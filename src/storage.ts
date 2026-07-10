@@ -7,9 +7,20 @@ import type { DocumentMeta } from './types.js';
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const EXT_PATTERN = /^[a-z0-9]{1,10}$/;
 
-export async function ensureDataDirs(): Promise<void> {
-  const dirs = [config.originalsDir, config.convertedDir, config.metaDir, config.auditDir];
-  await Promise.all(dirs.map((dir) => fs.mkdir(dir, { recursive: true })));
+/**
+ * 문서 저장 계층 추상화. disk(기본)와 memory 두 구현을 DOCVIEW_STORAGE로 선택한다.
+ * 외부에서 함수 호출로 재사용할 수 있도록 파일 경로가 아닌 버퍼 기반 API를 노출한다.
+ */
+export interface DocumentStore {
+  readonly mode: 'disk' | 'memory';
+  saveOriginal(id: string, ext: string, data: Buffer): Promise<void>;
+  readOriginal(id: string, ext: string): Promise<Buffer>;
+  saveConverted(id: string, data: Buffer): Promise<void>;
+  readConverted(id: string): Promise<Buffer>;
+  writeMeta(meta: DocumentMeta): Promise<void>;
+  readMeta(id: string): Promise<DocumentMeta | null>;
+  listMeta(): Promise<readonly DocumentMeta[]>;
+  deleteDocument(id: string): Promise<void>;
 }
 
 export function newDocumentId(): string {
@@ -28,51 +39,174 @@ function assertValidExt(ext: string): void {
   }
 }
 
-export function originalPath(id: string, ext: string): string {
-  assertValidId(id);
-  assertValidExt(ext);
-  return path.join(config.originalsDir, `${id}.${ext}`);
+function sortByCreatedAtDesc(metas: DocumentMeta[]): DocumentMeta[] {
+  return metas.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
-export function convertedPath(id: string): string {
-  assertValidId(id);
-  return path.join(config.convertedDir, `${id}.pdf`);
-}
+export class DiskStore implements DocumentStore {
+  readonly mode = 'disk' as const;
 
-export async function saveOriginal(id: string, ext: string, data: Buffer): Promise<void> {
-  await fs.writeFile(originalPath(id, ext), data);
-}
-
-export async function writeMeta(meta: DocumentMeta): Promise<void> {
-  assertValidId(meta.id);
-  const target = path.join(config.metaDir, `${meta.id}.json`);
-  await fs.writeFile(target, JSON.stringify(meta, null, 2), 'utf8');
-}
-
-export async function readMeta(id: string): Promise<DocumentMeta | null> {
-  if (!UUID_PATTERN.test(id)) {
-    return null;
+  private originalPath(id: string, ext: string): string {
+    assertValidId(id);
+    assertValidExt(ext);
+    return path.join(config.originalsDir, `${id}.${ext}`);
   }
-  try {
-    const raw = await fs.readFile(path.join(config.metaDir, `${id}.json`), 'utf8');
-    return JSON.parse(raw) as DocumentMeta;
-  } catch {
-    return null;
+
+  private convertedPath(id: string): string {
+    assertValidId(id);
+    return path.join(config.convertedDir, `${id}.pdf`);
+  }
+
+  private metaPath(id: string): string {
+    assertValidId(id);
+    return path.join(config.metaDir, `${id}.json`);
+  }
+
+  async saveOriginal(id: string, ext: string, data: Buffer): Promise<void> {
+    await fs.writeFile(this.originalPath(id, ext), data);
+  }
+
+  async readOriginal(id: string, ext: string): Promise<Buffer> {
+    return fs.readFile(this.originalPath(id, ext));
+  }
+
+  async saveConverted(id: string, data: Buffer): Promise<void> {
+    await fs.writeFile(this.convertedPath(id), data);
+  }
+
+  async readConverted(id: string): Promise<Buffer> {
+    return fs.readFile(this.convertedPath(id));
+  }
+
+  async writeMeta(meta: DocumentMeta): Promise<void> {
+    await fs.writeFile(this.metaPath(meta.id), JSON.stringify(meta, null, 2), 'utf8');
+  }
+
+  async readMeta(id: string): Promise<DocumentMeta | null> {
+    if (!UUID_PATTERN.test(id)) {
+      return null;
+    }
+    try {
+      const raw = await fs.readFile(this.metaPath(id), 'utf8');
+      return JSON.parse(raw) as DocumentMeta;
+    } catch {
+      return null;
+    }
+  }
+
+  async listMeta(): Promise<readonly DocumentMeta[]> {
+    let entries: string[];
+    try {
+      entries = await fs.readdir(config.metaDir);
+    } catch {
+      return [];
+    }
+    const ids = entries
+      .filter((name) => name.endsWith('.json'))
+      .map((name) => name.slice(0, -'.json'.length));
+    const metas = await Promise.all(ids.map((id) => this.readMeta(id)));
+    return sortByCreatedAtDesc(metas.filter((meta): meta is DocumentMeta => meta !== null));
+  }
+
+  async deleteDocument(id: string): Promise<void> {
+    const meta = await this.readMeta(id);
+    if (!meta) return;
+    await Promise.allSettled([
+      fs.rm(this.originalPath(id, meta.ext), { force: true }),
+      fs.rm(this.convertedPath(id), { force: true }),
+      fs.rm(this.metaPath(id), { force: true }),
+    ]);
   }
 }
 
-export async function listMeta(): Promise<readonly DocumentMeta[]> {
-  let entries: string[];
-  try {
-    entries = await fs.readdir(config.metaDir);
-  } catch {
-    return [];
+/**
+ * 메모리 저장소: 디스크에 아무것도 남기지 않는다 (변환 순간의 임시 파일 제외).
+ * 서버 재시작 시 전부 소멸하며, 예산 초과 시 오래된 문서부터 제거한다.
+ */
+export class MemoryStore implements DocumentStore {
+  readonly mode = 'memory' as const;
+  private readonly originals = new Map<string, Buffer>();
+  private readonly converted = new Map<string, Buffer>();
+  private readonly metas = new Map<string, DocumentMeta>();
+  private readonly budgetBytes: number;
+
+  constructor(budgetBytes: number = config.memoryBudgetBytes) {
+    this.budgetBytes = budgetBytes;
   }
-  const ids = entries
-    .filter((name) => name.endsWith('.json'))
-    .map((name) => name.slice(0, -'.json'.length));
-  const metas = await Promise.all(ids.map((id) => readMeta(id)));
-  return metas
-    .filter((meta): meta is DocumentMeta => meta !== null)
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+
+  private totalBytes(): number {
+    let total = 0;
+    for (const buf of this.originals.values()) total += buf.length;
+    for (const buf of this.converted.values()) total += buf.length;
+    return total;
+  }
+
+  /** 예산 초과 시 보호 대상(protectedId)을 제외하고 가장 오래된 문서부터 제거한다. */
+  private enforceBudget(protectedId: string): void {
+    while (this.totalBytes() > this.budgetBytes) {
+      const oldest = sortByCreatedAtDesc([...this.metas.values()])
+        .reverse()
+        .find((meta) => meta.id !== protectedId);
+      if (!oldest) return;
+      this.originals.delete(oldest.id);
+      this.converted.delete(oldest.id);
+      this.metas.delete(oldest.id);
+      console.warn(`메모리 예산 초과로 오래된 문서를 제거했습니다: ${oldest.name} (${oldest.id})`);
+    }
+  }
+
+  async saveOriginal(id: string, ext: string, data: Buffer): Promise<void> {
+    assertValidId(id);
+    assertValidExt(ext);
+    this.originals.set(id, data);
+    this.enforceBudget(id);
+  }
+
+  async readOriginal(id: string, _ext: string): Promise<Buffer> {
+    const data = this.originals.get(id);
+    if (!data) throw new Error('문서가 메모리에서 만료되었습니다. 다시 업로드해 주세요.');
+    return data;
+  }
+
+  async saveConverted(id: string, data: Buffer): Promise<void> {
+    assertValidId(id);
+    this.converted.set(id, data);
+    this.enforceBudget(id);
+  }
+
+  async readConverted(id: string): Promise<Buffer> {
+    const data = this.converted.get(id);
+    if (!data) throw new Error('문서가 메모리에서 만료되었습니다. 다시 업로드해 주세요.');
+    return data;
+  }
+
+  async writeMeta(meta: DocumentMeta): Promise<void> {
+    assertValidId(meta.id);
+    this.metas.set(meta.id, meta);
+  }
+
+  async readMeta(id: string): Promise<DocumentMeta | null> {
+    return this.metas.get(id) ?? null;
+  }
+
+  async listMeta(): Promise<readonly DocumentMeta[]> {
+    return sortByCreatedAtDesc([...this.metas.values()]);
+  }
+
+  async deleteDocument(id: string): Promise<void> {
+    this.originals.delete(id);
+    this.converted.delete(id);
+    this.metas.delete(id);
+  }
+}
+
+export const store: DocumentStore =
+  config.storageMode === 'memory' ? new MemoryStore() : new DiskStore();
+
+export async function ensureDataDirs(): Promise<void> {
+  const dirs = [config.auditDir];
+  if (config.storageMode === 'disk') {
+    dirs.push(config.originalsDir, config.convertedDir, config.metaDir);
+  }
+  await Promise.all(dirs.map((dir) => fs.mkdir(dir, { recursive: true })));
 }

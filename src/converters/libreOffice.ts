@@ -68,6 +68,41 @@ export function stripCustomRowHeights(xlsxBytes: Uint8Array): Uint8Array {
 
 type SourcePreprocessor = (bytes: Uint8Array) => Uint8Array;
 
+/**
+ * 프로필 풀: 매 변환마다 새 프로필을 만들면 LibreOffice가 프로필 초기화에
+ * 수 초를 쓰므로, 웜업된 프로필을 슬롯 단위로 재사용한다. 슬롯별로 직렬화되어
+ * 같은 프로필을 두 프로세스가 동시에 쓰는 일은 없다.
+ */
+const PROFILE_POOL_SIZE = 2;
+const profileRoot = path.join(os.tmpdir(), 'docview-lo-profiles');
+const slotQueues: Array<Promise<unknown>> = Array.from({ length: PROFILE_POOL_SIZE }, () =>
+  Promise.resolve(),
+);
+let nextSlot = 0;
+
+async function withProfileSlot<T>(task: (profileDir: string) => Promise<T>): Promise<T> {
+  const slot = nextSlot;
+  nextSlot = (nextSlot + 1) % PROFILE_POOL_SIZE;
+  const previous = slotQueues[slot];
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  slotQueues[slot] = previous.then(() => current);
+  await previous.catch(() => {});
+  const profileDir = path.join(profileRoot, `slot-${slot}`);
+  try {
+    await fs.mkdir(profileDir, { recursive: true });
+    return await task(profileDir);
+  } catch (error) {
+    // 변환 실패가 프로필 손상 때문일 수 있으므로 다음 실행에서 새로 만들도록 비운다.
+    await fs.rm(profileDir, { recursive: true, force: true }).catch(() => {});
+    throw error;
+  } finally {
+    release();
+  }
+}
+
 async function convertWithSoffice(
   sourcePath: string,
   targetPdfPath: string,
@@ -78,7 +113,6 @@ async function convertWithSoffice(
   if (!sofficePath) {
     throw new Error('LibreOffice(soffice)를 찾을 수 없습니다.');
   }
-  // 호출마다 고유 프로필/작업 디렉터리를 써서 동시 실행 충돌과 사용자 세션 간섭을 피한다.
   const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'docview-lo-'));
   try {
     // LibreOffice가 문서 머리글에 UUID 대신 원래 파일명을 쓰도록 표시용 이름으로 복사해 변환한다.
@@ -99,19 +133,21 @@ async function convertWithSoffice(
       await fs.copyFile(sourcePath, stagedSource);
     }
 
-    await execFileAsync(
-      sofficePath,
-      [
-        '--headless',
-        '--norestore',
-        `-env:UserInstallation=${pathToFileURL(path.join(workDir, 'profile')).href}`,
-        ...extraArgs,
-        '--outdir',
-        workDir,
-        stagedSource,
-      ],
-      { timeout: CONVERT_TIMEOUT_MS },
-    );
+    await withProfileSlot(async (profileDir) => {
+      await execFileAsync(
+        sofficePath,
+        [
+          '--headless',
+          '--norestore',
+          `-env:UserInstallation=${pathToFileURL(profileDir).href}`,
+          ...extraArgs,
+          '--outdir',
+          workDir,
+          stagedSource,
+        ],
+        { timeout: CONVERT_TIMEOUT_MS },
+      );
+    });
     // soffice는 변환 실패 시에도 종료 코드 0을 반환할 수 있어 산출물 존재로 판정한다.
     const produced = path.join(workDir, `${path.parse(displayName).name}.pdf`);
     try {
@@ -123,6 +159,28 @@ async function convertWithSoffice(
   } finally {
     await fs.rm(workDir, { recursive: true, force: true });
   }
+}
+
+/**
+ * 서버 시작 시 프로필 풀을 미리 웜업해 첫 변환의 콜드 스타트(수 초)를 없앤다.
+ * 각 슬롯에서 초소형 문서를 한 번씩 변환해 LibreOffice 프로필을 생성해 둔다.
+ */
+export async function warmUpProfiles(): Promise<void> {
+  if (!sofficePath) return;
+  await Promise.all(
+    Array.from({ length: PROFILE_POOL_SIZE }, async (_, index) => {
+      const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'docview-warmup-'));
+      try {
+        const seed = path.join(workDir, `warmup-${index}.csv`);
+        await fs.writeFile(seed, 'warmup\n', 'utf8');
+        await convertWithSoffice(seed, path.join(workDir, 'warmup.pdf'), ['--convert-to', 'pdf']);
+      } catch {
+        /* 웜업 실패는 무시 — 실제 변환 시 콜드 스타트로 대체된다 */
+      } finally {
+        await fs.rm(workDir, { recursive: true, force: true });
+      }
+    }),
+  );
 }
 
 export const officeConverter: Converter = {
@@ -165,7 +223,12 @@ export const dxfConverter: Converter = {
       ['--infilter=DXF', '--convert-to', 'pdf:draw_pdf_Export'],
       sourceName,
     );
-    // 도면이 거대한 빈 페이지에 작게 놓이는 문제를 내용 영역 크롭으로 보정한다
-    await trimPdfMargins(targetPdfPath);
+    // 도면이 거대한 빈 페이지에 작게 놓이는 문제를 내용 영역 크롭으로 보정한다.
+    // 크롭은 표시 품질 개선일 뿐이므로 실패해도 변환 자체를 실패시키지 않는다.
+    try {
+      await trimPdfMargins(targetPdfPath);
+    } catch (error) {
+      console.warn('도면 여백 크롭 실패 (원본 페이지 그대로 표시):', error);
+    }
   },
 };

@@ -1,20 +1,14 @@
+import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { recordAudit } from '../audit.js';
 import { config } from '../config.js';
 import { findConverter, supportedExtensions } from '../converters/index.js';
-import { getPageCount } from '../rendering.js';
+import { ConversionError, type Converter } from '../converters/types.js';
+import { getPageCountFromBytes } from '../rendering.js';
 import { issueViewToken } from '../security.js';
-import {
-  convertedPath,
-  listMeta,
-  newDocumentId,
-  originalPath,
-  readMeta,
-  saveOriginal,
-  writeMeta,
-} from '../storage.js';
-import type { Converter } from '../converters/types.js';
+import { newDocumentId, store } from '../storage.js';
 import type { DocumentMeta } from '../types.js';
 
 const tokenBodySchema = {
@@ -38,26 +32,42 @@ interface TokenBody {
 const PROGRESS_CONVERTING = 25;
 const PROGRESS_PDF_DONE = 85;
 
+/**
+ * 변환기는 외부 도구(LibreOffice/LibreDWG) 특성상 파일 경로가 필요하다.
+ * 스토리지 모드와 무관하게 임시 작업 폴더에 꺼냈다가 변환 후 즉시 삭제하므로
+ * memory 모드에서는 변환 순간 외에 디스크에 남는 것이 없다.
+ */
 async function runConversion(
   app: FastifyInstance,
   converter: Converter,
   meta: DocumentMeta,
 ): Promise<void> {
+  const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'docview-convert-'));
   try {
-    await writeMeta({ ...meta, progress: PROGRESS_CONVERTING });
-    await converter.convert(originalPath(meta.id, meta.ext), convertedPath(meta.id), meta.name);
-    await writeMeta({ ...meta, progress: PROGRESS_PDF_DONE });
-    const pageCount = await getPageCount(convertedPath(meta.id));
-    await writeMeta({ ...meta, status: 'ready', pageCount, progress: 100 });
+    const sourcePath = path.join(workDir, `source.${meta.ext}`);
+    await fs.writeFile(sourcePath, await store.readOriginal(meta.id, meta.ext));
+    await store.writeMeta({ ...meta, progress: PROGRESS_CONVERTING });
+
+    const targetPdfPath = path.join(workDir, 'converted.pdf');
+    await converter.convert(sourcePath, targetPdfPath, meta.name);
+
+    const pdfBytes = await fs.readFile(targetPdfPath);
+    await store.saveConverted(meta.id, pdfBytes);
+    await store.writeMeta({ ...meta, progress: PROGRESS_PDF_DONE });
+
+    const pageCount = await getPageCountFromBytes(pdfBytes);
+    await store.writeMeta({ ...meta, status: 'ready', pageCount, progress: 100 });
     await recordAudit({ type: 'converted', docId: meta.id, detail: `${pageCount} pages` });
   } catch (error) {
     app.log.error(error, 'document conversion failed');
-    await writeMeta({
-      ...meta,
-      status: 'failed',
-      error: '문서 변환에 실패했습니다. 파일이 손상되었거나 지원되지 않는 내용입니다.',
-    });
+    const userMessage =
+      error instanceof ConversionError
+        ? error.message
+        : '문서 변환에 실패했습니다. 파일이 손상되었거나 지원되지 않는 내용입니다.';
+    await store.writeMeta({ ...meta, status: 'failed', error: userMessage });
     await recordAudit({ type: 'conversion_failed', docId: meta.id, detail: meta.name });
+  } finally {
+    await fs.rm(workDir, { recursive: true, force: true });
   }
 }
 
@@ -91,7 +101,7 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
 
     const id = newDocumentId();
     try {
-      await saveOriginal(id, ext, data);
+      await store.saveOriginal(id, ext, data);
       const meta: DocumentMeta = {
         id,
         name: file.filename,
@@ -101,7 +111,7 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
         createdAt: new Date().toISOString(),
         progress: 10,
       };
-      await writeMeta(meta);
+      await store.writeMeta(meta);
       await recordAudit({ type: 'uploaded', docId: id, detail: file.filename });
       // 변환은 백그라운드로 진행하고 즉시 응답한다. 클라이언트는 상태를 폴링한다.
       void runConversion(app, converter, meta);
@@ -113,7 +123,7 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.get<{ Params: { id: string } }>('/api/documents/:id', async (request, reply) => {
-    const meta = await readMeta(request.params.id);
+    const meta = await store.readMeta(request.params.id);
     if (!meta) {
       return reply.code(404).send({ success: false, error: '문서를 찾을 수 없습니다.' });
     }
@@ -121,7 +131,7 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.get('/api/documents', async () => {
-    const documents = await listMeta();
+    const documents = await store.listMeta();
     return { success: true, data: documents };
   });
 
@@ -131,7 +141,7 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
     '/api/documents/:id/tokens',
     { schema: { body: tokenBodySchema } },
     async (request, reply) => {
-      const meta = await readMeta(request.params.id);
+      const meta = await store.readMeta(request.params.id);
       if (!meta || meta.status !== 'ready') {
         return reply.code(404).send({ success: false, error: '문서를 찾을 수 없습니다.' });
       }

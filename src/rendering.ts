@@ -1,9 +1,9 @@
-import fs from 'node:fs/promises';
 import { PDFDocument, StandardFonts, degrees, rgb } from 'pdf-lib';
 import { pdf } from 'pdf-to-img';
 import { config } from './config.js';
 
 type PdfImageDocument = Awaited<ReturnType<typeof pdf>>;
+export type BytesProvider = () => Promise<Buffer>;
 
 interface PageSize {
   readonly width: number;
@@ -35,41 +35,51 @@ function evictOldest<K, V>(cache: Map<K, V>, limit: number): void {
   }
 }
 
-function openDocument(pdfPath: string, scale: number): Promise<PdfImageDocument> {
-  const key = `${pdfPath}#${scale.toFixed(2)}`;
+/** pdfjs가 전달받은 버퍼 소유권을 가져갈 수 있으므로 항상 복사본을 넘긴다. */
+function toOwnedBytes(data: Buffer): Uint8Array {
+  return new Uint8Array(data);
+}
+
+function openDocument(docId: string, scale: number, loadBytes: BytesProvider): Promise<PdfImageDocument> {
+  const key = `${docId}#${scale.toFixed(2)}`;
   const cached = documentCache.get(key);
   if (cached) {
     return cached;
   }
-  const loading = pdf(pdfPath, { scale });
+  const loading = loadBytes().then((bytes) => pdf(toOwnedBytes(bytes), { scale }));
   loading.catch(() => documentCache.delete(key));
   documentCache.set(key, loading);
   evictOldest(documentCache, DOCUMENT_CACHE_LIMIT);
   return loading;
 }
 
-function getPageSizes(pdfPath: string): Promise<readonly PageSize[]> {
-  const cached = pageSizeCache.get(pdfPath);
+function getPageSizes(docId: string, loadBytes: BytesProvider): Promise<readonly PageSize[]> {
+  const cached = pageSizeCache.get(docId);
   if (cached) {
     return cached;
   }
-  const loading = (async () => {
-    const bytes = await fs.readFile(pdfPath);
-    const doc = await PDFDocument.load(bytes, { ignoreEncryption: true, updateMetadata: false });
+  const loading = loadBytes().then(async (bytes) => {
+    const doc = await PDFDocument.load(toOwnedBytes(bytes), {
+      ignoreEncryption: true,
+      updateMetadata: false,
+    });
     return doc.getPages().map((page) => {
       const { width, height } = page.getSize();
       return { width, height };
     });
-  })();
-  loading.catch(() => pageSizeCache.delete(pdfPath));
-  pageSizeCache.set(pdfPath, loading);
+  });
+  loading.catch(() => pageSizeCache.delete(docId));
+  pageSizeCache.set(docId, loading);
   evictOldest(pageSizeCache, DOCUMENT_CACHE_LIMIT * 4);
   return loading;
 }
 
-export async function getPageCount(pdfPath: string): Promise<number> {
-  const sizes = await getPageSizes(pdfPath);
-  return sizes.length;
+export async function getPageCountFromBytes(pdfBytes: Buffer): Promise<number> {
+  const doc = await PDFDocument.load(toOwnedBytes(pdfBytes), {
+    ignoreEncryption: true,
+    updateMetadata: false,
+  });
+  return doc.getPageCount();
 }
 
 /**
@@ -86,16 +96,17 @@ function clampScale(requestedScale: number, size: PageSize): number {
 }
 
 export async function renderPage(
-  pdfPath: string,
+  docId: string,
   pageNumber: number,
-  requestedScale: number = config.renderScale,
+  requestedScale: number,
+  loadBytes: BytesProvider,
 ): Promise<Buffer> {
-  const sizes = await getPageSizes(pdfPath);
+  const sizes = await getPageSizes(docId, loadBytes);
   if (pageNumber < 1 || pageNumber > sizes.length) {
     throw new PageOutOfRangeError(pageNumber, sizes.length);
   }
-  const scale = clampScale(requestedScale, sizes[pageNumber - 1]);
-  const document = await openDocument(pdfPath, scale);
+  const scale = clampScale(requestedScale ?? config.renderScale, sizes[pageNumber - 1]);
+  const document = await openDocument(docId, scale, loadBytes);
   return document.getPage(pageNumber);
 }
 
@@ -105,9 +116,8 @@ function toWinAnsiSafe(text: string): string {
   return safe.length > 0 ? safe : 'CONFIDENTIAL';
 }
 
-export async function buildPrintPdf(pdfPath: string, watermarkText: string): Promise<Uint8Array> {
-  const bytes = await fs.readFile(pdfPath);
-  const doc = await PDFDocument.load(bytes, { ignoreEncryption: true });
+export async function buildPrintPdf(pdfBytes: Buffer, watermarkText: string): Promise<Uint8Array> {
+  const doc = await PDFDocument.load(toOwnedBytes(pdfBytes), { ignoreEncryption: true });
   const font = await doc.embedFont(StandardFonts.Helvetica);
   const text = toWinAnsiSafe(watermarkText);
   for (const page of doc.getPages()) {

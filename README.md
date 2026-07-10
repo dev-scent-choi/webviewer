@@ -27,6 +27,9 @@ npm run dev        # http://127.0.0.1:8000
 | `DOCVIEW_HOST` | `127.0.0.1` | 바인딩 호스트 |
 | `DOCVIEW_DATA_DIR` | `./data` | 원본/변환본/메타/감사로그 저장 경로 |
 | `DOCVIEW_TOKEN_TTL` | `3600` | 열람 토큰 유효기간(초) |
+| `DOCVIEW_STORAGE` | `disk` | `disk`: 파일 저장 / `memory`: 서버 메모리에만 보관 — 디스크 비잔류, 재시작 시 소멸 (변환 순간의 임시 파일은 예외적으로 생성 후 즉시 삭제) |
+| `DOCVIEW_MEMORY_BUDGET_MB` | `1024` | memory 모드 총 보관 용량. 초과 시 오래된 문서부터 자동 제거 |
+| `DOCVIEW_ODA_CONVERTER` | (자동 감지) | ODA File Converter 경로. 설치되어 있으면 DWG 변환에 우선 사용 (전 버전 지원·최고 충실도) |
 
 검증:
 
@@ -71,7 +74,7 @@ npm test
 | 문서 | doc, docx, ppt, pptx, odt, odp, rtf, txt | LibreOffice headless (미설치 시 자동 비활성화) |
 | 스프레드시트 | xls, xlsx, ods, csv | LibreOffice Calc — `SinglePageSheets` 옵션으로 시트 1장 = PDF 1페이지 (인쇄 폭 분할로 화면이 조각나는 문제 방지). xlsx는 변환 전 고정 행 높이를 제거해 Excel↔LibreOffice 글꼴 폭 차이로 인한 텍스트 잘림을 방지 |
 | 도면 | dxf | LibreOffice Draw |
-| 도면 | dwg | LibreDWG(`tools/dwg2dxf.exe`)로 DXF 변환 후 LibreOffice Draw. 최신 DWG 전용 객체 일부는 누락될 수 있음 — 충실도가 부족하면 ODA File Converter로 교체 가능(`DOCVIEW_DWG2DXF` 환경변수) |
+| 도면 | dwg | ODA File Converter(설치 시 자동 감지, 전 버전 지원) → LibreDWG 순으로 시도 후 LibreOffice Draw. **LibreDWG만으로는 AutoCAD 2000/2004 형식 위주로 동작**하며 R14·2007~2018 형식은 실패할 수 있음 — 실패 시 파일의 AutoCAD 버전과 안내가 오류 메시지에 표시됨 |
 
 `GET /api/formats`가 현재 서버에서 활성화된 확장자 목록을 반환하며, 업로드 화면의
 파일 선택 필터도 이 목록을 따른다.

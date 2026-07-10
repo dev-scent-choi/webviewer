@@ -93,23 +93,72 @@ function desiredScale() {
   return Math.min(16, Math.max(2, scale));
 }
 
+/* 대용량 페이지 이미지를 동시에 너무 많이 받으면 메인 스레드가 밀려
+   스크롤·버튼 반응이 늦어지므로 동시 로딩 수를 제한한다 */
+const MAX_CONCURRENT_LOADS = 3;
+let activeLoads = 0;
+const loadWaiters = [];
+
+async function withLoadSlot(task) {
+  if (activeLoads >= MAX_CONCURRENT_LOADS) {
+    await new Promise((resolve) => loadWaiters.push(resolve));
+  }
+  activeLoads += 1;
+  try {
+    return await task();
+  } finally {
+    activeLoads -= 1;
+    const next = loadWaiters.shift();
+    if (next) next();
+  }
+}
+
 async function loadPageInto(canvas, pageNumber) {
   const scale = desiredScale();
   canvas.dataset.requestedScale = String(scale);
-  const res = await fetch(`/api/view/pages/${pageNumber}?${tokenQuery}&scale=${scale}`);
-  if (!res.ok) {
-    canvas.closest('.page-frame').classList.add('page-error');
-    return;
-  }
-  const bitmap = await createImageBitmap(await res.blob());
-  canvas.width = bitmap.width;
-  canvas.height = bitmap.height;
-  canvas.getContext('2d').drawImage(bitmap, 0, 0);
-  bitmap.close();
-  canvas.dataset.loadedScale = String(scale);
+  await withLoadSlot(async () => {
+    const res = await fetch(`/api/view/pages/${pageNumber}?${tokenQuery}&scale=${scale}`);
+    if (!res.ok) {
+      canvas.closest('.page-frame').classList.add('page-error');
+      return;
+    }
+    const bitmap = await createImageBitmap(await res.blob());
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    canvas.getContext('2d').drawImage(bitmap, 0, 0);
+    bitmap.close();
+    canvas.dataset.loadedScale = String(scale);
+    const frame = canvas.closest('.page-frame');
+    frame.style.aspectRatio = `${canvas.width} / ${canvas.height}`;
+    frame.classList.remove('page-loading');
+    frame.classList.add('page-ready');
+  });
+}
+
+/**
+ * 화면에서 멀리 벗어난 페이지의 비트맵을 해제한다.
+ * 페이지가 많을 때 GPU 메모리가 쌓여 화질 저하·뒤로가기 지연이
+ * 생기는 것을 막는다. 종횡비를 고정해 스크롤 위치는 유지된다.
+ */
+function releaseCanvas(canvas) {
+  if (!canvas.dataset.loadedScale) return;
   const frame = canvas.closest('.page-frame');
-  frame.classList.remove('page-loading');
-  frame.classList.add('page-ready');
+  if (canvas.width > 0) {
+    frame.style.aspectRatio = `${canvas.width} / ${canvas.height}`;
+  }
+  canvas.width = 0;
+  canvas.height = 0;
+  delete canvas.dataset.loadedScale;
+  delete canvas.dataset.requestedScale;
+  frame.classList.remove('page-ready');
+  frame.classList.add('page-loading');
+}
+
+function ensureLoaded(canvas) {
+  const target = desiredScale();
+  const requested = Number(canvas.dataset.requestedScale || 0);
+  if (requested >= target) return;
+  loadPageInto(canvas, Number(canvas.dataset.page));
 }
 
 let qualityReloadTimer = null;
@@ -119,28 +168,28 @@ function scheduleQualityReload() {
   if (qualityReloadTimer !== null) clearTimeout(qualityReloadTimer);
   qualityReloadTimer = setTimeout(() => {
     qualityReloadTimer = null;
-    const target = desiredScale();
     const nearViewport = window.innerHeight * 2;
     for (const canvas of pagesContainer.querySelectorAll('canvas')) {
-      const loaded = Number(canvas.dataset.loadedScale || 0);
-      const requested = Number(canvas.dataset.requestedScale || 0);
-      if (loaded === 0 || requested >= target) continue; // 아직 로딩 전이거나 이미 요청됨
+      if (!canvas.dataset.loadedScale) continue; // 화면 밖(해제됨)은 접근 시 로딩된다
       const rect = canvas.getBoundingClientRect();
       if (rect.bottom < -nearViewport || rect.top > window.innerHeight + nearViewport) continue;
-      loadPageInto(canvas, Number(canvas.dataset.page));
+      ensureLoaded(canvas);
     }
   }, 350);
 }
 
 function buildPages() {
+  // 화면 근처(±1200px)에 들어오면 로딩, 멀어지면 비트맵 해제 (가상화)
   const observer = new IntersectionObserver((entries) => {
     for (const entry of entries) {
-      if (!entry.isIntersecting) continue;
-      const canvas = entry.target;
-      observer.unobserve(canvas);
-      loadPageInto(canvas, Number(canvas.dataset.page));
+      const canvas = entry.target.querySelector('canvas');
+      if (entry.isIntersecting) {
+        ensureLoaded(canvas);
+      } else {
+        releaseCanvas(canvas);
+      }
     }
-  }, { rootMargin: '600px 0px' });
+  }, { rootMargin: '1200px 0px' });
 
   const frames = [];
   for (let page = 1; page <= pageCount; page += 1) {
@@ -153,7 +202,7 @@ function buildPages() {
     label.textContent = String(page);
     frame.append(canvas, label);
     frames.push(frame);
-    observer.observe(canvas);
+    observer.observe(frame);
   }
   pagesContainer.replaceChildren(...frames);
 }

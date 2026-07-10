@@ -1,9 +1,8 @@
-import fs from 'node:fs/promises';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { recordAudit } from '../audit.js';
 import { PageOutOfRangeError, buildPrintPdf, renderPage } from '../rendering.js';
 import { InvalidTokenError, verifyViewToken } from '../security.js';
-import { convertedPath, originalPath, readMeta } from '../storage.js';
+import { store } from '../storage.js';
 import type { DocumentMeta, ViewClaims } from '../types.js';
 
 interface ViewContext {
@@ -31,7 +30,7 @@ async function resolveView(token: string | undefined, reply: FastifyReply): Prom
     }
     throw error;
   }
-  const meta = await readMeta(claims.docId);
+  const meta = await store.readMeta(claims.docId);
   if (!meta || meta.status !== 'ready') {
     await reply.code(404).send({ success: false, error: '문서를 찾을 수 없습니다.' });
     return null;
@@ -95,10 +94,8 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
       const view = await resolveView(request.query.token, reply);
       if (!view) return reply;
       try {
-        const png = await renderPage(
-          convertedPath(view.meta.id),
-          request.params.page,
-          request.query.scale,
+        const png = await renderPage(view.meta.id, request.params.page, request.query.scale, () =>
+          store.readConverted(view.meta.id),
         );
         return await reply.type('image/png').header('cache-control', 'private, no-store').send(png);
       } catch (error) {
@@ -122,7 +119,7 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
         return reply.code(403).send({ success: false, error: '출력 권한이 없습니다.' });
       }
       const watermark = `${view.claims.viewer}  ${new Date().toISOString().slice(0, 10)}`;
-      const pdfBytes = await buildPrintPdf(convertedPath(view.meta.id), watermark);
+      const pdfBytes = await buildPrintPdf(await store.readConverted(view.meta.id), watermark);
       await recordAudit({ type: 'printed', docId: view.meta.id, viewer: view.claims.viewer });
       return reply
         .type('application/pdf')
@@ -141,7 +138,7 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
         await recordAudit({ type: 'download_denied', docId: view.meta.id, viewer: view.claims.viewer });
         return reply.code(403).send({ success: false, error: '저장(다운로드) 권한이 없습니다.' });
       }
-      const data = await fs.readFile(originalPath(view.meta.id, view.meta.ext));
+      const data = await store.readOriginal(view.meta.id, view.meta.ext);
       await recordAudit({ type: 'downloaded', docId: view.meta.id, viewer: view.claims.viewer });
       const encodedName = encodeURIComponent(view.meta.name);
       return reply
