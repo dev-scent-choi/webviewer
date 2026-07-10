@@ -1,0 +1,13 @@
+# 의존성
+node_modules/
+
+# 업로드된 문서·변환본·감사 로그 (사용자 데이터 — 절대 커밋 금지)
+data/
+
+# 외부 변환 도구 바이너리 (README의 설치 안내 참조)
+tools/
+
+# 로그·임시 파일
+*.log
+.DS_Store
+Thumbs.db
