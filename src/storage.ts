@@ -7,6 +7,9 @@ import type { DocumentMeta } from './types.js';
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const EXT_PATTERN = /^[a-z0-9]{1,10}$/;
 
+/** 변환 산출물 종류: pdf(페이지 뷰·출력용) / grid(스프레드시트 그리드 뷰 JSON) */
+export type DerivedKind = 'pdf' | 'grid';
+
 /**
  * 문서 저장 계층 추상화. disk(기본)와 memory 두 구현을 DOCVIEW_STORAGE로 선택한다.
  * 외부에서 함수 호출로 재사용할 수 있도록 파일 경로가 아닌 버퍼 기반 API를 노출한다.
@@ -15,8 +18,9 @@ export interface DocumentStore {
   readonly mode: 'disk' | 'memory';
   saveOriginal(id: string, ext: string, data: Buffer): Promise<void>;
   readOriginal(id: string, ext: string): Promise<Buffer>;
-  saveConverted(id: string, data: Buffer): Promise<void>;
-  readConverted(id: string): Promise<Buffer>;
+  saveDerived(id: string, kind: DerivedKind, data: Buffer): Promise<void>;
+  readDerived(id: string, kind: DerivedKind): Promise<Buffer>;
+  hasDerived(id: string, kind: DerivedKind): Promise<boolean>;
   writeMeta(meta: DocumentMeta): Promise<void>;
   readMeta(id: string): Promise<DocumentMeta | null>;
   listMeta(): Promise<readonly DocumentMeta[]>;
@@ -52,9 +56,9 @@ export class DiskStore implements DocumentStore {
     return path.join(config.originalsDir, `${id}.${ext}`);
   }
 
-  private convertedPath(id: string): string {
+  private derivedPath(id: string, kind: DerivedKind): string {
     assertValidId(id);
-    return path.join(config.convertedDir, `${id}.pdf`);
+    return path.join(config.convertedDir, kind === 'pdf' ? `${id}.pdf` : `${id}.grid.json`);
   }
 
   private metaPath(id: string): string {
@@ -70,12 +74,21 @@ export class DiskStore implements DocumentStore {
     return fs.readFile(this.originalPath(id, ext));
   }
 
-  async saveConverted(id: string, data: Buffer): Promise<void> {
-    await fs.writeFile(this.convertedPath(id), data);
+  async saveDerived(id: string, kind: DerivedKind, data: Buffer): Promise<void> {
+    await fs.writeFile(this.derivedPath(id, kind), data);
   }
 
-  async readConverted(id: string): Promise<Buffer> {
-    return fs.readFile(this.convertedPath(id));
+  async readDerived(id: string, kind: DerivedKind): Promise<Buffer> {
+    return fs.readFile(this.derivedPath(id, kind));
+  }
+
+  async hasDerived(id: string, kind: DerivedKind): Promise<boolean> {
+    try {
+      await fs.access(this.derivedPath(id, kind));
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   async writeMeta(meta: DocumentMeta): Promise<void> {
@@ -113,7 +126,8 @@ export class DiskStore implements DocumentStore {
     if (!meta) return;
     await Promise.allSettled([
       fs.rm(this.originalPath(id, meta.ext), { force: true }),
-      fs.rm(this.convertedPath(id), { force: true }),
+      fs.rm(this.derivedPath(id, 'pdf'), { force: true }),
+      fs.rm(this.derivedPath(id, 'grid'), { force: true }),
       fs.rm(this.metaPath(id), { force: true }),
     ]);
   }
@@ -126,7 +140,7 @@ export class DiskStore implements DocumentStore {
 export class MemoryStore implements DocumentStore {
   readonly mode = 'memory' as const;
   private readonly originals = new Map<string, Buffer>();
-  private readonly converted = new Map<string, Buffer>();
+  private readonly derived = new Map<string, Buffer>();
   private readonly metas = new Map<string, DocumentMeta>();
   private readonly budgetBytes: number;
 
@@ -137,7 +151,7 @@ export class MemoryStore implements DocumentStore {
   private totalBytes(): number {
     let total = 0;
     for (const buf of this.originals.values()) total += buf.length;
-    for (const buf of this.converted.values()) total += buf.length;
+    for (const buf of this.derived.values()) total += buf.length;
     return total;
   }
 
@@ -149,7 +163,8 @@ export class MemoryStore implements DocumentStore {
         .find((meta) => meta.id !== protectedId);
       if (!oldest) return;
       this.originals.delete(oldest.id);
-      this.converted.delete(oldest.id);
+      this.derived.delete(`${oldest.id}#pdf`);
+      this.derived.delete(`${oldest.id}#grid`);
       this.metas.delete(oldest.id);
       console.warn(`메모리 예산 초과로 오래된 문서를 제거했습니다: ${oldest.name} (${oldest.id})`);
     }
@@ -168,16 +183,20 @@ export class MemoryStore implements DocumentStore {
     return data;
   }
 
-  async saveConverted(id: string, data: Buffer): Promise<void> {
+  async saveDerived(id: string, kind: DerivedKind, data: Buffer): Promise<void> {
     assertValidId(id);
-    this.converted.set(id, data);
+    this.derived.set(`${id}#${kind}`, data);
     this.enforceBudget(id);
   }
 
-  async readConverted(id: string): Promise<Buffer> {
-    const data = this.converted.get(id);
+  async readDerived(id: string, kind: DerivedKind): Promise<Buffer> {
+    const data = this.derived.get(`${id}#${kind}`);
     if (!data) throw new Error('문서가 메모리에서 만료되었습니다. 다시 업로드해 주세요.');
     return data;
+  }
+
+  async hasDerived(id: string, kind: DerivedKind): Promise<boolean> {
+    return this.derived.has(`${id}#${kind}`);
   }
 
   async writeMeta(meta: DocumentMeta): Promise<void> {
@@ -195,7 +214,8 @@ export class MemoryStore implements DocumentStore {
 
   async deleteDocument(id: string): Promise<void> {
     this.originals.delete(id);
-    this.converted.delete(id);
+    this.derived.delete(`${id}#pdf`);
+    this.derived.delete(`${id}#grid`);
     this.metas.delete(id);
   }
 }

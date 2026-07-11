@@ -134,7 +134,11 @@ describe('viewer access control', () => {
 
     const info = await app.inject({ method: 'GET', url: `/api/view/info?token=${token}` });
     expect(info.statusCode).toBe(200);
-    expect(info.json().data.permissions).toEqual({ canPrint: false, canDownload: false });
+    expect(info.json().data.permissions).toEqual({
+      canPrint: false,
+      canDownload: false,
+      canCopy: false,
+    });
 
     const page = await app.inject({ method: 'GET', url: `/api/view/pages/1?token=${token}` });
     expect(page.statusCode).toBe(200);
@@ -196,5 +200,49 @@ describe('viewer access control', () => {
   test('rejects a missing token with 401', async () => {
     const res = await app.inject({ method: 'GET', url: '/api/view/info' });
     expect(res.statusCode).toBe(401);
+  });
+});
+
+describe('grid view (spreadsheets)', () => {
+  async function uploadCsv(): Promise<DocMeta> {
+    const csv = Buffer.from('name,qty\n"사과, 청송",3\n바나나,7\n', 'utf8');
+    const { payload, headers } = multipartPayload('판매.csv', 'text/csv', csv);
+    const res = await app.inject({ method: 'POST', url: '/api/documents', payload, headers });
+    expect(res.statusCode).toBe(201);
+    const meta = await waitForStatus(res.json().data.id);
+    expect(meta.status).toBe('ready');
+    return meta;
+  }
+
+  test('extracts spreadsheets into grid view without PDF conversion', async () => {
+    const doc = await uploadCsv();
+    const info = await app.inject({
+      method: 'GET',
+      url: `/api/documents/${doc.id}`,
+    });
+    expect(info.json().data.viewKind).toBe('grid');
+
+    const token = await issueToken(doc.id, false, false);
+    const metaRes = await app.inject({ method: 'GET', url: `/api/view/grid/meta?token=${token}` });
+    expect(metaRes.statusCode).toBe(200);
+    const gridMeta = metaRes.json().data;
+    expect(gridMeta.sheets).toHaveLength(1);
+    expect(gridMeta.sheets[0].rowCount).toBe(3);
+
+    const rowsRes = await app.inject({
+      method: 'GET',
+      url: `/api/view/grid/rows?token=${token}&sheet=0&from=1&count=10`,
+    });
+    expect(rowsRes.statusCode).toBe(200);
+    const { rows } = rowsRes.json().data;
+    expect(rows[1][0].v).toBe('사과, 청송');
+    expect(rows[2][1].v).toBe('7');
+  });
+
+  test('rejects grid endpoints for page-view documents', async () => {
+    const doc = await uploadSamplePdf(1);
+    const token = await issueToken(doc.id, false, false);
+    const res = await app.inject({ method: 'GET', url: `/api/view/grid/meta?token=${token}` });
+    expect(res.statusCode).toBe(400);
   });
 });

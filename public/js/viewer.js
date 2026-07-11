@@ -310,6 +310,207 @@ function setupDeterrents() {
   });
 }
 
+/* ==================== 그리드 뷰 (스프레드시트) ==================== */
+
+const GRID_ROW_H = 28;
+const GRID_CHUNK = 200;
+const GRID_OVERSCAN = 12;
+const GRID_ROWNUM_W = 52;
+
+const gridState = {
+  sheets: [],
+  styles: [],
+  active: 0,
+  chunks: new Map(), // `${sheet}:${chunkIdx}` -> rows | 'loading'
+  mergeStarts: new Map(),
+  mergeCovered: new Set(),
+};
+
+function colLetter(index) {
+  let name = '';
+  let n = index;
+  while (n > 0) {
+    const rem = (n - 1) % 26;
+    name = String.fromCharCode(65 + rem) + name;
+    n = Math.floor((n - 1) / 26);
+  }
+  return name;
+}
+
+function injectGridStyles(styles) {
+  const rules = styles.map((style, i) => {
+    const parts = [];
+    if (style.b) parts.push('font-weight:600');
+    if (style.col) parts.push(`color:${style.col}`);
+    if (style.bg) parts.push(`background:${style.bg}`);
+    if (style.a === 'c') parts.push('text-align:center');
+    if (style.a === 'r') parts.push('text-align:right');
+    if (style.w) parts.push('white-space:normal');
+    return `.gs${i}{${parts.join(';')}}`;
+  });
+  const styleEl = document.createElement('style');
+  styleEl.textContent = rules.join('\n');
+  document.head.append(styleEl);
+}
+
+function buildMergeIndex(sheet) {
+  gridState.mergeStarts = new Map();
+  gridState.mergeCovered = new Set();
+  for (const m of sheet.merges) {
+    gridState.mergeStarts.set(`${m.r}:${m.c}`, m);
+    for (let r = m.r; r < m.r + m.rs; r += 1) {
+      for (let c = m.c; c < m.c + m.cs; c += 1) {
+        if (r !== m.r || c !== m.c) gridState.mergeCovered.add(`${r}:${c}`);
+      }
+    }
+  }
+}
+
+async function fetchChunk(sheetIdx, chunkIdx) {
+  const key = `${sheetIdx}:${chunkIdx}`;
+  if (gridState.chunks.has(key)) return;
+  gridState.chunks.set(key, 'loading');
+  try {
+    const from = chunkIdx * GRID_CHUNK + 1;
+    const data = await fetchJsonView(`/api/view/grid/rows?${tokenQuery}&sheet=${sheetIdx}&from=${from}&count=${GRID_CHUNK}`);
+    gridState.chunks.set(key, data.rows);
+    renderGridViewport();
+  } catch {
+    gridState.chunks.delete(key);
+  }
+}
+
+async function fetchJsonView(url) {
+  const res = await fetch(url);
+  const json = await res.json();
+  if (!res.ok || !json.success) throw new Error(json.error || `요청 실패 (HTTP ${res.status})`);
+  return json.data;
+}
+
+function cellAt(sheetIdx, rowNumber, colIdx) {
+  const chunkIdx = Math.floor((rowNumber - 1) / GRID_CHUNK);
+  const chunk = gridState.chunks.get(`${sheetIdx}:${chunkIdx}`);
+  if (!chunk || chunk === 'loading') return undefined;
+  const row = chunk[(rowNumber - 1) % GRID_CHUNK];
+  return row ? row[colIdx] : 0;
+}
+
+function escapeHtml(text) {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function renderGridViewport() {
+  const sheet = gridState.sheets[gridState.active];
+  if (!sheet) return;
+  const scroll = document.getElementById('grid-scroll');
+  const firstVisible = Math.max(1, Math.floor(scroll.scrollTop / GRID_ROW_H) + 1 - GRID_OVERSCAN);
+  const visibleCount = Math.ceil(scroll.clientHeight / GRID_ROW_H) + GRID_OVERSCAN * 2;
+  const lastVisible = Math.min(sheet.rowCount, firstVisible + visibleCount);
+
+  // 필요한 청크를 비동기로 요청
+  const firstChunk = Math.floor((firstVisible - 1) / GRID_CHUNK);
+  const lastChunk = Math.floor((lastVisible - 1) / GRID_CHUNK);
+  for (let c = firstChunk; c <= lastChunk; c += 1) fetchChunk(gridState.active, c);
+
+  const cols = `<colgroup><col style="width:${GRID_ROWNUM_W}px">${sheet.colWidths
+    .map((w) => `<col style="width:${w}px">`)
+    .join('')}</colgroup>`;
+
+  const rowsHtml = [];
+  for (let r = firstVisible; r <= lastVisible; r += 1) {
+    const cells = [`<td class="g-rownum">${r}</td>`];
+    for (let c = 1; c <= sheet.colCount; c += 1) {
+      if (gridState.mergeCovered.has(`${r}:${c}`)) continue;
+      const merge = gridState.mergeStarts.get(`${r}:${c}`);
+      const cell = cellAt(gridState.active, r, c - 1);
+      const value = cell && cell !== 0 ? escapeHtml(cell.v) : '';
+      const cls = cell && cell !== 0 && cell.s !== undefined ? ` class="gs${cell.s}"` : '';
+      const span = merge ? ` colspan="${merge.cs}"${merge.rs > 1 ? ` rowspan="${merge.rs}"` : ''}` : '';
+      cells.push(`<td${cls}${span}>${value}</td>`);
+    }
+    rowsHtml.push(`<tr style="height:${GRID_ROW_H}px">${cells.join('')}</tr>`);
+  }
+
+  const table = document.getElementById('grid-table');
+  table.innerHTML = cols + rowsHtml.join('');
+  table.style.transform = `translateY(${(firstVisible - 1) * GRID_ROW_H}px)`;
+
+  pageIndicator.textContent = `${Math.min(sheet.rowCount, Math.floor(scroll.scrollTop / GRID_ROW_H) + 1).toLocaleString()} / ${sheet.rowCount.toLocaleString()}행`;
+}
+
+function renderGridHead() {
+  const sheet = gridState.sheets[gridState.active];
+  const head = document.getElementById('grid-head');
+  const scroll = document.getElementById('grid-scroll');
+  const cells = [`<div class="g-head-cell g-head-corner" style="width:${GRID_ROWNUM_W}px"></div>`];
+  for (let c = 1; c <= sheet.colCount; c += 1) {
+    cells.push(`<div class="g-head-cell" style="width:${sheet.colWidths[c - 1]}px">${colLetter(c)}</div>`);
+  }
+  head.innerHTML = `<div class="g-head-track">${cells.join('')}</div>`;
+  head.firstChild.style.transform = `translateX(${-scroll.scrollLeft}px)`;
+}
+
+function activateSheet(index) {
+  gridState.active = index;
+  const sheet = gridState.sheets[index];
+  buildMergeIndex(sheet);
+  const inner = document.getElementById('grid-inner');
+  inner.style.height = `${sheet.rowCount * GRID_ROW_H}px`;
+  inner.style.width = `${GRID_ROWNUM_W + sheet.colWidths.reduce((a, b) => a + b, 0)}px`;
+  document.getElementById('grid-scroll').scrollTop = 0;
+  for (const [i, tab] of [...document.querySelectorAll('.sheet-tab')].entries()) {
+    tab.classList.toggle('active', i === index);
+  }
+  renderGridHead();
+  renderGridViewport();
+}
+
+async function initGridView() {
+  document.getElementById('pages').hidden = true;
+  document.getElementById('grid').hidden = false;
+  document.getElementById('zoom-out').hidden = true;
+  document.getElementById('zoom-in').hidden = true;
+  document.getElementById('zoom-level').hidden = true;
+  document.getElementById('invert-btn').hidden = true;
+
+  const meta = await fetchJsonView(`/api/view/grid/meta?${tokenQuery}`);
+  gridState.sheets = meta.sheets;
+  injectGridStyles(meta.styles);
+
+  const tabs = document.getElementById('sheet-tabs');
+  tabs.replaceChildren(
+    ...meta.sheets.map((sheet, i) => {
+      const tab = document.createElement('button');
+      tab.className = 'sheet-tab';
+      tab.role = 'tab';
+      tab.textContent = sheet.name;
+      tab.addEventListener('click', () => activateSheet(i));
+      return tab;
+    }),
+  );
+
+  const scroll = document.getElementById('grid-scroll');
+  let ticking = false;
+  scroll.addEventListener('scroll', () => {
+    if (ticking) return;
+    ticking = true;
+    requestAnimationFrame(() => {
+      ticking = false;
+      renderGridViewport();
+      document.querySelector('.g-head-track').style.transform = `translateX(${-scroll.scrollLeft}px)`;
+    });
+  });
+
+  // 복사 권한이 없으면 선택·복사·우클릭을 차단한다 (서버가 원본을 주지 않는 것이 근본 방어)
+  if (!permissions.canCopy) {
+    const grid = document.getElementById('grid');
+    grid.classList.add('grid-noselect');
+    grid.addEventListener('copy', (event) => event.preventDefault());
+  }
+
+  activateSheet(0);
+}
+
 async function init() {
   if (!token) {
     showError('열람 토큰이 없습니다. 발급받은 링크로 접속해 주세요.');
@@ -333,11 +534,21 @@ async function init() {
   docName = json.data.name;
   pageCount = json.data.pageCount;
   permissions = json.data.permissions;
-  pageIndicator.textContent = `1 / ${pageCount}`;
 
-  applyZoom();
   setupToolbar();
   setupDeterrents();
+
+  if (json.data.viewKind === 'grid') {
+    try {
+      await initGridView();
+    } catch (error) {
+      showError(error.message || '스프레드시트를 불러오지 못했습니다.');
+    }
+    return;
+  }
+
+  pageIndicator.textContent = `1 / ${pageCount}`;
+  applyZoom();
   buildPages();
   trackCurrentPage();
 }

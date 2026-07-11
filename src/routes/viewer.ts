@@ -1,7 +1,12 @@
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { recordAudit } from '../audit.js';
+import { findConverter } from '../converters/index.js';
 import { PageOutOfRangeError, buildPrintPdf, renderPage } from '../rendering.js';
 import { InvalidTokenError, verifyViewToken } from '../security.js';
+import type { GridCell, GridHeader } from '../spreadsheet.js';
 import { store } from '../storage.js';
 import type { DocumentMeta, ViewClaims } from '../types.js';
 
@@ -38,6 +43,94 @@ async function resolveView(token: string | undefined, reply: FastifyReply): Prom
   return { claims, meta };
 }
 
+/**
+ * JSONL 그리드 인덱스: 헤더만 파싱하고 행 데이터는 줄 오프셋으로 색인해
+ * 요청된 범위의 줄만 그때그때 파싱한다 (수십만 행 문서 대응).
+ */
+interface LoadedGrid {
+  readonly header: GridHeader;
+  readonly buffer: Buffer;
+  readonly lineOffsets: readonly number[];
+  readonly sheetStartLine: readonly number[];
+}
+
+const GRID_CACHE_LIMIT = 2;
+const gridCache = new Map<string, Promise<LoadedGrid>>();
+
+function indexGrid(buffer: Buffer): LoadedGrid {
+  const lineOffsets: number[] = [0];
+  for (let i = buffer.indexOf(10); i !== -1; i = buffer.indexOf(10, i + 1)) {
+    lineOffsets.push(i + 1);
+  }
+  const headerEnd = lineOffsets.length > 1 ? lineOffsets[1] - 1 : buffer.length;
+  const header = JSON.parse(buffer.toString('utf8', 0, headerEnd)) as GridHeader;
+  const sheetStartLine: number[] = [];
+  let line = 1;
+  for (const sheet of header.sheets) {
+    sheetStartLine.push(line);
+    line += sheet.rowCount;
+  }
+  return { header, buffer, lineOffsets, sheetStartLine };
+}
+
+function loadGrid(docId: string): Promise<LoadedGrid> {
+  const cached = gridCache.get(docId);
+  if (cached) return cached;
+  const loading = store.readDerived(docId, 'grid').then(indexGrid);
+  loading.catch(() => gridCache.delete(docId));
+  gridCache.set(docId, loading);
+  while (gridCache.size > GRID_CACHE_LIMIT) {
+    const oldest = gridCache.keys().next().value;
+    if (oldest === undefined) break;
+    gridCache.delete(oldest);
+  }
+  return loading;
+}
+
+function sliceRows(
+  grid: LoadedGrid,
+  sheetIdx: number,
+  from: number,
+  count: number,
+): Array<Array<GridCell | 0>> {
+  const sheet = grid.header.sheets[sheetIdx];
+  const start = grid.sheetStartLine[sheetIdx] + from - 1;
+  const end = Math.min(start + count, grid.sheetStartLine[sheetIdx] + sheet.rowCount);
+  const rows: Array<Array<GridCell | 0>> = [];
+  for (let line = start; line < end; line += 1) {
+    const begin = grid.lineOffsets[line];
+    const finish = line + 1 < grid.lineOffsets.length ? grid.lineOffsets[line + 1] - 1 : grid.buffer.length;
+    rows.push(JSON.parse(grid.buffer.toString('utf8', begin, finish)));
+  }
+  return rows;
+}
+
+/**
+ * 그리드 문서의 PDF는 업로드 시 만들지 않고 출력 요청 시 생성한다.
+ * (대형 리스트의 수 분짜리 LibreOffice 변환을 열람 경로에서 제거)
+ */
+async function ensurePdf(meta: DocumentMeta): Promise<Buffer> {
+  if (await store.hasDerived(meta.id, 'pdf')) {
+    return store.readDerived(meta.id, 'pdf');
+  }
+  const converter = findConverter(meta.ext);
+  if (!converter) {
+    throw new Error(`PDF 변환기를 찾을 수 없습니다: ${meta.ext}`);
+  }
+  const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'docview-print-'));
+  try {
+    const sourcePath = path.join(workDir, `source.${meta.ext}`);
+    await fs.writeFile(sourcePath, await store.readOriginal(meta.id, meta.ext));
+    const targetPdfPath = path.join(workDir, 'converted.pdf');
+    await converter.convert(sourcePath, targetPdfPath, meta.name);
+    const pdfBytes = await fs.readFile(targetPdfPath);
+    await store.saveDerived(meta.id, 'pdf', pdfBytes);
+    return pdfBytes;
+  } finally {
+    await fs.rm(workDir, { recursive: true, force: true });
+  }
+}
+
 // token 누락/무효는 resolveView가 401로 일관 처리하도록 스키마에서 required로 강제하지 않는다.
 const tokenQuerySchema = {
   type: 'object',
@@ -59,12 +152,28 @@ const pageRequestSchema = {
   },
 } as const;
 
+const gridRowsSchema = {
+  type: 'object',
+  properties: {
+    token: { type: 'string' },
+    sheet: { type: 'integer', minimum: 0, default: 0 },
+    from: { type: 'integer', minimum: 1, default: 1 },
+    count: { type: 'integer', minimum: 1, maximum: 500, default: 200 },
+  },
+} as const;
+
 interface TokenQuery {
   readonly token?: string;
 }
 
 interface PageQuery extends TokenQuery {
   readonly scale: number;
+}
+
+interface GridRowsQuery extends TokenQuery {
+  readonly sheet: number;
+  readonly from: number;
+  readonly count: number;
 }
 
 export async function viewerRoutes(app: FastifyInstance): Promise<void> {
@@ -80,6 +189,7 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
         data: {
           name: view.meta.name,
           pageCount: view.meta.pageCount,
+          viewKind: view.meta.viewKind ?? 'pages',
           permissions: view.claims.perms,
           viewer: view.claims.viewer,
         },
@@ -95,7 +205,7 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
       if (!view) return reply;
       try {
         const png = await renderPage(view.meta.id, request.params.page, request.query.scale, () =>
-          store.readConverted(view.meta.id),
+          store.readDerived(view.meta.id, 'pdf'),
         );
         return await reply.type('image/png').header('cache-control', 'private, no-store').send(png);
       } catch (error) {
@@ -105,6 +215,41 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
         request.log.error(error, 'page rendering failed');
         return reply.code(500).send({ success: false, error: '페이지 렌더링에 실패했습니다.' });
       }
+    },
+  );
+
+  /** 그리드 메타: 시트 목록·크기·병합·스타일 팔레트 (셀 데이터 제외) */
+  app.get<{ Querystring: TokenQuery }>(
+    '/api/view/grid/meta',
+    { schema: { querystring: tokenQuerySchema } },
+    async (request, reply) => {
+      const view = await resolveView(request.query.token, reply);
+      if (!view) return reply;
+      if ((view.meta.viewKind ?? 'pages') !== 'grid') {
+        return reply.code(400).send({ success: false, error: '그리드 뷰 문서가 아닙니다.' });
+      }
+      const grid = await loadGrid(view.meta.id);
+      return { success: true, data: grid.header };
+    },
+  );
+
+  /** 그리드 행 데이터를 범위 단위로 반환한다 (가상 스크롤용) */
+  app.get<{ Querystring: GridRowsQuery }>(
+    '/api/view/grid/rows',
+    { schema: { querystring: gridRowsSchema } },
+    async (request, reply) => {
+      const view = await resolveView(request.query.token, reply);
+      if (!view) return reply;
+      if ((view.meta.viewKind ?? 'pages') !== 'grid') {
+        return reply.code(400).send({ success: false, error: '그리드 뷰 문서가 아닙니다.' });
+      }
+      const grid = await loadGrid(view.meta.id);
+      if (!grid.header.sheets[request.query.sheet]) {
+        return reply.code(404).send({ success: false, error: '시트를 찾을 수 없습니다.' });
+      }
+      const from = request.query.from;
+      const rows = sliceRows(grid, request.query.sheet, from, request.query.count);
+      return { success: true, data: { from, rows } };
     },
   );
 
@@ -118,8 +263,15 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
         await recordAudit({ type: 'print_denied', docId: view.meta.id, viewer: view.claims.viewer });
         return reply.code(403).send({ success: false, error: '출력 권한이 없습니다.' });
       }
+      let pdfSource: Buffer;
+      try {
+        pdfSource = await ensurePdf(view.meta);
+      } catch (error) {
+        request.log.error(error, 'print pdf generation failed');
+        return reply.code(500).send({ success: false, error: '출력용 PDF 생성에 실패했습니다.' });
+      }
       const watermark = `${view.claims.viewer}  ${new Date().toISOString().slice(0, 10)}`;
-      const pdfBytes = await buildPrintPdf(await store.readConverted(view.meta.id), watermark);
+      const pdfBytes = await buildPrintPdf(pdfSource, watermark);
       await recordAudit({ type: 'printed', docId: view.meta.id, viewer: view.claims.viewer });
       return reply
         .type('application/pdf')

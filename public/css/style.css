@@ -387,11 +387,125 @@ h2 { font-size: 1.1rem; margin: 2rem 0 0.75rem; }
 
 .icon-btn:disabled { opacity: 0.3; cursor: not-allowed; }
 
+/* ---------- 그리드 뷰 (스프레드시트) ---------- */
+
+.grid-container {
+  position: fixed;
+  inset: 4.4rem 0.75rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  border-radius: 14px;
+  overflow: hidden;
+  border: 1px solid var(--v-glass-line);
+  background: #fff;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
+}
+
+.grid-head {
+  position: relative;
+  height: 30px;
+  flex: none;
+  overflow: hidden;
+  background: #f3f4f7;
+  border-bottom: 1px solid #d7dae0;
+  z-index: 2;
+}
+
+.g-head-track { display: flex; height: 100%; will-change: transform; }
+
+.g-head-cell {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #6b7280;
+  border-right: 1px solid #e2e5ea;
+  box-sizing: border-box;
+}
+
+.g-head-corner { position: sticky; left: 0; background: #f3f4f7; z-index: 1; }
+
+.grid-scroll {
+  flex: 1;
+  overflow: auto;
+  background: #fff;
+  color: #1c1b1a;
+}
+
+.grid-inner { position: relative; }
+
+.grid-table {
+  position: absolute;
+  top: 0;
+  left: 0;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 0.8rem;
+  line-height: 1.3;
+  will-change: transform;
+}
+
+.grid-table td {
+  border: 1px solid #e6e8ec;
+  padding: 2px 6px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+  background-clip: padding-box;
+}
+
+.grid-table .g-rownum {
+  position: sticky;
+  left: 0;
+  background: #f3f4f7;
+  color: #8a8f99;
+  font-size: 0.7rem;
+  text-align: center;
+  border-right: 1px solid #d7dae0;
+  z-index: 1;
+}
+
+.grid-noselect { user-select: none; -webkit-user-select: none; }
+
+.sheet-tabs {
+  flex: none;
+  display: flex;
+  gap: 2px;
+  padding: 4px 6px;
+  background: #eceef2;
+  border-top: 1px solid #d7dae0;
+  overflow-x: auto;
+}
+
+.sheet-tab {
+  border: none;
+  border-radius: 7px 7px 0 0;
+  padding: 5px 14px;
+  font-size: 0.78rem;
+  background: transparent;
+  color: #5b6270;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.sheet-tab:hover { background: rgba(0, 0, 0, 0.06); }
+.sheet-tab.active { background: #fff; color: #1c1b1a; font-weight: 600; box-shadow: 0 -1px 4px rgba(0,0,0,0.08); }
+
 .error-screen {
   min-height: 100vh;
   display: grid;
   place-content: center;
   padding: 1.5rem;
+}
+
+/* hidden 속성이 author display 값에 지지 않도록 명시한다 */
+.error-screen[hidden],
+.pages-container[hidden],
+.grid-container[hidden] {
+  display: none;
 }
 
 .error-card {

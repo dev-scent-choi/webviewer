@@ -42,6 +42,7 @@ export function verifyViewToken(token: string): ViewClaims {
   const permissions: Permissions = {
     canPrint: raw.canPrint === true,
     canDownload: raw.canDownload === true,
+    canCopy: raw.canCopy === true,
   };
   return { docId, viewer, perms: permissions };
 }

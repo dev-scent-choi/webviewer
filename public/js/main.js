@@ -33,17 +33,17 @@ async function loadFormats() {
   }
 }
 
-async function issueToken(docId, viewer, canPrint, canDownload) {
+async function issueToken(docId, viewer, canPrint, canDownload, canCopy) {
   return fetchJson(`/api/documents/${docId}/tokens`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ viewer, canPrint, canDownload }),
+    body: JSON.stringify({ viewer, canPrint, canDownload, canCopy }),
   });
 }
 
 /** 업로더 본인 열람용 — 전체 권한 토큰을 발급해 뷰어로 이동한다. */
 async function openViewer(docId, viewer) {
-  const issued = await issueToken(docId, viewer, true, true);
+  const issued = await issueToken(docId, viewer, true, true, true);
   location.href = issued.viewerUrl;
 }
 
@@ -227,6 +227,7 @@ function renderDocItem(doc) {
     <input type="text" name="viewer" placeholder="열람자 이름" required maxlength="100" />
     <label><input type="checkbox" name="canPrint" /> 출력</label>
     <label><input type="checkbox" name="canDownload" /> 저장</label>
+    <label><input type="checkbox" name="canCopy" /> 복사</label>
     <button type="submit" class="btn btn-primary">열람 링크 발급</button>
   `;
   const result = document.createElement('p');
@@ -241,6 +242,7 @@ function renderDocItem(doc) {
         data.get('viewer'),
         data.get('canPrint') === 'on',
         data.get('canDownload') === 'on',
+        data.get('canCopy') === 'on',
       );
       result.replaceChildren();
       const open = document.createElement('a');

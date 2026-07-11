@@ -5,7 +5,7 @@ import type { ViewClaims } from '../src/types.js';
 const claims: ViewClaims = {
   docId: '11111111-2222-3333-4444-555555555555',
   viewer: '홍길동',
-  perms: { canPrint: true, canDownload: false },
+  perms: { canPrint: true, canDownload: false, canCopy: false },
 };
 
 describe('security', () => {
@@ -14,7 +14,7 @@ describe('security', () => {
     const verified = verifyViewToken(token);
     expect(verified.docId).toBe(claims.docId);
     expect(verified.viewer).toBe(claims.viewer);
-    expect(verified.perms).toEqual({ canPrint: true, canDownload: false });
+    expect(verified.perms).toEqual({ canPrint: true, canDownload: false, canCopy: false });
   });
 
   test('throws InvalidTokenError for a tampered token', () => {
@@ -33,11 +33,12 @@ describe('security', () => {
 
   test('coerces missing permission fields to false instead of trusting the payload', () => {
     const token = issueViewToken(
-      { ...claims, perms: { canPrint: false, canDownload: false } },
+      { ...claims, perms: { canPrint: false, canDownload: false, canCopy: false } },
       60,
     );
     const verified = verifyViewToken(token);
     expect(verified.perms.canPrint).toBe(false);
     expect(verified.perms.canDownload).toBe(false);
+    expect(verified.perms.canCopy).toBe(false);
   });
 });

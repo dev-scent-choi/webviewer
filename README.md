@@ -58,7 +58,9 @@ npm test
 | POST | `/api/documents` | multipart 업로드. 즉시 201(`status: processing`) 응답 후 백그라운드 변환 |
 | GET | `/api/documents/:id` | 단일 문서 상태 조회 (변환 진행 폴링용, `processing`/`ready`/`failed`) |
 | GET | `/api/documents` | 문서 목록 |
-| POST | `/api/documents/:id/tokens` | `{viewer, canPrint, canDownload}` → 열람 토큰 발급 |
+| POST | `/api/documents/:id/tokens` | `{viewer, canPrint, canDownload, canCopy}` → 열람 토큰 발급 |
+| GET | `/api/view/grid/meta?token=…` | 그리드 문서의 시트 목록·크기·스타일 팔레트 |
+| GET | `/api/view/grid/rows?token=…&sheet&from&count` | 그리드 행 데이터 범위 조회 (가상 스크롤용, 최대 500행/요청) |
 | GET | `/api/view/info?token=…` | 문서 정보 + 권한 |
 | GET | `/api/view/pages/:n?token=…&scale=1~4` | 페이지 PNG 렌더링. 뷰어가 확대 수준에 맞춰 배율을 자동 요청 (페이지당 최장변 6000px 상한) |
 | GET | `/api/view/print?token=…` | 워터마크 PDF (canPrint 필요) |
@@ -72,7 +74,8 @@ npm test
 | 이미지 | png, jpg, jpeg | pdf-lib |
 | 이미지(확장) | tif, tiff, bmp, webp, gif | sharp — 다페이지 TIFF는 페이지별로 분리 |
 | 문서 | doc, docx, ppt, pptx, odt, odp, rtf, txt | LibreOffice headless (미설치 시 자동 비활성화) |
-| 스프레드시트 | xls, xlsx, ods, csv | LibreOffice Calc — `SinglePageSheets` 옵션으로 시트 1장 = PDF 1페이지 (인쇄 폭 분할로 화면이 조각나는 문제 방지). xlsx는 변환 전 고정 행 높이를 제거해 Excel↔LibreOffice 글꼴 폭 차이로 인한 텍스트 잘림을 방지 |
+| 스프레드시트 (그리드 뷰) | xlsx, csv | **PDF 변환 없이** 셀 값·스타일만 추출해 엑셀처럼 시트 탭+가상 스크롤 그리드로 표시 (수십만 행 지원, 원본 비전송 유지). PDF는 출력 요청 시에만 지연 생성. 셀 복사는 토큰의 `canCopy` 권한으로 제어 |
+| 스프레드시트 (PDF 뷰) | xls, ods | LibreOffice Calc — 시트당 1페이지(`SinglePageSheets`), 500행 초과 리스트는 폭 맞춤 페이지 분할, 행 높이 자동 보정 |
 | 도면 | dxf | LibreOffice Draw |
 | 도면 | dwg | ODA File Converter(설치 시 자동 감지, 전 버전 지원) → LibreDWG 순으로 시도 후 LibreOffice Draw. **LibreDWG만으로는 AutoCAD 2000/2004 형식 위주로 동작**하며 R14·2007~2018 형식은 실패할 수 있음 — 실패 시 파일의 AutoCAD 버전과 안내가 오류 메시지에 표시됨 |
 
