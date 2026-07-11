@@ -152,6 +152,27 @@ describe.skipIf(!sofficePath)('libreOffice converters (requires LibreOffice)', (
     expect(height).toBeLessThan(590);
   });
 
+  test(
+    'splits very long list sheets into normal pages instead of one giant page',
+    { timeout: LIBREOFFICE_TIMEOUT_MS },
+    async () => {
+      const source = path.join(workDir, 'long-list.csv');
+      const target = path.join(workDir, 'out-long-list.pdf');
+      const rows = Array.from({ length: 1200 }, (_, i) => `${i + 1},도면-${i + 1},검토중`);
+      await fs.writeFile(source, `no,name,status\n${rows.join('\n')}\n`, 'utf8');
+
+      const { spreadsheetConverter } = await import('../src/converters/libreOffice.js');
+      await spreadsheetConverter.convert(source, target, 'long-list.csv');
+
+      const doc = await PDFDocument.load(await fs.readFile(target));
+      expect(doc.getPageCount()).toBeGreaterThan(1);
+      for (const page of doc.getPages()) {
+        const { width, height } = page.getSize();
+        expect(Math.max(width, height)).toBeLessThan(3600);
+      }
+    },
+  );
+
   test('fails explicitly when no PDF is produced', { timeout: LIBREOFFICE_TIMEOUT_MS }, async () => {
     const source = path.join(workDir, 'does-not-exist.docx');
     const target = path.join(workDir, 'out-missing.pdf');

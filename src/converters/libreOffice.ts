@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
+import { PDFDocument } from 'pdf-lib';
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 import { trimPdfMargins } from './pdfTrim.js';
 import type { Converter } from './types.js';
@@ -43,27 +44,99 @@ function toSafeDisplayName(sourceName: string | undefined, ext: string): string 
   return `${safe.length > 0 ? safe : 'document'}.${ext}`;
 }
 
+function transformWorksheets(
+  xlsxBytes: Uint8Array,
+  transform: (xml: string) => string,
+): Uint8Array {
+  const entries = unzipSync(xlsxBytes);
+  const updated: Record<string, Uint8Array> = {};
+  for (const [name, bytes] of Object.entries(entries)) {
+    updated[name] = /^xl\/worksheets\/[^/]+\.xml$/.test(name)
+      ? strToU8(transform(strFromU8(bytes)))
+      : bytes;
+  }
+  return zipSync(updated);
+}
+
 /**
- * xlsx 안의 고정 행 높이(ht/customHeight)를 제거한다.
+ * 고정 행 높이(ht/customHeight)를 제거한다.
  * Excel과 LibreOffice의 글꼴 폭 계산 차이로, Excel에서 꼭 맞게 저장된 행 높이가
  * LibreOffice에서는 부족해 줄바꿈 텍스트가 잘린다. 높이를 제거하면 Calc가
  * 내용에 맞게 행 높이를 자동 계산하므로 텍스트가 잘리지 않는다.
  */
-export function stripCustomRowHeights(xlsxBytes: Uint8Array): Uint8Array {
-  const entries = unzipSync(xlsxBytes);
-  const updated: Record<string, Uint8Array> = {};
-  for (const [name, bytes] of Object.entries(entries)) {
-    if (/^xl\/worksheets\/[^/]+\.xml$/.test(name)) {
-      const xml = strFromU8(bytes);
-      const fixed = xml.replace(/<row\b[^>]*?>/g, (tag) =>
-        tag.replace(/ ht="[^"]*"/g, '').replace(/ customHeight="(?:1|true)"/g, ''),
-      );
-      updated[name] = strToU8(fixed);
-    } else {
-      updated[name] = bytes;
-    }
+function stripRowHeightsXml(xml: string): string {
+  return xml.replace(/<row\b[^>]*?>/g, (tag) =>
+    tag.replace(/ ht="[^"]*"/g, '').replace(/ customHeight="(?:1|true)"/g, ''),
+  );
+}
+
+/**
+ * 시트를 "페이지 폭에 맞춰 축소 + 세로로 일반 페이지 분할"로 인쇄하도록 강제한다.
+ * 세로로 매우 긴 리스트 시트에서 SinglePageSheets가 만드는 초장신 페이지
+ * (렌더링 픽셀 상한 때문에 뿌옇게 보이는 문제)의 대안 경로.
+ */
+function forceFitToWidthXml(xml: string): string {
+  let out = xml;
+  const fitToPage = '<pageSetUpPr fitToPage="1"/>';
+  if (/<sheetPr\b[^>]*\/>/.test(out)) {
+    out = out.replace(/<sheetPr\b([^>]*)\/>/, `<sheetPr$1>${fitToPage}</sheetPr>`);
+  } else if (/<sheetPr\b/.test(out)) {
+    out = /<pageSetUpPr\b/.test(out)
+      ? out.replace(/<pageSetUpPr\b[^>]*\/>/, fitToPage)
+      : out.replace(/<sheetPr\b([^>]*)>/, `<sheetPr$1>${fitToPage}`);
+  } else {
+    out = out.replace(/(<worksheet\b[^>]*>)/, `$1<sheetPr>${fitToPage}</sheetPr>`);
   }
-  return zipSync(updated);
+
+  const setupAttrs = 'fitToWidth="1" fitToHeight="0" orientation="landscape"';
+  if (/<pageSetup\b/.test(out)) {
+    out = out.replace(/<pageSetup\b([^>]*?)\/>/, (_match, attrs: string) => {
+      const cleaned = attrs
+        .replace(/\sfitToWidth="[^"]*"/g, '')
+        .replace(/\sfitToHeight="[^"]*"/g, '')
+        .replace(/\sorientation="[^"]*"/g, '');
+      return `<pageSetup${cleaned} ${setupAttrs}/>`;
+    });
+  } else {
+    // 스키마상 pageSetup 뒤에 올 수 있는 요소들 앞(없으면 문서 끝)에 삽입한다
+    out = out.replace(
+      /<headerFooter\b|<rowBreaks\b|<colBreaks\b|<drawing\b|<legacyDrawing\b|<tableParts\b|<\/worksheet>/,
+      (anchor) => `<pageSetup ${setupAttrs}/>${anchor}`,
+    );
+  }
+  return out;
+}
+
+export function stripCustomRowHeights(xlsxBytes: Uint8Array): Uint8Array {
+  return transformWorksheets(xlsxBytes, stripRowHeightsXml);
+}
+
+/** 폭 맞춤 페이지 분할만 적용 (수천 행 리스트용 — 행높이 재계산 비용을 피한다) */
+export function applyFitToWidth(xlsxBytes: Uint8Array): Uint8Array {
+  return transformWorksheets(xlsxBytes, forceFitToWidthXml);
+}
+
+/** 폭 맞춤 + 행높이 자동 계산 (일반 크기 시트의 폴백용) */
+export function applyFitToWidthAndStrip(xlsxBytes: Uint8Array): Uint8Array {
+  return transformWorksheets(xlsxBytes, (xml) => forceFitToWidthXml(stripRowHeightsXml(xml)));
+}
+
+/** 시트별 최대 행 번호를 dimension 참조로 가볍게 추정한다 (전체 파싱 없이). */
+export function maxSheetRows(xlsxBytes: Uint8Array): number {
+  const entries = unzipSync(xlsxBytes);
+  let max = 0;
+  for (const [name, bytes] of Object.entries(entries)) {
+    if (!/^xl\/worksheets\/[^/]+\.xml$/.test(name)) continue;
+    const xml = strFromU8(bytes);
+    const dimension = xml.match(/<dimension ref="[A-Z]+\d+:[A-Z]+(\d+)"/);
+    if (dimension) {
+      max = Math.max(max, Number(dimension[1]));
+      continue;
+    }
+    const rowRefs = xml.match(/<row r="(\d+)"[^>]*>(?![\s\S]*<row )/);
+    if (rowRefs) max = Math.max(max, Number(rowRefs[1]));
+  }
+  return max;
 }
 
 type SourcePreprocessor = (bytes: Uint8Array) => Uint8Array;
@@ -198,11 +271,53 @@ export const officeConverter: Converter = {
 const SPREADSHEET_PDF_FILTER =
   'pdf:calc_pdf_Export:{"SinglePageSheets":{"type":"boolean","value":"true"}}';
 
+/** 세로 스크롤형 리스트 시트가 만드는 초장신 페이지 판정 기준 */
+const EXTREME_PAGE_EDGE_PT = 3600;
+const EXTREME_PAGE_ASPECT = 4;
+
+async function hasExtremePages(pdfPath: string): Promise<boolean> {
+  const doc = await PDFDocument.load(await fs.readFile(pdfPath), {
+    ignoreEncryption: true,
+    updateMetadata: false,
+  });
+  return doc.getPages().some((page) => {
+    const { width, height } = page.getSize();
+    const long = Math.max(width, height);
+    const short = Math.min(width, height);
+    return long > EXTREME_PAGE_EDGE_PT || long / short > EXTREME_PAGE_ASPECT;
+  });
+}
+
+/** 이 행 수를 넘는 시트는 시트당 1페이지 방식을 시도하지 않고 곧장 페이지 분할로 간다 */
+const LONG_SHEET_ROWS = 500;
+
 export const spreadsheetConverter: Converter = {
   name: 'libreoffice-calc',
   extensions: ['xls', 'xlsx', 'ods', 'csv'],
   async convert(sourcePath, targetPdfPath, sourceName) {
     const isXlsx = path.extname(sourcePath).toLowerCase() === '.xlsx';
+
+    // 수천 행짜리 리스트는 시트당 1페이지가 수 미터짜리 리본이 되어 뿌옇게 보이고,
+    // 행높이 재계산 비용도 커서 처음부터 폭 맞춤 페이지 분할로 변환한다.
+    if (isXlsx) {
+      let longList = false;
+      try {
+        longList = maxSheetRows(await fs.readFile(sourcePath)) > LONG_SHEET_ROWS;
+      } catch {
+        /* 추정 실패 시 일반 경로로 진행 */
+      }
+      if (longList) {
+        await convertWithSoffice(
+          sourcePath,
+          targetPdfPath,
+          ['--convert-to', 'pdf'],
+          sourceName,
+          applyFitToWidth,
+        );
+        return;
+      }
+    }
+
     await convertWithSoffice(
       sourcePath,
       targetPdfPath,
@@ -210,6 +325,16 @@ export const spreadsheetConverter: Converter = {
       sourceName,
       isXlsx ? stripCustomRowHeights : undefined,
     );
+    // 예외적으로 여전히 초장신 페이지가 나오면 폭 맞춤 페이지 분할로 재변환한다.
+    if (await hasExtremePages(targetPdfPath)) {
+      await convertWithSoffice(
+        sourcePath,
+        targetPdfPath,
+        ['--convert-to', 'pdf'],
+        sourceName,
+        isXlsx ? applyFitToWidthAndStrip : undefined,
+      );
+    }
   },
 };
 

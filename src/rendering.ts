@@ -91,8 +91,9 @@ function clampScale(requestedScale: number, size: PageSize): number {
   const longestEdge = Math.max(size.width, size.height);
   const maxByPixels = MAX_BITMAP_EDGE_PX / longestEdge;
   const clamped = Math.min(bounded, maxByPixels);
-  // 캐시 키가 무한히 늘지 않도록 0.5 단위로 정량화한다
-  return Math.max(1, Math.floor(clamped * 2) / 2);
+  // 픽셀 상한보다 큰 초대형 페이지는 1 미만 배율로 낮춰서라도 상한을 지킨다.
+  // 캐시 키가 무한히 늘지 않도록 0.25 단위로 정량화한다.
+  return Math.max(0.25, Math.floor(clamped * 4) / 4);
 }
 
 export async function renderPage(
