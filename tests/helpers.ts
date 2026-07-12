@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { PDFDocument } from 'pdf-lib';
+import { PDFDocument, StandardFonts } from 'pdf-lib';
 
 /** fastify.inject용 multipart 본문을 직접 조립한다. */
 export function multipartPayload(
@@ -22,8 +22,10 @@ export function multipartPayload(
 
 export async function makeSamplePdf(pages = 2): Promise<Buffer> {
   const doc = await PDFDocument.create();
+  const font = await doc.embedFont(StandardFonts.Helvetica);
   for (let i = 0; i < pages; i += 1) {
-    doc.addPage([595, 842]);
+    const page = doc.addPage([595, 842]);
+    page.drawText(`DocView Search Target page ${i + 1}`, { x: 50, y: 760, size: 18, font });
   }
   return Buffer.from(await doc.save());
 }

@@ -307,6 +307,130 @@ function setupDeterrents() {
         printBtn.click();
       }
     }
+    // 브라우저 기본 Ctrl+F는 가상화된 문서를 찾지 못하므로 자체 검색으로 대체한다
+    if ((event.ctrlKey || event.metaKey) && key === 'f') {
+      event.preventDefault();
+      openSearchBar();
+    }
+    if (key === 'escape') closeSearchBar();
+  });
+}
+
+/* ==================== 문서 내 검색 ==================== */
+
+const searchState = { hits: [], current: -1, kind: 'pages', lastQuery: '' };
+
+function openSearchBar() {
+  const bar = document.getElementById('search-bar');
+  bar.hidden = false;
+  document.getElementById('search-input').focus();
+  document.getElementById('search-input').select();
+}
+
+function closeSearchBar() {
+  document.getElementById('search-bar').hidden = true;
+  clearSearchHighlights();
+  searchState.hits = [];
+  searchState.current = -1;
+  updateSearchCount('');
+}
+
+function updateSearchCount(text) {
+  document.getElementById('search-count').textContent = text;
+  const hasHits = searchState.hits.length > 0;
+  document.getElementById('search-prev').disabled = !hasHits;
+  document.getElementById('search-next').disabled = !hasHits;
+}
+
+function clearSearchHighlights() {
+  for (const el of document.querySelectorAll('.search-hit-overlay')) el.remove();
+  gridSearchHits.clear();
+  gridCurrentHit = null;
+  if (typeof renderGridViewport === 'function' && gridState.sheets.length > 0) renderGridViewport();
+}
+
+async function runSearch() {
+  const query = document.getElementById('search-input').value.trim();
+  if (query === '' || query === searchState.lastQuery) {
+    if (query === searchState.lastQuery && searchState.hits.length > 0) gotoHit(searchState.current + 1);
+    return;
+  }
+  searchState.lastQuery = query;
+  clearSearchHighlights();
+  updateSearchCount('검색 중…');
+  try {
+    const data = await fetchJsonView(
+      `/api/view/search?${tokenQuery}&q=${encodeURIComponent(query)}&limit=500`,
+    );
+    searchState.kind = data.kind;
+    searchState.hits = data.hits;
+    searchState.current = -1;
+    if (data.hits.length === 0) {
+      updateSearchCount('결과 없음');
+      return;
+    }
+    if (data.kind === 'grid') {
+      gridSearchHits = new Set(data.hits.map((h) => `${h.sheet}:${h.r}:${h.c}`));
+    }
+    gotoHit(0);
+  } catch (error) {
+    updateSearchCount(error.message || '검색 실패');
+  }
+}
+
+function gotoHit(index) {
+  if (searchState.hits.length === 0) return;
+  const i = ((index % searchState.hits.length) + searchState.hits.length) % searchState.hits.length;
+  searchState.current = i;
+  const total = searchState.hits.length;
+  const totalLabel = total >= 500 ? '500+' : String(total);
+  updateSearchCount(`${i + 1} / ${totalLabel}`);
+  const hit = searchState.hits[i];
+  if (searchState.kind === 'grid') {
+    gotoGridHit(hit);
+  } else {
+    gotoPageHit(hit);
+  }
+}
+
+function gotoPageHit(hit) {
+  const frame = pagesContainer.children[hit.page - 1];
+  if (!frame) return;
+  frame.scrollIntoView({ block: 'center' });
+  for (const el of document.querySelectorAll('.search-hit-overlay')) el.remove();
+  for (const rect of hit.rects) {
+    const overlay = document.createElement('div');
+    overlay.className = 'search-hit-overlay';
+    overlay.style.left = `${rect.x * 100}%`;
+    overlay.style.top = `${rect.y * 100}%`;
+    overlay.style.width = `${Math.max(rect.w * 100, 0.5)}%`;
+    overlay.style.height = `${Math.max(rect.h * 100, 0.5)}%`;
+    frame.append(overlay);
+  }
+}
+
+let gridSearchHits = new Set();
+let gridCurrentHit = null;
+
+function gotoGridHit(hit) {
+  if (gridState.active !== hit.sheet) activateSheet(hit.sheet);
+  gridCurrentHit = `${hit.sheet}:${hit.r}:${hit.c}`;
+  const scroll = document.getElementById('grid-scroll');
+  scroll.scrollTop = Math.max(0, (hit.r - 1) * GRID_ROW_H - scroll.clientHeight / 2);
+  renderGridViewport();
+}
+
+function setupSearchBar() {
+  document.getElementById('search-btn').addEventListener('click', openSearchBar);
+  document.getElementById('search-close').addEventListener('click', closeSearchBar);
+  document.getElementById('search-prev').addEventListener('click', () => gotoHit(searchState.current - 1));
+  document.getElementById('search-next').addEventListener('click', () => gotoHit(searchState.current + 1));
+  document.getElementById('search-input').addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      if (event.shiftKey) gotoHit(searchState.current - 1);
+      else runSearch();
+    }
   });
 }
 
@@ -424,7 +548,12 @@ function renderGridViewport() {
       const merge = gridState.mergeStarts.get(`${r}:${c}`);
       const cell = cellAt(gridState.active, r, c - 1);
       const value = cell && cell !== 0 ? escapeHtml(cell.v) : '';
-      const cls = cell && cell !== 0 && cell.s !== undefined ? ` class="gs${cell.s}"` : '';
+      const classes = [];
+      if (cell && cell !== 0 && cell.s !== undefined) classes.push(`gs${cell.s}`);
+      const hitKey = `${gridState.active}:${r}:${c}`;
+      if (gridSearchHits.has(hitKey)) classes.push('g-hit');
+      if (hitKey === gridCurrentHit) classes.push('g-hit-current');
+      const cls = classes.length > 0 ? ` class="${classes.join(' ')}"` : '';
       const span = merge ? ` colspan="${merge.cs}"${merge.rs > 1 ? ` rowspan="${merge.rs}"` : ''}` : '';
       cells.push(`<td${cls}${span}>${value}</td>`);
     }
@@ -537,6 +666,7 @@ async function init() {
 
   setupToolbar();
   setupDeterrents();
+  setupSearchBar();
 
   if (json.data.viewKind === 'grid') {
     try {

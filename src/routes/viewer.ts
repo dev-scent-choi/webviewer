@@ -6,6 +6,7 @@ import { recordAudit } from '../audit.js';
 import { findConverter } from '../converters/index.js';
 import { PageOutOfRangeError, buildPrintPdf, renderPage } from '../rendering.js';
 import { InvalidTokenError, verifyViewToken } from '../security.js';
+import { extractPdfText, searchPdfText, type PageText } from '../search.js';
 import type { GridCell, GridHeader } from '../spreadsheet.js';
 import { store } from '../storage.js';
 import type { DocumentMeta, ViewClaims } from '../types.js';
@@ -85,6 +86,60 @@ function loadGrid(docId: string): Promise<LoadedGrid> {
     gridCache.delete(oldest);
   }
   return loading;
+}
+
+/** PDF 텍스트 추출 결과 캐시 (문서당 1회 추출) */
+const PDF_TEXT_CACHE_LIMIT = 4;
+const pdfTextCache = new Map<string, Promise<PageText[]>>();
+
+function loadPdfText(docId: string): Promise<PageText[]> {
+  const cached = pdfTextCache.get(docId);
+  if (cached) return cached;
+  const loading = store.readDerived(docId, 'pdf').then(extractPdfText);
+  loading.catch(() => pdfTextCache.delete(docId));
+  pdfTextCache.set(docId, loading);
+  while (pdfTextCache.size > PDF_TEXT_CACHE_LIMIT) {
+    const oldest = pdfTextCache.keys().next().value;
+    if (oldest === undefined) break;
+    pdfTextCache.delete(oldest);
+  }
+  return loading;
+}
+
+interface GridSearchHit {
+  readonly sheet: number;
+  readonly r: number;
+  readonly c: number;
+  readonly snippet: string;
+}
+
+/** JSONL 그리드에서 부분 문자열을 검색한다. 줄 단위 1차 필터 후 매칭 줄만 파싱한다. */
+function searchGrid(grid: LoadedGrid, query: string, limit: number): { hits: GridSearchHit[]; total: number } {
+  const needle = query.toLowerCase();
+  const hits: GridSearchHit[] = [];
+  let total = 0;
+  for (let sheetIdx = 0; sheetIdx < grid.header.sheets.length; sheetIdx += 1) {
+    const sheet = grid.header.sheets[sheetIdx];
+    const startLine = grid.sheetStartLine[sheetIdx];
+    for (let r = 1; r <= sheet.rowCount; r += 1) {
+      const line = startLine + r - 1;
+      const begin = grid.lineOffsets[line];
+      const finish =
+        line + 1 < grid.lineOffsets.length ? grid.lineOffsets[line + 1] - 1 : grid.buffer.length;
+      const raw = grid.buffer.toString('utf8', begin, finish);
+      if (!raw.toLowerCase().includes(needle)) continue;
+      const cells = JSON.parse(raw) as Array<GridCell | 0>;
+      for (let c = 0; c < cells.length; c += 1) {
+        const cell = cells[c];
+        if (cell === 0 || !cell.v.toLowerCase().includes(needle)) continue;
+        total += 1;
+        if (hits.length < limit) {
+          hits.push({ sheet: sheetIdx, r, c: c + 1, snippet: cell.v.slice(0, 120) });
+        }
+      }
+    }
+  }
+  return { hits, total };
 }
 
 function sliceRows(
@@ -176,6 +231,21 @@ interface GridRowsQuery extends TokenQuery {
   readonly count: number;
 }
 
+const searchQuerySchema = {
+  type: 'object',
+  required: ['q'],
+  properties: {
+    token: { type: 'string' },
+    q: { type: 'string', minLength: 1, maxLength: 200 },
+    limit: { type: 'integer', minimum: 1, maximum: 500, default: 200 },
+  },
+} as const;
+
+interface SearchQuery extends TokenQuery {
+  readonly q: string;
+  readonly limit: number;
+}
+
 export async function viewerRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Querystring: TokenQuery }>(
     '/api/view/info',
@@ -250,6 +320,35 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
       const from = request.query.from;
       const rows = sliceRows(grid, request.query.sheet, from, request.query.count);
       return { success: true, data: { from, rows } };
+    },
+  );
+
+  /**
+   * 문서 내 문자 검색.
+   * grid 문서: 셀 값 검색 → {kind:'grid', hits:[{sheet,r,c,snippet}]}
+   * pages 문서: PDF 텍스트 레이어 검색 → {kind:'pages', hits:[{page,rects,snippet}]}
+   * rects는 페이지 크기 대비 비율(0~1)이라 클라이언트가 배율과 무관하게 하이라이트를 그린다.
+   */
+  app.get<{ Querystring: SearchQuery }>(
+    '/api/view/search',
+    { schema: { querystring: searchQuerySchema } },
+    async (request, reply) => {
+      const view = await resolveView(request.query.token, reply);
+      if (!view) return reply;
+      const { q, limit } = request.query;
+      try {
+        if ((view.meta.viewKind ?? 'pages') === 'grid') {
+          const grid = await loadGrid(view.meta.id);
+          const { hits, total } = searchGrid(grid, q, limit);
+          return { success: true, data: { kind: 'grid', hits, total } };
+        }
+        const pages = await loadPdfText(view.meta.id);
+        const { hits, total } = searchPdfText(pages, q, limit);
+        return { success: true, data: { kind: 'pages', hits, total } };
+      } catch (error) {
+        request.log.error(error, 'search failed');
+        return reply.code(500).send({ success: false, error: '검색에 실패했습니다.' });
+      }
     },
   );
 

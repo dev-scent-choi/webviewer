@@ -387,6 +387,63 @@ h2 { font-size: 1.1rem; margin: 2rem 0 0.75rem; }
 
 .icon-btn:disabled { opacity: 0.3; cursor: not-allowed; }
 
+/* ---------- 문서 내 검색 ---------- */
+
+.search-bar {
+  position: fixed;
+  top: 4.4rem;
+  right: 1.2rem;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.4rem 0.5rem;
+  border-radius: 12px;
+  background: var(--v-glass);
+  border: 1px solid var(--v-glass-line);
+  backdrop-filter: blur(18px) saturate(1.5);
+  -webkit-backdrop-filter: blur(18px) saturate(1.5);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+}
+
+.search-bar[hidden] { display: none; }
+
+.search-bar input {
+  width: 15rem;
+  border: none;
+  outline: none;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
+  padding: 0.4rem 0.7rem;
+  color: var(--v-text);
+  font-size: 0.85rem;
+}
+
+.search-bar input::placeholder { color: var(--v-text-dim); }
+
+.search-count {
+  min-width: 4.5em;
+  text-align: center;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--v-text-dim);
+  white-space: nowrap;
+}
+
+/* 페이지 뷰 하이라이트 오버레이 (비율 좌표) */
+.search-hit-overlay {
+  position: absolute;
+  background: rgba(255, 200, 40, 0.45);
+  outline: 2px solid rgba(255, 160, 0, 0.9);
+  border-radius: 2px;
+  pointer-events: none;
+  z-index: 3;
+}
+
+/* 그리드 뷰 하이라이트 */
+.grid-table td.g-hit { background: #fff3bf !important; }
+.grid-table td.g-hit-current { background: #ffd43b !important; outline: 2px solid #f59f00; }
+
 /* ---------- 그리드 뷰 (스프레드시트) ---------- */
 
 .grid-container {

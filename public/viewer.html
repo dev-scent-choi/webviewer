@@ -26,6 +26,9 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
         </button>
       </div>
+      <button id="search-btn" class="icon-btn" title="문서 내 검색 (Ctrl+F)" aria-label="문서 내 검색">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+      </button>
       <button id="invert-btn" class="icon-btn" title="도면 모드 (어두운 배경 반전)" aria-label="도면 모드 전환" aria-pressed="false">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 0 0 18z" fill="currentColor" stroke="none"/></svg>
       </button>
@@ -39,6 +42,20 @@
       </button>
     </div>
   </header>
+
+  <div id="search-bar" class="search-bar" hidden>
+    <input id="search-input" type="text" placeholder="문서 내 검색…" autocomplete="off" />
+    <span id="search-count" class="search-count"></span>
+    <button id="search-prev" class="icon-btn" title="이전 결과" disabled>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m18 15-6-6-6 6"/></svg>
+    </button>
+    <button id="search-next" class="icon-btn" title="다음 결과" disabled>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+    </button>
+    <button id="search-close" class="icon-btn" title="닫기">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+    </button>
+  </div>
 
   <main id="pages" class="pages-container"></main>
 

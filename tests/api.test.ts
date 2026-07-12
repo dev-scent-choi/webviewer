@@ -246,3 +246,53 @@ describe('grid view (spreadsheets)', () => {
     expect(res.statusCode).toBe(400);
   });
 });
+
+describe('in-document search', () => {
+  test('finds cell values in grid documents with sheet/row/column coordinates', async () => {
+    const csv = Buffer.from('name,qty\n사과,3\n바나나,7\n', 'utf8');
+    const { payload, headers } = multipartPayload('검색.csv', 'text/csv', csv);
+    const uploaded = await app.inject({ method: 'POST', url: '/api/documents', payload, headers });
+    const meta = await waitForStatus(uploaded.json().data.id);
+    const token = await issueToken(meta.id, false, false);
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/view/search?token=${token}&q=${encodeURIComponent('바나나')}`,
+    });
+    expect(res.statusCode).toBe(200);
+    const { kind, hits, total } = res.json().data;
+    expect(kind).toBe('grid');
+    expect(total).toBe(1);
+    expect(hits[0]).toMatchObject({ sheet: 0, r: 3, c: 1, snippet: '바나나' });
+  });
+
+  test('finds text in the PDF text layer with highlight rectangles', async () => {
+    const doc = await uploadSamplePdf(2);
+    const token = await issueToken(doc.id, false, false);
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/view/search?token=${token}&q=${encodeURIComponent('search target page 2')}`,
+    });
+    expect(res.statusCode).toBe(200);
+    const { kind, hits } = res.json().data;
+    expect(kind).toBe('pages');
+    expect(hits.length).toBeGreaterThanOrEqual(1);
+    expect(hits[0].page).toBe(2);
+    const rect = hits[0].rects[0];
+    expect(rect.x).toBeGreaterThanOrEqual(0);
+    expect(rect.x).toBeLessThanOrEqual(1);
+    expect(rect.w).toBeGreaterThan(0);
+  });
+
+  test('returns empty results for a missing term', async () => {
+    const doc = await uploadSamplePdf(1);
+    const token = await issueToken(doc.id, false, false);
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/view/search?token=${token}&q=nonexistent-term-xyz`,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data.hits).toHaveLength(0);
+  });
+});

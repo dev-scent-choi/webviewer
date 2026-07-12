@@ -182,6 +182,7 @@ Content-Type: application/json
 | GET | `/api/view/pages/:n?token=…&scale=1~16` | 페이지 PNG. `scale`은 해상도 배율(뷰어가 확대 수준·디스플레이 밀도에 맞춰 자동 요청, 페이지당 최장변 6000px 상한) |
 | GET | `/api/view/grid/meta?token=…` | 그리드 문서의 시트 목록·열 너비·병합·스타일 팔레트 |
 | GET | `/api/view/grid/rows?token=…&sheet=0&from=1&count=200` | 행 데이터 범위 조회 (최대 500행/요청) |
+| GET | `/api/view/search?token=…&q=…&limit=200` | 문서 내 문자 검색 (OCR 아님 — 그리드 셀 값 / PDF 텍스트 레이어). grid: `{kind:'grid', hits:[{sheet,r,c,snippet}]}` / pages: `{kind:'pages', hits:[{page, rects:[{x,y,w,h}(비율 0~1)], snippet}]}`. 뷰어에서 Ctrl+F 또는 돋보기 버튼 |
 | GET | `/api/view/print?token=…` | 워터마크 PDF (`canPrint` 필요, 403) |
 | GET | `/api/view/download?token=…` | 원본 파일 (`canDownload` 필요, 403) |
 
