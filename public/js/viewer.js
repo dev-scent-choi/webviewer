@@ -393,20 +393,33 @@ function gotoHit(index) {
   }
 }
 
+/** 모든 검색 결과를 연노랑으로, 현재 결과를 진한 주황 테두리로 표시한다 */
+function renderPageHitOverlays() {
+  for (const el of document.querySelectorAll('.search-hit-overlay')) el.remove();
+  if (searchState.kind !== 'pages') return;
+  searchState.hits.forEach((hit, index) => {
+    const frame = pagesContainer.children[hit.page - 1];
+    if (!frame) return;
+    for (const rect of hit.rects) {
+      const overlay = document.createElement('div');
+      overlay.className =
+        index === searchState.current ? 'search-hit-overlay current' : 'search-hit-overlay';
+      overlay.style.left = `${rect.x * 100}%`;
+      overlay.style.top = `${rect.y * 100}%`;
+      overlay.style.width = `${Math.max(rect.w * 100, 0.5)}%`;
+      overlay.style.height = `${Math.max(rect.h * 100, 0.5)}%`;
+      frame.append(overlay);
+    }
+  });
+}
+
 function gotoPageHit(hit) {
   const frame = pagesContainer.children[hit.page - 1];
   if (!frame) return;
   frame.scrollIntoView({ block: 'center' });
-  for (const el of document.querySelectorAll('.search-hit-overlay')) el.remove();
-  for (const rect of hit.rects) {
-    const overlay = document.createElement('div');
-    overlay.className = 'search-hit-overlay';
-    overlay.style.left = `${rect.x * 100}%`;
-    overlay.style.top = `${rect.y * 100}%`;
-    overlay.style.width = `${Math.max(rect.w * 100, 0.5)}%`;
-    overlay.style.height = `${Math.max(rect.h * 100, 0.5)}%`;
-    frame.append(overlay);
-  }
+  renderPageHitOverlays();
+  const current = frame.querySelector('.search-hit-overlay.current');
+  if (current) current.scrollIntoView({ block: 'center' });
 }
 
 let gridSearchHits = new Set();
@@ -465,6 +478,12 @@ function injectGridStyles(styles) {
   const rules = styles.map((style, i) => {
     const parts = [];
     if (style.b) parts.push('font-weight:600');
+    if (style.i) parts.push('font-style:italic');
+    const lines = [];
+    if (style.u) lines.push('underline');
+    if (style.st) lines.push('line-through');
+    if (lines.length > 0) parts.push(`text-decoration:${lines.join(' ')}`);
+    if (style.fs) parts.push(`font-size:${style.fs}px`);
     if (style.col) parts.push(`color:${style.col}`);
     if (style.bg) parts.push(`background:${style.bg}`);
     if (style.a === 'c') parts.push('text-align:center');

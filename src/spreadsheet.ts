@@ -24,6 +24,11 @@ export interface GridSheet {
 
 export interface GridStyle {
   readonly b?: 1;
+  readonly i?: 1;
+  readonly u?: 1;
+  readonly st?: 1;
+  /** 글자 크기(px). 기본(11pt≈15px)과 다를 때만 기록 */
+  readonly fs?: number;
   readonly col?: string;
   readonly bg?: string;
   readonly a?: 'l' | 'c' | 'r';
@@ -67,6 +72,114 @@ const CHAR_TO_PX = 7.2;
 function argbToCss(argb?: string): string | undefined {
   if (!argb || argb.length !== 8) return undefined;
   return `#${argb.slice(2)}`;
+}
+
+/**
+ * 테마 색 인덱스 순서 (Excel은 dk1/lt1, dk2/lt2가 스왑된 관례를 사용한다)
+ */
+const THEME_COLOR_ORDER = [
+  'lt1', 'dk1', 'lt2', 'dk2',
+  'accent1', 'accent2', 'accent3', 'accent4', 'accent5', 'accent6',
+  'hlink', 'folHlink',
+] as const;
+
+/** 워크북 theme1.xml에서 테마 팔레트(RRGGBB)를 추출한다 */
+export function parseThemeColors(themeXml: string | undefined): readonly string[] {
+  if (!themeXml) return [];
+  const scheme = themeXml.match(/<a:clrScheme[\s\S]*?<\/a:clrScheme>/)?.[0];
+  if (!scheme) return [];
+  const byName = new Map<string, string>();
+  for (const match of scheme.matchAll(
+    /<a:(dk1|lt1|dk2|lt2|accent[1-6]|hlink|folHlink)>\s*<a:(?:srgbClr val="([0-9A-Fa-f]{6})"|sysClr[^>]*lastClr="([0-9A-Fa-f]{6})")/g,
+  )) {
+    byName.set(match[1], (match[2] ?? match[3]).toUpperCase());
+  }
+  return THEME_COLOR_ORDER.map((name) => byName.get(name) ?? '000000');
+}
+
+/** Excel tint: HSL 명도(L)를 tint>0이면 흰색 쪽, tint<0이면 검정 쪽으로 보간한다 */
+function applyTint(hex: string, tint: number): string {
+  const r = parseInt(hex.slice(0, 2), 16) / 255;
+  const g = parseInt(hex.slice(2, 4), 16) / 255;
+  const b = parseInt(hex.slice(4, 6), 16) / 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  let h = 0;
+  const l = (max + min) / 2;
+  const d = max - min;
+  let s = 0;
+  if (d !== 0) {
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    if (max === r) h = ((g - b) / d + (g < b ? 6 : 0)) / 6;
+    else if (max === g) h = ((b - r) / d + 2) / 6;
+    else h = ((r - g) / d + 4) / 6;
+  }
+  const newL = tint < 0 ? l * (1 + tint) : l * (1 - tint) + tint;
+  const hueToRgb = (p: number, q: number, t: number) => {
+    let tt = t;
+    if (tt < 0) tt += 1;
+    if (tt > 1) tt -= 1;
+    if (tt < 1 / 6) return p + (q - p) * 6 * tt;
+    if (tt < 1 / 2) return q;
+    if (tt < 2 / 3) return p + (q - p) * (2 / 3 - tt) * 6;
+    return p;
+  };
+  let r2: number;
+  let g2: number;
+  let b2: number;
+  if (s === 0) {
+    r2 = g2 = b2 = newL;
+  } else {
+    const q = newL < 0.5 ? newL * (1 + s) : newL + s - newL * s;
+    const p = 2 * newL - q;
+    r2 = hueToRgb(p, q, h + 1 / 3);
+    g2 = hueToRgb(p, q, h);
+    b2 = hueToRgb(p, q, h - 1 / 3);
+  }
+  const toHex = (v: number) => Math.round(Math.min(1, Math.max(0, v)) * 255).toString(16).padStart(2, '0');
+  return `${toHex(r2)}${toHex(g2)}${toHex(b2)}`.toUpperCase();
+}
+
+/** 레거시 인덱스 팔레트 (표준 0~63) */
+const INDEXED_COLORS: Record<number, string> = {
+  0: '000000', 1: 'FFFFFF', 2: 'FF0000', 3: '00FF00', 4: '0000FF', 5: 'FFFF00',
+  6: 'FF00FF', 7: '00FFFF', 8: '000000', 9: 'FFFFFF', 10: 'FF0000', 11: '00FF00',
+  12: '0000FF', 13: 'FFFF00', 14: 'FF00FF', 15: '00FFFF', 16: '800000', 17: '008000',
+  18: '000080', 19: '808000', 20: '800080', 21: '008080', 22: 'C0C0C0', 23: '808080',
+  24: '9999FF', 25: '993366', 26: 'FFFFCC', 27: 'CCFFFF', 28: '660066', 29: 'FF8080',
+  30: '0066CC', 31: 'CCCCFF', 32: '000080', 33: 'FF00FF', 34: 'FFFF00', 35: '00FFFF',
+  36: '800080', 37: '800000', 38: '008080', 39: '0000FF', 40: '00CCFF', 41: 'CCFFFF',
+  42: 'CCFFCC', 43: 'FFFF99', 44: '99CCFF', 45: 'FF99CC', 46: 'CC99FF', 47: 'FFCC99',
+  48: '3366FF', 49: '33CCCC', 50: '99CC00', 51: 'FFCC00', 52: 'FF9900', 53: 'FF6600',
+  54: '666699', 55: '969696', 56: '003366', 57: '339966', 58: '003300', 59: '333300',
+  60: '993300', 61: '993366', 62: '333399', 63: '333333',
+};
+
+interface ExcelColorLike {
+  readonly argb?: string;
+  readonly theme?: number;
+  readonly tint?: number;
+  readonly indexed?: number;
+}
+
+/** argb / theme+tint / indexed 세 가지 색 표현을 모두 CSS 색으로 해석한다 */
+function resolveColor(
+  color: ExcelColorLike | undefined,
+  themeColors: readonly string[],
+): string | undefined {
+  if (!color) return undefined;
+  if (color.argb) return argbToCss(color.argb);
+  if (color.theme !== undefined) {
+    const base = themeColors[color.theme];
+    if (!base) return undefined;
+    const withTint = color.tint ? applyTint(base, color.tint) : base;
+    return `#${withTint}`;
+  }
+  if (color.indexed !== undefined) {
+    const hex = INDEXED_COLORS[color.indexed];
+    return hex ? `#${hex}` : undefined;
+  }
+  return undefined;
 }
 
 function formatNumber(value: number, numFmt?: string): string {
@@ -142,21 +255,40 @@ class StylePalette {
   }
 }
 
-function extractStyle(cell: ExcelJS.Cell, palette: StylePalette): number | undefined {
+const DEFAULT_FONT_SIZE_PT = 11;
+const PT_TO_PX = 96 / 72;
+const MAX_FONT_PX = 26;
+
+function extractStyle(
+  cell: ExcelJS.Cell,
+  palette: StylePalette,
+  themeColors: readonly string[],
+): number | undefined {
   const style: {
     b?: 1;
+    i?: 1;
+    u?: 1;
+    st?: 1;
+    fs?: number;
     col?: string;
     bg?: string;
     a?: 'l' | 'c' | 'r';
     w?: 1;
   } = {};
-  if (cell.font?.bold) style.b = 1;
-  const fontColor = argbToCss(cell.font?.color?.argb);
-  if (fontColor && fontColor !== '#000000') style.col = fontColor;
+  const font = cell.font;
+  if (font?.bold) style.b = 1;
+  if (font?.italic) style.i = 1;
+  if (font?.underline) style.u = 1;
+  if (font?.strike) style.st = 1;
+  if (font?.size && font.size !== DEFAULT_FONT_SIZE_PT) {
+    style.fs = Math.min(MAX_FONT_PX, Math.round(font.size * PT_TO_PX));
+  }
+  const fontColor = resolveColor(font?.color, themeColors);
+  if (fontColor && fontColor.toUpperCase() !== '#000000') style.col = fontColor;
   const fill = cell.fill;
   if (fill && fill.type === 'pattern' && fill.pattern === 'solid') {
-    const bg = argbToCss(fill.fgColor?.argb);
-    if (bg && bg !== '#FFFFFF') style.bg = bg;
+    const bg = resolveColor(fill.fgColor, themeColors);
+    if (bg && bg.toUpperCase() !== '#FFFFFF') style.bg = bg;
   }
   const horizontal = cell.alignment?.horizontal;
   if (horizontal === 'center') style.a = 'c';
@@ -169,6 +301,9 @@ export async function parseXlsxToGrid(xlsxBytes: Buffer): Promise<GridDocument> 
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(xlsxBytes as unknown as ArrayBuffer);
   const palette = new StylePalette();
+  // exceljs 타입 선언(string[])과 달리 런타임은 { theme1: xml문자열 } 형태다
+  const themes = (workbook.model as unknown as { themes?: Record<string, string> }).themes;
+  const themeColors = parseThemeColors(themes?.theme1);
   const sheets: GridSheet[] = [];
 
   workbook.eachSheet((sheet) => {
@@ -190,7 +325,7 @@ export async function parseXlsxToGrid(xlsxBytes: Buffer): Promise<GridDocument> 
       row.eachCell({ includeEmpty: false }, (cell, colNumber) => {
         if (colNumber > colCount) return;
         const text = displayValue(cell);
-        const styleRef = extractStyle(cell, palette);
+        const styleRef = extractStyle(cell, palette, themeColors);
         if (text === '' && styleRef === undefined) return;
         cells[colNumber - 1] = styleRef === undefined ? { v: text } : { v: text, s: styleRef };
       });
