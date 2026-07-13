@@ -8,7 +8,11 @@
 
 ## 실행
 
+요구 사항: Node.js 20 이상.
+
 ```bash
+git clone https://github.com/dev-scent-choi/webviewer.git
+cd webviewer
 npm install
 npm run dev        # http://127.0.0.1:8000
 ```

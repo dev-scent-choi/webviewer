@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "description": "권한 제어형 문서 웹뷰어 — 모든 포맷을 서버에서 PDF/이미지로 정규화하여 열람",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "start": "tsx src/server.ts",

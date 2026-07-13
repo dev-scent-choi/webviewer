@@ -82,6 +82,13 @@ function applyZoom() {
 
 const tokenQuery = `token=${encodeURIComponent(token)}`;
 
+/* 진행 중인 페이지·그리드 로딩을 뒤로가기 시 즉시 취소해 네비게이션 지연을 없앤다 */
+let viewAbort = new AbortController();
+
+function isAbort(error) {
+  return error && error.name === 'AbortError';
+}
+
 /**
  * 확대 수준 × 디스플레이 픽셀 밀도에 맞는 서버 렌더링 배율.
  * 고해상도(Windows 배율 125~150%) 모니터에서는 CSS 픽셀보다 실제 픽셀이
@@ -118,12 +125,23 @@ async function loadPageInto(canvas, pageNumber) {
   const scale = desiredScale();
   canvas.dataset.requestedScale = String(scale);
   await withLoadSlot(async () => {
-    const res = await fetch(`/api/view/pages/${pageNumber}?${tokenQuery}&scale=${scale}`);
-    if (!res.ok) {
+    if (viewAbort.signal.aborted) return;
+    let res;
+    let bitmap;
+    try {
+      res = await fetch(`/api/view/pages/${pageNumber}?${tokenQuery}&scale=${scale}`, {
+        signal: viewAbort.signal,
+      });
+      if (!res.ok) {
+        canvas.closest('.page-frame').classList.add('page-error');
+        return;
+      }
+      bitmap = await createImageBitmap(await res.blob());
+    } catch (error) {
+      if (isAbort(error)) return; // 뒤로가기 등으로 취소됨
       canvas.closest('.page-frame').classList.add('page-error');
       return;
     }
-    const bitmap = await createImageBitmap(await res.blob());
     canvas.width = bitmap.width;
     canvas.height = bitmap.height;
     canvas.getContext('2d').drawImage(bitmap, 0, 0);
@@ -239,7 +257,20 @@ function applyInvert(enabled) {
   }
 }
 
+function navigateBack() {
+  // 진행 중인 이미지·그리드 로딩을 즉시 취소해야 대형 문서에서도 뒤로가기가 바로 먹힌다
+  viewAbort.abort();
+  if (qualityReloadTimer !== null) clearTimeout(qualityReloadTimer);
+  window.location.assign('/');
+}
+
 function setupToolbar() {
+  const backBtn = document.getElementById('back-btn');
+  backBtn.addEventListener('click', (event) => {
+    event.preventDefault();
+    navigateBack();
+  });
+
   document.getElementById('zoom-in').addEventListener('click', () => {
     zoomIndex = Math.min(zoomIndex + 1, ZOOM_STEPS.length - 1);
     applyZoom();
@@ -536,7 +567,7 @@ async function fetchChunk(sheetIdx, chunkIdx) {
 }
 
 async function fetchJsonView(url) {
-  const res = await fetch(url);
+  const res = await fetch(url, { signal: viewAbort.signal });
   const json = await res.json();
   if (!res.ok || !json.success) throw new Error(json.error || `요청 실패 (HTTP ${res.status})`);
   return json.data;

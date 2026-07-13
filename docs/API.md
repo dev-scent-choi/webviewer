@@ -24,13 +24,27 @@ REST API로 문서를 등록하고 열람 토큰을 발급받은 뒤, **뷰어 U
 
 ---
 
-## 1. 실행
+## 1. 설치 및 실행
+
+**요구 사항**: Node.js 20 이상 (`node -v`로 확인).
 
 ```bash
+# 1) 소스 받기
+git clone https://github.com/dev-scent-choi/webviewer.git
+cd webviewer                 # 저장소 루트가 프로젝트 폴더(package.json 위치)
+
+# 2) 의존성 설치
 npm install
-npm run dev            # 개발 (기본 http://127.0.0.1:8000)
-npm start              # 운영
+
+# 3) 실행
+npm run dev                  # 개발 모드 (파일 변경 자동 반영, 기본 http://127.0.0.1:8000)
+npm start                    # 운영 모드
 ```
+
+- 실행 후 브라우저에서 `http://<호스트>:<포트>` 접속 → 업로드·열람 화면.
+- 외부에서 접속하게 하려면 `DOCVIEW_HOST=0.0.0.0`으로 바인딩한다 (아래 환경변수 참고).
+- 운영 배포 시에는 `DOCVIEW_SECRET`을 반드시 고정값으로 설정한다 (미설정 시 재시작마다 발급된 토큰이 전부 무효화됨).
+- Windows에서 상시 구동하려면 `npm start`를 pm2/NSSM 등 프로세스 관리자로 감싸 서비스로 등록한다.
 
 ### 환경변수
 
