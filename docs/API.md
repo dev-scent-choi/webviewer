@@ -45,6 +45,9 @@ npm start                    # 운영 모드
 - 외부에서 접속하게 하려면 `DOCVIEW_HOST=0.0.0.0`으로 바인딩한다 (아래 환경변수 참고).
 - 운영 배포 시에는 `DOCVIEW_SECRET`을 반드시 고정값으로 설정한다 (미설정 시 재시작마다 발급된 토큰이 전부 무효화됨).
 - Windows에서 상시 구동하려면 `npm start`를 pm2/NSSM 등 프로세스 관리자로 감싸 서비스로 등록한다.
+- 렌더링·파싱 캐시는 `DOCVIEW_CACHE_BUDGET_MB`(기본 512) 안에서 관리된다. 고배율 도면/대형
+  시트를 많이 동시 열람하는 환경이면 이 값과 Node 힙(`NODE_OPTIONS=--max-old-space-size=2048`)을
+  함께 올린다. (네이티브 이미지 렌더링 메모리 때문에 실제 사용량은 예산보다 다소 크다.)
 
 ### 환경변수
 
@@ -56,6 +59,7 @@ npm start                    # 운영 모드
 | `DOCVIEW_DATA_DIR` | `./data` | 저장 경로 (disk 모드) |
 | `DOCVIEW_STORAGE` | `disk` | `disk` 파일 저장 / `memory` 메모리 보관(디스크 비잔류, 재시작 시 소멸) |
 | `DOCVIEW_MEMORY_BUDGET_MB` | `1024` | memory 모드 총 용량. 초과 시 오래된 문서부터 제거 |
+| `DOCVIEW_CACHE_BUDGET_MB` | `512` | 렌더링·파싱 캐시(페이지 이미지/그리드/PDF 텍스트) 총 상한. 초과 시 LRU 제거 |
 | `DOCVIEW_TOKEN_TTL` | `3600` | 열람 토큰 유효기간(초) |
 | `DOCVIEW_SOFFICE` | (자동 감지) | LibreOffice 경로 |
 | `DOCVIEW_DWG2DXF` | `tools/dwg2dxf.exe` | LibreDWG 변환기 경로 |

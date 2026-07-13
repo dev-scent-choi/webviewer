@@ -35,6 +35,7 @@ npm run dev        # http://127.0.0.1:8000
 | `DOCVIEW_TOKEN_TTL` | `3600` | 열람 토큰 유효기간(초) |
 | `DOCVIEW_STORAGE` | `disk` | `disk`: 파일 저장 / `memory`: 서버 메모리에만 보관 — 디스크 비잔류, 재시작 시 소멸 (변환 순간의 임시 파일은 예외적으로 생성 후 즉시 삭제) |
 | `DOCVIEW_MEMORY_BUDGET_MB` | `1024` | memory 모드 총 보관 용량. 초과 시 오래된 문서부터 자동 제거 |
+| `DOCVIEW_CACHE_BUDGET_MB` | `512` | 렌더링·파싱 캐시(페이지 이미지/그리드/PDF 텍스트) 총 상한. 초과 시 LRU 제거 |
 | `DOCVIEW_ODA_CONVERTER` | (자동 감지) | ODA File Converter 경로. 설치되어 있으면 DWG 변환에 우선 사용 (전 버전 지원·최고 충실도) |
 
 검증:

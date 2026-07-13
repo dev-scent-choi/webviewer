@@ -1,5 +1,6 @@
 import { PDFDocument, StandardFonts, degrees, rgb } from 'pdf-lib';
 import { pdf } from 'pdf-to-img';
+import { SizedLruCache } from './cache.js';
 import { config } from './config.js';
 
 type PdfImageDocument = Awaited<ReturnType<typeof pdf>>;
@@ -10,15 +11,30 @@ interface PageSize {
   readonly height: number;
 }
 
-const DOCUMENT_CACHE_LIMIT = 6;
 /** 페이지당 렌더링 픽셀 상한 — 초대형 시트/도면에서 메모리 폭주를 막는다. */
 const MAX_BITMAP_EDGE_PX = 6000;
 /* 실질적인 안전장치는 페이지 픽셀 상한(MAX_BITMAP_EDGE_PX)이며,
    작은 페이지(크롭된 도면 등)는 높은 배율로 렌더링해야 확대 시 선명하다 */
 export const MAX_RENDER_SCALE = 16;
 
-const documentCache = new Map<string, Promise<PdfImageDocument>>();
-const pageSizeCache = new Map<string, Promise<readonly PageSize[]>>();
+interface CachedRenderDoc {
+  readonly doc: PdfImageDocument;
+  readonly estimatedBytes: number;
+}
+
+/** 렌더링 문서 캐시가 예산의 대부분을 차지하므로 캐시 예산의 65%를 할당한다 */
+const documentCache = new SizedLruCache<CachedRenderDoc>({
+  maxBytes: Math.floor(config.cacheBudgetBytes * 0.65),
+  maxEntries: 8,
+  sizeOf: (entry) => entry.estimatedBytes,
+});
+
+/** 페이지 크기 배열은 작으므로 개수만 제한한다 */
+const pageSizeCache = new SizedLruCache<readonly PageSize[]>({
+  maxBytes: Number.POSITIVE_INFINITY,
+  maxEntries: 32,
+  sizeOf: () => 0,
+});
 
 export class PageOutOfRangeError extends Error {
   constructor(pageNumber: number, pageCount: number) {
@@ -27,38 +43,31 @@ export class PageOutOfRangeError extends Error {
   }
 }
 
-function evictOldest<K, V>(cache: Map<K, V>, limit: number): void {
-  while (cache.size > limit) {
-    const oldestKey = cache.keys().next().value;
-    if (oldestKey === undefined) return;
-    cache.delete(oldestKey);
-  }
-}
-
 /** pdfjs가 전달받은 버퍼 소유권을 가져갈 수 있으므로 항상 복사본을 넘긴다. */
 function toOwnedBytes(data: Buffer): Uint8Array {
   return new Uint8Array(data);
 }
 
-function openDocument(docId: string, scale: number, loadBytes: BytesProvider): Promise<PdfImageDocument> {
+async function openDocument(
+  docId: string,
+  scale: number,
+  loadBytes: BytesProvider,
+): Promise<PdfImageDocument> {
   const key = `${docId}#${scale.toFixed(2)}`;
-  const cached = documentCache.get(key);
-  if (cached) {
-    return cached;
-  }
-  const loading = loadBytes().then((bytes) => pdf(toOwnedBytes(bytes), { scale }));
-  loading.catch(() => documentCache.delete(key));
-  documentCache.set(key, loading);
-  evictOldest(documentCache, DOCUMENT_CACHE_LIMIT);
-  return loading;
+  const cached = await documentCache.getOrLoad(key, async () => {
+    const bytes = await loadBytes();
+    const doc = await pdf(toOwnedBytes(bytes), { scale });
+    // pdf-to-img는 페이지를 배율²에 비례한 캔버스로 렌더링한다. 원본 크기×배율²을
+    // 상대적 메모리 순위 추정치로 삼아(상한 16배) 큰 문서·고배율부터 제거한다.
+    const estimatedBytes = bytes.length * Math.min(scale * scale, 16);
+    return { doc, estimatedBytes };
+  });
+  return cached.doc;
 }
 
 function getPageSizes(docId: string, loadBytes: BytesProvider): Promise<readonly PageSize[]> {
-  const cached = pageSizeCache.get(docId);
-  if (cached) {
-    return cached;
-  }
-  const loading = loadBytes().then(async (bytes) => {
+  return pageSizeCache.getOrLoad(docId, async () => {
+    const bytes = await loadBytes();
     const doc = await PDFDocument.load(toOwnedBytes(bytes), {
       ignoreEncryption: true,
       updateMetadata: false,
@@ -68,10 +77,6 @@ function getPageSizes(docId: string, loadBytes: BytesProvider): Promise<readonly
       return { width, height };
     });
   });
-  loading.catch(() => pageSizeCache.delete(docId));
-  pageSizeCache.set(docId, loading);
-  evictOldest(pageSizeCache, DOCUMENT_CACHE_LIMIT * 4);
-  return loading;
 }
 
 /** 페이지 크기 목록(pt) — 뷰어가 로딩 전 프레임 크기를 고정해 정확한 스크롤 점프를 보장한다 */

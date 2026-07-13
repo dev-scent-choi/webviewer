@@ -3,6 +3,8 @@ import os from 'node:os';
 import path from 'node:path';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { recordAudit } from '../audit.js';
+import { SizedLruCache } from '../cache.js';
+import { config } from '../config.js';
 import { findConverter } from '../converters/index.js';
 import { PageOutOfRangeError, buildPrintPdf, getPageDimensions, renderPage } from '../rendering.js';
 import { InvalidTokenError, verifyViewToken } from '../security.js';
@@ -55,8 +57,22 @@ interface LoadedGrid {
   readonly sheetStartLine: readonly number[];
 }
 
-const GRID_CACHE_LIMIT = 2;
-const gridCache = new Map<string, Promise<LoadedGrid>>();
+/** 그리드·PDF텍스트 캐시는 렌더링 문서 캐시와 나머지 예산을 나눠 쓴다 */
+const gridCache = new SizedLruCache<LoadedGrid>({
+  maxBytes: Math.floor(config.cacheBudgetBytes * 0.25),
+  maxEntries: 4,
+  sizeOf: (grid) => grid.buffer.length + grid.lineOffsets.length * 8,
+});
+
+const pdfTextCache = new SizedLruCache<PageText[]>({
+  maxBytes: Math.floor(config.cacheBudgetBytes * 0.1),
+  maxEntries: 6,
+  sizeOf: (pages) =>
+    pages.reduce(
+      (sum, page) => sum + page.items.reduce((acc, item) => acc + item.str.length * 2 + 48, 0),
+      0,
+    ),
+});
 
 function indexGrid(buffer: Buffer): LoadedGrid {
   const lineOffsets: number[] = [0];
@@ -75,35 +91,12 @@ function indexGrid(buffer: Buffer): LoadedGrid {
 }
 
 function loadGrid(docId: string): Promise<LoadedGrid> {
-  const cached = gridCache.get(docId);
-  if (cached) return cached;
-  const loading = store.readDerived(docId, 'grid').then(indexGrid);
-  loading.catch(() => gridCache.delete(docId));
-  gridCache.set(docId, loading);
-  while (gridCache.size > GRID_CACHE_LIMIT) {
-    const oldest = gridCache.keys().next().value;
-    if (oldest === undefined) break;
-    gridCache.delete(oldest);
-  }
-  return loading;
+  return gridCache.getOrLoad(docId, () => store.readDerived(docId, 'grid').then(indexGrid));
 }
 
 /** PDF 텍스트 추출 결과 캐시 (문서당 1회 추출) */
-const PDF_TEXT_CACHE_LIMIT = 4;
-const pdfTextCache = new Map<string, Promise<PageText[]>>();
-
 function loadPdfText(docId: string): Promise<PageText[]> {
-  const cached = pdfTextCache.get(docId);
-  if (cached) return cached;
-  const loading = store.readDerived(docId, 'pdf').then(extractPdfText);
-  loading.catch(() => pdfTextCache.delete(docId));
-  pdfTextCache.set(docId, loading);
-  while (pdfTextCache.size > PDF_TEXT_CACHE_LIMIT) {
-    const oldest = pdfTextCache.keys().next().value;
-    if (oldest === undefined) break;
-    pdfTextCache.delete(oldest);
-  }
-  return loading;
+  return pdfTextCache.getOrLoad(docId, () => store.readDerived(docId, 'pdf').then(extractPdfText));
 }
 
 interface GridSearchHit {

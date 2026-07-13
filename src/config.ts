@@ -7,6 +7,7 @@ const DEFAULT_TOKEN_TTL_SECONDS = 60 * 60;
 const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
 const RENDER_SCALE = 2;
 const DEFAULT_MEMORY_BUDGET_MB = 1024;
+const DEFAULT_CACHE_BUDGET_MB = 512;
 
 export type StorageMode = 'disk' | 'memory';
 
@@ -27,4 +28,7 @@ export const config = {
   storageMode,
   memoryBudgetBytes:
     Number(process.env.DOCVIEW_MEMORY_BUDGET_MB ?? DEFAULT_MEMORY_BUDGET_MB) * 1024 * 1024,
+  /** 렌더링·파싱 캐시(그리드/PDF 텍스트/페이지 이미지)가 공유하는 총 메모리 상한 */
+  cacheBudgetBytes:
+    Number(process.env.DOCVIEW_CACHE_BUDGET_MB ?? DEFAULT_CACHE_BUDGET_MB) * 1024 * 1024,
 } as const;
