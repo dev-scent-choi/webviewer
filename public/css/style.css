@@ -444,6 +444,25 @@ h2 { font-size: 1.1rem; margin: 2rem 0 0.75rem; }
   background: rgba(255, 170, 30, 0.5);
   outline: 2.5px solid #f76707;
   box-shadow: 0 0 0 4px rgba(247, 103, 7, 0.25);
+  animation: hit-pulse 0.9s ease-in-out 3;
+}
+
+@keyframes hit-pulse {
+  0%, 100% { box-shadow: 0 0 0 4px rgba(247, 103, 7, 0.25); }
+  50% { box-shadow: 0 0 0 10px rgba(247, 103, 7, 0.45); }
+}
+
+/* 그리드 셀 내 매치 부분 형광 표시 */
+.grid-table mark {
+  background: #ffd43b;
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+.grid-table td.g-hit-current mark {
+  background: #ff922b;
+  color: #fff;
 }
 
 /* 그리드 뷰 하이라이트 */

@@ -4,7 +4,7 @@ import path from 'node:path';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { recordAudit } from '../audit.js';
 import { findConverter } from '../converters/index.js';
-import { PageOutOfRangeError, buildPrintPdf, renderPage } from '../rendering.js';
+import { PageOutOfRangeError, buildPrintPdf, getPageDimensions, renderPage } from '../rendering.js';
 import { InvalidTokenError, verifyViewToken } from '../security.js';
 import { extractPdfText, searchPdfText, type PageText } from '../search.js';
 import type { GridCell, GridHeader } from '../spreadsheet.js';
@@ -254,12 +254,21 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
       const view = await resolveView(request.query.token, reply);
       if (!view) return reply;
       await recordAudit({ type: 'opened', docId: view.meta.id, viewer: view.claims.viewer });
+      const viewKind = view.meta.viewKind ?? 'pages';
+      // 페이지 크기를 미리 내려 뷰어가 로딩 전 프레임 크기를 고정한다 (스크롤 점프 정확도)
+      const pages =
+        viewKind === 'pages'
+          ? await getPageDimensions(view.meta.id, () => store.readDerived(view.meta.id, 'pdf')).catch(
+              () => undefined,
+            )
+          : undefined;
       return {
         success: true,
         data: {
           name: view.meta.name,
           pageCount: view.meta.pageCount,
-          viewKind: view.meta.viewKind ?? 'pages',
+          viewKind,
+          pages,
           permissions: view.claims.perms,
           viewer: view.claims.viewer,
         },

@@ -74,6 +74,15 @@ function getPageSizes(docId: string, loadBytes: BytesProvider): Promise<readonly
   return loading;
 }
 
+/** 페이지 크기 목록(pt) — 뷰어가 로딩 전 프레임 크기를 고정해 정확한 스크롤 점프를 보장한다 */
+export async function getPageDimensions(
+  docId: string,
+  loadBytes: BytesProvider,
+): Promise<ReadonlyArray<{ w: number; h: number }>> {
+  const sizes = await getPageSizes(docId, loadBytes);
+  return sizes.map((size) => ({ w: Math.round(size.width), h: Math.round(size.height) }));
+}
+
 export async function getPageCountFromBytes(pdfBytes: Buffer): Promise<number> {
   const doc = await PDFDocument.load(toOwnedBytes(pdfBytes), {
     ignoreEncryption: true,

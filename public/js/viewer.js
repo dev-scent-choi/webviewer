@@ -15,6 +15,7 @@ let zoomIndex = DEFAULT_ZOOM_INDEX;
 let pageCount = 0;
 let permissions = { canPrint: false, canDownload: false };
 let docName = 'document';
+let pageDimensions = null; // [{w,h}] — 로딩 전 프레임 크기 고정용
 
 /** content-length 기반 진행률과 함께 응답 본문을 받아온다. */
 async function fetchWithProgress(url, onProgress) {
@@ -195,6 +196,12 @@ function buildPages() {
   for (let page = 1; page <= pageCount; page += 1) {
     const frame = document.createElement('div');
     frame.className = 'page-frame page-loading';
+    // 페이지 크기를 미리 알면 로딩 전에도 프레임 높이가 정확해 스크롤 점프가 어긋나지 않는다
+    const dims = pageDimensions && pageDimensions[page - 1];
+    if (dims && dims.w > 0) {
+      frame.style.aspectRatio = `${dims.w} / ${dims.h}`;
+      frame.style.minHeight = '0';
+    }
     const canvas = document.createElement('canvas');
     canvas.dataset.page = String(page);
     const label = document.createElement('span');
@@ -311,6 +318,11 @@ function setupDeterrents() {
     if ((event.ctrlKey || event.metaKey) && key === 'f') {
       event.preventDefault();
       openSearchBar();
+    }
+    if (key === 'f3') {
+      event.preventDefault();
+      if (searchState.hits.length > 0) gotoHit(searchState.current + (event.shiftKey ? -1 : 1));
+      else openSearchBar();
     }
     if (key === 'escape') closeSearchBar();
   });
@@ -542,6 +554,24 @@ function escapeHtml(text) {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+/** 셀 값 중 검색어와 일치하는 부분만 <mark>로 감싼다 (대소문자 무시) */
+function markMatches(rawText, query) {
+  if (!query) return escapeHtml(rawText);
+  const lower = rawText.toLowerCase();
+  const needle = query.toLowerCase();
+  const parts = [];
+  let from = 0;
+  for (;;) {
+    const at = lower.indexOf(needle, from);
+    if (at === -1) break;
+    parts.push(escapeHtml(rawText.slice(from, at)));
+    parts.push(`<mark>${escapeHtml(rawText.slice(at, at + needle.length))}</mark>`);
+    from = at + needle.length;
+  }
+  parts.push(escapeHtml(rawText.slice(from)));
+  return parts.join('');
+}
+
 function renderGridViewport() {
   const sheet = gridState.sheets[gridState.active];
   if (!sheet) return;
@@ -566,12 +596,18 @@ function renderGridViewport() {
       if (gridState.mergeCovered.has(`${r}:${c}`)) continue;
       const merge = gridState.mergeStarts.get(`${r}:${c}`);
       const cell = cellAt(gridState.active, r, c - 1);
-      const value = cell && cell !== 0 ? escapeHtml(cell.v) : '';
       const classes = [];
       if (cell && cell !== 0 && cell.s !== undefined) classes.push(`gs${cell.s}`);
       const hitKey = `${gridState.active}:${r}:${c}`;
-      if (gridSearchHits.has(hitKey)) classes.push('g-hit');
+      const isHit = gridSearchHits.has(hitKey);
+      if (isHit) classes.push('g-hit');
       if (hitKey === gridCurrentHit) classes.push('g-hit-current');
+      const value =
+        cell && cell !== 0
+          ? isHit
+            ? markMatches(cell.v, searchState.lastQuery)
+            : escapeHtml(cell.v)
+          : '';
       const cls = classes.length > 0 ? ` class="${classes.join(' ')}"` : '';
       const span = merge ? ` colspan="${merge.cs}"${merge.rs > 1 ? ` rowspan="${merge.rs}"` : ''}` : '';
       cells.push(`<td${cls}${span}>${value}</td>`);
@@ -681,6 +717,7 @@ async function init() {
   document.title = `DocView — ${json.data.name}`;
   docName = json.data.name;
   pageCount = json.data.pageCount;
+  pageDimensions = json.data.pages || null;
   permissions = json.data.permissions;
 
   setupToolbar();
