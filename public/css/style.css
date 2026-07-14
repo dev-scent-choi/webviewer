@@ -469,6 +469,79 @@ h2 { font-size: 1.1rem; margin: 2rem 0 0.75rem; }
 .grid-table td.g-hit { background: #fff3bf !important; }
 .grid-table td.g-hit-current { background: #ffd43b !important; outline: 2px solid #f59f00; }
 
+/* ---------- 도면 도구: 패닝 · 거리 측정 ---------- */
+
+.pages-container { cursor: grab; }
+.pages-container.panning { cursor: grabbing; }
+.pages-container.measuring,
+.pages-container.measuring .page-frame { cursor: crosshair; }
+
+.measure-bar {
+  position: fixed;
+  top: 4.4rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.6rem;
+  border-radius: 12px;
+  background: var(--v-glass);
+  border: 1px solid var(--v-glass-line);
+  backdrop-filter: blur(18px) saturate(1.5);
+  -webkit-backdrop-filter: blur(18px) saturate(1.5);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+  color: var(--v-text);
+  font-size: 0.82rem;
+}
+
+.measure-bar[hidden] { display: none; }
+.measure-bar .btn-pill { padding: 0.3rem 0.7rem; font-size: 0.78rem; }
+
+.measure-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  overflow: visible;
+  z-index: 4;
+}
+
+.measure-layer line {
+  stroke: #e8590c;
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.measure-dot {
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #e8590c;
+  border: 2px solid #fff;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  z-index: 5;
+}
+
+.measure-label {
+  position: absolute;
+  transform: translate(-50%, -130%);
+  background: #1c1b1a;
+  color: #fff;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  padding: 2px 7px;
+  border-radius: 6px;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 5;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+
 /* ---------- 그리드 뷰 (스프레드시트) ---------- */
 
 .grid-container {

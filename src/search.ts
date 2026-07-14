@@ -56,17 +56,42 @@ export async function extractPdfText(pdfBytes: Buffer): Promise<PageText[]> {
     for (let pageNumber = 1; pageNumber <= doc.numPages; pageNumber += 1) {
       const page = await doc.getPage(pageNumber);
       const viewport = page.getViewport({ scale: 1 });
+      // 텍스트 좌표는 크롭 전 원지 좌표계이므로 CropBox 원점(view)을 빼서 보정한다
+      // (도면 여백 자동 크롭이 적용된 문서에서 하이라이트가 어긋나던 원인)
+      const [cropX, cropY] = page.view;
       const content = await page.getTextContent();
       const items: PageTextItem[] = [];
       for (const item of content.items) {
         if (!('str' in item) || item.str.trim() === '') continue;
+        const width = item.width || DEFAULT_ITEM_HEIGHT;
         const height = item.height || DEFAULT_ITEM_HEIGHT;
+        // 도면의 치수 문자처럼 회전된 텍스트는 transform 행렬로 실제 진행 방향을
+        // 구해 네 꼭짓점의 축 정렬 바운딩 박스를 계산해야 하이라이트가 맞는다.
+        const [a, b, c, d, e, f] = item.transform;
+        const wNorm = Math.hypot(a, b) || 1;
+        const hNorm = Math.hypot(c, d) || 1;
+        // 행렬의 x축(a,b)·y축(c,d) 방향 그대로 폭·높이를 전개해야
+        // 뒤집힘(d<0)·회전이 섞인 행렬에서도 바운딩 박스가 맞는다
+        const wx = (a / wNorm) * width;
+        const wy = (b / wNorm) * width;
+        const hx = (c / hNorm) * height;
+        const hy = (d / hNorm) * height;
+        const corners: Array<[number, number]> = [
+          [e, f],
+          [e + wx, f + wy],
+          [e + hx, f + hy],
+          [e + wx + hx, f + wy + hy],
+        ];
+        const xs = corners.map((corner) => corner[0]);
+        const ys = corners.map((corner) => corner[1]);
+        const minX = Math.min(...xs) - cropX;
+        const maxY = Math.max(...ys) - cropY;
         items.push({
           str: item.str,
-          x: item.transform[4],
-          y: viewport.height - item.transform[5] - height,
-          w: item.width,
-          h: height,
+          x: minX,
+          y: viewport.height - maxY,
+          w: Math.max(...xs) - Math.min(...xs),
+          h: maxY - (Math.min(...ys) - cropY),
         });
       }
       pages.push({ width: viewport.width, height: viewport.height, items });

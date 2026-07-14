@@ -355,7 +355,10 @@ function setupDeterrents() {
       if (searchState.hits.length > 0) gotoHit(searchState.current + (event.shiftKey ? -1 : 1));
       else openSearchBar();
     }
-    if (key === 'escape') closeSearchBar();
+    if (key === 'escape') {
+      if (measure.mode) setMeasureMode(false);
+      else closeSearchBar();
+    }
   });
 }
 
@@ -456,13 +459,55 @@ function renderPageHitOverlays() {
   });
 }
 
+/** 하이라이트가 이 크기(px)보다 작으면 읽을 수 있는 배율까지 자동 확대한다 */
+const MIN_READABLE_HIT_PX = 11;
+const TARGET_HIT_PX = 16;
+
 function gotoPageHit(hit) {
   const frame = pagesContainer.children[hit.page - 1];
   if (!frame) return;
-  frame.scrollIntoView({ block: 'center' });
   renderPageHitOverlays();
   const current = frame.querySelector('.search-hit-overlay.current');
-  if (current) current.scrollIntoView({ block: 'center' });
+
+  // 도면처럼 결과 문자가 아주 작으면(전체 보기 기준 수 px) 자동으로 확대해 보여준다
+  if (current) {
+    const hitHeight = current.getBoundingClientRect().height;
+    if (hitHeight > 0 && hitHeight < MIN_READABLE_HIT_PX) {
+      const targetPercent = Math.min(
+        ZOOM_STEPS[ZOOM_STEPS.length - 1],
+        ZOOM_STEPS[zoomIndex] * (TARGET_HIT_PX / hitHeight),
+      );
+      const nextIndex = ZOOM_STEPS.findIndex((step) => step >= targetPercent);
+      const resolved = nextIndex === -1 ? ZOOM_STEPS.length - 1 : nextIndex;
+      if (resolved > zoomIndex) {
+        zoomIndex = resolved;
+        applyZoom();
+      }
+    }
+  }
+
+  centerOnElement(current ?? frame);
+}
+
+/**
+ * 요소를 화면 정중앙으로 스크롤한다.
+ * 확대 시 pages-container가 가로·세로 스크롤을 모두 갖게 되어 scrollIntoView가
+ * 어긋나므로, 컨테이너 → 윈도우 순으로 직접 보정한다.
+ */
+function centerOnElement(el) {
+  const rect = el.getBoundingClientRect();
+  const containerRect = pagesContainer.getBoundingClientRect();
+
+  const dx = rect.left + rect.width / 2 - (containerRect.left + pagesContainer.clientWidth / 2);
+  pagesContainer.scrollLeft += dx;
+
+  const dy = rect.top + rect.height / 2 - window.innerHeight / 2;
+  const beforeTop = pagesContainer.scrollTop;
+  pagesContainer.scrollTop += dy;
+  const consumed = pagesContainer.scrollTop - beforeTop;
+  if (Math.abs(dy - consumed) > 1) {
+    window.scrollBy(0, dy - consumed);
+  }
 }
 
 let gridSearchHits = new Set();
@@ -687,6 +732,7 @@ async function initGridView() {
   document.getElementById('zoom-in').hidden = true;
   document.getElementById('zoom-level').hidden = true;
   document.getElementById('invert-btn').hidden = true;
+  document.getElementById('measure-btn').hidden = true;
 
   const meta = await fetchJsonView(`/api/view/grid/meta?${tokenQuery}`);
   gridState.sheets = meta.sheets;
@@ -724,6 +770,199 @@ async function initGridView() {
   }
 
   activateSheet(0);
+}
+
+/* ==================== 도면 도구: 커서 기준 줌 · 패닝 · 거리 측정 ==================== */
+
+/** 커서가 가리키는 지점을 유지한 채 배율을 바꾼다 (AutoCAD 휠 줌) */
+function zoomAtPoint(nextIndex, clientX, clientY) {
+  const bounded = Math.max(0, Math.min(ZOOM_STEPS.length - 1, nextIndex));
+  if (bounded === zoomIndex) return;
+  const ratio = ZOOM_STEPS[bounded] / ZOOM_STEPS[zoomIndex];
+  const rect = pagesContainer.getBoundingClientRect();
+  const containerDocTop = rect.top + window.scrollY;
+  const contentX = pagesContainer.scrollLeft + (clientX - rect.left);
+  const contentY = clientY + window.scrollY - containerDocTop;
+  zoomIndex = bounded;
+  applyZoom();
+  pagesContainer.scrollLeft = contentX * ratio - (clientX - rect.left);
+  window.scrollTo(window.scrollX, containerDocTop + contentY * ratio - clientY);
+}
+
+const measure = {
+  mode: false,
+  calibrating: false,
+  pending: null, // { frame, fx, fy, dot }
+  items: [], // { frame, a, b, paperMm, els: [] }
+  factor: 1,
+  unit: 'mm(용지)',
+};
+
+function measureLayer(frame) {
+  let layer = frame.querySelector('.measure-layer');
+  if (!layer) {
+    layer = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    layer.setAttribute('class', 'measure-layer');
+    layer.setAttribute('viewBox', '0 0 100 100');
+    layer.setAttribute('preserveAspectRatio', 'none');
+    frame.append(layer);
+  }
+  return layer;
+}
+
+function measureDot(frame, fx, fy) {
+  const dot = document.createElement('div');
+  dot.className = 'measure-dot';
+  dot.style.left = `${fx * 100}%`;
+  dot.style.top = `${fy * 100}%`;
+  frame.append(dot);
+  return dot;
+}
+
+function measurementLabelText(paperMm) {
+  const value = paperMm * measure.factor;
+  return `${value >= 100 ? value.toFixed(0) : value.toFixed(1)} ${measure.unit}`;
+}
+
+function addMeasurement(a, b) {
+  const frame = a.frame;
+  const pageIdx = [...pagesContainer.children].indexOf(frame);
+  const dims = pageDimensions && pageDimensions[pageIdx];
+  if (!dims) return;
+  const dxPt = (b.fx - a.fx) * dims.w;
+  const dyPt = (b.fy - a.fy) * dims.h;
+  const paperMm = (Math.hypot(dxPt, dyPt) * 25.4) / 72;
+
+  const layer = measureLayer(frame);
+  const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+  line.setAttribute('x1', String(a.fx * 100));
+  line.setAttribute('y1', String(a.fy * 100));
+  line.setAttribute('x2', String(b.fx * 100));
+  line.setAttribute('y2', String(b.fy * 100));
+  layer.append(line);
+
+  const dotB = measureDot(frame, b.fx, b.fy);
+  const label = document.createElement('div');
+  label.className = 'measure-label';
+  label.style.left = `${((a.fx + b.fx) / 2) * 100}%`;
+  label.style.top = `${((a.fy + b.fy) / 2) * 100}%`;
+  frame.append(label);
+
+  const item = { frame, paperMm, label, els: [line, a.dot, dotB, label] };
+  label.textContent = measurementLabelText(paperMm);
+  measure.items.push(item);
+
+  if (measure.calibrating) {
+    measure.calibrating = false;
+    const input = window.prompt('방금 잰 구간의 실제 길이를 입력하세요 (예: 1500 → mm)', '');
+    const value = Number((input || '').replace(/[^\d.]/g, ''));
+    if (value > 0) {
+      measure.factor = value / paperMm;
+      measure.unit = 'mm';
+      for (const it of measure.items) it.label.textContent = measurementLabelText(it.paperMm);
+      document.getElementById('measure-hint').textContent = '보정 완료 — 실제 치수(mm)로 표시됩니다';
+    } else {
+      document.getElementById('measure-hint').textContent = '보정이 취소되었습니다';
+    }
+  }
+}
+
+function clearMeasurements() {
+  for (const item of measure.items) for (const el of item.els) el?.remove();
+  measure.items = [];
+  if (measure.pending) {
+    measure.pending.dot.remove();
+    measure.pending = null;
+  }
+}
+
+function setMeasureMode(on) {
+  measure.mode = on;
+  measure.calibrating = false;
+  document.getElementById('measure-btn').setAttribute('aria-pressed', String(on));
+  document.getElementById('measure-bar').hidden = !on;
+  pagesContainer.classList.toggle('measuring', on);
+  if (!on) clearMeasurements();
+  else document.getElementById('measure-hint').textContent = '두 점을 클릭해 거리를 측정하세요';
+}
+
+function setupDrawingTools() {
+  // Ctrl+휠: 커서 기준 확대/축소
+  pagesContainer.addEventListener(
+    'wheel',
+    (event) => {
+      if (!event.ctrlKey) return;
+      event.preventDefault();
+      zoomAtPoint(zoomIndex + (event.deltaY < 0 ? 1 : -1), event.clientX, event.clientY);
+    },
+    { passive: false },
+  );
+
+  // 더블클릭: 해당 지점으로 두 단계 확대 (측정 중에는 비활성)
+  pagesContainer.addEventListener('dblclick', (event) => {
+    if (measure.mode) return;
+    zoomAtPoint(zoomIndex + 2, event.clientX, event.clientY);
+  });
+
+  // 드래그 패닝 (왼쪽/휠 버튼) — AutoCAD의 팬처럼 문서를 끌어서 이동
+  let pan = null;
+  pagesContainer.addEventListener('mousedown', (event) => {
+    if (measure.mode) return;
+    if (event.button !== 0 && event.button !== 1) return;
+    // 컨테이너 스크롤바 영역 클릭은 네이티브 동작(스크롤바 드래그)에 맡긴다
+    if (
+      event.target === pagesContainer &&
+      (event.offsetX > pagesContainer.clientWidth || event.offsetY > pagesContainer.clientHeight)
+    ) {
+      return;
+    }
+    pan = {
+      x: event.clientX,
+      y: event.clientY,
+      left: pagesContainer.scrollLeft,
+      top: window.scrollY,
+    };
+    pagesContainer.classList.add('panning');
+    event.preventDefault();
+  });
+  document.addEventListener('mousemove', (event) => {
+    if (!pan) return;
+    pagesContainer.scrollLeft = pan.left - (event.clientX - pan.x);
+    window.scrollTo(window.scrollX, pan.top - (event.clientY - pan.y));
+  });
+  document.addEventListener('mouseup', () => {
+    pan = null;
+    pagesContainer.classList.remove('panning');
+  });
+
+  // 측정 모드
+  document.getElementById('measure-btn').addEventListener('click', () => setMeasureMode(!measure.mode));
+  document.getElementById('measure-close').addEventListener('click', () => setMeasureMode(false));
+  document.getElementById('measure-clear').addEventListener('click', clearMeasurements);
+  document.getElementById('measure-calibrate').addEventListener('click', () => {
+    measure.calibrating = true;
+    document.getElementById('measure-hint').textContent =
+      '실제 길이를 아는 구간(치수선 등)의 양 끝을 클릭하세요';
+  });
+
+  pagesContainer.addEventListener('click', (event) => {
+    if (!measure.mode) return;
+    const frame = event.target.closest('.page-frame');
+    if (!frame) return;
+    const rect = frame.getBoundingClientRect();
+    const point = {
+      frame,
+      fx: (event.clientX - rect.left) / rect.width,
+      fy: (event.clientY - rect.top) / rect.height,
+    };
+    if (!measure.pending || measure.pending.frame !== frame) {
+      if (measure.pending) measure.pending.dot.remove();
+      measure.pending = { ...point, dot: measureDot(frame, point.fx, point.fy) };
+    } else {
+      addMeasurement(measure.pending, point);
+      measure.pending = null;
+    }
+  });
 }
 
 async function init() {
@@ -768,6 +1007,7 @@ async function init() {
   applyZoom();
   buildPages();
   trackCurrentPage();
+  setupDrawingTools();
 }
 
 init();
