@@ -291,10 +291,34 @@ async function hasExtremePages(pdfPath: string): Promise<boolean> {
 /** 이 행 수를 넘는 시트는 시트당 1페이지 방식을 시도하지 않고 곧장 페이지 분할로 간다 */
 const LONG_SHEET_ROWS = 500;
 
+/**
+ * xlsx/csv는 그리드 뷰(스프레드시트.ts)가 LibreOffice 없이 열람을 담당하므로
+ * 업로드 허용 목록에서는 LibreOffice 유무와 무관하게 항상 등록해야 한다.
+ * 이 convert()는 "출력용 PDF 지연 생성" 시에만 호출되며, 그 시점에 LibreOffice가
+ * 없으면 convertWithSoffice가 명확한 오류를 던진다 (열람 자체는 영향 없음).
+ */
+export const gridPrintConverter: Converter = {
+  name: 'libreoffice-calc-grid-print',
+  extensions: ['xlsx', 'csv'],
+  async convert(sourcePath, targetPdfPath, sourceName) {
+    await spreadsheetConvert(sourcePath, targetPdfPath, sourceName);
+  },
+};
+
+/** xls/ods는 그리드 뷰가 없어 PDF 변환(LibreOffice)만이 유일한 열람 경로다. */
 export const spreadsheetConverter: Converter = {
   name: 'libreoffice-calc',
-  extensions: ['xls', 'xlsx', 'ods', 'csv'],
+  extensions: ['xls', 'ods'],
   async convert(sourcePath, targetPdfPath, sourceName) {
+    await spreadsheetConvert(sourcePath, targetPdfPath, sourceName);
+  },
+};
+
+async function spreadsheetConvert(
+  sourcePath: string,
+  targetPdfPath: string,
+  sourceName?: string,
+): Promise<void> {
     const isXlsx = path.extname(sourcePath).toLowerCase() === '.xlsx';
 
     // 수천 행짜리 리스트는 시트당 1페이지가 수 미터짜리 리본이 되어 뿌옇게 보이고,
@@ -335,8 +359,7 @@ export const spreadsheetConverter: Converter = {
         isXlsx ? applyFitToWidthAndStrip : undefined,
       );
     }
-  },
-};
+}
 
 export const dxfConverter: Converter = {
   name: 'libreoffice-dxf',
