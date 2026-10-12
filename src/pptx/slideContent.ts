@@ -1,7 +1,7 @@
 import { XMLParser } from 'fast-xml-parser';
 import type { Node as PMNode } from 'prosemirror-model';
 import { pptxTextSchema as schema } from './textSchema.js';
-import type { SlideVisual } from '../collab/pptxShared.js';
+import { SLIDE_WIDTH_EMU, SLIDE_HEIGHT_EMU, type SlideVisual } from '../collab/pptxShared.js';
 
 export interface ParsedShape {
   readonly shapeId: string;
@@ -417,8 +417,28 @@ export function parseSlideVisuals(zipEntries: Record<string, Uint8Array>, source
 
   const parsed = parser.parse(slideXml) as XmlNode;
   const sld = parsed['p:sld'] as XmlNode;
-  const spTree = (sld['p:cSld'] as XmlNode)['p:spTree'] as XmlNode;
+  const cSld = sld['p:cSld'] as XmlNode;
+  const spTree = cSld['p:spTree'] as XmlNode;
   const visuals: SlideVisual[] = [];
+
+  // 슬라이드 배경(<p:bg>)은 <p:spTree> 형제 노드라 위 p:pic/p:sp/p:graphicFrame 루프가 전혀
+  // 보지 못한다 — 그래서 지금까지 배경 그림/단색이 있는 슬라이드는 편집 화면에서 통째로
+  // 비어 보였다(실사용 파일로 재현 확인: 표지 슬라이드가 썸네일엔 배경이 보이는데 편집
+  // 캔버스엔 안 보임). 다른 모든 요소보다 먼저 push해 배열 순서상 맨 뒤에 깔리게 한다
+  // (renderCanvasForSlide가 visuals를 순서대로 append하므로 나중 요소가 위에 쌓인다).
+  // 테마 참조 배경(<p:bgRef>, 테마 XML까지 더 읽어야 풀린다)은 이번 범위에서 생략한다 —
+  // fillColorFromSpPr가 스킴 컬러를 생략하는 것과 같은 이유(완전히 안 보이는 것보다는 낫다).
+  const bgPr = ((cSld['p:bg'] as XmlNode | undefined)?.['p:bgPr']) as XmlNode | undefined;
+  if (bgPr) {
+    const blip = (bgPr['a:blipFill'] as XmlNode | undefined)?.['a:blip'] as XmlNode | undefined;
+    const mediaPath = resolveImageMediaPath(blip?.['@_r:embed'] as string | undefined);
+    if (mediaPath) {
+      visuals.push({ kind: 'image', x: 0, y: 0, w: SLIDE_WIDTH_EMU, h: SLIDE_HEIGHT_EMU, mediaPath });
+    } else {
+      const fill = fillColorFromSpPr(bgPr);
+      if (fill) visuals.push({ kind: 'shape', x: 0, y: 0, w: SLIDE_WIDTH_EMU, h: SLIDE_HEIGHT_EMU, fill });
+    }
+  }
 
   for (const pic of asArray<XmlNode>(spTree['p:pic'] as XmlNode | XmlNode[] | undefined)) {
     const spPr = pic['p:spPr'] as XmlNode | undefined;

@@ -12,6 +12,8 @@ import {
   PPTX_SLIDE_VISUALS_MAP,
   NEW_TEXTBOX_WIDTH_RATIO,
   NEW_TEXTBOX_HEIGHT_RATIO,
+  SLIDE_WIDTH_EMU,
+  SLIDE_HEIGHT_EMU,
   shouldBlockAddTextbox,
   type SlideEntry,
   type SlideShapeMeta,
@@ -82,11 +84,12 @@ let slideVisuals: Y.Map<readonly SlideVisual[]>;
 /**
  * 슬라이드 크기(EMU)를 캔버스 픽셀로 스케일한다. `/api/view/info`(ViewInfo)에는 슬라이드 크기
  * 필드가 없고, room.ts/viewer.ts 어디에도 sldSz류 값을 따로 내려주는 경로가 없다(grep으로 확인
- * 완료) — 표준 16:9 슬라이드 크기(12192000 x 6858000 EMU)를 기본값으로 쓴다. 실제 프레젠테이션의
- * 진짜 크기를 반영하는 것은 이후 개선 과제로 남긴다(이번 태스크에서 서버 API를 넓히지 않는다).
+ * 완료) — 표준 16:9 슬라이드 크기(pptxShared.ts의 SLIDE_WIDTH_EMU/SLIDE_HEIGHT_EMU, 서버의
+ * 슬라이드 배경 표시용 치수와 같은 값)를 기본값으로 쓴다. 실제 프레젠테이션의 진짜 크기를
+ * 반영하는 것은 이후 개선 과제로 남긴다(이번 태스크에서 서버 API를 넓히지 않는다).
  */
-const SLIDE_W_EMU = 12192000;
-const SLIDE_H_EMU = 6858000;
+const SLIDE_W_EMU = SLIDE_WIDTH_EMU;
+const SLIDE_H_EMU = SLIDE_HEIGHT_EMU;
 const EMU_PER_PX = SLIDE_W_EMU / 960; // 캔버스 폭을 960px 기준으로 스케일(반응형은 이후 과제)
 
 function emuToPx(emu: number): number {

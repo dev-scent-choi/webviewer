@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { parseSlideVisuals } from '../src/pptx/slideContent.js';
+import { SLIDE_WIDTH_EMU, SLIDE_HEIGHT_EMU } from '../src/collab/pptxShared.js';
 
 const XML_HEAD =
   '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' +
@@ -174,5 +175,72 @@ describe('parseSlideVisuals', () => {
 
   test('returns an empty array when the slide part is missing from the zip', () => {
     expect(parseSlideVisuals(zip({}), 'slide1.xml')).toEqual([]);
+  });
+
+  test('extracts a slide background image (<p:bg>, sibling of <p:spTree>) as a full-slide image visual, listed before other visuals', () => {
+    const slideXml =
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' +
+      '<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" ' +
+      'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" ' +
+      'xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">' +
+      '<p:cSld>' +
+      '<p:bg><p:bgPr><a:blipFill><a:blip r:embed="rId9"/></a:blipFill><a:effectLst/></p:bgPr></p:bg>' +
+      '<p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>' +
+      '<p:sp><p:nvSpPr><p:cNvPr id="5" name="Rectangle"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>' +
+      '<p:spPr><a:xfrm><a:off x="100" y="200"/><a:ext cx="300" cy="400"/></a:xfrm>' +
+      '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>' +
+      '<a:solidFill><a:srgbClr val="4472C4"/></a:solidFill></p:spPr></p:sp>' +
+      '</p:spTree></p:cSld></p:sld>';
+    const relsXml =
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+      '<Relationship Id="rId9" Type=".../image" Target="../media/bg.png"/>' +
+      '</Relationships>';
+    const entries = zip({
+      'ppt/slides/slide1.xml': slideXml,
+      'ppt/slides/_rels/slide1.xml.rels': relsXml,
+      'ppt/media/bg.png': new Uint8Array([137, 80, 78, 71]),
+    });
+
+    const visuals = parseSlideVisuals(entries, 'slide1.xml');
+
+    expect(visuals).toEqual([
+      { kind: 'image', x: 0, y: 0, w: SLIDE_WIDTH_EMU, h: SLIDE_HEIGHT_EMU, mediaPath: 'ppt/media/bg.png' },
+      { kind: 'shape', x: 100, y: 200, w: 300, h: 400, fill: '#4472C4' },
+    ]);
+  });
+
+  test('extracts a slide background solid fill as a full-slide shape visual when there is no background image', () => {
+    const slideXml =
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' +
+      '<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" ' +
+      'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" ' +
+      'xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">' +
+      '<p:cSld>' +
+      '<p:bg><p:bgPr><a:solidFill><a:srgbClr val="112233"/></a:solidFill><a:effectLst/></p:bgPr></p:bg>' +
+      '<p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>' +
+      '</p:spTree></p:cSld></p:sld>';
+    const entries = zip({ 'ppt/slides/slide1.xml': slideXml });
+
+    const visuals = parseSlideVisuals(entries, 'slide1.xml');
+
+    expect(visuals).toEqual([
+      { kind: 'shape', x: 0, y: 0, w: SLIDE_WIDTH_EMU, h: SLIDE_HEIGHT_EMU, fill: '#112233' },
+    ]);
+  });
+
+  test('skips a theme-referenced background (<p:bgRef>) rather than guessing a color', () => {
+    const slideXml =
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' +
+      '<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" ' +
+      'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" ' +
+      'xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">' +
+      '<p:cSld>' +
+      '<p:bg><p:bgRef idx="1001"><a:schemeClr val="accent1"/></p:bgRef></p:bg>' +
+      '<p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>' +
+      '</p:spTree></p:cSld></p:sld>';
+    const entries = zip({ 'ppt/slides/slide1.xml': slideXml });
+
+    expect(parseSlideVisuals(entries, 'slide1.xml')).toEqual([]);
   });
 });

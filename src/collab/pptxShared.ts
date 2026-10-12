@@ -1,3 +1,11 @@
+/** 표준 PowerPoint 와이드스크린(16:9) 슬라이드 크기(EMU, 1인치=914400EMU) — 이 프로젝트는 실제
+ * 업로드된 파일의 presentation.xml(p:sldSz)을 읽지 않고 이 고정값을 전제로 좌표를 계산한다.
+ * src/client/editor-slides.ts(캔버스 크기·새 텍스트박스 위치)와 src/pptx/slideContent.ts(슬라이드
+ * 배경을 전체 슬라이드 크기의 표시용 요소로 만들 때) 양쪽이 같은 값을 써야 하므로 여기 하나로
+ * 묶는다 — 서버와 클라이언트 번들 둘 다 이 파일을 이미 가져다 쓴다. */
+export const SLIDE_WIDTH_EMU = 12192000;
+export const SLIDE_HEIGHT_EMU = 6858000;
+
 /**
  * pptx 동시편집이 쓰는 Y.Doc 최상위 공유 타입 이름 — 서버(room.ts, src/pptx/collab.ts)와
  * 클라이언트 번들(src/client/editor-slides.ts) 양쪽에서 그대로 가져다 쓴다. 슬라이드 "내용"은
