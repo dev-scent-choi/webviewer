@@ -76,16 +76,71 @@ function emuAttr(xfrmChild: XmlNode | undefined, attr: '@_x' | '@_y' | '@_cx' | 
   return typeof value === 'number' ? value : value !== undefined ? Number(value) : null;
 }
 
-/** pptx 슬라이드 XML(p:sld) 안의 각 텍스트 도형(p:sp)을 위치 정보 + ProseMirror 문서로 파싱한다.
- * <p:txBody>가 없는 도형(그림 등)은 편집 대상이 아니므로 결과에서 제외한다. */
-export function parseSlideShapes(slideXml: string): ParsedShape[] {
-  const parsed = parser.parse(slideXml) as XmlNode;
-  const sld = parsed['p:sld'] as XmlNode;
-  const spTree = (sld['p:cSld'] as XmlNode)['p:spTree'] as XmlNode;
-  const shapeNodes = asArray<XmlNode>(spTree['p:sp'] as XmlNode | XmlNode[] | undefined);
+/** <p:grpSp>(그룹 도형) 하나의 좌표 변환 — 그룹 안 자식 도형의 <a:xfrm>은 그룹의 "자식 좌표계"
+ * (<a:chOff>/<a:chExt>)로 표현되는데, 이는 그룹 자신의 겉보기 위치/크기(<a:off>/<a:ext>, 부모
+ * 좌표계 기준)와 다를 수 있다(PowerPoint가 그룹을 늘이거나 줄이면 어긋난다) — 그래서 자식 좌표를
+ * 그대로 쓰면 그룹을 옮기거나 늘였을 때 안의 도형들이 엉뚱한 자리에 보인다. 회전(rot=)은 이
+ * 파일이 최상위 도형에서도 다루지 않는 것과 같은 이유로 무시한다(완전히 틀린 자리보다 약간 어긋난
+ * 자리가 낫다는 이 파일의 기존 단순화 방침과 일관됨). */
+interface GroupTransform {
+  readonly scaleX: number;
+  readonly scaleY: number;
+  readonly chOffX: number;
+  readonly chOffY: number;
+  readonly offX: number;
+  readonly offY: number;
+}
 
-  const shapes: ParsedShape[] = [];
-  for (const sp of shapeNodes) {
+function groupTransformFromGrpSpPr(grpSpPr: XmlNode | undefined): GroupTransform | null {
+  const xfrm = grpSpPr?.['a:xfrm'] as XmlNode | undefined;
+  if (!xfrm) return null; // 구조적으로 있어야 하지만(PowerPoint가 항상 씀), 없으면 변환 없이 그대로 둔다.
+  const off = xfrm['a:off'] as XmlNode | undefined;
+  const ext = xfrm['a:ext'] as XmlNode | undefined;
+  const chOff = xfrm['a:chOff'] as XmlNode | undefined;
+  const chExt = xfrm['a:chExt'] as XmlNode | undefined;
+  const extCx = emuAttr(ext, '@_cx') ?? 0;
+  const extCy = emuAttr(ext, '@_cy') ?? 0;
+  const chExtCx = emuAttr(chExt, '@_cx') ?? extCx;
+  const chExtCy = emuAttr(chExt, '@_cy') ?? extCy;
+  return {
+    scaleX: chExtCx !== 0 ? extCx / chExtCx : 1,
+    scaleY: chExtCy !== 0 ? extCy / chExtCy : 1,
+    chOffX: emuAttr(chOff, '@_x') ?? 0,
+    chOffY: emuAttr(chOff, '@_y') ?? 0,
+    offX: emuAttr(off, '@_x') ?? 0,
+    offY: emuAttr(off, '@_y') ?? 0,
+  };
+}
+
+/** 중첩된 그룹을 거슬러 올라가며(가장 안쪽 그룹부터 바깥쪽 순서로) 로컬 좌표를 슬라이드 절대
+ * 좌표로 누적 변환한다. transforms는 바깥쪽부터 안쪽 순서로 쌓이므로(재귀가 바깥 그룹부터 먼저
+ * 방문하기 때문) 뒤에서부터(안쪽부터) 적용해야 한다. 네 값 중 하나라도 원본에 없으면(null)
+ * 변환하지 않고 그대로 null을 돌려준다 — 이 파일 전체의 "모르면 null, 억지로 계산하지 않는다"
+ * 원칙과 일관된다. */
+function applyGroupTransforms(
+  transforms: readonly GroupTransform[],
+  x: number | null,
+  y: number | null,
+  w: number | null,
+  h: number | null,
+): { x: number | null; y: number | null; w: number | null; h: number | null } {
+  if (x === null || y === null || w === null || h === null) return { x: null, y: null, w: null, h: null };
+  let px = x;
+  let py = y;
+  let pw = w;
+  let ph = h;
+  for (let i = transforms.length - 1; i >= 0; i--) {
+    const t = transforms[i];
+    px = (px - t.chOffX) * t.scaleX + t.offX;
+    py = (py - t.chOffY) * t.scaleY + t.offY;
+    pw = pw * t.scaleX;
+    ph = ph * t.scaleY;
+  }
+  return { x: Math.round(px), y: Math.round(py), w: Math.round(pw), h: Math.round(ph) };
+}
+
+function collectShapesRecursive(node: XmlNode, transforms: readonly GroupTransform[], shapes: ParsedShape[]): void {
+  for (const sp of asArray<XmlNode>(node['p:sp'] as XmlNode | XmlNode[] | undefined)) {
     const txBody = sp['p:txBody'] as XmlNode | undefined;
     if (!txBody) continue; // <p:txBody> 없는 도형(그림 등)은 편집 대상이 아니다 — 건너뛴다.
 
@@ -95,6 +150,7 @@ export function parseSlideShapes(slideXml: string): ParsedShape[] {
     const xfrm = (sp['p:spPr'] as XmlNode | undefined)?.['a:xfrm'] as XmlNode | undefined;
     const off = xfrm?.['a:off'] as XmlNode | undefined;
     const ext = xfrm?.['a:ext'] as XmlNode | undefined;
+    const pos = applyGroupTransforms(transforms, emuAttr(off, '@_x'), emuAttr(off, '@_y'), emuAttr(ext, '@_cx'), emuAttr(ext, '@_cy'));
 
     const paragraphs = asArray<XmlNode>(txBody['a:p'] as XmlNode | XmlNode[] | undefined).map(paragraphFromXml);
     const doc = schema.node(
@@ -103,15 +159,28 @@ export function parseSlideShapes(slideXml: string): ParsedShape[] {
       paragraphs.length > 0 ? paragraphs : [schema.node('paragraph', null, [])],
     );
 
-    shapes.push({
-      shapeId,
-      x: emuAttr(off, '@_x'),
-      y: emuAttr(off, '@_y'),
-      w: emuAttr(ext, '@_cx'),
-      h: emuAttr(ext, '@_cy'),
-      doc,
-    });
+    shapes.push({ shapeId, ...pos, doc });
   }
+
+  for (const grp of asArray<XmlNode>(node['p:grpSp'] as XmlNode | XmlNode[] | undefined)) {
+    const groupTransform = groupTransformFromGrpSpPr(grp['p:grpSpPr'] as XmlNode | undefined);
+    const nextTransforms = groupTransform ? [...transforms, groupTransform] : transforms;
+    collectShapesRecursive(grp, nextTransforms, shapes);
+  }
+}
+
+/** pptx 슬라이드 XML(p:sld) 안의 각 텍스트 도형(p:sp)을 위치 정보 + ProseMirror 문서로 파싱한다.
+ * <p:txBody>가 없는 도형(그림 등)은 편집 대상이 아니므로 결과에서 제외한다. <p:grpSp>(그룹 도형)
+ * 안에 중첩된 도형도 재귀로 찾아내 그룹의 좌표 변환을 적용한 절대 좌표로 반환한다 — 그룹 도형은
+ * 재질서(저장 시 position은 쓰지 않으므로, hasShape/spliceShapeTxBody/removeShape의 원본 XML
+ * 텍스트 기반 매칭은 이 중첩 여부와 무관하게 이미 그대로 동작한다, 이 함수만 읽기 전용으로 몰랐을
+ * 뿐이다). */
+export function parseSlideShapes(slideXml: string): ParsedShape[] {
+  const parsed = parser.parse(slideXml) as XmlNode;
+  const sld = parsed['p:sld'] as XmlNode;
+  const spTree = (sld['p:cSld'] as XmlNode)['p:spTree'] as XmlNode;
+  const shapes: ParsedShape[] = [];
+  collectShapesRecursive(spTree, [], shapes);
   return shapes;
 }
 
@@ -440,55 +509,57 @@ export function parseSlideVisuals(zipEntries: Record<string, Uint8Array>, source
     }
   }
 
-  for (const pic of asArray<XmlNode>(spTree['p:pic'] as XmlNode | XmlNode[] | undefined)) {
-    const spPr = pic['p:spPr'] as XmlNode | undefined;
-    const xfrm = spPr?.['a:xfrm'] as XmlNode | undefined;
-    const off = xfrm?.['a:off'] as XmlNode | undefined;
-    const ext = xfrm?.['a:ext'] as XmlNode | undefined;
-    const blip = (pic['p:blipFill'] as XmlNode | undefined)?.['a:blip'] as XmlNode | undefined;
-    const mediaPath = resolveImageMediaPath(blip?.['@_r:embed'] as string | undefined);
-    if (!mediaPath) continue; // 관계 유실 또는 브라우저가 못 그리는 포맷 — 자리표시자 없이 생략
-    visuals.push({
-      kind: 'image',
-      x: emuAttr(off, '@_x'),
-      y: emuAttr(off, '@_y'),
-      w: emuAttr(ext, '@_cx'),
-      h: emuAttr(ext, '@_cy'),
-      mediaPath,
-    });
-  }
+  // <p:grpSp>(그룹 도형) 안에 중첩된 이미지·단순 도형·표/차트도 재귀로 찾아 그룹의 좌표 변환을
+  // 적용한 절대 좌표로 push한다(parseSlideShapes의 collectShapesRecursive와 같은 이유 —
+  // GroupTransform 설명 참고).
+  function collectVisualsRecursive(node: XmlNode, transforms: readonly GroupTransform[]): void {
+    for (const pic of asArray<XmlNode>(node['p:pic'] as XmlNode | XmlNode[] | undefined)) {
+      const spPr = pic['p:spPr'] as XmlNode | undefined;
+      const xfrm = spPr?.['a:xfrm'] as XmlNode | undefined;
+      const off = xfrm?.['a:off'] as XmlNode | undefined;
+      const ext = xfrm?.['a:ext'] as XmlNode | undefined;
+      const blip = (pic['p:blipFill'] as XmlNode | undefined)?.['a:blip'] as XmlNode | undefined;
+      const mediaPath = resolveImageMediaPath(blip?.['@_r:embed'] as string | undefined);
+      if (!mediaPath) continue; // 관계 유실 또는 브라우저가 못 그리는 포맷 — 자리표시자 없이 생략
+      const pos = applyGroupTransforms(transforms, emuAttr(off, '@_x'), emuAttr(off, '@_y'), emuAttr(ext, '@_cx'), emuAttr(ext, '@_cy'));
+      visuals.push({ kind: 'image', ...pos, mediaPath });
+    }
 
-  for (const sp of asArray<XmlNode>(spTree['p:sp'] as XmlNode | XmlNode[] | undefined)) {
-    if (sp['p:txBody']) continue; // 텍스트박스는 parseSlideShapes가 이미 편집 대상으로 다룬다
-    const spPr = sp['p:spPr'] as XmlNode | undefined;
-    const xfrm = spPr?.['a:xfrm'] as XmlNode | undefined;
-    const off = xfrm?.['a:off'] as XmlNode | undefined;
-    const ext = xfrm?.['a:ext'] as XmlNode | undefined;
-    visuals.push({
-      kind: 'shape',
-      x: emuAttr(off, '@_x'),
-      y: emuAttr(off, '@_y'),
-      w: emuAttr(ext, '@_cx'),
-      h: emuAttr(ext, '@_cy'),
-      fill: fillColorFromSpPr(spPr),
-    });
-  }
+    for (const sp of asArray<XmlNode>(node['p:sp'] as XmlNode | XmlNode[] | undefined)) {
+      if (sp['p:txBody']) continue; // 텍스트박스는 parseSlideShapes가 이미 편집 대상으로 다룬다
+      const spPr = sp['p:spPr'] as XmlNode | undefined;
+      const xfrm = spPr?.['a:xfrm'] as XmlNode | undefined;
+      const off = xfrm?.['a:off'] as XmlNode | undefined;
+      const ext = xfrm?.['a:ext'] as XmlNode | undefined;
+      const pos = applyGroupTransforms(transforms, emuAttr(off, '@_x'), emuAttr(off, '@_y'), emuAttr(ext, '@_cx'), emuAttr(ext, '@_cy'));
+      visuals.push({ kind: 'shape', ...pos, fill: fillColorFromSpPr(spPr) });
+    }
 
-  for (const gf of asArray<XmlNode>(spTree['p:graphicFrame'] as XmlNode | XmlNode[] | undefined)) {
-    const { x, y, w, h } = graphicFrameXfrm(gf);
-    const graphicData = (gf['a:graphic'] as XmlNode | undefined)?.['a:graphicData'] as XmlNode | undefined;
-    const uri = graphicData?.['@_uri'] as string | undefined;
-    if (uri === TABLE_GRAPHIC_URI) {
-      const tbl = graphicData?.['a:tbl'] as XmlNode | undefined;
-      const rows = asArray<XmlNode>(tbl?.['a:tr'] as XmlNode | XmlNode[] | undefined).map((tr) =>
-        asArray<XmlNode>(tr['a:tc'] as XmlNode | XmlNode[] | undefined).map(tableCellText),
-      );
-      visuals.push({ kind: 'table', x, y, w, h, rows });
-    } else {
-      const label = uri === CHART_GRAPHIC_URI ? '차트' : uri?.includes('/diagram') ? '스마트아트' : '콘텐츠';
-      visuals.push({ kind: 'placeholder', x, y, w, h, label });
+    for (const gf of asArray<XmlNode>(node['p:graphicFrame'] as XmlNode | XmlNode[] | undefined)) {
+      const raw = graphicFrameXfrm(gf);
+      const { x, y, w, h } = applyGroupTransforms(transforms, raw.x, raw.y, raw.w, raw.h);
+      const graphicData = (gf['a:graphic'] as XmlNode | undefined)?.['a:graphicData'] as XmlNode | undefined;
+      const uri = graphicData?.['@_uri'] as string | undefined;
+      if (uri === TABLE_GRAPHIC_URI) {
+        const tbl = graphicData?.['a:tbl'] as XmlNode | undefined;
+        const rows = asArray<XmlNode>(tbl?.['a:tr'] as XmlNode | XmlNode[] | undefined).map((tr) =>
+          asArray<XmlNode>(tr['a:tc'] as XmlNode | XmlNode[] | undefined).map(tableCellText),
+        );
+        visuals.push({ kind: 'table', x, y, w, h, rows });
+      } else {
+        const label = uri === CHART_GRAPHIC_URI ? '차트' : uri?.includes('/diagram') ? '스마트아트' : '콘텐츠';
+        visuals.push({ kind: 'placeholder', x, y, w, h, label });
+      }
+    }
+
+    for (const grp of asArray<XmlNode>(node['p:grpSp'] as XmlNode | XmlNode[] | undefined)) {
+      const groupTransform = groupTransformFromGrpSpPr(grp['p:grpSpPr'] as XmlNode | undefined);
+      const nextTransforms = groupTransform ? [...transforms, groupTransform] : transforms;
+      collectVisualsRecursive(grp, nextTransforms);
     }
   }
+
+  collectVisualsRecursive(spTree, []);
 
   return visuals;
 }

@@ -229,6 +229,37 @@ describe('parseSlideVisuals', () => {
     ]);
   });
 
+  test('finds an image nested inside a <p:grpSp> and converts its local coordinates to absolute slide coordinates', () => {
+    // 그룹 off=(1000,2000) ext=(2000,4000), chOff=(0,0) chExt=(1000,1000) → 자식 좌표를 가로 2배,
+    // 세로 4배로 확대. 자식 로컬 (x=100,y=100,w=200,h=200) → 절대 (1200, 2400, 400, 800).
+    const slideXml =
+      XML_HEAD +
+      '<p:grpSp><p:nvGrpSpPr><p:cNvPr id="10" name="Group 1"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>' +
+      '<p:grpSpPr><a:xfrm><a:off x="1000" y="2000"/><a:ext cx="2000" cy="4000"/>' +
+      '<a:chOff x="0" y="0"/><a:chExt cx="1000" cy="1000"/></a:xfrm></p:grpSpPr>' +
+      '<p:pic><p:nvPicPr><p:cNvPr id="11" name="Picture"/></p:nvPicPr>' +
+      '<p:blipFill><a:blip r:embed="rId2"/></p:blipFill>' +
+      '<p:spPr><a:xfrm><a:off x="100" y="100"/><a:ext cx="200" cy="200"/></a:xfrm></p:spPr></p:pic>' +
+      '</p:grpSp>' +
+      XML_TAIL;
+    const relsXml =
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+      '<Relationship Id="rId2" Type=".../image" Target="../media/image1.png"/>' +
+      '</Relationships>';
+    const entries = zip({
+      'ppt/slides/slide1.xml': slideXml,
+      'ppt/slides/_rels/slide1.xml.rels': relsXml,
+      'ppt/media/image1.png': new Uint8Array([137, 80, 78, 71]),
+    });
+
+    const visuals = parseSlideVisuals(entries, 'slide1.xml');
+
+    expect(visuals).toEqual([
+      { kind: 'image', x: 1200, y: 2400, w: 400, h: 800, mediaPath: 'ppt/media/image1.png' },
+    ]);
+  });
+
   test('skips a theme-referenced background (<p:bgRef>) rather than guessing a color', () => {
     const slideXml =
       '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' +

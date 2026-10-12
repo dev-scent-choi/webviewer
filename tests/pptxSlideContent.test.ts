@@ -138,6 +138,76 @@ describe('parseSlideShapes', () => {
     expect(shapes[0].doc.childCount).toBe(1);
     expect(shapes[0].doc.child(0).textContent).toBe('');
   });
+
+  test('finds a text shape nested inside a <p:grpSp> and converts its local coordinates to absolute slide coordinates', () => {
+    // 그룹은 겉보기로 부모 좌표계에서 off=(1000,2000) ext=(2000,4000)를 차지하지만, 안쪽
+    // 자식들은 chOff=(0,0) chExt=(1000,1000) 기준 좌표계로 표현된다 — 즉 그룹이 자식 좌표계를
+    // 가로 2배, 세로 4배로 늘인 셈이다. 자식 도형의 로컬 (x=100,y=100,w=200,h=200)은
+    // 절대 좌표로 (1000 + 100*2, 2000 + 100*4, 200*2, 200*4) = (1200, 2400, 400, 800)이어야 한다.
+    const xml =
+      XML_HEAD +
+      '<p:grpSp><p:nvGrpSpPr><p:cNvPr id="10" name="Group 1"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>' +
+      '<p:grpSpPr><a:xfrm><a:off x="1000" y="2000"/><a:ext cx="2000" cy="4000"/>' +
+      '<a:chOff x="0" y="0"/><a:chExt cx="1000" cy="1000"/></a:xfrm></p:grpSpPr>' +
+      '<p:sp><p:nvSpPr><p:cNvPr id="11" name="Nested"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>' +
+      '<p:spPr><a:xfrm><a:off x="100" y="100"/><a:ext cx="200" cy="200"/></a:xfrm></p:spPr>' +
+      '<p:txBody><a:bodyPr/><a:p><a:r><a:t>Grouped</a:t></a:r></a:p></p:txBody></p:sp>' +
+      '</p:grpSp>' +
+      XML_TAIL;
+
+    const shapes = parseSlideShapes(xml);
+
+    expect(shapes).toHaveLength(1);
+    expect(shapes[0].shapeId).toBe('11');
+    expect(shapes[0].doc.textContent).toBe('Grouped');
+    expect(shapes[0]).toMatchObject({ x: 1200, y: 2400, w: 400, h: 800 });
+  });
+
+  test('composes transforms across two levels of nested groups', () => {
+    // 바깥 그룹: off=(0,0) ext=(1000,1000) chOff=(0,0) chExt=(100,100) → 안쪽 좌표를 10배 확대.
+    // 안쪽 그룹(바깥 그룹의 자식 좌표계 기준): off=(10,10) ext=(20,20) chOff=(0,0) chExt=(10,10)
+    //   → 그 자식의 로컬 좌표를 2배 확대한 뒤 (10,10)만큼 이동.
+    // 도형 로컬 (x=1,y=1,w=2,h=2) → 안쪽 그룹 통과: (10+1*2, 10+1*2, 2*2, 2*2) = (12,12,4,4)
+    //                              → 바깥 그룹 통과(10배): (120, 120, 40, 40)
+    const xml =
+      XML_HEAD +
+      '<p:grpSp><p:nvGrpSpPr><p:cNvPr id="20" name="Outer"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>' +
+      '<p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1000" cy="1000"/>' +
+      '<a:chOff x="0" y="0"/><a:chExt cx="100" cy="100"/></a:xfrm></p:grpSpPr>' +
+      '<p:grpSp><p:nvGrpSpPr><p:cNvPr id="21" name="Inner"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>' +
+      '<p:grpSpPr><a:xfrm><a:off x="10" y="10"/><a:ext cx="20" cy="20"/>' +
+      '<a:chOff x="0" y="0"/><a:chExt cx="10" cy="10"/></a:xfrm></p:grpSpPr>' +
+      '<p:sp><p:nvSpPr><p:cNvPr id="22" name="DeepNested"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>' +
+      '<p:spPr><a:xfrm><a:off x="1" y="1"/><a:ext cx="2" cy="2"/></a:xfrm></p:spPr>' +
+      '<p:txBody><a:bodyPr/><a:p><a:r><a:t>Deep</a:t></a:r></a:p></p:txBody></p:sp>' +
+      '</p:grpSp></p:grpSp>' +
+      XML_TAIL;
+
+    const shapes = parseSlideShapes(xml);
+
+    expect(shapes).toHaveLength(1);
+    expect(shapes[0].shapeId).toBe('22');
+    expect(shapes[0]).toMatchObject({ x: 120, y: 120, w: 40, h: 40 });
+  });
+
+  test('a shape with no <a:xfrm> inside a group stays null rather than a half-computed transform', () => {
+    const xml =
+      XML_HEAD +
+      '<p:grpSp><p:nvGrpSpPr><p:cNvPr id="10" name="Group 1"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>' +
+      '<p:grpSpPr><a:xfrm><a:off x="1000" y="2000"/><a:ext cx="2000" cy="4000"/>' +
+      '<a:chOff x="0" y="0"/><a:chExt cx="1000" cy="1000"/></a:xfrm></p:grpSpPr>' +
+      '<p:sp><p:nvSpPr><p:cNvPr id="11" name="Nested"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>' +
+      '<p:txBody><a:bodyPr/><a:p><a:r><a:t>Grouped</a:t></a:r></a:p></p:txBody></p:sp>' +
+      '</p:grpSp>' +
+      XML_TAIL;
+
+    const shapes = parseSlideShapes(xml);
+
+    expect(shapes[0].x).toBeNull();
+    expect(shapes[0].y).toBeNull();
+    expect(shapes[0].w).toBeNull();
+    expect(shapes[0].h).toBeNull();
+  });
 });
 
 describe('serializeTxBodyXml + spliceShapeTxBody (export)', () => {
