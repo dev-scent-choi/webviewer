@@ -45,3 +45,6 @@ start.local.bat
 
 # `npm pack`/`npm publish` 산출물 — 배포 전 로컬 검증용으로 그때그때 만드는 tarball, 소스 아님.
 *.tgz
+
+# npm 배포용 서버 컴파일 산출물(scripts/build-server.mjs → package.json의 prepack이 생성) — 소스 아님.
+dist/

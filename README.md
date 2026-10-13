@@ -120,13 +120,23 @@ DOCVIEW_SECRET=... DOCVIEW_DATA_DIR=... npx docview
 
 **npm으로 안 따라오는 것** — 대상 시스템에 따로 준비해야 한다:
 - LibreOffice(문서 변환, 위 "요구 사항" 참고).
-- 한글 편집기를 쓰려면 `node scripts/mirror-rhwp-studio.mjs`로 `public/rhwp/`를 직접 받아야 한다
-  (외부 프로젝트 미러라 패키지에 포함하지 않는다).
+- 한글 편집기를 쓰려면 `node node_modules/docview/scripts/mirror-rhwp-studio.mjs`로 `public/rhwp/`를
+  직접 받아야 한다(외부 프로젝트 미러라 패키지에 포함하지 않는다).
 - `DOCVIEW_SECRET`/`DOCVIEW_API_KEYS`/`DOCVIEW_DATA_DIR` 등 환경변수(아래 "환경 변수" 참고) — 설치
   대상마다 직접 설정해야 하며, 설정하지 않으면 로컬 개발용 기본값(임시 시크릿 등)으로 동작한다.
 
-지금은 `tsx`로 TypeScript를 그대로 실행하는 구조를 그대로 유지한다(`dependencies`에 포함돼 있어
-설치만 하면 바로 돌아간다) — 별도의 `tsc` 컴파일 산출물을 만들지 않는다.
+**패키지에는 TypeScript 원본이 아니라 컴파일+압축(minify)된 JS만 담긴다.** `scripts/build-server.mjs`가
+`src/**/*.ts`를 `dist/`에 파일 단위로 컴파일하고(여러 파일을 하나로 합치지 않는다 — 이 프로젝트
+곳곳의 "자기 파일 기준 상대 경로 찾기"가 합쳐지면 깨지기 때문), esbuild의 `minify`가 변수명 압축과
+공백·주석 제거를 한다. 이 빌드는 `prepare` 스크립트로 묶여 있어 `npm pack`/`npm publish` 시점과
+`npm install git+...`(git 의존성 설치) 시점에 자동으로 실행된다 — 설치하는 쪽이 따로 뭘 안 해도 된다.
+단, 이건 **완전한 난독화(제어 흐름 평탄화, 문자열 암호화 등)는 아니다** — 변수명이 사라지고 구조가
+읽기 불편해지는 수준이지, 역공학을 막는 수준의 보호는 아니다. 그 이상이 필요하면 `javascript-obfuscator`
+같은 전용 도구를 이 빌드 단계 뒤에 추가로 거쳐야 한다.
+
+tsx/esbuild는 이제 `devDependencies`에만 있다 — 설치하는 쪽은 둘 다 설치되지 않고, `dist/server.js`를
+일반 `node`로 바로 실행한다(이 저장소 자체의 로컬 개발(`npm run dev`/`npm start`)은 지금처럼 `tsx`로
+TypeScript를 바로 실행하는 방식 그대로다 — 이 컴파일은 배포용 패키지에만 적용된다).
 
 ## 환경 변수
 
