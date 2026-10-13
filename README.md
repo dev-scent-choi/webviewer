@@ -106,37 +106,77 @@ git clone 없이, 버전 관리된 패키지로 다른 서버에 배포하고 �
 `bin`(`docview` 명령)과 `files`(실행에 필요한 것만 담도록 제한)가 설정돼 있어, tarball 하나로
 설치·실행할 수 있다.
 
+### 1. 설치
+
+**방법 A — tarball(권장, 레지스트리 없이 지금 바로 가능)**
+
 ```bash
 # 이 저장소에서: 설치 가능한 tarball 생성
-npm pack   # docview-<version>.tgz 생성
+npm pack   # docview-<version>.tgz 생성 → 대상 시스템 담당자에게 전달
 
-# 대상 시스템에서: tarball로부터 설치 (레지스트리에 올리기 전이어도 동작)
+# 대상 시스템에서
 npm install ./docview-<version>.tgz
-# 또는 npm install git+https://github.com/dev-scent-choi/docView.git 처럼 git URL로도 가능
-
-# 실행
-DOCVIEW_SECRET=... DOCVIEW_DATA_DIR=... npx docview
 ```
 
-**npm으로 안 따라오는 것** — 대상 시스템에 따로 준비해야 한다:
-- LibreOffice(문서 변환, 위 "요구 사항" 참고).
-- 한글 편집기를 쓰려면 `node node_modules/docview/scripts/mirror-rhwp-studio.mjs`로 `public/rhwp/`를
-  직접 받아야 한다(외부 프로젝트 미러라 패키지에 포함하지 않는다).
-- `DOCVIEW_SECRET`/`DOCVIEW_API_KEYS`/`DOCVIEW_DATA_DIR` 등 환경변수(아래 "환경 변수" 참고) — 설치
-  대상마다 직접 설정해야 하며, 설정하지 않으면 로컬 개발용 기본값(임시 시크릿 등)으로 동작한다.
+**방법 B — git URL (저장소가 공개/접근 가능해야 함)**
 
-**패키지에는 TypeScript 원본이 아니라 컴파일+압축(minify)된 JS만 담긴다.** `scripts/build-server.mjs`가
-`src/**/*.ts`를 `dist/`에 파일 단위로 컴파일하고(여러 파일을 하나로 합치지 않는다 — 이 프로젝트
-곳곳의 "자기 파일 기준 상대 경로 찾기"가 합쳐지면 깨지기 때문), esbuild의 `minify`가 변수명 압축과
-공백·주석 제거를 한다. 이 빌드는 `prepare` 스크립트로 묶여 있어 `npm pack`/`npm publish` 시점과
-`npm install git+...`(git 의존성 설치) 시점에 자동으로 실행된다 — 설치하는 쪽이 따로 뭘 안 해도 된다.
-단, 이건 **완전한 난독화(제어 흐름 평탄화, 문자열 암호화 등)는 아니다** — 변수명이 사라지고 구조가
-읽기 불편해지는 수준이지, 역공학을 막는 수준의 보호는 아니다. 그 이상이 필요하면 `javascript-obfuscator`
-같은 전용 도구를 이 빌드 단계 뒤에 추가로 거쳐야 한다.
+```bash
+npm install git+https://github.com/dev-scent-choi/docView.git
+```
 
-tsx/esbuild는 이제 `devDependencies`에만 있다 — 설치하는 쪽은 둘 다 설치되지 않고, `dist/server.js`를
-일반 `node`로 바로 실행한다(이 저장소 자체의 로컬 개발(`npm run dev`/`npm start`)은 지금처럼 `tsx`로
-TypeScript를 바로 실행하는 방식 그대로다 — 이 컴파일은 배포용 패키지에만 적용된다).
+**방법 B를 쓰기 전에 확인할 것**: git 의존성 설치는 설치 시점에 `prepare` 스크립트(서버 컴파일,
+아래 "패키지 내용물" 참고)가 **그 자리에서 실행**되어야 `dist/`가 생긴다. tarball(방법 A)은 이미
+`dist/`가 빌드되어 tar 안에 들어있어서 이 단계가 아예 필요 없지만, git URL 설치는 그렇지 않다.
+사내 npm 설정에 `allow-scripts`(lavamoat) 같은 설치 스크립트 차단 정책이 있으면 `prepare`가 막혀
+`dist/server.js`가 안 만들어진 채로 설치가 "성공"해버릴 수 있다(겉보기엔 설치됐는데 실행하면 모듈을
+못 찾는다) — 이런 정책이 있는 환경이면 방법 A를 쓰거나, 설치 후 `node node_modules/docview/dist/server.js`
+파일이 실제로 존재하는지 먼저 확인할 것.
+
+### 2. 실행
+
+```bash
+DOCVIEW_SECRET=아무-긴-문자열 DOCVIEW_DATA_DIR=/path/to/data npx docview
+```
+
+전역 설치(`npm install -g`)했다면 `npx` 없이 `docview`만으로 실행된다. 기본 주소는
+`http://127.0.0.1:8000`(`DOCVIEW_HOST`/`DOCVIEW_PORT`로 변경 가능, 아래 "환경 변수" 참고).
+
+문서 업로드 → 변환(LibreOffice) → 실시간 협업 편집까지 실제 파일로 직접 검증했다 — 서버가 뜨고
+정적 페이지가 응답하는 수준이 아니라, 핵심 기능 자체가 패키지 설치본에서 그대로 동작한다.
+
+### 3. 설치 전후로 따로 챙겨야 할 것 (npm으로 안 따라옴)
+
+- **LibreOffice** — 문서 변환에 필수. 대상 시스템에 따로 설치해야 한다(위 "요구 사항" 참고).
+- **한글(hwp/hwpx) 편집기**를 쓰려면: `node node_modules/docview/scripts/mirror-rhwp-studio.mjs`를
+  한 번 실행해 `public/rhwp/`를 받아야 한다(외부 프로젝트 미러라 패키지에 포함하지 않는다).
+- **운영 환경이면** `DOCVIEW_API_KEYS`(업로드/토큰 API 인증)와 `DOCVIEW_ALLOWED_ORIGINS`(iframe 임베드
+  출처 제한)도 설정할 것 — 설정하지 않으면 개발 편의상 열려있는 상태로 경고만 남기고 동작한다.
+- 레지스트리(공개 npm/사내 private)는 아직 정해지지 않았다 — 지금은 tarball을 직접 전달하거나 git
+  URL로 설치하는 방식뿐이다.
+
+### 4. 패키지 내용물 — 소스가 아니라 컴파일된 결과물
+
+**설치된 패키지에는 TypeScript 원본이 포함되지 않는다**(`.ts` 파일 0개 — 실제 tarball 내용으로
+확인함). `scripts/build-server.mjs`가 `src/**/*.ts`를 `dist/`에 **파일 단위로**(여러 파일을 하나로
+합치지 않고) 컴파일+압축(minify)한다. 파일을 합치지 않는 이유: 이 프로젝트 곳곳이
+`import.meta.url`로 자기 파일 기준 상대 경로를 찾는데(`app.ts`의 `publicDir`, `rendering.ts`의
+`FONTS_DIR`, `dwgConverter.ts`의 외부 도구 경로 등 — 전부 깊이가 다르다), 여러 파일을 하나로 합치면
+그 경로들이 합쳐진 산출물 하나의 위치를 기준으로 계산되어 조용히 틀어진다. 파일 단위 변환은 `dist/`
+구조가 `src/`와 똑같은 상대 깊이를 유지해 이 문제가 없다(dwg 변환기 테스트로 실제 확인함).
+
+이 빌드는 `prepare` 스크립트로 묶여 있어 `npm pack`/`npm publish`와 `npm install git+...`(방법 B)
+시점에 자동 실행된다 — 단, 방법 B의 제약은 위 "1. 설치"를 참고.
+
+**이건 압축(minify)이지 완전한 난독화가 아니다.** 변수명이 의미 없는 짧은 이름으로 바뀌고
+공백·주석이 사라지는 정도고(원본을 복사해서 바로 읽긴 어렵다), 제어 흐름을 꼬거나 문자열을
+암호화하는 등 역공학 자체를 막는 수준의 보호는 없다. 지금 요구사항("소스가 패키지에 포함 안 되거나
+난독화되면 됨")은 이 정도로 충족된다 — 그 이상(역공학 방어)이 필요해지면 `javascript-obfuscator`
+같은 전용 도구를 이 빌드 단계 뒤에 추가로 거쳐야 한다(런타임 디버깅이 훨씬 어려워지는 트레이드오프가
+있다).
+
+tsx/esbuild는 `devDependencies`에만 있다 — 설치하는 쪽에는 둘 다 설치되지 않고, `dist/server.js`를
+일반 `node`로 바로 실행한다. 이 저장소 자체의 로컬 개발(`npm run dev`/`npm start`)은 지금처럼 `tsx`로
+TypeScript를 바로 실행하는 방식 그대로다 — 이 컴파일은 배포용 패키지에만 적용된다.
 
 ## 환경 변수
 
