@@ -100,6 +100,34 @@ Windows에서는 `start.bat`을 그대로 쓰면 된다. `DOCVIEW_SECRET`/`DOCVI
 `start.bat`이 있을 때만 자동으로 불러온다. 그 파일이 없으면 서버는 매 재시작마다 임시 시크릿으로
 경고와 함께 계속 동작한다(로컬 개발용 기본 동작, 아래 `DOCVIEW_SECRET` 설명과 동일).
 
+## 다른 시스템에 npm으로 설치하기
+
+git clone 없이, 버전 관리된 패키지로 다른 서버에 배포하고 싶을 때 쓰는 경로다. `package.json`에
+`bin`(`docview` 명령)과 `files`(실행에 필요한 것만 담도록 제한)가 설정돼 있어, tarball 하나로
+설치·실행할 수 있다.
+
+```bash
+# 이 저장소에서: 설치 가능한 tarball 생성
+npm pack   # docview-<version>.tgz 생성
+
+# 대상 시스템에서: tarball로부터 설치 (레지스트리에 올리기 전이어도 동작)
+npm install ./docview-<version>.tgz
+# 또는 npm install git+https://github.com/dev-scent-choi/docView.git 처럼 git URL로도 가능
+
+# 실행
+DOCVIEW_SECRET=... DOCVIEW_DATA_DIR=... npx docview
+```
+
+**npm으로 안 따라오는 것** — 대상 시스템에 따로 준비해야 한다:
+- LibreOffice(문서 변환, 위 "요구 사항" 참고).
+- 한글 편집기를 쓰려면 `node scripts/mirror-rhwp-studio.mjs`로 `public/rhwp/`를 직접 받아야 한다
+  (외부 프로젝트 미러라 패키지에 포함하지 않는다).
+- `DOCVIEW_SECRET`/`DOCVIEW_API_KEYS`/`DOCVIEW_DATA_DIR` 등 환경변수(아래 "환경 변수" 참고) — 설치
+  대상마다 직접 설정해야 하며, 설정하지 않으면 로컬 개발용 기본값(임시 시크릿 등)으로 동작한다.
+
+지금은 `tsx`로 TypeScript를 그대로 실행하는 구조를 그대로 유지한다(`dependencies`에 포함돼 있어
+설치만 하면 바로 돌아간다) — 별도의 `tsc` 컴파일 산출물을 만들지 않는다.
+
 ## 환경 변수
 
 | 변수 | 기본값 | 설명 |
