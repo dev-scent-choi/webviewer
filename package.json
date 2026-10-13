@@ -11,6 +11,7 @@
     "docview": "bin/docview.mjs"
   },
   "files": [
+    "assets",
     "bin",
     "dist",
     "public",

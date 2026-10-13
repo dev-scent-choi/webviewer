@@ -134,27 +134,103 @@ npm install git+https://github.com/dev-scent-choi/docView.git
 
 ### 2. 실행
 
-```bash
-DOCVIEW_SECRET=아무-긴-문자열 DOCVIEW_DATA_DIR=/path/to/data npx docview
+`npm install`은 설치만 한다. 서버(서비스)는 `npx docview`로 띄운다 — `npx`는 설치된
+`node_modules/.bin/docview`를 찾아 실행해 주는 명령이고, 그 결과로 Node 서버 프로세스가 떠서 포트를
+열고 계속 돌아간다. 설정은 실행 **전에** 환경변수로 넘긴다(전체 목록은 아래 "환경 변수").
+
+설치한 폴더에 `run-docview.bat` 같은 파일을 하나 만들어 두는 게 편하다:
+
+```bat
+@echo off
+cd /d "%~dp0"
+rem 설치본 밖의 고정 위치를 써야 한다 — 아래 "데이터 위치" 주의 참고
+set DOCVIEW_DATA_DIR=D:\docview-data
+set DOCVIEW_PORT=8001
+rem 다른 PC에서 접속해야 하면 0.0.0.0, 이 PC 안에서만 쓰면 생략(기본 127.0.0.1)
+set DOCVIEW_HOST=0.0.0.0
+set DOCVIEW_SECRET=길고-무작위인-고정값
+rem webviewer를 iframe으로 띄우는 "쪽" 화면의 주소(프로토콜://호스트:포트), 콤마로 여러 개
+set DOCVIEW_ALLOWED_ORIGINS=http://localhost:8080,http://192.168.0.15:8080
+npx docview
 ```
 
-전역 설치(`npm install -g`)했다면 `npx` 없이 `docview`만으로 실행된다. 기본 주소는
-`http://127.0.0.1:8000`(`DOCVIEW_HOST`/`DOCVIEW_PORT`로 변경 가능, 아래 "환경 변수" 참고).
+리눅스/맥에서는 `DOCVIEW_PORT=8001 DOCVIEW_SECRET=... npx docview`처럼 한 줄로 넘기면 된다(이 문법은
+Windows cmd/PowerShell에서는 동작하지 않는다 — Windows는 위처럼 `set`, PowerShell은 `$env:이름="값"`).
+
+- **포트**: 같은 PC의 다른 서버(예: Tomcat)가 쓰는 포트와 겹치면 안 된다. 기본값은 8000.
+- **`DOCVIEW_ALLOWED_ORIGINS`**: 도메인이 아니어도 된다 — `http://localhost:8080`, `http://192.168.0.15:8080`
+  같은 로컬·사내망 주소를 그대로 넣으면 된다. 단 브라우저 주소창에 보이는 그대로여야 한다
+  (`localhost`와 `127.0.0.1`은 서로 다른 출처로 취급되고, 포트·`http`/`https`도 정확히 같아야 함).
+  로컬에서 잠깐 테스트할 때는 비워 둬도 된다(경고만 남기고 아무 데서나 iframe 허용).
+- **CORS는 설정할 필요 없다** — 토큰 발급은 연동하는 쪽 서버가 서버 대 서버로 호출하고(브라우저가
+  아니라 CORS 대상 아님), 화면은 webviewer 자신의 페이지를 iframe으로 통째로 띄우는 구조라 그 안의
+  호출은 같은 출처다. iframe 허용 여부만 위 `DOCVIEW_ALLOWED_ORIGINS`(CSP `frame-ancestors`)로 제어한다.
+- 다른 PC에서 접속이 안 되면 Windows 방화벽에서 그 포트를 열어야 할 수 있다.
+- 전역 설치(`npm install -g`)했다면 `npx` 없이 `docview`만으로 실행된다.
 
 문서 업로드 → 변환(LibreOffice) → 실시간 협업 편집까지 실제 파일로 직접 검증했다 — 서버가 뜨고
 정적 페이지가 응답하는 수준이 아니라, 핵심 기능 자체가 패키지 설치본에서 그대로 동작한다.
 
-### 3. 설치 전후로 따로 챙겨야 할 것 (npm으로 안 따라옴)
+> **데이터 위치 주의**: `DOCVIEW_DATA_DIR`을 지정하지 않으면 업로드 문서가 설치본 안
+> (`node_modules/docview/data`)에 쌓인다. 이 상태로 `npm install`을 다시 하거나 버전을 올리면
+> **업로드된 문서가 통째로 지워질 수 있다.** 운영이면 반드시 설치 폴더 밖의 고정 경로를 지정할 것.
 
-- **LibreOffice** — 문서 변환에 필수. 대상 시스템에 따로 설치해야 한다(위 "요구 사항" 참고).
+### 3. 계속 띄워 두기 — Windows 서비스로 등록 (운영)
+
+`.bat`은 테스트용이다 — 창을 닫거나 로그아웃·재부팅하면 서버도 같이 내려가고, 프로세스가 죽어도
+다시 뜨지 않는다. 다른 시스템이 계속 붙어서 쓰는 운영 환경이면 Windows 서비스로 등록한다.
+가장 간단한 방법은 [NSSM](https://nssm.cc/)(무료)으로 위 `.bat`을 그대로 서비스로 감싸는 것이다
+(환경변수가 `.bat` 안에 있으니 서비스 쪽에 따로 설정할 게 없다).
+
+```bat
+rem 관리자 권한 명령 프롬프트에서
+nssm install docview "C:\경로\run-docview.bat"
+nssm set docview AppDirectory "C:\경로"
+nssm set docview Start SERVICE_AUTO_START
+rem 죽으면 5초 뒤 자동 재시작
+nssm set docview AppExit Default Restart
+nssm set docview AppRestartDelay 5000
+rem 로그를 파일로 남긴다(창이 없으니 이게 없으면 서버 로그를 볼 방법이 없다)
+nssm set docview AppStdout "C:\경로\logs\docview.log"
+nssm set docview AppStderr "C:\경로\logs\docview.log"
+nssm start docview
+```
+
+관리: `nssm stop docview` / `nssm start docview` / `nssm restart docview`, 제거는 `nssm remove docview confirm`.
+버전을 올릴 때는 서비스를 멈추고 → `npm install ./docview-<새버전>.tgz` → (한글 편집기를 쓰면 아래
+rhwp 미러 다시 받기) → 서비스 시작 순서로 한다.
+
+### 4. 설치 전후로 따로 챙겨야 할 것 (npm으로 안 따라옴)
+
+- **LibreOffice** — 문서 변환에 필수. 대상 시스템에 따로 설치해야 한다(위 "요구 사항" 참고). 기본
+  설치 경로(`C:\Program Files\LibreOffice\...`)가 아니면 `DOCVIEW_SOFFICE`로 `soffice.exe` 경로를 지정.
 - **한글(hwp/hwpx) 편집기**를 쓰려면: `node node_modules/docview/scripts/mirror-rhwp-studio.mjs`를
-  한 번 실행해 `public/rhwp/`를 받아야 한다(외부 프로젝트 미러라 패키지에 포함하지 않는다).
+  실행해 `public/rhwp/`를 받아야 한다(외부 프로젝트 미러라 패키지에 포함하지 않는다). 설치본 안에
+  받아지므로 **`npm install`을 다시 할 때마다(버전 업 포함) 다시 받아야 한다.**
+- **dwg(CAD) 변환**을 쓰려면: 변환 도구(`dwg2dxf` 또는 ODA File Converter)는 패키지에 없다 —
+  `DOCVIEW_DWG2DXF` 또는 `DOCVIEW_ODA_CONVERTER`로 실행 파일 경로를 지정한다.
 - **운영 환경이면** `DOCVIEW_API_KEYS`(업로드/토큰 API 인증)와 `DOCVIEW_ALLOWED_ORIGINS`(iframe 임베드
   출처 제한)도 설정할 것 — 설정하지 않으면 개발 편의상 열려있는 상태로 경고만 남기고 동작한다.
 - 레지스트리(공개 npm/사내 private)는 아직 정해지지 않았다 — 지금은 tarball을 직접 전달하거나 git
   URL로 설치하는 방식뿐이다.
 
-### 4. 패키지 내용물 — 소스가 아니라 컴파일된 결과물
+### 5. 이 저장소가 있는 PC도 설치본으로 운영할 수 있다
+
+운영 서버를 저장소 소스에서 직접(`npm run dev`/`run-webviewer.bat`) 띄우지 않고, 다른 시스템과 똑같이
+`npm pack`한 tarball을 별도 폴더에 설치해 `npx docview`(또는 서비스)로 띄워도 된다. 오히려 이쪽이 낫다:
+`npm run dev`는 `tsx watch`라 **저장소의 서버 소스를 저장하는 순간 운영 서버가 재시작되고**, 시크릿을
+고정하지 않았으면 그때마다 발급된 토큰이 전부 무효화된다. 설치본으로 돌리면 개발 중인 소스와 운영이
+분리되어, 의도적으로 새 버전을 설치할 때만 운영이 바뀐다.
+
+옮길 때 기존 운영과 맞춰야 하는 값:
+- `DOCVIEW_DATA_DIR` = 지금까지 쓰던 이 저장소의 `data` 폴더(절대 경로) — 안 맞추면 기존 문서가 안 보인다.
+- `DOCVIEW_PORT` = 지금과 같은 포트(8000) — 연동 중인 시스템(maintenance-management 등)이 이 포트로 붙는다.
+- `DOCVIEW_HOST`, `DOCVIEW_ALLOWED_ORIGINS` = 지금 운영과 같은 값.
+- `DOCVIEW_SECRET` = 고정값(`start.local.bat`과 같은 값을 쓰면 됨).
+- dwg 변환을 쓰고 있었다면 `DOCVIEW_DWG2DXF`/`DOCVIEW_ODA_CONVERTER`를 이 저장소의 `tools\` 안 실행 파일로.
+- 한글 편집기를 쓰고 있었다면 설치본에서 rhwp 미러를 다시 받는다(위 4번).
+
+### 6. 패키지 내용물 — 소스가 아니라 컴파일된 결과물
 
 **설치된 패키지에는 TypeScript 원본이 포함되지 않는다**(`.ts` 파일 0개 — 실제 tarball 내용으로
 확인함). `scripts/build-server.mjs`가 `src/**/*.ts`를 `dist/`에 **파일 단위로**(여러 파일을 하나로
