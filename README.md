@@ -143,16 +143,24 @@ npm install git+https://github.com/dev-scent-choi/docView.git
 ```bat
 @echo off
 cd /d "%~dp0"
-rem 설치본 밖의 고정 위치를 써야 한다 — 아래 "데이터 위치" 주의 참고
 set DOCVIEW_DATA_DIR=D:\docview-data
 set DOCVIEW_PORT=8001
-rem 다른 PC에서 접속해야 하면 0.0.0.0, 이 PC 안에서만 쓰면 생략(기본 127.0.0.1)
 set DOCVIEW_HOST=0.0.0.0
-set DOCVIEW_SECRET=길고-무작위인-고정값
-rem webviewer를 iframe으로 띄우는 "쪽" 화면의 주소(프로토콜://호스트:포트), 콤마로 여러 개
+set DOCVIEW_SECRET=change-this-to-a-long-random-value
 set DOCVIEW_ALLOWED_ORIGINS=http://localhost:8080,http://192.168.0.15:8080
 npx docview
 ```
+
+**이 파일 안에는 한글·특수문자를 쓰지 말고, 줄바꿈은 CRLF로 저장할 것**(`start.bat`과 같은 이유) —
+한글 주석이나 `—` 같은 문자가 들어가면 저장 인코딩(특히 UTF-8 BOM)에 따라 cmd가 첫 줄부터 깨진
+글자로 읽어 "내부 또는 외부 명령, 실행할 수 있는 프로그램, 또는 배치 파일이 아닙니다"로 실패한다.
+메모장으로 저장하면 `run-docview.bat.txt`가 되기 쉬우니 확장자도 확인할 것.
+
+- `DOCVIEW_DATA_DIR`: 설치 폴더 밖의 고정 위치 — 아래 "데이터 위치 주의" 참고.
+- `DOCVIEW_HOST`: 다른 PC에서 접속해야 하면 `0.0.0.0`, 이 PC 안에서만(또는 같은 PC의 프록시를 거쳐서만)
+  쓰면 생략(기본 `127.0.0.1`).
+- `DOCVIEW_ALLOWED_ORIGINS`: webviewer를 iframe으로 띄우는 "쪽" 화면의 주소(`프로토콜://호스트:포트`),
+  콤마로 여러 개. 새 창으로만 띄우면 필요 없다.
 
 리눅스/맥에서는 `DOCVIEW_PORT=8001 DOCVIEW_SECRET=... npx docview`처럼 한 줄로 넘기면 된다(이 문법은
 Windows cmd/PowerShell에서는 동작하지 않는다 — Windows는 위처럼 `set`, PowerShell은 `$env:이름="값"`).
