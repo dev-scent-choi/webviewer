@@ -1300,6 +1300,10 @@ body.chrome-hidden .grid-status-bar {
 body.chrome-hidden .grid-editor-surface { margin: 0; border-radius: 0; border: none; }
 body.chrome-hidden .editor-surface { margin: 0; max-width: none; border: none; border-radius: 0; box-shadow: none; }
 
+/* ?home=hidden — chrome=hidden과 달리 포맷 툴바는 그대로 두고 webviewer 자체 홈(/)으로
+   나가는 "문서 목록으로" 링크만 숨긴다 (editor-grid.html/editor.html/editor-slides.html/viewer.html 공용) */
+body.home-hidden .doclist-link { display: none !important; }
+
 .grid-editor-surface {
   position: relative;
   flex: 1;

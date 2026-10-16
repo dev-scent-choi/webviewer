@@ -344,7 +344,10 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
     return { success: true, data: { ...meta, changes: getChangeLog(meta.id) } };
   });
 
-  app.get('/api/documents', async () => {
+  // 업로드/토큰발급과 같은 이유로 인증을 건다 — 이 엔드포인트는 서버에 올라와 있는 모든 문서의
+  // 메타(파일명 포함)를 누구나 볼 수 있게 돌려주고 있었다(DOCVIEW_API_KEYS 설정 시에만 막힘,
+  // 미설정 개발 환경에서는 기존과 동일하게 그대로 열려 있음 — requireApiKey 참고).
+  app.get('/api/documents', { preHandler: requireApiKey }, async () => {
     const documents = await store.listMeta();
     return { success: true, data: documents };
   });

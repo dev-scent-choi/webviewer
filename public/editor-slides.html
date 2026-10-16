@@ -18,11 +18,16 @@
     if (new URLSearchParams(location.search).get('chrome') === 'hidden') {
       document.body.classList.add('chrome-hidden');
     }
+    // "문서 목록으로"(.doclist-link)만 숨긴다 (editor-grid.html과 동일 — 공용 webviewer를
+    // 다른 서비스에 임베드할 때, 그 서비스 소유가 아닌 webviewer 자체 홈으로 못 나가게 함)
+    if (new URLSearchParams(location.search).get('home') === 'hidden') {
+      document.body.classList.add('home-hidden');
+    }
   </script>
   <header class="editor-toolbar" id="toolbar">
     <div class="toolbar-top-row">
       <div class="toolbar-group toolbar-left">
-        <a href="/" class="icon-btn" title="문서 목록으로" aria-label="문서 목록으로 돌아가기">
+        <a href="/" class="icon-btn doclist-link" title="문서 목록으로" aria-label="문서 목록으로 돌아가기">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="m12 19-7-7 7-7"/></svg>
         </a>
         <span id="doc-title" class="doc-title">문서 불러오는 중…</span>
@@ -89,7 +94,7 @@
     <div class="error-card">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>
       <p id="error-message"></p>
-      <a href="/" class="btn-pill btn-pill-primary">문서 목록으로</a>
+      <a href="/" class="btn-pill btn-pill-primary doclist-link">문서 목록으로</a>
     </div>
   </div>
 
