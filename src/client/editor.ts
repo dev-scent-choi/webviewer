@@ -20,6 +20,7 @@ import { WebsocketProvider } from 'y-websocket';
 import { redo, undo, ySyncPlugin, yCursorPlugin, yUndoPlugin } from 'y-prosemirror';
 import { docxSchema, type PageSetup } from '../docx/schema.js';
 import { pickPresenceColorForName, renderPresenceAvatars } from './presence.js';
+import { DOC_META_MAP, DOC_META_SAVED_AT_KEY, DOC_META_SAVE_ERROR_AT_KEY } from '../collab/gridShared.js';
 
 interface Permissions {
   readonly canPrint: boolean;
@@ -405,6 +406,56 @@ function bindToolbarButton(
   });
 }
 
+/**
+ * 저장 상태 표시("저장 중… / 모든 변경 내용이 저장됨 / 저장 실패") + Ctrl+S 즉시 저장 — 엑셀·PPT
+ * 편집기와 같은 동작. 서버의 flushToStore가 실제로 디스크에 쓴 뒤에만 docMeta.savedAt을 갱신하므로
+ * (문서 종류 공통, room.ts) 화면의 "저장됨"은 진짜 저장 완료를 뜻한다. 예전엔 docx 편집기에만 이
+ * 표시가 없어 사용자가 저장 여부를 알 수 없었다(브라우저 E2E에서 확인).
+ */
+function setupSaveStatus(ydoc: Y.Doc, viewToken: string): void {
+  // 읽기 전용 열람자에게 저장 상태는 의미가 없다(처음 동기화만으로도 과거 저장 시각 때문에 "저장됨"이 떴다).
+  if (!canEdit) return;
+  const saveStatusEl = document.getElementById('save-status') as HTMLElement | null;
+  const textEl = saveStatusEl?.querySelector('.save-status-text') as HTMLElement | null;
+  const docMeta = ydoc.getMap<number>(DOC_META_MAP);
+  let lastSavedAt = docMeta.get(DOC_META_SAVED_AT_KEY) ?? 0;
+  let lastErrorAt = docMeta.get(DOC_META_SAVE_ERROR_AT_KEY) ?? 0;
+  const show = (status: 'saving' | 'saved' | 'error') => {
+    if (!saveStatusEl) return;
+    saveStatusEl.hidden = false;
+    saveStatusEl.dataset.status = status;
+    if (textEl) {
+      textEl.textContent =
+        status === 'saving' ? '저장 중…' : status === 'saved' ? '모든 변경 내용이 저장됨' : '저장 실패 — 편집을 계속하면 다시 시도합니다';
+    }
+  };
+  if (canEdit) {
+    ydoc.on('afterTransaction', (tx) => {
+      if (tx.local && tx.changed.size > 0 && !tx.changed.has(docMeta as never)) show('saving');
+    });
+    window.addEventListener('keydown', (event) => {
+      if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === 's') {
+        event.preventDefault(); // 브라우저의 "페이지 저장" 대화상자 대신 문서 저장
+        show('saving');
+        fetch(`/api/view/save?token=${encodeURIComponent(viewToken)}`, { method: 'POST' }).catch(() => {
+          // 실패해도 유휴 자동저장이 다시 시도한다
+        });
+      }
+    });
+  }
+  docMeta.observe(() => {
+    const savedAt = docMeta.get(DOC_META_SAVED_AT_KEY) ?? 0;
+    const errorAt = docMeta.get(DOC_META_SAVE_ERROR_AT_KEY) ?? 0;
+    if (errorAt > savedAt && errorAt > lastErrorAt) {
+      lastErrorAt = errorAt;
+      show('error');
+    } else if (savedAt > lastSavedAt) {
+      lastSavedAt = savedAt;
+      show('saved');
+    }
+  });
+}
+
 async function main(): Promise<void> {
   if (!token) {
     showFatalError('열람 토큰이 없습니다.');
@@ -471,6 +522,7 @@ async function main(): Promise<void> {
   });
   provider.awareness.on('change', () => renderPresenceAvatars(presenceEl, provider.awareness));
   renderPresenceAvatars(presenceEl, provider.awareness);
+  setupSaveStatus(ydoc, token);
 
   const state = EditorState.create({
     schema: docxSchema,
