@@ -5,6 +5,7 @@ import { EditorState, type Command } from 'prosemirror-state';
 import { EditorView } from 'prosemirror-view';
 import { baseKeymap, toggleMark } from 'prosemirror-commands';
 import { keymap } from 'prosemirror-keymap';
+import type { Mark, MarkType, Node as PMNode } from 'prosemirror-model';
 import { ySyncPlugin, yCursorPlugin, yUndoPlugin, ySyncPluginKey, undo, redo } from 'y-prosemirror';
 import {
   PPTX_SLIDES_ARRAY,
@@ -15,6 +16,8 @@ import {
   SLIDE_WIDTH_EMU,
   SLIDE_HEIGHT_EMU,
   shouldBlockAddTextbox,
+  NEW_SHAPE_GEOMS,
+  type NewShapeGeom,
   type SlideEntry,
   type SlideShapeMeta,
   type SlideVisual,
@@ -41,6 +44,7 @@ interface ViewInfo {
   readonly name: string;
   readonly viewer: string;
   readonly permissions: Permissions;
+  readonly slideSize?: { readonly cx: number; readonly cy: number } | null;
 }
 
 const token = new URLSearchParams(location.search).get('token');
@@ -88,12 +92,19 @@ let slideVisuals: Y.Map<readonly SlideVisual[]>;
  * 슬라이드 배경 표시용 치수와 같은 값)를 기본값으로 쓴다. 실제 프레젠테이션의 진짜 크기를
  * 반영하는 것은 이후 개선 과제로 남긴다(이번 태스크에서 서버 API를 넓히지 않는다).
  */
-const SLIDE_W_EMU = SLIDE_WIDTH_EMU;
-const SLIDE_H_EMU = SLIDE_HEIGHT_EMU;
-const EMU_PER_PX = SLIDE_W_EMU / 960; // 캔버스 폭을 960px 기준으로 스케일(반응형은 이후 과제)
+// main()이 /api/view/info의 slideSize(presentation.xml의 실제 크기)로 덮어쓴다 — 없으면 16:9.
+let SLIDE_W_EMU = SLIDE_WIDTH_EMU;
+let SLIDE_H_EMU = SLIDE_HEIGHT_EMU;
+const CANVAS_WIDTH_PX = 960; // 캔버스 폭 기준(반응형은 이후 과제)
+const EMU_PER_PT = 12700;
 
 function emuToPx(emu: number): number {
-  return emu / EMU_PER_PX;
+  return emu * (CANVAS_WIDTH_PX / SLIDE_W_EMU);
+}
+
+/** 캔버스 위 1pt의 px — 글자 크기·여백을 슬라이드와 같은 축척으로 그리기 위해 CSS 변수로 넘긴다. */
+function slidePtPx(): number {
+  return CANVAS_WIDTH_PX / (SLIDE_W_EMU / EMU_PER_PT);
 }
 
 /** room.ts의 MESSAGE_SLIDE_CONTENT_SUBSCRIBE와 **같은 값이어야 한다**(grid-editor.ts의
@@ -194,12 +205,32 @@ let activePerSlideUnobserve: (() => void) | null = null;
  * 위에 Mod-z/Mod-y/Mod-Shift-z만 y-prosemirror의 undo/redo로 덮어쓴다(이 스키마엔 표/목록/
  * 제목이 없어 그 외 docx 전용 바인딩은 옮기지 않는다).
  */
+/** 리본 동작을 키보드에서도 같은 키로 — 커맨드는 항상 "이 view에서 처리됨(true)"을 돌려
+ * 브라우저 기본 동작(Ctrl+R 새로고침, Ctrl+E 주소창 등)이 끼어들지 않게 한다. */
+function viewCommand(run: (view: EditorView) => void): Command {
+  return (_state, _dispatch, view) => {
+    if (view) run(view);
+    return true;
+  };
+}
+
 function buildSlideKeymap(): Record<string, Command> {
   return {
     ...baseKeymap,
     'Mod-z': undo,
     'Mod-y': redo,
     'Mod-Shift-z': redo,
+    'Mod-b': toggleMark(pptxTextSchema.marks.strong),
+    'Mod-i': toggleMark(pptxTextSchema.marks.em),
+    'Mod-u': toggleMark(pptxTextSchema.marks.underline),
+    'Mod-l': viewCommand((v) => applyAlign(v, 'l')),
+    'Mod-e': viewCommand((v) => applyAlign(v, 'ctr')),
+    'Mod-r': viewCommand((v) => applyAlign(v, 'r')),
+    'Mod-j': viewCommand((v) => applyAlign(v, 'just')),
+    'Mod->': viewCommand((v) => stepFontSize(v, 1)),
+    'Mod-Shift-.': viewCommand((v) => stepFontSize(v, 1)),
+    'Mod-<': viewCommand((v) => stepFontSize(v, -1)),
+    'Mod-Shift-,': viewCommand((v) => stepFontSize(v, -1)),
   };
 }
 
@@ -241,6 +272,7 @@ function renderSlideVisual(visual: SlideVisual): HTMLElement {
     el.append(img);
   } else if (visual.kind === 'shape') {
     if (visual.fill) el.style.background = visual.fill;
+    if (visual.geom) el.classList.add(`slide-shape-${visual.geom}`);
   } else if (visual.kind === 'table' && visual.rows) {
     for (const row of visual.rows) {
       const tr = document.createElement('tr');
@@ -301,6 +333,7 @@ function renderCanvasForSlide(entryId: string): void {
   activePerSlideUnobserve = null;
   canvasEl.style.width = `${emuToPx(SLIDE_W_EMU)}px`;
   canvasEl.style.height = `${emuToPx(SLIDE_H_EMU)}px`;
+  canvasEl.style.setProperty('--slide-pt', `${slidePtPx()}px`);
   canvasEl.replaceChildren();
 
   // 이미지·단순 도형·표/차트·스마트아트 자리표시자 — 편집 대상이 아니라 텍스트박스보다 먼저
@@ -336,6 +369,11 @@ function renderCanvasForSlide(entryId: string): void {
     box.style.top = `${emuToPx(meta.y ?? SLIDE_H_EMU * 0.4)}px`;
     box.style.width = `${emuToPx(meta.w ?? SLIDE_W_EMU * NEW_TEXTBOX_WIDTH_RATIO)}px`;
     box.style.height = `${emuToPx(meta.h ?? SLIDE_H_EMU * NEW_TEXTBOX_HEIGHT_RATIO)}px`;
+    if (meta.geom) {
+      // 리본 "도형"으로 넣은 도형 — 저장 파일의 prstGeom/solidFill과 같은 모양으로 그린다.
+      box.classList.add('slide-shape', `slide-shape-${meta.geom}`);
+      if (meta.fill && /^#[0-9A-Fa-f]{6}$/.test(meta.fill)) box.style.background = meta.fill;
+    }
     canvasEl.append(box);
 
     if (canEdit) {
@@ -367,6 +405,16 @@ function renderCanvasForSlide(entryId: string): void {
         plugins: [ySyncPlugin(fragment), yCursorPlugin(provider.awareness), yUndoPlugin(), keymap(buildSlideKeymap())],
       }),
       editable: () => canEdit,
+      // 커서가 움직이거나 서식이 바뀔 때마다 리본의 눌림 상태(굵게/정렬 등)와 글꼴·크기 칸을
+      // 지금 커서 위치의 값으로 맞춘다 — 실제 오피스 리본과 같은 피드백. 주의: 바깥 `const view`를
+      // 여기서 참조하면 안 된다 — ySyncPlugin이 EditorView **생성자 안에서**(plugin view 초기화 중
+      // _forceRerender) 이미 dispatch하므로 그 시점엔 view가 아직 TDZ라 ReferenceError로 텍스트
+      // 상자 전체가 비어 버린다(실제 브라우저 테스트로 재현). ProseMirror는 이 콜백의 this를 view로
+      // 바인딩해 주므로 this를 쓴다.
+      dispatchTransaction(this: EditorView, tr) {
+        this.updateState(this.state.apply(tr));
+        if (focusedView === this) refreshRibbonState(this);
+      },
       // 서식 툴바가 "지금 어느 텍스트박스를 편집 중인지" 알 수 있는 유일한 경로 — handleDOMEvents의
       // 반환값 false는 "이 이벤트를 ProseMirror가 가로채 막지 말고 브라우저 기본 동작(포커스 이동)을
       // 그대로 진행시켜라"는 뜻이다(true를 반환하면 기본 동작이 막힌다). focus 이벤트는 이 view가
@@ -377,6 +425,7 @@ function renderCanvasForSlide(entryId: string): void {
       handleDOMEvents: {
         focus: () => {
           focusedView = view;
+          refreshRibbonState(view);
           return false;
         },
       },
@@ -391,10 +440,32 @@ function cardFor(entry: SlideEntry, index: number): HTMLElement {
   card.dataset.index = String(index);
   card.dataset.id = entry.id;
   const img = card.querySelector('img') as HTMLImageElement;
-  img.src =
-    entry.kind === 'blank'
-      ? '/img/blank-slide.svg'
-      : `/api/view/pages/${entry.sourcePageNumber}?token=${encodeURIComponent(token ?? '')}`;
+  // 복제본은 sourcePageNumber가 null이라(자기 원본 페이지가 따로 없다) 그대로 쓰면
+  // /api/view/pages/null로 400이 나며 썸네일이 깨졌다 — 같은 원본 슬라이드 파트를 가리키는 항목의
+  // 페이지 번호를 빌려 쓴다(빈 슬라이드를 복제했으면 원본 파트가 없으니 빈 슬라이드 그림).
+  const pageNumber =
+    entry.sourcePageNumber ??
+    (entry.sourceSlidePart
+      ? slidesArray.toArray().find((e) => e.sourceSlidePart === entry.sourceSlidePart && e.sourcePageNumber !== null)
+          ?.sourcePageNumber ?? null
+      : null);
+  if (entry.kind === 'blank' || pageNumber === null) {
+    img.src = '/img/blank-slide.svg';
+  } else {
+    const base = `/api/view/pages/${pageNumber}?token=${encodeURIComponent(token ?? '')}`;
+    // 저장 직후 서버는 슬라이드 목록(새 페이지 번호)을 먼저 갱신하고 PDF 재변환은 그 뒤에 수 초
+    // 걸려 끝난다(room.ts flushToStore — 순서를 바꾸면 동시 편집 보호 구간이 길어진다). 그 사이
+    // 새로 생긴 페이지 번호의 썸네일은 404가 나므로, 잠깐 기다렸다 다시 받는다(최대 약 15초).
+    let attempt = 0;
+    img.addEventListener('error', () => {
+      if (attempt >= 8) return;
+      attempt += 1;
+      setTimeout(() => {
+        if (img.isConnected) img.src = `${base}&retry=${attempt}`;
+      }, 1000 + attempt * 400);
+    });
+    img.src = base;
+  }
   (card.querySelector('.slide-card-number') as HTMLElement).textContent = String(index + 1);
   if (!canEdit) {
     card.querySelector('.slide-card-actions')?.remove();
@@ -479,107 +550,162 @@ function setupCardActions(): void {
     }
     if (!canEdit) return;
     const index = Number(card.dataset.index);
-    const entry = slidesArray.get(index);
-    if (target.closest('.slide-card-duplicate')) {
-      const newEntryId = crypto.randomUUID();
-      // 아래 proactive subscribeSlideContent 호출이 그 순간 WebSocket이 OPEN이 아니라서(재연결
-      // 중 등) 아무것도 안 보내고 조용히 리턴하더라도, 이 매핑은 이미 존재하게 만들어 둔다 —
-      // 그래야 나중에 어떤 경로로든(renderCanvasForSlide의 폴백, 또는 pendingSlideSubscriptions
-      // 타임아웃 이후의 재시도) 이 슬라이드에 대한 구독이 결국 시도될 때 duplicateOfId 없는
-      // "평범한" 요청이 나가는 대신 항상 이 원본 id를 함께 실어 보낼 수 있다.
-      pendingDuplicateSources.set(newEntryId, entry.id);
-      const ydoc = slidesArray.doc!;
-      ydoc.transact(() => {
-        slidesArray.insert(index + 1, [
-          {
-            id: newEntryId,
-            kind: 'duplicate',
-            sourceSlidePart: entry.sourceSlidePart,
-            sourcePageNumber: null,
-          },
-        ]);
-      });
-      // 서버가 원본 파일의(오래된) 디스크 XML이 아니라 소스 슬라이드의 "지금 세션에서 편집된"
-      // 콘텐츠를 그대로 깊은 복사해 시딩하도록, 사용자가 실제로 이 복제본을 열기 전에(활성
-      // 슬라이드가 되는 것과 무관하게) 미리 duplicateOfId를 실어 구독 요청을 보내 둔다. 이 전송
-      // 자체가 드롭돼도(WS가 그 순간 OPEN이 아니었던 경우) 위에서 이미 채워둔
-      // pendingDuplicateSources 덕분에, 이후 이 슬라이드에 대해 실제로 나가는 첫 구독 요청은
-      // subscribeSlideContent 내부에서 이 매핑을 찾아 duplicateOfId를 채워 보낸다.
-      subscribeSlideContent(newEntryId, entry.id);
-    } else if (target.closest('.slide-card-delete')) {
-      if (slidesArray.length <= 1) return; // 마지막 남은 슬라이드는 지울 수 없다
-      slidesArray.delete(index, 1);
-    }
+    if (target.closest('.slide-card-duplicate')) duplicateSlideAt(index);
+    else if (target.closest('.slide-card-delete')) deleteSlideAt(index);
   });
-  document.getElementById('btn-add-blank')?.addEventListener('click', () => {
-    if (!canEdit) return;
-    slidesArray.insert(slidesArray.length, [
-      { id: crypto.randomUUID(), kind: 'blank', sourceSlidePart: null, sourcePageNumber: null },
+  document.getElementById('btn-add-blank')?.addEventListener('click', addBlankSlide);
+  document.getElementById('btn-dup-slide')?.addEventListener('click', () => {
+    const index = activeSlideIndex();
+    if (canEdit && index >= 0) duplicateSlideAt(index);
+  });
+  document.getElementById('btn-del-slide')?.addEventListener('click', () => {
+    const index = activeSlideIndex();
+    if (canEdit && index >= 0) deleteSlideAt(index);
+  });
+  document.getElementById('btn-add-textbox')?.addEventListener('click', () => addShapeToActiveSlide());
+  for (const geom of NEW_SHAPE_GEOMS) {
+    document.getElementById(`btn-shape-${geom.toLowerCase()}`)?.addEventListener('click', () => {
+      const fill = (document.getElementById('shape-fill-picker') as HTMLInputElement | null)?.value ?? '#4472c4';
+      addShapeToActiveSlide({ geom, fill });
+    });
+  }
+}
+
+function activeSlideIndex(): number {
+  return activeSlideId ? slidesArray.toArray().findIndex((e) => e.id === activeSlideId) : -1;
+}
+
+/** 실제 프레젠테이션 프로그램처럼 새 슬라이드는 "지금 보고 있는 슬라이드 바로 뒤"에 들어가고
+ * 곧바로 그 슬라이드로 이동한다(예전엔 항상 맨 끝에 붙고 선택도 안 바뀌어, 긴 문서에서는 추가된
+ * 슬라이드를 찾아 스크롤해야 했다). */
+function addBlankSlide(): void {
+  if (!canEdit) return;
+  const index = activeSlideIndex();
+  const insertAt = index >= 0 ? index + 1 : slidesArray.length;
+  const id = crypto.randomUUID();
+  slidesArray.insert(insertAt, [{ id, kind: 'blank', sourceSlidePart: null, sourcePageNumber: null }]);
+  selectSlide(id);
+}
+
+function deleteSlideAt(index: number): void {
+  if (slidesArray.length <= 1) return; // 마지막 남은 슬라이드는 지울 수 없다
+  const wasActive = slidesArray.get(index)?.id === activeSlideId;
+  slidesArray.delete(index, 1);
+  // 지운 슬라이드를 보고 있었다면 그 자리(없으면 바로 앞)의 슬라이드로 이동한다
+  if (wasActive) {
+    const next = slidesArray.get(Math.min(index, slidesArray.length - 1));
+    if (next) selectSlide(next.id);
+  }
+}
+
+function duplicateSlideAt(index: number): void {
+  const entry = slidesArray.get(index);
+  const newEntryId = crypto.randomUUID();
+  // 아래 proactive subscribeSlideContent 호출이 그 순간 WebSocket이 OPEN이 아니라서(재연결
+  // 중 등) 아무것도 안 보내고 조용히 리턴하더라도, 이 매핑은 이미 존재하게 만들어 둔다 —
+  // 그래야 나중에 어떤 경로로든(renderCanvasForSlide의 폴백, 또는 pendingSlideSubscriptions
+  // 타임아웃 이후의 재시도) 이 슬라이드에 대한 구독이 결국 시도될 때 duplicateOfId 없는
+  // "평범한" 요청이 나가는 대신 항상 이 원본 id를 함께 실어 보낼 수 있다.
+  pendingDuplicateSources.set(newEntryId, entry.id);
+  const ydoc = slidesArray.doc!;
+  ydoc.transact(() => {
+    slidesArray.insert(index + 1, [
+      {
+        id: newEntryId,
+        kind: 'duplicate',
+        sourceSlidePart: entry.sourceSlidePart,
+        sourcePageNumber: null,
+      },
     ]);
   });
-  document.getElementById('btn-add-textbox')?.addEventListener('click', () => {
-    if (!canEdit || !activeSlideId) return;
-    const entryId = activeSlideId;
-    const entry = slidesArray.toArray().find((e) => e.id === entryId);
-    if (!entry) return; // 이미 삭제된 슬라이드를 향한 레이스(카드가 지워진 직후의 늦은 클릭 등) — 방어적 no-op
+  // 서버가 원본 파일의(오래된) 디스크 XML이 아니라 소스 슬라이드의 "지금 세션에서 편집된"
+  // 콘텐츠를 그대로 깊은 복사해 시딩하도록, 사용자가 실제로 이 복제본을 열기 전에(활성
+  // 슬라이드가 되는 것과 무관하게) 미리 duplicateOfId를 실어 구독 요청을 보내 둔다. 이 전송
+  // 자체가 드롭돼도(WS가 그 순간 OPEN이 아니었던 경우) 위에서 이미 채워둔
+  // pendingDuplicateSources 덕분에, 이후 이 슬라이드에 대해 실제로 나가는 첫 구독 요청은
+  // subscribeSlideContent 내부에서 이 매핑을 찾아 duplicateOfId를 채워 보낸다.
+  subscribeSlideContent(newEntryId, entry.id);
+  selectSlide(newEntryId);
+}
 
-    // FINAL REVIEW C1(Critical): slideContents에 이 슬라이드의 perSlide가 아직 없을 때, 원인이
-    // 두 가지로 갈린다 —
-    //  - kind:'blank'(원래부터 도형이 없는, 사용자가 직접 추가한 빈 슬라이드): 지금 여기서 새로
-    //    만드는 게 맞다(원본이라 부를 것 자체가 없다).
-    //  - kind:'original'/'duplicate'인데 아직 시딩 전(구독 응답을 못 받음 — 예: 이 슬라이드를
-    //    고른 순간 WS가 재연결 중이었거나 서버 응답이 아직 안 왔거나): 여기서 새 perSlide를
-    //    만들면 그 안엔 방금 추가한 도형 "하나만" 담기고, src/pptx/collab.ts의 export 삭제 병합
-    //    루프(Task 13)는 "baseline에는 있는데 지금 perSlide에는 없는 도형 = 사용자가 삭제했다"로
-    //    해석해 다음 저장에서 이 슬라이드의 원본 도형을 전부 지워버린다 — 텍스트박스 하나
-    //    추가했을 뿐인데 슬라이드의 나머지 원본 내용이 통째로 사라지는 셈이다. 그러니 이 경우엔
-    //    텍스트박스를 추가하지 않고, 구독을 다시 보낸 뒤(끊겼을 수 있으므로 — subscribeSlideContent
-    //    자체가 이미 진행 중인 요청과 중복 전송은 막아 준다) 클릭 자체를 조용히 무시한다. 시딩이
-    //    끝나면 slideContents.observe가 캔버스를 실제 원본 내용으로 다시 그려 주므로, 사용자는
-    //    그걸 본 뒤 "텍스트 추가"를 다시 누르면 된다.
-    //
-    // 이 조건의 boolean 공식 자체는 shouldBlockAddTextbox(pptxShared.ts)로 뽑아 뒀다 — 이 파일은
-    // 모듈 최상단에서 document/location을 곧바로 읽어 브라우저 전역 없이는 import조차 안 되므로
-    // (이 저장소엔 아직 jsdom 테스트 환경이 없다), 가드의 "판단" 부분만 DOM 의존성 없는 공유
-    // 모듈로 옮겨 plain vitest로 직접 단위 테스트할 수 있게 했다 —
-    // tests/editorSlidesAddTextboxGuard.test.ts 참고.
-    if (shouldBlockAddTextbox(entry.kind, slideContents.has(entryId))) {
-      subscribeSlideContent(entryId);
-      return;
+/** 지금 보고 있는 슬라이드에 텍스트 상자(shape 없음) 또는 도형(geom/fill)을 하나 추가한다. */
+function addShapeToActiveSlide(shape?: { geom: NewShapeGeom; fill: string }): void {
+  if (!canEdit || !activeSlideId) return;
+  const entryId = activeSlideId;
+  const entry = slidesArray.toArray().find((e) => e.id === entryId);
+  if (!entry) return; // 이미 삭제된 슬라이드를 향한 레이스(카드가 지워진 직후의 늦은 클릭 등) — 방어적 no-op
+
+  // FINAL REVIEW C1(Critical): slideContents에 이 슬라이드의 perSlide가 아직 없을 때, 원인이
+  // 두 가지로 갈린다 —
+  //  - kind:'blank'(원래부터 도형이 없는, 사용자가 직접 추가한 빈 슬라이드): 지금 여기서 새로
+  //    만드는 게 맞다(원본이라 부를 것 자체가 없다).
+  //  - kind:'original'/'duplicate'인데 아직 시딩 전(구독 응답을 못 받음 — 예: 이 슬라이드를
+  //    고른 순간 WS가 재연결 중이었거나 서버 응답이 아직 안 왔거나): 여기서 새 perSlide를
+  //    만들면 그 안엔 방금 추가한 도형 "하나만" 담기고, src/pptx/collab.ts의 export 삭제 병합
+  //    루프(Task 13)는 "baseline에는 있는데 지금 perSlide에는 없는 도형 = 사용자가 삭제했다"로
+  //    해석해 다음 저장에서 이 슬라이드의 원본 도형을 전부 지워버린다 — 텍스트박스 하나
+  //    추가했을 뿐인데 슬라이드의 나머지 원본 내용이 통째로 사라지는 셈이다. 그러니 이 경우엔
+  //    텍스트박스를 추가하지 않고, 구독을 다시 보낸 뒤(끊겼을 수 있으므로 — subscribeSlideContent
+  //    자체가 이미 진행 중인 요청과 중복 전송은 막아 준다) 클릭 자체를 조용히 무시한다. 시딩이
+  //    끝나면 slideContents.observe가 캔버스를 실제 원본 내용으로 다시 그려 주므로, 사용자는
+  //    그걸 본 뒤 "텍스트 추가"를 다시 누르면 된다.
+  //
+  // 이 조건의 boolean 공식 자체는 shouldBlockAddTextbox(pptxShared.ts)로 뽑아 뒀다 — 이 파일은
+  // 모듈 최상단에서 document/location을 곧바로 읽어 브라우저 전역 없이는 import조차 안 되므로
+  // (이 저장소엔 아직 jsdom 테스트 환경이 없다), 가드의 "판단" 부분만 DOM 의존성 없는 공유
+  // 모듈로 옮겨 plain vitest로 직접 단위 테스트할 수 있게 했다 —
+  // tests/editorSlidesAddTextboxGuard.test.ts 참고.
+  if (shouldBlockAddTextbox(entry.kind, slideContents.has(entryId))) {
+    subscribeSlideContent(entryId);
+    return;
+  }
+
+  const ydoc = slidesArray.doc!;
+  ydoc.transact(() => {
+    // 슬라이드가 완전히 빈 상태(원본이 blank로 만들어짐)라면 slideContents에 이 슬라이드의
+    // perSlide 항목 자체가 없을 수 있다 — 그 경우 여기서 새로 만든다(위 가드가 이미 kind !==
+    // 'blank'인데 아직 시딩 전인 경우를 걸러냈으므로, 여기 도달했는데 perSlide가 없다면 항상
+    // kind === 'blank'이거나 이미 시딩이 끝난 상태다).
+    let perSlide = slideContents.get(entryId);
+    if (!perSlide) {
+      perSlide = new Y.Map<ShapeContentMap>();
+      slideContents.set(entryId, perSlide);
     }
-
-    const ydoc = slidesArray.doc!;
-    ydoc.transact(() => {
-      // 슬라이드가 완전히 빈 상태(원본이 blank로 만들어짐)라면 slideContents에 이 슬라이드의
-      // perSlide 항목 자체가 없을 수 있다 — 그 경우 여기서 새로 만든다(위 가드가 이미 kind !==
-      // 'blank'인데 아직 시딩 전인 경우를 걸러냈으므로, 여기 도달했는데 perSlide가 없다면 항상
-      // kind === 'blank'이거나 이미 시딩이 끝난 상태다).
-      let perSlide = slideContents.get(entryId);
-      if (!perSlide) {
-        perSlide = new Y.Map<ShapeContentMap>();
-        slideContents.set(entryId, perSlide);
-      }
-      const shapeId = `new-${crypto.randomUUID()}`;
-      const shapeMap: ShapeContentMap = new Y.Map();
-      const meta: SlideShapeMeta = {
-        shapeId,
-        x: Math.round((SLIDE_W_EMU * (1 - NEW_TEXTBOX_WIDTH_RATIO)) / 2),
-        y: Math.round((SLIDE_H_EMU * (1 - NEW_TEXTBOX_HEIGHT_RATIO)) / 2),
-        w: Math.round(SLIDE_W_EMU * NEW_TEXTBOX_WIDTH_RATIO),
-        h: Math.round(SLIDE_H_EMU * NEW_TEXTBOX_HEIGHT_RATIO),
-      };
-      shapeMap.set('meta', meta);
-      shapeMap.set('content', new Y.XmlFragment());
-      perSlide.set(shapeId, shapeMap);
-    });
-    // perSlide가 이미 있었다면 위 변경은 slideContents 자신의 키가 아니라 그 안의 perSlide
-    // Y.Map에 대한 나머지 변경이라 최상위 slideContents.observe(main() 참고)로는 안 올라온다 —
-    // 하지만 이 슬라이드가 지금 활성 상태였다면(대부분의 경우) renderCanvasForSlide가 이미 이
-    // perSlide에 onPerSlideStructureChange 구독을 붙여 뒀으므로(위 renderCanvasForSlide 참고)
-    // 그 구독이 알아서 다시 그려준다 — perSlide를 방금 새로 만든 경우(원래 shapeless)만
-    // slideContents.set이 최상위 키 변경이라 그 observe가 대신 다시 그려준다. 두 경로 모두
-    // 여기서 별도로 renderCanvasForSlide를 부를 필요가 없다.
+    const shapeId = `new-${crypto.randomUUID()}`;
+    const shapeMap: ShapeContentMap = new Y.Map();
+    // 같은 버튼을 연달아 눌러도 정확히 겹쳐 "하나만 생긴 것처럼" 보이지 않게, 이미 있는 새 도형
+    // 개수만큼 실제 프로그램처럼 대각선으로 조금씩 비켜 놓는다.
+    const stagger = [...perSlide.keys()].filter((k) => k.startsWith('new-')).length % 8;
+    const nudge = Math.round(SLIDE_W_EMU * 0.025) * stagger;
+    const w = Math.round(SLIDE_W_EMU * (shape ? 0.3 : NEW_TEXTBOX_WIDTH_RATIO));
+    const h = Math.round(SLIDE_H_EMU * (shape ? 0.3 : NEW_TEXTBOX_HEIGHT_RATIO));
+    const meta: SlideShapeMeta = {
+      shapeId,
+      x: Math.round((SLIDE_W_EMU - w) / 2) + nudge,
+      y: Math.round((SLIDE_H_EMU - h) / 2) + nudge,
+      w,
+      h,
+      ...(shape ? { geom: shape.geom, fill: shape.fill } : {}),
+    };
+    shapeMap.set('meta', meta);
+    const content = new Y.XmlFragment();
+    if (shape) {
+      // 도형 글자는 실제 프로그램처럼 가로 가운데로 시작한다(세로 가운데는 저장 시 bodyPr anchor=ctr).
+      // y-prosemirror는 XmlElement 이름=노드 타입, 속성=노드 attrs로 그대로 대응시킨다.
+      const paragraph = new Y.XmlElement('paragraph');
+      paragraph.setAttribute('align', 'ctr');
+      content.insert(0, [paragraph]);
+    }
+    shapeMap.set('content', content);
+    perSlide.set(shapeId, shapeMap);
   });
+  // perSlide가 이미 있었다면 위 변경은 slideContents 자신의 키가 아니라 그 안의 perSlide
+  // Y.Map에 대한 나머지 변경이라 최상위 slideContents.observe(main() 참고)로는 안 올라온다 —
+  // 하지만 이 슬라이드가 지금 활성 상태였다면(대부분의 경우) renderCanvasForSlide가 이미 이
+  // perSlide에 onPerSlideStructureChange 구독을 붙여 뒀으므로(위 renderCanvasForSlide 참고)
+  // 그 구독이 알아서 다시 그려준다 — perSlide를 방금 새로 만든 경우(원래 shapeless)만
+  // slideContents.set이 최상위 키 변경이라 그 observe가 대신 다시 그려준다. 두 경로 모두
+  // 여기서 별도로 renderCanvasForSlide를 부를 필요가 없다.
 }
 
 /**
@@ -599,27 +725,194 @@ function bindFormatButton(id: string, markName: 'strong' | 'em' | 'underline'): 
   });
 }
 
+/** 프레젠테이션 프로그램의 "글꼴 크기 크게/작게" 단계(pt) — 그 사이 값은 다음 단계로 올라간다. */
+const FONT_SIZE_STEPS = [8, 9, 10, 10.5, 11, 12, 14, 16, 18, 20, 24, 28, 32, 36, 40, 44, 48, 54, 60, 66, 72, 80, 88, 96];
+/** 글자 크기 마크가 없는 텍스트의 기준 크기 — 새 텍스트 상자 본문 기본값(18pt)과 같다. */
+const DEFAULT_TEXT_PT = 18;
+
+/** 커서/선택 위치의 마크 목록 — 선택 영역이 없으면 "다음 입력에 붙을" stored mark를 우선한다
+ * (예: 빈 줄에서 굵게를 누른 직후의 눌림 상태도 정확히 보이도록). */
+function marksAtSelection(state: EditorState): readonly Mark[] {
+  const { $from, from, to, empty } = state.selection;
+  if (empty) return state.storedMarks ?? $from.marks();
+  // 선택 영역이면 그 안의 첫 글자의 마크(실제 오피스도 선택 시작 글자의 서식을 보여준다). $from을
+  // 그대로 쓰면 안 된다 — Ctrl+A(AllSelection)는 $from이 문단 밖(doc 루트, pos 0)이라 그 자리엔
+  // 글자가 없어 항상 "서식 없음"으로 보였다(브라우저 테스트로 재현).
+  let found: readonly Mark[] | null = null;
+  state.doc.nodesBetween(from, to, (node) => {
+    if (found) return false;
+    if (node.isText) found = node.marks;
+    return !found;
+  });
+  return found ?? $from.marks();
+}
+
+/** 선택 영역의 첫 문단 — AllSelection에서도 실제 문단을 찾는다(위 marksAtSelection과 같은 이유). */
+function firstParagraphInSelection(state: EditorState): PMNode | null {
+  const { $from, from, to } = state.selection;
+  if ($from.parent.type.name === 'paragraph') return $from.parent;
+  let found: PMNode | null = null;
+  state.doc.nodesBetween(from, to, (node) => {
+    if (found) return false;
+    if (node.type.name === 'paragraph') found = node;
+    return !found;
+  });
+  return found;
+}
+
+function markAttrAtSelection(state: EditorState, typeName: string, attr: string): unknown {
+  return marksAtSelection(state).find((m) => m.type.name === typeName)?.attrs[attr];
+}
+
+/** 같은 종류의 마크를 값만 바꿔 다시 건다(글꼴/크기/색처럼 attrs를 가진 마크). attrs가 null이면
+ * 그 마크를 지운다. 선택 영역이 없으면 다음 입력에 적용되는 stored mark로 처리한다. */
+function setValueMark(view: EditorView, type: MarkType, attrs: Record<string, unknown> | null): void {
+  const { state } = view;
+  const { from, to, empty } = state.selection;
+  let tr = state.tr;
+  if (empty) {
+    tr = tr.removeStoredMark(type);
+    if (attrs) tr = tr.addStoredMark(type.create(attrs));
+  } else {
+    tr = tr.removeMark(from, to, type);
+    if (attrs) tr = tr.addMark(from, to, type.create(attrs));
+  }
+  view.dispatch(tr);
+  view.focus();
+}
+
+function applyAlign(view: EditorView, align: 'l' | 'ctr' | 'r' | 'just'): void {
+  const { state } = view;
+  const { from, to } = state.selection;
+  let tr = state.tr;
+  state.doc.nodesBetween(from, to, (node, pos) => {
+    if (node.type.name !== 'paragraph') return true;
+    if (node.attrs.align !== align) tr = tr.setNodeMarkup(pos, undefined, { ...node.attrs, align });
+    return false;
+  });
+  if (tr.docChanged) view.dispatch(tr);
+  view.focus();
+}
+
+function stepFontSize(view: EditorView, direction: 1 | -1): void {
+  const current = Number(markAttrAtSelection(view.state, 'fontSize', 'size') ?? DEFAULT_TEXT_PT);
+  const next =
+    direction > 0
+      ? FONT_SIZE_STEPS.find((s) => s > current) ?? current
+      : [...FONT_SIZE_STEPS].reverse().find((s) => s < current) ?? current;
+  if (next !== current) setValueMark(view, pptxTextSchema.marks.fontSize, { size: next });
+}
+
+/** select에 현재 값이 목록에 없으면(원본 문서의 낯선 글꼴, 15.5pt 같은 크기) 임시 항목을 끼워
+ * 넣어서라도 정확한 값을 보여준다 — 목록에 없다고 엉뚱한 값을 보여주면 사용자가 오해한다. */
+function showSelectValue(select: HTMLSelectElement | null, value: string): void {
+  if (!select) return;
+  select.querySelector('option[data-transient]')?.remove();
+  if (value && ![...select.options].some((o) => o.value === value)) {
+    const opt = document.createElement('option');
+    opt.value = value;
+    opt.textContent = value;
+    opt.dataset.transient = '1';
+    select.append(opt);
+  }
+  select.value = value;
+}
+
+const ALIGN_BUTTONS: ReadonlyArray<readonly [string, 'l' | 'ctr' | 'r' | 'just']> = [
+  ['btn-align-left', 'l'],
+  ['btn-align-center', 'ctr'],
+  ['btn-align-right', 'r'],
+  ['btn-align-justify', 'just'],
+];
+
+function refreshRibbonState(view: EditorView): void {
+  const state = view.state;
+  const marks = marksAtSelection(state);
+  const has = (name: string) => marks.some((m) => m.type.name === name);
+  document.getElementById('btn-bold')?.setAttribute('aria-pressed', String(has('strong')));
+  document.getElementById('btn-italic')?.setAttribute('aria-pressed', String(has('em')));
+  document.getElementById('btn-underline')?.setAttribute('aria-pressed', String(has('underline')));
+
+  // 정렬 속성이 없는 문단은 왼쪽 맞춤으로 보인다(실제 렌더링과 같은 기본값)
+  const align = (firstParagraphInSelection(state)?.attrs.align as string | null) ?? 'l';
+  for (const [id, value] of ALIGN_BUTTONS) {
+    document.getElementById(id)?.setAttribute('aria-pressed', String(align === value));
+  }
+
+  showSelectValue(
+    document.getElementById('font-family') as HTMLSelectElement | null,
+    String(markAttrAtSelection(state, 'fontFamily', 'family') ?? ''),
+  );
+  const size = markAttrAtSelection(state, 'fontSize', 'size');
+  showSelectValue(document.getElementById('font-size') as HTMLSelectElement | null, size === undefined ? '' : String(size));
+}
+
 function setupFormatToolbar(): void {
   bindFormatButton('btn-bold', 'strong');
   bindFormatButton('btn-italic', 'em');
   bindFormatButton('btn-underline', 'underline');
 
+  const familySelect = document.getElementById('font-family') as HTMLSelectElement | null;
+  familySelect?.addEventListener('change', () => {
+    if (!focusedView) return;
+    const family = familySelect.value;
+    setValueMark(focusedView, pptxTextSchema.marks.fontFamily, family ? { family } : null);
+  });
+  const sizeSelect = document.getElementById('font-size') as HTMLSelectElement | null;
+  sizeSelect?.addEventListener('change', () => {
+    if (!focusedView || !sizeSelect.value) return;
+    setValueMark(focusedView, pptxTextSchema.marks.fontSize, { size: Number(sizeSelect.value) });
+  });
+  document.getElementById('btn-font-grow')?.addEventListener('click', () => {
+    if (focusedView) stepFontSize(focusedView, 1);
+  });
+  document.getElementById('btn-font-shrink')?.addEventListener('click', () => {
+    if (focusedView) stepFontSize(focusedView, -1);
+  });
+  document.getElementById('btn-clear-format')?.addEventListener('click', () => {
+    if (!focusedView) return;
+    const { from, to, empty } = focusedView.state.selection;
+    const tr = empty ? focusedView.state.tr.setStoredMarks([]) : focusedView.state.tr.removeMark(from, to);
+    focusedView.dispatch(tr);
+    focusedView.focus();
+  });
+  for (const [id, value] of ALIGN_BUTTONS) {
+    document.getElementById(id)?.addEventListener('click', () => {
+      if (focusedView) applyAlign(focusedView, value);
+    });
+  }
+
   const colorInput = document.getElementById('text-color-picker') as HTMLInputElement | null;
   const colorBtn = document.getElementById('text-color-btn') as HTMLElement | null;
   // .color-btn-bar는 --btn-color 커스텀 프로퍼티로 자기 배경색을 그리므로(style.css), 입력의
-  // 현재 값과 항상 맞춰 둔다 — 초기값(HTML의 value="#1b1a17")과 이후 사용자가 고른 색 둘 다.
-  colorBtn?.style.setProperty('--btn-color', colorInput?.value ?? '#1b1a17');
+  // 현재 값과 항상 맞춰 둔다 — 초기값과 이후 사용자가 고른 색 둘 다.
+  colorBtn?.style.setProperty('--btn-color', colorInput?.value ?? '#c00000');
   colorInput?.addEventListener('input', () => {
-    if (!focusedView) return;
     colorBtn?.style.setProperty('--btn-color', colorInput.value);
-    const { from, to } = focusedView.state.selection;
-    // from === to(선택 영역 없이 커서만 있는 경우)여도 addMark(from, to, ...)는 그냥 빈 범위에
-    // 아무것도 안 하는 no-op이다 — toggleMark류처럼 "커서 위치의 다음 입력에 적용"하는 stored-mark
-    // 동작까지는 흉내 내지 않지만, 이 태스크 범위에서는 브리프가 그린 그대로(선택 영역에 직접
-    // addMark) 충분하다.
-    const tr = focusedView.state.tr.addMark(from, to, pptxTextSchema.marks.textColor.create({ color: colorInput.value }));
-    focusedView.dispatch(tr);
-    focusedView.focus();
+    if (!focusedView) return;
+    setValueMark(focusedView, pptxTextSchema.marks.textColor, { color: colorInput.value });
+  });
+
+  const fillInput = document.getElementById('shape-fill-picker') as HTMLInputElement | null;
+  const fillBtn = document.getElementById('shape-fill-btn') as HTMLElement | null;
+  fillBtn?.style.setProperty('--btn-color', fillInput?.value ?? '#4472c4');
+  fillInput?.addEventListener('input', () => fillBtn?.style.setProperty('--btn-color', fillInput.value));
+
+  // 슬라이드 단위 단축키 — 텍스트 편집 중이 아닐 때의 Ctrl+D(복제)는 브라우저 북마크 대신
+  // 슬라이드 복제로, Ctrl+M은 어디서든 새 슬라이드로 쓴다(프레젠테이션 프로그램과 같은 키).
+  window.addEventListener('keydown', (event) => {
+    if (!canEdit || !(event.ctrlKey || event.metaKey) || event.shiftKey || event.altKey) return;
+    const target = event.target as HTMLElement | null;
+    if (target?.closest('input, select, textarea')) return;
+    const key = event.key.toLowerCase();
+    if (key === 'm') {
+      event.preventDefault();
+      addBlankSlide();
+    } else if (key === 'd' && !target?.closest('.slide-textbox')) {
+      event.preventDefault();
+      const index = activeSlideIndex();
+      if (index >= 0) duplicateSlideAt(index);
+    }
   });
 }
 
@@ -638,13 +931,16 @@ async function main(): Promise<void> {
   titleEl.textContent = info.name;
   document.title = `${info.name} — DocView 편집`;
   canEdit = info.permissions.canEdit;
+  if (info.slideSize && info.slideSize.cx > 0 && info.slideSize.cy > 0) {
+    SLIDE_W_EMU = info.slideSize.cx;
+    SLIDE_H_EMU = info.slideSize.cy;
+  }
   // 읽기 전용 토큰이어도 이 화면 자체는 그대로 보여주고 쓰기만 막는다 — grid-editor.ts와 동일한
   // 패턴(canEdit:false로 fatal error를 띄우면 "바로보기"가 동시편집 화면을 못 씀). 실제 쓰기
   // 차단은 room.ts의 readOnlyConns(서버 쪽)가 이미 하고 있고, 여기서는 UI만 맞춘다.
   if (!canEdit) {
-    document.getElementById('btn-add-blank')?.setAttribute('hidden', '');
-    document.getElementById('btn-add-textbox')?.setAttribute('hidden', '');
-    document.getElementById('format-toolbar')?.setAttribute('hidden', '');
+    // 리본 전체가 편집 도구라 읽기 전용에선 통째로 숨긴다(빈 그룹 테두리만 남는 일이 없도록).
+    document.getElementById('slides-ribbon')?.setAttribute('hidden', '');
     connStatusEl.insertAdjacentHTML('afterend', '<span class="conn-status" data-status="readonly">읽기 전용</span>');
   }
 

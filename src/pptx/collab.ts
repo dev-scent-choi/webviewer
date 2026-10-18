@@ -14,7 +14,8 @@ import {
 } from './slideContent.js';
 import type { ParsedShape } from './slideContent.js';
 import { pptxTextSchema } from './textSchema.js';
-import type { SlideEntry, SlideShapeMeta } from '../collab/pptxShared.js';
+import type { NewShapeGeom, SlideEntry, SlideShapeMeta } from '../collab/pptxShared.js';
+import { NEW_SHAPE_GEOMS } from '../collab/pptxShared.js';
 
 const SLIDE_TARGET = /Target="(?:[^"]*\/)?(slide\d+\.xml)"/;
 
@@ -603,9 +604,13 @@ export function exportPptxFromSlides(
           ) {
             continue;
           }
+          // geom/fill도 x/y/w/h와 같은 위협 모델(클라이언트가 쓸 수 있는 값이 XML에 접합됨) —
+          // 화이트리스트/엄격한 형식에 맞지 않으면 그 속성만 버리고 일반 텍스트 상자로 저장한다.
+          const geom = NEW_SHAPE_GEOMS.includes(meta.geom as NewShapeGeom) ? meta.geom : undefined;
+          const fill = geom && typeof meta.fill === 'string' && /^#[0-9A-Fa-f]{6}$/.test(meta.fill) ? meta.fill : undefined;
           slideXml = appendNewShape(
             slideXml,
-            { shapeId, x: meta.x, y: meta.y, w: meta.w, h: meta.h },
+            { shapeId, x: meta.x, y: meta.y, w: meta.w, h: meta.h, geom, fill },
             txBodyXml,
           );
         }

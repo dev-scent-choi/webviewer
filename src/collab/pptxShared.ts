@@ -46,7 +46,15 @@ export interface SlideShapeMeta {
   readonly y: number | null;
   readonly w: number | null;
   readonly h: number | null;
+  /** 리본 "도형" 삽입으로 새로 만든 도형만 갖는다 — 없으면 일반 텍스트 상자(기존 동작 그대로).
+   * 원본에서 시딩된 도형은 이 값을 갖지 않는다(그 도형의 <p:spPr>은 저장 시 손대지 않으므로). */
+  readonly geom?: NewShapeGeom;
+  /** 새 도형의 채우기 색, '#RRGGBB'. geom이 있을 때만 의미가 있다. */
+  readonly fill?: string;
 }
+
+export type NewShapeGeom = 'rect' | 'roundRect' | 'ellipse';
+export const NEW_SHAPE_GEOMS: readonly NewShapeGeom[] = ['rect', 'roundRect', 'ellipse'];
 
 /**
  * slideVisuals.get(slideEntryId) -> readonly SlideVisual[] (일반 배열 — Yjs 공유 타입이 아니라
@@ -74,6 +82,9 @@ export interface SlideVisual {
   readonly mediaPath?: string;
   /** kind:'shape' — 단색 채우기(#RRGGBB), 없으면 채우기 없는 도형 */
   readonly fill?: string;
+  /** kind:'shape' — 원본 <a:prstGeom prst>가 둥근 모양일 때만('ellipse'|'roundRect') 기록한다.
+   * 나머지(사각형 및 아직 그리지 못하는 복잡한 모양)는 생략 = 사각형으로 표시. */
+  readonly geom?: 'ellipse' | 'roundRect';
   /** kind:'table' — 행 단위 셀 텍스트(행렬, 서식 없이 텍스트만) */
   readonly rows?: readonly (readonly string[])[];
   /** kind:'placeholder' — 표시할 라벨(예: "차트", "스마트아트") */

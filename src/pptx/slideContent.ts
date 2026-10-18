@@ -55,8 +55,16 @@ function marksFromRPr(rPr: XmlNode | undefined): ReturnType<typeof schema.marks.
   if (colorVal) marks.push(schema.marks.textColor.create({ color: `#${colorVal}` }));
   const sz = rPr['@_sz'] as string | undefined;
   if (sz) marks.push(schema.marks.fontSize.create({ size: Number(sz) / 100 }));
+  // 한글 문서는 <a:ea>(동아시아 글꼴)가 실제 보이는 글꼴이라 그쪽을 우선한다. 테마 참조("+mn-lt"
+  // 등 '+'로 시작)는 실제 글꼴 이름이 아니므로 마크로 만들지 않는다 — 원본 테마 글꼴이 그대로 쓰인다.
+  const typeface =
+    ((rPr['a:ea'] as XmlNode | undefined)?.['@_typeface'] as string | undefined) ??
+    ((rPr['a:latin'] as XmlNode | undefined)?.['@_typeface'] as string | undefined);
+  if (typeface && !typeface.startsWith('+')) marks.push(schema.marks.fontFamily.create({ family: typeface }));
   return marks;
 }
+
+const ALIGN_VALUES = new Set(['l', 'ctr', 'r', 'just']);
 
 function paragraphFromXml(pNode: XmlNode): PMNode {
   const runs = asArray<XmlNode>(pNode['a:r'] as XmlNode | XmlNode[] | undefined);
@@ -68,7 +76,8 @@ function paragraphFromXml(pNode: XmlNode): PMNode {
       return schema.text(textStr, marksFromRPr(run['a:rPr'] as XmlNode | undefined));
     })
     .filter((n): n is NonNullable<typeof n> => n !== null);
-  return schema.node('paragraph', null, inline);
+  const algn = (pNode['a:pPr'] as XmlNode | undefined)?.['@_algn'] as string | undefined;
+  return schema.node('paragraph', { align: algn && ALIGN_VALUES.has(algn) ? algn : null }, inline);
 }
 
 function emuAttr(xfrmChild: XmlNode | undefined, attr: '@_x' | '@_y' | '@_cx' | '@_cy'): number | null {
@@ -197,12 +206,25 @@ function rPrXmlFor(node: PMNode): string {
   const sizeMark = node.marks.find((m) => m.type.name === 'fontSize');
   const sz = sizeMark ? ` sz="${Math.round((sizeMark.attrs.size as number) * 100)}"` : '';
   const colorMark = node.marks.find((m) => m.type.name === 'textColor');
+  const familyMark = node.marks.find((m) => m.type.name === 'fontFamily');
   const attrs = `${b}${i}${u}${sz}`;
-  if (!colorMark) {
-    return attrs ? `<a:rPr${attrs}/>` : '';
-  }
-  const hex = (colorMark.attrs.color as string).replace('#', '').toUpperCase();
-  return `<a:rPr${attrs}><a:solidFill><a:srgbClr val="${hex}"/></a:solidFill></a:rPr>`;
+  // CT_TextCharacterProperties의 자식 순서: ... solidFill ... latin, ea, cs ... (스키마상 고정)
+  const fill = colorMark
+    ? `<a:solidFill><a:srgbClr val="${(colorMark.attrs.color as string).replace('#', '').toUpperCase()}"/></a:solidFill>`
+    : '';
+  const face = familyMark
+    ? (() => {
+        const name = escapeXmlAttr(familyMark.attrs.family as string);
+        return `<a:latin typeface="${name}"/><a:ea typeface="${name}"/>`;
+      })()
+    : '';
+  const children = fill + face;
+  if (!children) return attrs ? `<a:rPr${attrs}/>` : '';
+  return `<a:rPr${attrs}>${children}</a:rPr>`;
+}
+
+function escapeXmlAttr(text: string): string {
+  return escapeXmlText(text).replace(/"/g, '&quot;');
 }
 
 export function serializeTxBodyXml(doc: PMNode): string {
@@ -214,7 +236,9 @@ export function serializeTxBodyXml(doc: PMNode): string {
       const rPr = rPrXmlFor(textNode);
       runsXml.push(`<a:r>${rPr}<a:t>${escapeXmlText(textNode.text)}</a:t></a:r>`);
     });
-    paragraphsXml.push(`<a:p>${runsXml.join('')}</a:p>`);
+    const align = paragraph.attrs.align as string | null;
+    const pPr = align ? `<a:pPr algn="${align}"/>` : '';
+    paragraphsXml.push(`<a:p>${pPr}${runsXml.join('')}</a:p>`);
   });
   // CT_TextBody(OOXML 스키마)는 <a:p>가 최소 1개 있어야 한다(minOccurs="1") — 문단이 하나도 없는
   // <p:txBody>는 PowerPoint가 열 수 없는 손상된 파일이다(FINAL REVIEW C2). pptxTextSchema는
@@ -255,6 +279,20 @@ export function serializeTxBodyXml(doc: PMNode): string {
  * 속성을 정의하지 않으므로 `<p:sp>`보다 훨씬 드문 트리거지만, 어떤 재직렬화 도구가 네임스페이스
  * 재선언 등을 붙이면 여전히 가능하다)을 만나면 이 함수가 "<p:txBody> 없음"으로 잘못 throw했다.
  * 아래에서 `<p:txBody\b`로 넓혀 같은 방식으로 고쳤다. */
+/** 원본 txBody의 상자 수준 속성(<a:bodyPr>: 세로 맞춤·여백·자동 맞춤(글자 줄이기)·줄바꿈,
+ * <a:lstStyle>: 단계별 기본 글꼴 크기/글머리)을 새로 직렬화한 txBody에 그대로 옮겨 심는다.
+ * serializeTxBodyXml은 항상 빈 `<a:bodyPr/><a:lstStyle/>`를 내보내므로, 이걸 안 하면 글자를
+ * 한 자만 고쳐도 아래 맞춤 제목이 위로 붙거나 "넘치면 글자 줄이기" 상자가 넘쳐 보이는 등
+ * PowerPoint에서 보이는 모양이 바뀌었다(편집 안 한 상자는 애초에 splice되지 않아 무관). */
+function carryOverBodyProps(originalTxBody: string, newTxBody: string): string {
+  const bodyPr = /<a:bodyPr\b(?:[^>]*\/>|[\s\S]*?<\/a:bodyPr>)/.exec(originalTxBody)?.[0];
+  const lstStyle = /<a:lstStyle\b(?:[^>]*\/>|[\s\S]*?<\/a:lstStyle>)/.exec(originalTxBody)?.[0];
+  let out = newTxBody;
+  if (bodyPr) out = out.replace('<a:bodyPr/>', () => bodyPr);
+  if (lstStyle) out = out.replace('<a:lstStyle/>', () => lstStyle);
+  return out;
+}
+
 export function spliceShapeTxBody(slideXml: string, shapeId: string, txBodyXml: string): string {
   const spBlockRe = /<p:sp\b(?:(?!<\/p:sp>)[\s\S])*?<\/p:sp>/g;
   let replaced = false;
@@ -280,7 +318,8 @@ export function spliceShapeTxBody(slideXml: string, shapeId: string, txBodyXml: 
       throw new Error(`spliceShapeTxBody: shapeId ${shapeId}의 <p:sp> 블록에 <p:txBody>가 없습니다.`);
     }
     replaced = true;
-    return spBlock.replace(/<p:txBody\b[\s\S]*?<\/p:txBody>/, txBodyXml);
+    const originalTxBody = /<p:txBody\b[\s\S]*?<\/p:txBody>/.exec(spBlock)![0];
+    return spBlock.replace(/<p:txBody\b[\s\S]*?<\/p:txBody>/, () => carryOverBodyProps(originalTxBody, txBodyXml));
   });
   if (!replaced) {
     throw new Error(`spliceShapeTxBody: shapeId ${shapeId}를 슬라이드 XML에서 찾지 못했습니다.`);
@@ -321,14 +360,20 @@ export function hasShape(slideXml: string, shapeId: string): boolean {
  * 않는 필드). */
 export function appendNewShape(
   slideXml: string,
-  meta: { shapeId: string; x: number; y: number; w: number; h: number },
+  meta: { shapeId: string; x: number; y: number; w: number; h: number; geom?: string; fill?: string },
   txBodyXml: string,
 ): string {
+  // geom/fill은 호출자(exportPptxFromSlides)가 화이트리스트·형식 검증을 끝낸 값만 넘긴다.
+  const isShape = meta.geom !== undefined;
+  const fillXml = isShape && meta.fill ? `<a:solidFill><a:srgbClr val="${meta.fill.replace('#', '').toUpperCase()}"/></a:solidFill>` : '';
   const spXml =
-    `<p:sp><p:nvSpPr><p:cNvPr id="${meta.shapeId}" name="TextBox"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr>` +
+    `<p:sp><p:nvSpPr><p:cNvPr id="${meta.shapeId}" name="${isShape ? 'Shape' : 'TextBox'}"/>` +
+    `${isShape ? '<p:cNvSpPr/>' : '<p:cNvSpPr txBox="1"/>'}<p:nvPr/></p:nvSpPr>` +
     `<p:spPr><a:xfrm><a:off x="${meta.x}" y="${meta.y}"/><a:ext cx="${meta.w}" cy="${meta.h}"/></a:xfrm>` +
-    '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr>' +
-    txBodyXml +
+    `<a:prstGeom prst="${meta.geom ?? 'rect'}"><a:avLst/></a:prstGeom>${fillXml}</p:spPr>` +
+    // 새 도형의 글자는 실제 프레젠테이션 프로그램처럼 도형 한가운데(세로 가운데) — 이후 재저장에서도
+    // carryOverBodyProps가 이 bodyPr를 그대로 유지한다.
+    (isShape ? txBodyXml.replace('<a:bodyPr/>', '<a:bodyPr anchor="ctr"/>') : txBodyXml) +
     '</p:sp>';
   const closeIdx = slideXml.lastIndexOf('</p:spTree>');
   if (closeIdx === -1) {
@@ -430,6 +475,22 @@ export const IMAGE_MIME_BY_EXT: Record<string, string> = {
   // data URI를 만들어봐야 화면에 아무것도 안 나온다(깨진 이미지 아이콘보다는 그냥 생략이 낫다).
 };
 
+/** presentation.xml의 실제 슬라이드 크기(<p:sldSz cx cy>, EMU). 없거나 읽을 수 없으면 표준 16:9.
+ * 4:3(9144000×6858000) 같은 다른 크기의 문서를 16:9 좌표계로 그리면 모든 도형이 왼쪽으로
+ * 찌그러지고 비율이 틀어진다 — 공공기관 문서에 흔한 4:3 파일로 실제 재현. */
+export function readSlideSizeEmu(zipEntries: Record<string, Uint8Array>): { cx: number; cy: number } {
+  const bytes = zipEntries['ppt/presentation.xml'];
+  const tag = bytes ? /<p:sldSz\b[^>]*>/.exec(Buffer.from(bytes).toString('utf-8'))?.[0] : undefined;
+  const cx = Number(tag ? /\bcx="(\d+)"/.exec(tag)?.[1] : NaN);
+  const cy = Number(tag ? /\bcy="(\d+)"/.exec(tag)?.[1] : NaN);
+  return cx > 0 && cy > 0 ? { cx, cy } : { cx: SLIDE_WIDTH_EMU, cy: SLIDE_HEIGHT_EMU };
+}
+
+function roundGeomFromSpPr(spPr: XmlNode | undefined): 'ellipse' | 'roundRect' | undefined {
+  const prst = (spPr?.['a:prstGeom'] as XmlNode | undefined)?.['@_prst'];
+  return prst === 'ellipse' || prst === 'roundRect' ? prst : undefined;
+}
+
 function fillColorFromSpPr(spPr: XmlNode | undefined): string | undefined {
   const solidFill = spPr?.['a:solidFill'] as XmlNode | undefined;
   const srgbClr = solidFill?.['a:srgbClr'] as XmlNode | undefined;
@@ -499,13 +560,14 @@ export function parseSlideVisuals(zipEntries: Record<string, Uint8Array>, source
   // fillColorFromSpPr가 스킴 컬러를 생략하는 것과 같은 이유(완전히 안 보이는 것보다는 낫다).
   const bgPr = ((cSld['p:bg'] as XmlNode | undefined)?.['p:bgPr']) as XmlNode | undefined;
   if (bgPr) {
+    const { cx, cy } = readSlideSizeEmu(zipEntries);
     const blip = (bgPr['a:blipFill'] as XmlNode | undefined)?.['a:blip'] as XmlNode | undefined;
     const mediaPath = resolveImageMediaPath(blip?.['@_r:embed'] as string | undefined);
     if (mediaPath) {
-      visuals.push({ kind: 'image', x: 0, y: 0, w: SLIDE_WIDTH_EMU, h: SLIDE_HEIGHT_EMU, mediaPath });
+      visuals.push({ kind: 'image', x: 0, y: 0, w: cx, h: cy, mediaPath });
     } else {
       const fill = fillColorFromSpPr(bgPr);
-      if (fill) visuals.push({ kind: 'shape', x: 0, y: 0, w: SLIDE_WIDTH_EMU, h: SLIDE_HEIGHT_EMU, fill });
+      if (fill) visuals.push({ kind: 'shape', x: 0, y: 0, w: cx, h: cy, fill });
     }
   }
 
@@ -526,13 +588,18 @@ export function parseSlideVisuals(zipEntries: Record<string, Uint8Array>, source
     }
 
     for (const sp of asArray<XmlNode>(node['p:sp'] as XmlNode | XmlNode[] | undefined)) {
-      if (sp['p:txBody']) continue; // 텍스트박스는 parseSlideShapes가 이미 편집 대상으로 다룬다
       const spPr = sp['p:spPr'] as XmlNode | undefined;
+      const fill = fillColorFromSpPr(spPr);
+      // 글자가 든 도형의 "글자"는 parseSlideShapes가 편집 대상으로 다룬다 — 하지만 그 도형에 채우기
+      // 색이 있으면(색 칠한 사각형 위의 제목 등, 실사용 문서에 매우 흔함) 예전엔 배경색이 통째로
+      // 빠져 글자만 허공에 떠 보였다. 채우기가 있을 때만 그 색 판을 텍스트 상자 아래에 깔아 준다.
+      if (sp['p:txBody'] && !fill) continue;
       const xfrm = spPr?.['a:xfrm'] as XmlNode | undefined;
       const off = xfrm?.['a:off'] as XmlNode | undefined;
       const ext = xfrm?.['a:ext'] as XmlNode | undefined;
       const pos = applyGroupTransforms(transforms, emuAttr(off, '@_x'), emuAttr(off, '@_y'), emuAttr(ext, '@_cx'), emuAttr(ext, '@_cy'));
-      visuals.push({ kind: 'shape', ...pos, fill: fillColorFromSpPr(spPr) });
+      const geom = roundGeomFromSpPr(spPr);
+      visuals.push({ kind: 'shape', ...pos, fill, ...(geom ? { geom } : {}) });
     }
 
     for (const gf of asArray<XmlNode>(node['p:graphicFrame'] as XmlNode | XmlNode[] | undefined)) {

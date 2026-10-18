@@ -565,3 +565,94 @@ describe('parseSlideShapes: numeric-looking run text round-trips unchanged (Fix 
     },
   );
 });
+
+describe('리본 서식 왕복: 글꼴(latin/ea) + 문단 정렬(algn)', () => {
+  const shapeXml = (body: string) =>
+    XML_HEAD +
+    '<p:sp><p:nvSpPr><p:cNvPr id="2" name="T"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/>' +
+    `<p:txBody><a:bodyPr/>${body}</p:txBody></p:sp>` +
+    XML_TAIL;
+
+  test('a:ea 글꼴을 fontFamily 마크로, a:pPr algn을 문단 align으로 읽는다', () => {
+    const [shape] = parseSlideShapes(
+      shapeXml('<a:p><a:pPr algn="ctr"/><a:r><a:rPr><a:latin typeface="Arial"/><a:ea typeface="맑은 고딕"/></a:rPr><a:t>가운데</a:t></a:r></a:p>'),
+    );
+    const para = shape.doc.firstChild!;
+    expect(para.attrs.align).toBe('ctr');
+    const family = para.firstChild!.marks.find((m) => m.type.name === 'fontFamily');
+    expect(family?.attrs.family).toBe('맑은 고딕');
+  });
+
+  test('테마 참조(+mn-lt)는 실제 글꼴이 아니라 마크로 만들지 않는다', () => {
+    const [shape] = parseSlideShapes(
+      shapeXml('<a:p><a:r><a:rPr><a:latin typeface="+mn-lt"/></a:rPr><a:t>x</a:t></a:r></a:p>'),
+    );
+    expect(shape.doc.firstChild!.firstChild!.marks.some((m) => m.type.name === 'fontFamily')).toBe(false);
+  });
+
+  test('직렬화 → 재파싱 시 글꼴·정렬·색이 그대로 보존되고 스키마 순서(solidFill→latin→ea)를 지킨다', () => {
+    const doc = schema.node('doc', null, [
+      schema.node('paragraph', { align: 'r' }, [
+        schema.text('오른쪽', [
+          schema.marks.textColor.create({ color: '#C00000' }),
+          schema.marks.fontFamily.create({ family: '나눔고딕' }),
+        ]),
+      ]),
+      schema.node('paragraph', null, [schema.text('정렬 없음')]),
+    ]);
+    const xml = serializeTxBodyXml(doc);
+    expect(xml).toContain('<a:pPr algn="r"/>');
+    expect(xml).toMatch(/<a:solidFill>.*<\/a:solidFill><a:latin typeface="나눔고딕"\/><a:ea typeface="나눔고딕"\/>/);
+    // 정렬이 없던 문단은 pPr 없이 그대로 내보낸다(원본 왕복 보존)
+    expect(xml).toContain('<a:p><a:r><a:t>정렬 없음</a:t></a:r></a:p>');
+
+    const [round] = parseSlideShapes(shapeXml(xml.replace(/^<p:txBody><a:bodyPr\/>/, '').replace(/<\/p:txBody>$/, '')));
+    expect(round.doc.firstChild!.attrs.align).toBe('r');
+    expect(round.doc.lastChild!.attrs.align).toBeNull();
+  });
+
+  test('글꼴 이름의 XML 특수문자는 속성값으로 안전하게 이스케이프된다', () => {
+    const doc = schema.node('doc', null, [
+      schema.node('paragraph', null, [schema.text('a', [schema.marks.fontFamily.create({ family: 'A "B" & C' })])]),
+    ]);
+    expect(serializeTxBodyXml(doc)).toContain('typeface="A &quot;B&quot; &amp; C"');
+  });
+});
+
+describe('spliceShapeTxBody: 상자 수준 속성(bodyPr/lstStyle) 보존', () => {
+  test('글자를 고쳐 다시 저장해도 원본의 세로 맞춤·자동 맞춤·목록 스타일이 그대로 남는다', () => {
+    const bodyPr = '<a:bodyPr anchor="b" lIns="0"><a:normAutofit fontScale="85000"/></a:bodyPr>';
+    const lstStyle = '<a:lstStyle><a:lvl1pPr><a:defRPr sz="4400"/></a:lvl1pPr></a:lstStyle>';
+    const xml =
+      XML_HEAD +
+      '<p:sp><p:nvSpPr><p:cNvPr id="2" name="Title"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/>' +
+      `<p:txBody>${bodyPr}${lstStyle}<a:p><a:r><a:t>원래 제목</a:t></a:r></a:p></p:txBody></p:sp>` +
+      XML_TAIL;
+    const doc = schema.node('doc', null, [schema.node('paragraph', null, [schema.text('고친 제목')])]);
+    const out = spliceShapeTxBody(xml, '2', serializeTxBodyXml(doc));
+    expect(out).toContain(bodyPr);
+    expect(out).toContain(lstStyle);
+    expect(out).toContain('고친 제목');
+    expect(out).not.toContain('원래 제목');
+    expect(out).not.toContain('<a:bodyPr/>');
+  });
+
+  test('원본이 자기 닫힘 bodyPr이어도 그대로 옮긴다', () => {
+    const xml =
+      XML_HEAD +
+      '<p:sp><p:nvSpPr><p:cNvPr id="2" name="T"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/>' +
+      '<p:txBody><a:bodyPr wrap="none" anchor="ctr"/><a:p><a:r><a:t>a</a:t></a:r></a:p></p:txBody></p:sp>' +
+      XML_TAIL;
+    const doc = schema.node('doc', null, [schema.node('paragraph', null, [schema.text('b')])]);
+    expect(spliceShapeTxBody(xml, '2', serializeTxBodyXml(doc))).toContain('<a:bodyPr wrap="none" anchor="ctr"/><a:lstStyle/>');
+  });
+
+  test('새 도형은 글자가 세로 가운데(anchor=ctr)로 저장된다', () => {
+    const out = appendNewShape(
+      XML_HEAD + XML_TAIL,
+      { shapeId: 'new-1', x: 1, y: 2, w: 3, h: 4, geom: 'ellipse', fill: '#123456' },
+      serializeTxBodyXml(schema.node('doc', null, [schema.node('paragraph', null, [])])),
+    );
+    expect(out).toContain('<a:bodyPr anchor="ctr"/>');
+  });
+});

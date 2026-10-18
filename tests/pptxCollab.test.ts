@@ -402,3 +402,46 @@ describe('exportPptxFromSlides — media entries skip recompression', () => {
     expect(methods.get('ppt/notmedia/image1.png')).toBe(8);
   });
 });
+
+describe('exportPptxFromSlides: 리본 "도형" 삽입(geom/fill)', () => {
+  function exportWithNewShape(meta: Record<string, unknown>): string {
+    const original = makeSamplePptx(['Slide 1']);
+    const ydoc = new Y.Doc();
+    const slidesArray = ydoc.getArray<SlideEntry>(PPTX_SLIDES_ARRAY);
+    seedSlidesFromPptx(original, slidesArray);
+    const slideContents = ydoc.getMap<PerSlideContentsMap>(PPTX_SLIDE_CONTENTS_MAP);
+    const entry = slidesArray.get(0);
+    seedSlideContentFromXml(slideContents, entry.id, unzipSync(original), entry.sourceSlidePart!);
+    ydoc.transact(() => {
+      const shapeMap = new Y.Map<unknown>();
+      shapeMap.set('meta', { shapeId: 'new-shape-1', x: 100, y: 200, w: 300, h: 400, ...meta });
+      shapeMap.set('content', new Y.XmlFragment());
+      slideContents.get(entry.id)!.set('new-shape-1', shapeMap);
+    });
+    const { bytes } = exportPptxFromSlides(original, slidesArray, slideContents);
+    return strFromU8(unzipSync(bytes)['ppt/slides/slide1.xml']);
+  }
+
+  test('타원 + 채우기 색이 prstGeom/solidFill로 저장되고 원본 텍스트도 유지된다', () => {
+    const xml = exportWithNewShape({ geom: 'ellipse', fill: '#4472c4' });
+    expect(xml).toContain('<a:prstGeom prst="ellipse"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="4472C4"/></a:solidFill>');
+    expect(xml).toContain('Slide 1');
+    expect(xml).not.toContain('txBox="1"/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="100"');
+  });
+
+  test('geom이 없으면 기존과 같은 일반 텍스트 상자로 저장된다', () => {
+    const xml = exportWithNewShape({});
+    expect(xml).toContain('<p:cNvSpPr txBox="1"/>');
+    expect(xml).toContain('<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr>');
+  });
+
+  test('화이트리스트 밖 geom·형식이 깨진 fill은 버리고 well-formed XML을 유지한다', () => {
+    const xml = exportWithNewShape({ geom: 'rect"><evil a="', fill: '#123456"/><x y="' });
+    expect(xml).not.toContain('evil');
+    expect(xml).not.toContain('<x y=');
+    expect(xml).toContain('<p:cNvSpPr txBox="1"/>'); // 텍스트 상자로 강등
+    const xml2 = exportWithNewShape({ geom: 'rect', fill: 'red"/><evil/>' });
+    expect(xml2).toContain('<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr>'); // fill만 버림
+    expect(xml2).not.toContain('evil');
+  });
+});

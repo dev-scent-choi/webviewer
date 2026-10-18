@@ -275,3 +275,38 @@ describe('parseSlideVisuals', () => {
     expect(parseSlideVisuals(entries, 'slide1.xml')).toEqual([]);
   });
 });
+
+describe('편집 캔버스 충실도: 실제 슬라이드 크기 / 글자 있는 도형의 채우기 / 둥근 도형', () => {
+  test('readSlideSizeEmu: presentation.xml의 4:3 크기를 읽고, 없으면 16:9로 대체한다', async () => {
+    const { readSlideSizeEmu } = await import('../src/pptx/slideContent.js');
+    const pres = '<p:presentation xmlns:p="p"><p:sldSz cy="6858000" type="screen4x3" cx="9144000"/></p:presentation>';
+    expect(readSlideSizeEmu(zip({ 'ppt/presentation.xml': pres }))).toEqual({ cx: 9144000, cy: 6858000 });
+    expect(readSlideSizeEmu(zip({}))).toEqual({ cx: SLIDE_WIDTH_EMU, cy: SLIDE_HEIGHT_EMU });
+  });
+
+  test('배경 그림/색은 실제 슬라이드 크기(4:3)로 깔린다', () => {
+    const slideXml =
+      XML_HEAD.replace('<p:cSld>', '<p:cSld><p:bg><p:bgPr><a:solidFill><a:srgbClr val="112233"/></a:solidFill></p:bgPr></p:bg>') +
+      XML_TAIL;
+    const entries = zip({
+      'ppt/slides/slide1.xml': slideXml,
+      'ppt/presentation.xml': '<p:presentation xmlns:p="p"><p:sldSz cx="9144000" cy="6858000"/></p:presentation>',
+    });
+    expect(parseSlideVisuals(entries, 'slide1.xml')[0]).toMatchObject({ kind: 'shape', w: 9144000, h: 6858000, fill: '#112233' });
+  });
+
+  test('글자가 든 도형도 채우기 색이 있으면 색 판(+둥근 모양)을 깔고, 채우기 없으면 건너뛴다', () => {
+    const slideXml =
+      XML_HEAD +
+      '<p:sp><p:nvSpPr><p:cNvPr id="5" name="Badge"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>' +
+      '<p:spPr><a:xfrm><a:off x="10" y="20"/><a:ext cx="300" cy="400"/></a:xfrm><a:prstGeom prst="ellipse"><a:avLst/></a:prstGeom>' +
+      '<a:solidFill><a:srgbClr val="FFC000"/></a:solidFill></p:spPr>' +
+      '<p:txBody><a:bodyPr/><a:p><a:r><a:t>뱃지</a:t></a:r></a:p></p:txBody></p:sp>' +
+      '<p:sp><p:nvSpPr><p:cNvPr id="6" name="Plain"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/>' +
+      '<p:txBody><a:bodyPr/><a:p><a:r><a:t>그냥 글자</a:t></a:r></a:p></p:txBody></p:sp>' +
+      XML_TAIL;
+    const visuals = parseSlideVisuals(zip({ 'ppt/slides/slide1.xml': slideXml }), 'slide1.xml');
+    expect(visuals).toHaveLength(1);
+    expect(visuals[0]).toMatchObject({ kind: 'shape', x: 10, y: 20, w: 300, h: 400, fill: '#FFC000', geom: 'ellipse' });
+  });
+});

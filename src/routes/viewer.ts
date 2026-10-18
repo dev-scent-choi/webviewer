@@ -6,7 +6,8 @@ import { recordAudit } from '../audit.js';
 import { SizedLruCache } from '../cache.js';
 import { config } from '../config.js';
 import { findConverter } from '../converters/index.js';
-import { IMAGE_MIME_BY_EXT } from '../pptx/slideContent.js';
+import { IMAGE_MIME_BY_EXT, readSlideSizeEmu } from '../pptx/slideContent.js';
+import { unzipSync } from 'fflate';
 import { guardedUnzipSync } from '../zipGuard.js';
 import { convertToPdf } from './documents.js';
 import {
@@ -558,6 +559,15 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
           ? Promise.resolve().then(() => getDocxDefaultFontFamily(docxBytes)).catch(() => null)
           : Promise.resolve(null),
       ]);
+      // pptx 편집기가 슬라이드를 실제 크기(4:3 등) 좌표계로 그리기 위한 값. presentation.xml 하나만
+      // 압축 해제한다(filter) — 큰 덱이라도 미디어 파트는 풀지 않는다.
+      const slideSize =
+        view.meta.ext === 'pptx'
+          ? await store
+              .readOriginal(view.meta.id, view.meta.ext)
+              .then((bytes) => readSlideSizeEmu(unzipSync(bytes, { filter: (f) => f.name === 'ppt/presentation.xml' })))
+              .catch(() => null)
+          : null;
       return {
         success: true,
         data: {
@@ -575,6 +585,7 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
           pageSetup,
           defaultFontSizePt,
           defaultFontFamily,
+          slideSize,
         },
       };
     },
