@@ -124,7 +124,7 @@ export interface GridDocument {
  * (routes/viewer.ts의 loadGridUncached 참고) — 기존 문서를 한꺼번에 마이그레이션하지 않는다(그 자체가
  * 새로운 리스크이므로). 앞으로 계산 로직이 바뀔 때마다(예: 새로운 함수 지원, 다른 계산 버그 수정)
  * 이 값을 올리면 같은 메커니즘이 그대로 재사용된다. */
-export const GRID_CACHE_FORMAT_VERSION = 3;
+export const GRID_CACHE_FORMAT_VERSION = 4;
 
 /** JSONL 헤더(1행): 셀 데이터를 제외한 시트 메타 정보 */
 export interface GridHeader {
