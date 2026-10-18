@@ -54,6 +54,8 @@ export interface SlideShapeMeta {
   /** 원본 도형의 "보이는 모양" 중 레이아웃·마스터에서 물려받는 값(src/pptx/inheritance.ts) —
    * 편집 캔버스 표시 전용, 저장 경로는 쓰지 않는다. 시딩 때만 채워지고 없으면 기본(위쪽/18pt/왼쪽). */
   readonly anchor?: 't' | 'ctr' | 'b';
+  /** 줄바꿈 안 함(bodyPr wrap="none") — 글자가 상자 너비를 넘어도 한 줄로 그린다. */
+  readonly wrapNone?: boolean;
   readonly defaultSizePt?: number;
   readonly defaultAlign?: 'l' | 'ctr' | 'r' | 'just';
   /** 목록 수준 0~8의 글머리·들여쓰기(pt)·크기(pt) — inheritance.ts LevelLook과 같은 모양. */

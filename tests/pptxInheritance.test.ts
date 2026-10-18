@@ -112,3 +112,52 @@ describe('resolveSlideShapeLooks: 그린 도형의 글자는 기본 가운데', 
     expect(looks.get('8')?.defaultAlign).toBe('l');
   });
 });
+
+describe('resolveSlideShapeLooks: 줄바꿈 안 함(bodyPr wrap="none")', () => {
+  const zip = deck();
+  zip['ppt/slides/slide1.xml'] = enc(
+    `<p:sld ${NS}>` +
+      tree(
+        sp(5, '', xfrm(0, 0, 100, 100), '<a:bodyPr wrap="none"><a:spAutoFit/></a:bodyPr>') +
+        sp(6, '', xfrm(0, 0, 100, 100), '<a:bodyPr wrap="square"/>') +
+        sp(7, '', xfrm(0, 0, 100, 100), '<a:bodyPr/>') +
+        sp(2, '<p:ph type="ctrTitle"/>', '', '<a:bodyPr/>'),
+      ) +
+      '</p:sld>',
+  );
+  zip['ppt/slideLayouts/slideLayout1.xml'] = enc(
+    `<p:sldLayout ${NS}>` +
+      tree(sp(2, '<p:ph type="ctrTitle"/>', xfrm(1, 2, 3, 4), '<a:bodyPr wrap="none"/>')) +
+      '</p:sldLayout>',
+  );
+  const looks = resolveSlideShapeLooks(zip, 'slide1.xml');
+
+  test('wrap="none"이면 wrapNone, square·미지정이면 아님', () => {
+    expect(looks.get('5')?.wrapNone).toBe(true);
+    expect(looks.get('6')?.wrapNone).toBe(false);
+    expect(looks.get('7')?.wrapNone).toBe(false);
+  });
+
+  test('개체 틀은 레이아웃의 wrap="none"을 물려받는다', () => {
+    expect(looks.get('2')?.wrapNone).toBe(true);
+  });
+});
+
+describe('resolveSlideShapeLooks: 그룹 안 도형', () => {
+  const zip = deck();
+  zip['ppt/slides/slide1.xml'] = enc(
+    `<p:sld ${NS}>` +
+      tree(
+        '<p:grpSp><p:nvGrpSpPr><p:cNvPr id="30" name="g"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>' +
+          '<p:grpSp><p:nvGrpSpPr><p:cNvPr id="31" name="g2"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>' +
+          sp(9, '', xfrm(0, 0, 100, 100), '<a:bodyPr wrap="none" anchor="b"/><a:lstStyle><a:lvl1pPr><a:defRPr sz="3200"/></a:lvl1pPr></a:lstStyle>') +
+          '</p:grpSp></p:grpSp>',
+      ) +
+      '</p:sld>',
+  );
+  const looks = resolveSlideShapeLooks(zip, 'slide1.xml');
+
+  test('중첩 그룹 안 도형도 자기 bodyPr·목록 스타일을 갖는다', () => {
+    expect(looks.get('9')).toMatchObject({ wrapNone: true, anchor: 'b', defaultSizePt: 32 });
+  });
+});

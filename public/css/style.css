@@ -1427,6 +1427,7 @@ body.home-hidden .doclist-link { display: none !important; }
 /* 텍스트 정렬은 문단의 style="text-align" 인라인(textSchema toDOM)으로 들어온다 — 문단 기본
    여백을 없애 저장 파일(PowerPoint 렌더링)과 줄 간격을 맞춘다. */
 .slide-textbox .ProseMirror p { margin: 0; }
+.slide-textbox.slide-nowrap .ProseMirror { white-space: pre; }
 
 /* 목록 수준별 글머리·들여쓰기·크기 — 값은 JS가 텍스트 상자마다 --lN-* 변수로 넣는다(레이아웃·
    마스터 상속 결과). marL/indent는 pt 단위 숫자라 슬라이드 축척(--slide-pt)을 곱한다. 첫 줄은

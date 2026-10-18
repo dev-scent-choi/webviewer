@@ -133,3 +133,34 @@ describe('글자의 테마 색: 화면엔 풀어서, 저장엔 원본 그대로'
     );
   });
 });
+
+describe('parseSlideVisuals: 그라데이션 채우기와 레이아웃·마스터 글자 도형', () => {
+  test('gradFill은 위치(pos) 순으로 정렬한 CSS linear-gradient — 첫 번째로 적힌 정지점 색 하나로 칠하지 않는다', () => {
+    const inner =
+      `<p:sp><p:nvSpPr><p:cNvPr id="9" name="g"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr>${xfrm(1, 2, 3, 4)}` +
+      '<a:gradFill><a:gsLst><a:gs pos="100000"><a:srgbClr val="4C5E78"/></a:gs><a:gs pos="38000"><a:srgbClr val="0339A6"/></a:gs></a:gsLst>' +
+      '<a:lin ang="0" scaled="0"/></a:gradFill></p:spPr></p:sp>';
+    const v = parseSlideVisuals(deck({ slideInner: inner }), 'slide1.xml');
+    expect(v.find((x) => x.x === 1 && x.y === 2)?.fill).toBe('linear-gradient(90deg, #0339A6 38%, #4C5E78 100%)');
+  });
+
+  test('레이아웃의 글자 도형(쪽 번호·꼬리말 문구 등, 개체 틀 아님)은 원본 렌더링에서 잘라 그린다', () => {
+    const zipEntries = deck();
+    const layoutXml = new TextDecoder().decode(zipEntries['ppt/slideLayouts/slideLayout1.xml']);
+    zipEntries['ppt/slideLayouts/slideLayout1.xml'] = enc(
+      layoutXml.replace(
+        '</p:spTree>',
+        `<p:sp><p:nvSpPr><p:cNvPr id="7" name="footer"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr><p:spPr>${xfrm(500, 600, 700, 80)}</p:spPr>` +
+          '<p:txBody><a:bodyPr/><a:p><a:r><a:t>사용자 매뉴얼</a:t></a:r></a:p></p:txBody></p:sp>' +
+          `<p:sp><p:nvSpPr><p:cNvPr id="8" name="num"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr>${xfrm(900, 600, 50, 80)}</p:spPr>` +
+          '<p:txBody><a:bodyPr/><a:p><a:fld id="{1}" type="slidenum"><a:t>‹#›</a:t></a:fld></a:p></p:txBody></p:sp>' +
+          `<p:sp><p:nvSpPr><p:cNvPr id="10" name="empty"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr>${xfrm(950, 600, 50, 80)}</p:spPr>` +
+          '<p:txBody><a:bodyPr/><a:p><a:r><a:t> </a:t></a:r></a:p></p:txBody></p:sp></p:spTree>',
+      ),
+    );
+    const v = parseSlideVisuals(zipEntries, 'slide1.xml');
+    expect(v).toContainEqual({ kind: 'snapshot', x: 500, y: 600, w: 700, h: 80, snapshot: true });
+    expect(v).toContainEqual({ kind: 'snapshot', x: 900, y: 600, w: 50, h: 80, snapshot: true });
+    expect(v.some((x) => x.x === 950)).toBe(false); // 공백뿐인 글자 도형(채우기 없음)은 그릴 것이 없다
+  });
+});

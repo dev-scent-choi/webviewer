@@ -521,6 +521,7 @@ function renderCanvasForSlide(entryId: string): void {
     // 레이아웃·마스터에서 물려받은 "보이는 모양"(src/pptx/inheritance.ts) — 서식이 없는 글자의 기본
     // 크기·정렬과 상자 안 세로 맞춤. 도형(geom)은 클래스가 이미 세로 가운데를 맡는다.
     if (meta.anchor && !meta.geom) box.classList.add(`slide-anchor-${meta.anchor}`);
+    if (meta.wrapNone) box.classList.add('slide-nowrap');
     if (meta.defaultSizePt) view.dom.style.fontSize = `calc(${meta.defaultSizePt} * var(--slide-pt, 1pt))`;
     const alignCss = { ctr: 'center', r: 'right', just: 'justify', l: '' }[meta.defaultAlign ?? 'l'];
     if (alignCss) view.dom.style.textAlign = alignCss;

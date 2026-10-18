@@ -38,6 +38,8 @@ export interface InheritedShapeLook {
   readonly w: number | null;
   readonly h: number | null;
   readonly anchor: Anchor;
+  /** bodyPr wrap="none" — 상자 너비에서 줄을 바꾸지 않는다(PowerPoint의 "도형의 텍스트 줄 바꿈" 끔). */
+  readonly wrapNone: boolean;
   /** 1수준 문단의 기본 글자 크기(pt) — 글자에 크기 서식이 없을 때 보이는 크기. */
   readonly defaultSizePt: number;
   /** 1수준 문단의 기본 정렬 — 문단에 정렬이 없을 때 보이는 정렬. */
@@ -102,6 +104,7 @@ interface ShapeLook {
   readonly w: number | null;
   readonly h: number | null;
   readonly anchor: Anchor | undefined;
+  readonly wrap: 'none' | 'square' | undefined;
   readonly sizePt: number | undefined;
   readonly align: Align | undefined;
   readonly levels: readonly PartialLevel[];
@@ -165,7 +168,12 @@ function shapeLooks(root: XmlNode | null, rootTag: string): ShapeLook[] {
     | XmlNode
     | undefined;
   if (!spTree) return [];
-  return asArray(spTree['p:sp'] as XmlNode | XmlNode[] | undefined).map((sp) => {
+  // 그룹(<p:grpSp>, 중첩 포함) 안 도형도 모은다 — 실제 문서의 제목 상자가 그룹 안에 든 경우가 흔하다.
+  const collect = (node: XmlNode): XmlNode[] => [
+    ...asArray(node['p:sp'] as XmlNode | XmlNode[] | undefined),
+    ...asArray(node['p:grpSp'] as XmlNode | XmlNode[] | undefined).flatMap(collect),
+  ];
+  return collect(spTree).map((sp) => {
     const nvSpPr = sp['p:nvSpPr'] as XmlNode | undefined;
     const phNode = (nvSpPr?.['p:nvPr'] as XmlNode | undefined)?.['p:ph'] as XmlNode | string | undefined;
     // <p:ph/>처럼 속성이 하나도 없으면 파서가 빈 문자열을 준다 — 그것도 "개체 틀 있음"이다.
@@ -182,6 +190,7 @@ function shapeLooks(root: XmlNode | null, rootTag: string): ShapeLook[] {
     const txBody = sp['p:txBody'] as XmlNode | undefined;
     const bodyPr = txBody?.['a:bodyPr'] as XmlNode | undefined;
     const anchorRaw = typeof bodyPr === 'object' ? (bodyPr['@_anchor'] as string | undefined) : undefined;
+    const wrapRaw = typeof bodyPr === 'object' ? (bodyPr['@_wrap'] as string | undefined) : undefined;
     const levels = levelsOf(txBody?.['a:lstStyle'] as XmlNode | undefined);
     const { sizePt, align } = levels[0];
     return {
@@ -198,6 +207,7 @@ function shapeLooks(root: XmlNode | null, rootTag: string): ShapeLook[] {
       w: num(ext?.['@_cx']),
       h: num(ext?.['@_cy']),
       anchor: anchorRaw && ANCHORS.has(anchorRaw) ? (anchorRaw as Anchor) : undefined,
+      wrap: wrapRaw === 'none' || wrapRaw === 'square' ? wrapRaw : undefined,
       sizePt,
       align,
     };
@@ -266,7 +276,7 @@ export function resolveSlideShapeLooks(
     const master = shape.ph ? matchMaster(shape.ph, masterShapes) : undefined;
     const cls = shape.ph ? phClass(shape.ph.type) : 'other';
     const chain = [shape, layout, master];
-    const pick = <K extends 'anchor' | 'sizePt' | 'align'>(key: K) => chain.find((s) => s?.[key] !== undefined)?.[key];
+    const pick = <K extends 'anchor' | 'wrap' | 'sizePt' | 'align'>(key: K) => chain.find((s) => s?.[key] !== undefined)?.[key];
     // 위치는 네 값을 한 묶음으로 물려받는다(슬라이드가 위치만 바꾸고 크기는 안 쓰는 경우는 없다).
     const positioned = chain.find((s) => s && s.x !== null && s.y !== null && s.w !== null && s.h !== null);
     result.set(shape.id, {
@@ -275,6 +285,7 @@ export function resolveSlideShapeLooks(
       w: positioned?.w ?? null,
       h: positioned?.h ?? null,
       anchor: (pick('anchor') as Anchor | undefined) ?? 't',
+      wrapNone: pick('wrap') === 'none',
       defaultSizePt:
         (pick('sizePt') as number | undefined) ?? classStyle[cls].sizePt ?? defaultText.sizePt ?? 18,
       // 그린 도형(사각형·화살표 등, 글상자 아님)은 도형·개체 틀 어디에도 정렬이 없으면 가운데 —

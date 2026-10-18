@@ -557,14 +557,38 @@ function fillColorFromSpPr(spPr: XmlNode | undefined, theme?: ThemeColors, style
     return val ? `#${val}` : undefined;
   }
   const grad = spPr?.['a:gradFill'] as XmlNode | undefined;
-  if (grad && theme) {
-    const stops = asArray<XmlNode>((grad['a:gsLst'] as XmlNode | undefined)?.['a:gs'] as XmlNode | XmlNode[] | undefined);
-    if (stops[0]) return theme.resolve(stops[0]);
-  }
+  if (grad && theme) return gradientCss(grad, theme);
   if (spPr?.['a:blipFill'] !== undefined || spPr?.['a:pattFill'] !== undefined) return undefined;
   const fillRef = style?.['a:fillRef'] as XmlNode | undefined;
   if (fillRef && theme && Number(fillRef['@_idx'] ?? 0) > 0) return theme.resolve(fillRef);
   return undefined;
+}
+
+/** <a:gradFill> → CSS 그라데이션. 정지점은 파일에 적힌 순서가 아니라 위치(pos) 순으로 정렬한다
+ * (PowerPoint는 끝 정지점을 먼저 적기도 한다). 선형 각도: OOXML 0°=왼→오른쪽, CSS 90°=to right. */
+function gradientCss(grad: XmlNode, theme: ThemeColors): string | undefined {
+  const stops = asArray<XmlNode>((grad['a:gsLst'] as XmlNode | undefined)?.['a:gs'] as XmlNode | XmlNode[] | undefined)
+    .map((gs) => ({ pos: Number(gs['@_pos'] ?? 0) / 1000, color: theme.resolve(gs) }))
+    .filter((stop): stop is { pos: number; color: string } => Boolean(stop.color))
+    .sort((a, b) => a.pos - b.pos);
+  if (stops.length === 0) return undefined;
+  if (stops.length === 1) return stops[0].color;
+  const round = (n: number) => Number(n.toFixed(2));
+  const list = stops.map((stop) => `${stop.color} ${round(stop.pos)}%`).join(', ');
+  if (grad['a:path'] !== undefined) return `radial-gradient(${list})`;
+  const deg = Number((grad['a:lin'] as XmlNode | undefined)?.['@_ang'] ?? 0) / 60000;
+  return `linear-gradient(${round((deg + 90) % 360)}deg, ${list})`;
+}
+
+/** 글자 도형에 실제로 보이는 글자(공백 아닌 a:t, 또는 쪽 번호 같은 필드)가 있는지. */
+function hasVisibleText(txBody: XmlNode | undefined): boolean {
+  for (const para of asArray<XmlNode>(txBody?.['a:p'] as XmlNode | XmlNode[] | undefined)) {
+    if (para['a:fld'] !== undefined) return true;
+    for (const run of asArray<XmlNode>(para['a:r'] as XmlNode | XmlNode[] | undefined)) {
+      if (String(run['a:t'] ?? '').trim() !== '') return true;
+    }
+  }
+  return false;
 }
 
 function graphicFrameXfrm(gf: XmlNode) {
@@ -696,15 +720,20 @@ export function parseSlideVisuals(zipEntries: Record<string, Uint8Array>, source
       if (template && isPlaceholder(sp, 'p:nvSpPr')) continue; // 레이아웃·마스터의 개체 틀은 보이지 않는 "틀"
       const spPr = sp['p:spPr'] as XmlNode | undefined;
       const fill = fillColorFromSpPr(spPr, theme, sp['p:style'] as XmlNode | undefined);
-      // 글자가 든 도형의 "글자"는 parseSlideShapes가 편집 대상으로 다룬다 — 하지만 그 도형에 채우기
-      // 색이 있으면(색 칠한 사각형 위의 제목 등, 실사용 문서에 매우 흔함) 예전엔 배경색이 통째로
-      // 빠져 글자만 허공에 떠 보였다. 채우기가 있을 때만 그 색 판을 텍스트 상자 아래에 깔아 준다.
-      // (레이아웃·마스터의 글자 도형은 편집 대상이 아니므로 채우기만 그린다.)
-      if (sp['p:txBody'] && !fill) continue;
       const xfrm = spPr?.['a:xfrm'] as XmlNode | undefined;
       const off = xfrm?.['a:off'] as XmlNode | undefined;
       const ext = xfrm?.['a:ext'] as XmlNode | undefined;
       const pos = applyGroupTransforms(transforms, emuAttr(off, '@_x'), emuAttr(off, '@_y'), emuAttr(ext, '@_cx'), emuAttr(ext, '@_cy'));
+      // 레이아웃·마스터의 글자 도형(꼬리말 문구, 쪽 번호 등)은 편집 대상이 아니다 — 글자(쪽 번호는
+      // 슬라이드마다 다르다)까지 원본 렌더링에서 잘라 그대로 보여준다.
+      if (template && hasVisibleText(sp['p:txBody'] as XmlNode | undefined) && pos.x !== null && pos.y !== null) {
+        visuals.push({ kind: 'snapshot', ...pos, snapshot: true });
+        continue;
+      }
+      // 글자가 든 도형의 "글자"는 parseSlideShapes가 편집 대상으로 다룬다 — 하지만 그 도형에 채우기
+      // 색이 있으면(색 칠한 사각형 위의 제목 등, 실사용 문서에 매우 흔함) 예전엔 배경색이 통째로
+      // 빠져 글자만 허공에 떠 보였다. 채우기가 있을 때만 그 색 판을 텍스트 상자 아래에 깔아 준다.
+      if (sp['p:txBody'] && !fill) continue;
       const geom = presetGeomFromSpPr(spPr);
       visuals.push({ kind: 'shape', ...pos, fill, ...(geom ? { geom } : {}) });
     }
