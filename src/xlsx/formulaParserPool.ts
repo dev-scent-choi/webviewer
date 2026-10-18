@@ -1,4 +1,6 @@
 import FormulaParser, { type CellRef, type RangeRef } from 'fast-formula-parser';
+// 모든 서버 수식 평가가 이 풀을 거치므로 여기서 한 번 적용한다(엑셀처럼 날짜 텍스트를 산술에 허용).
+import './formulaExcelCoercion.js';
 import { formulaFunctions, formulaFunctionsNeedContext } from '../client/formulaOverrides.js';
 
 /**

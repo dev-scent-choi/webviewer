@@ -2,6 +2,7 @@ import ExcelJS from 'exceljs';
 import type { DocumentStore } from './storage.js';
 import type { DocumentMeta } from './types.js';
 import { buildSheetNameIndex, computeGridCellDisplay } from './xlsx/formulas.js';
+import { isDateNumFmt, serialToDateText } from './collab/cellValueShared.js';
 
 /** 대형 시트를 훑는 동기 반복문 중간에 이벤트 루프에 제어권을 돌려준다 — 이게 없으면 큰 xlsx를
  * 열 때(파싱이든 동시편집 시딩이든) 그 몇 초~몇십 초 동안 Node가 단일 스레드라 그 문서를 연
@@ -73,6 +74,8 @@ export interface GridStyle {
   /** 숫자 표시 형식(쉼표/통화/백분율) + 소수 자릿수. */
   readonly nf?: NumberFormatKind;
   readonly nd?: number;
+  /** 날짜 표시 형식 칸(gridShared.ts CellStyleAttrs.df와 같은 의미). */
+  readonly df?: 1;
   /** 시트 보호가 걸려 있고 이 셀이 잠겨 있음(=편집 불가) */
   readonly lk?: 1;
   /** 엑셀 데이터 유효성 검사(정수/소수)가 걸려 있음 */
@@ -418,6 +421,8 @@ function formatFormulaResult(value: unknown, numFmt?: string): string {
   if (value === null || value === undefined) return '';
   if (value instanceof Date) return formatDate(value);
   if (typeof value === 'boolean') return value ? 'TRUE' : 'FALSE';
+  // 날짜 형식 칸의 수식 결과(날짜 일련번호, 예: =A4+7 → 46215)는 엑셀처럼 날짜로 보여준다.
+  if (typeof value === 'number' && Number.isFinite(value) && isDateNumFmt(numFmt)) return serialToDateText(value);
   if (typeof value === 'number') {
     // 부동소수 잡음(0.1+0.2=0.30000000000000004) 제거 — formatComputedValueForStorage
     // (xlsx/formulas.ts)가 동시편집기 쪽에 쓰는 것과 같은 반올림 규칙. 절댓값이 너무 커서
@@ -643,6 +648,7 @@ export function extractStyle(
     w?: 1;
     nf?: NumberFormatKind;
     nd?: number;
+    df?: 1;
     lk?: 1;
     nu?: 1;
     bt?: BorderWeight;
@@ -688,6 +694,8 @@ export function extractStyle(
   if (nf) {
     style.nf = nf;
     if (nd) style.nd = nd;
+  } else if (isDateNumFmt(cell.numFmt)) {
+    style.df = 1;
   }
   // 시트 보호가 걸려 있을 때만 잠금 여부가 실제로 의미를 가진다(엑셀도 그렇게 동작함) — 그렇지
   // 않은 대부분의 일반 문서는 셀마다 protection.locked가 true(엑셀 기본값)라도 편집 가능해야 한다.

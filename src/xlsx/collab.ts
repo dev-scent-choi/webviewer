@@ -20,6 +20,7 @@ import type { GridCell, GridDocument, GridStyle } from '../spreadsheet.js';
 import { parseXlsxToGrid, unformattedCellValue, yieldToEventLoop, YIELD_EVERY_N_ROWS } from '../spreadsheet.js';
 import type { LazyGridSheetMeta, LazyGridStore } from './lazyGridStore.js';
 import { getRow } from './lazyGridStore.js';
+import { dateTextToDate, parseTypedNumber } from '../collab/cellValueShared.js';
 
 
 export function toCellStyleAttrs(style: GridStyle): CellStyleAttrs {
@@ -37,6 +38,7 @@ export function toCellStyleAttrs(style: GridStyle): CellStyleAttrs {
   if (style.fs) attrs.fs = style.fs;
   if (style.nf) attrs.nf = style.nf;
   if (style.nd) attrs.nd = style.nd;
+  if (style.df) attrs.df = 1;
   if (style.lk) attrs.lk = 1;
   if (style.nu) attrs.nu = 1;
   if (style.bt) attrs.bt = style.bt;
@@ -71,6 +73,7 @@ export function fromCellStyleAttrs(attrs: CellStyleAttrs): GridStyle {
   if (attrs.wrap) style.w = 1;
   if (attrs.nf) style.nf = attrs.nf;
   if (attrs.nd) style.nd = attrs.nd;
+  if (attrs.df) style.df = 1;
   if (attrs.lk) style.lk = 1;
   if (attrs.nu) style.nu = 1;
   if (attrs.bt) style.bt = attrs.bt;
@@ -450,8 +453,11 @@ export async function seedGridStructureOnly(ydoc: Y.Doc, sheets: readonly LazyGr
   }
 }
 
-/** '='로 시작하면 수식으로 저장한다(계산은 하지 않음 — 실제 결과는 저장 후 엑셀/뷰어에서 재계산된다). */
-export function coerceCellValue(raw: string): string | number | { formula: string } {
+/** '='로 시작하면 수식으로 저장한다(계산은 하지 않음 — 실제 결과는 저장 후 엑셀/뷰어에서 재계산된다).
+ * 날짜 모양 텍스트("2026-07-05")는 엑셀 날짜로, "1,000"/"50%"/"₩1,000"은 엑셀이 입력 시 하듯
+ * 숫자로 저장한다 — 예전엔 전부 문자열로 저장돼, 편집한 날짜·금액 칸이 받은 엑셀 파일에서 계산·
+ * 정렬이 안 되는 "텍스트 숫자"가 됐다. */
+export function coerceCellValue(raw: string): string | number | Date | { formula: string } {
   const trimmed = raw.trim();
   if (trimmed.startsWith('=') && trimmed.length > 1) {
     return { formula: trimmed.slice(1) };
@@ -460,7 +466,31 @@ export function coerceCellValue(raw: string): string | number | { formula: strin
     const num = Number(trimmed);
     if (Number.isFinite(num)) return num;
   }
+  const date = dateTextToDate(trimmed);
+  if (date) return date;
+  const typed = parseTypedNumber(trimmed);
+  if (typed) return typed.value;
   return raw;
+}
+
+/** 내보내기에서 칸 하나를 쓴다(값 + 서식). 값이 coerceCellValue로 날짜/백분율/금액이 됐는데 칸에
+ * 해당 표시 형식이 없으면("일반") 엑셀이 입력 시 자동으로 붙이는 형식을 붙여 준다 — 그러지 않으면
+ * 날짜가 46208 같은 일련번호로, 50%가 0.5로 보인다. */
+export function writeExportCellValue(cell: ExcelJS.Cell, text: string, style: CellStyleAttrs | undefined): void {
+  const value = text === '' ? null : coerceCellValue(text);
+  cell.value = value;
+  applyStyleToCell(cell, style);
+  if (value === null || cell.numFmt !== 'General') return;
+  if (value instanceof Date) {
+    cell.numFmt = value.getUTCHours() === 0 && value.getUTCMinutes() === 0 ? 'yyyy-mm-dd' : 'yyyy-mm-dd hh:mm';
+    return;
+  }
+  const typed = parseTypedNumber(text.trim());
+  if (typed) {
+    const decimals = typed.decimals ? `.${'0'.repeat(typed.decimals)}` : '';
+    cell.numFmt =
+      typed.kind === 'percent' ? `0${decimals}%` : typed.kind === 'currency' ? `"₩"#,##0${decimals}` : `#,##0${decimals}`;
+  }
 }
 
 const ALIGN_TO_EXCEL: Record<'l' | 'c' | 'r', ExcelJS.Alignment['horizontal']> = {
@@ -482,7 +512,7 @@ const BORDER_WEIGHT_TO_EXCEL: Record<1 | 2, ExcelJS.BorderStyle> = {
 const PX_TO_PT = 72 / 96;
 
 function numFmtStringFor(style: CellStyleAttrs): string | undefined {
-  if (!style.nf) return undefined;
+  if (!style.nf) return style.df ? 'yyyy-mm-dd' : undefined;
   const decimals = style.nd ? `.${'0'.repeat(style.nd)}` : '';
   switch (style.nf) {
     case 'number': return `#,##0${decimals}`;
@@ -738,10 +768,8 @@ export async function exportXlsxFromGrid(
     if (!dirtyList) continue;
     for (const { row: r, col: c, cell } of dirtyList) {
       if (r >= target.rowCount || c >= target.colCount) continue; // 이후 잘려나간 칸
-      const text = cellText(cell);
-      sheet.getCell(r + 1, c + 1).value = text === '' ? null : coerceCellValue(text);
       const style = cellStyle(cell, store);
-      applyStyleToCell(sheet.getCell(r + 1, c + 1), style ? toCellStyleAttrs(style) : undefined);
+      writeExportCellValue(sheet.getCell(r + 1, c + 1), cellText(cell), style ? toCellStyleAttrs(style) : undefined);
       await maybeYield();
     }
   }

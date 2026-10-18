@@ -955,6 +955,49 @@ describe('room.ts: xlsx seeding is windowed by subscribed page', () => {
     },
     60_000,
   );
+
+  test(
+    '값과 서식이 한 트랜잭션으로 같은 새 칸에 들어와도 둘 다 남는다 ("50%" 입력 → 값 0.5 + 백분율 서식) — ' +
+      '두 핸들러가 각자 await한 낡은 사본으로 서로의 필드를 덮어쓰던 경쟁 회귀 방지',
+    async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+      const { joinEditSession, getRoomLazyGridForTest, getCurrentBytes } = await import('../src/collab/room.js');
+      const { GRID_CELLS_MAP, GRID_STYLES_MAP, gridCellKey } = await import('../src/collab/gridShared.js');
+      const { getCell } = await import('../src/xlsx/lazyGridStore.js');
+
+      const docId = randomUUID();
+      await seedDoc(docId, await makeRichlyStyledXlsx());
+      const socket = new FakeSocket();
+      await joinEditSession(socket as never, {} as never, docId, 'xlsx', [], false);
+      await flushEventLoop();
+
+      // 원본 범위 밖 새 칸(B1) — 값과 서식을 클라이언트처럼 한 트랜잭션에 담아 보낸다
+      const key = gridCellKey(0, 0, 1);
+      const scratch = new Y.Doc();
+      scratch.clientID = 0xfffffffe;
+      scratch.transact(() => {
+        scratch.getMap<string>(GRID_CELLS_MAP).set(key, '0.5');
+        scratch.getMap(GRID_STYLES_MAP).set(key, { nf: 'percent' });
+      });
+      const encoder = encoding.createEncoder();
+      encoding.writeVarUint(encoder, MESSAGE_SYNC);
+      writeUpdate(encoder, Y.encodeStateAsUpdate(scratch));
+      socket.emit('message', encoding.toUint8Array(encoder));
+      await flushEventLoop();
+
+      const lazyGrid = getRoomLazyGridForTest(docId)!;
+      const cell = (await getCell(lazyGrid, 0, 0, 1)) as { v: string; s?: number };
+      expect(cell.v).toBe('0.5');
+      expect(lazyGrid.styles[cell.s!].nf).toBe('percent');
+
+      const reopened = new ExcelJS.Workbook();
+      await reopened.xlsx.load((await getCurrentBytes(docId))! as unknown as ArrayBuffer);
+      const saved = reopened.getWorksheet('Sheet1')!.getCell('B1');
+      expect(saved.value).toBe(0.5);
+      expect(saved.numFmt).toBe('0%');
+    },
+    60_000,
+  );
 });
 
 /**

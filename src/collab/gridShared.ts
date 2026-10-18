@@ -124,6 +124,10 @@ export interface CellStyleAttrs {
   readonly nf?: NumberFormatKind;
   /** nf가 있을 때만 의미 있는 소수 자릿수. 없으면 0. */
   readonly nd?: number;
+  /** 원본 표시 형식이 날짜(yyyy-mm-dd 등)인 칸 — 수식 결과(날짜 일련번호, 예: =A4+7)를 숫자가 아니라
+   * 날짜로 보여주기 위한 표시. nf와 별개 필드다: nf에 'date'를 섞으면 서식 드롭다운·내보내기 쪽
+   * switch가 전부 영향을 받는다(spreadsheet.ts classifyNumFmt 주석 참고). */
+  readonly df?: 1;
   /** 시트 보호가 걸려 있고 이 셀이 잠겨 있음(=편집 불가) — 엑셀의 "시트 보호 + 셀 잠금" 그대로. */
   readonly lk?: 1;
   /** 엑셀 데이터 유효성 검사(정수/소수)가 걸려 있음 — 숫자가 아닌 값 입력을 막고 안내를 띄운다. */

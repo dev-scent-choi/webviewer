@@ -468,6 +468,18 @@ function recordCellChange(
   }
 }
 
+/** 이미 편집된(dirty) 칸이면 그 최신 값을, 아니면 호출자가 await로 읽어 둔 값을 돌려준다(동기). */
+function latestCell(
+  store: LazyGridStore,
+  sheetIdx: number,
+  row: number,
+  col: number,
+  fallback: GridCell | 0 | undefined,
+): GridCell | 0 | undefined {
+  const key = gridCellKey(sheetIdx, row, col);
+  return store.dirtyOverlay.has(key) ? store.dirtyOverlay.get(key) : fallback;
+}
+
 async function applyCellsChangeToCanonical(
   room: Room,
   store: LazyGridStore,
@@ -523,7 +535,13 @@ async function applyCellsChangeToCanonical(
       continue;
     }
     const value = cells.get(c.key) ?? '';
-    const keptStyle = before !== 0 && before !== undefined ? before.s : undefined;
+    // 서식은 await 전에 읽은 before가 아니라 "지금" 값에서 가져온다 — 같은 칸에 값과 서식이 한
+    // 트랜잭션으로 함께 들어오면(예: "50%" 입력 → 값 + 백분율 서식) 이 핸들러와 서식 핸들러가 동시에
+    // getCell을 await했다가 각자 낡은 사본으로 덮어써, 늦게 쓴 쪽이 다른 쪽 필드를 지웠다(실측: 새
+    // 행에 친 값이 저장 파일에서 빈 칸이 됨). await 이후의 이 구간은 동기라 여기서 다시 읽으면 순서와
+    // 무관하게 둘 다 남는다.
+    const latest = latestCell(store, c.sheetIdx, c.row, c.col, before);
+    const keptStyle = latest !== 0 && latest !== undefined ? latest.s : undefined;
     const after: GridCell | 0 = value === '' ? 0 : { v: value, ...(keptStyle !== undefined ? { s: keptStyle } : {}) };
     setDirtyCell(store, c.sheetIdx, c.row, c.col, after);
     recordCellChange(room, c.sheetIdx, c.row, c.col, before, after, viewer);
@@ -714,8 +732,10 @@ async function applyStylesChangeToCanonical(
       c.attrs,
     );
     const styleIndex = findOrAddGridStyleIndex(store, fromCellStyleAttrs(merged));
+    // 값도 await 이전 사본(current)이 아니라 지금 값으로 — applyCellsChangeToCanonical의 같은 주석 참고.
+    const latest = latestCell(store, c.sheetIdx, c.row, c.col, current);
     setDirtyCell(store, c.sheetIdx, c.row, c.col, {
-      v: current === 0 || current === undefined ? '' : current.v,
+      v: latest === 0 || latest === undefined ? '' : latest.v,
       s: styleIndex,
     });
   }

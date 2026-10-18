@@ -1220,6 +1220,10 @@ h2 {
   vertical-align: middle;
   background-clip: padding-box;
 }
+/* 엑셀 기본 정렬(명시 정렬이 없는 칸만 — renderGridViewport가 판단해 붙인다): 숫자·날짜 오른쪽,
+   논리값 가운데. 명시 정렬(.gsN 규칙)은 이 클래스가 애초에 붙지 않으므로 충돌하지 않는다. */
+.grid-table td.g-num { text-align: right; }
+.grid-table td.g-bool { text-align: center; }
 
 /* 값이 있는 칸의 실제 내용은 이 안에 들어간다 — 기본은 자기 칸 폭 그대로(block이 부모 폭을
    채움) 안에서 잘리지만(overflow:hidden), 오른쪽에 빈 칸이 이어지면 JS가 그만큼의 폭을 인라인

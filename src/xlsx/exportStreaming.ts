@@ -6,7 +6,7 @@ import ExcelJS from 'exceljs';
 import { parseGridCellKey, type GridStructureOpRecord } from '../collab/gridShared.js';
 import type { GridCell } from '../spreadsheet.js';
 import { yieldToEventLoop, YIELD_EVERY_N_ROWS } from '../spreadsheet.js';
-import { applyStyleToCell, cellStyle, cellText, coerceCellValue, toCellStyleAttrs, type XlsxExportOptions } from './collab.js';
+import { cellStyle, cellText, toCellStyleAttrs, writeExportCellValue, type XlsxExportOptions } from './collab.js';
 import type { LazyGridStore } from './lazyGridStore.js';
 
 /**
@@ -162,9 +162,6 @@ function writeExportCell(
   cell: GridCell | 0,
   store: LazyGridStore,
 ): void {
-  const text = cellText(cell);
-  const dstCell = dstRow.getCell(col + 1);
-  dstCell.value = text === '' ? null : coerceCellValue(text);
   const style = cellStyle(cell, store);
-  applyStyleToCell(dstCell, style ? toCellStyleAttrs(style) : undefined);
+  writeExportCellValue(dstRow.getCell(col + 1), cellText(cell), style ? toCellStyleAttrs(style) : undefined);
 }

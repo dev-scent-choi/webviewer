@@ -1224,6 +1224,24 @@ function markMatches(rawText, query) {
 // 이 정규식과 일치하는 텍스트는 항상 날짜다(리터럴 날짜 칸은 displayValue가, 수식 결과 날짜는
 // formatFormulaResult가 둘 다 이 formatDate를 그대로 호출한다).
 const DATE_LIKE_TEXT = /^\d{4}-\d{2}-\d{2}( \d{2}:\d{2})?$/;
+/**
+ * 칸의 숫자 표시 형식(style.nf: 백분율/통화/쉼표 + nd 소수 자릿수)을 화면에서만 입힌다 — 동시편집기
+ * (src/client/grid-editor.ts formatNumberForDisplay)와 같은 규칙. 저장된 텍스트는 수식 계산에도
+ * 쓰이는 "값"이라(백분율 칸은 0.4) 서버에서 미리 꾸밀 수 없고, 예전엔 뷰어가 이 단계를 빠뜨려
+ * 40%가 0.4로, ₩2,500이 2,500으로 보였다(편집기에서는 정상 — 실측).
+ */
+function formatGridNumber(text, style) {
+  if (!style || !style.nf || text.trim() === '') return text;
+  const num = Number(text.replace(/[,₩\s]/g, ''));
+  if (!Number.isFinite(num)) return text;
+  const decimals = style.nd || 0;
+  const opts = { minimumFractionDigits: decimals, maximumFractionDigits: decimals };
+  if (style.nf === 'percent') return `${(num * 100).toLocaleString('ko-KR', opts)}%`;
+  if (style.nf === 'currency') return `₩${num.toLocaleString('ko-KR', opts)}`;
+  if (style.nf === 'number') return num.toLocaleString('ko-KR', opts);
+  return text;
+}
+
 function isSpillEligible(style, rawText) {
   if (style) {
     if (style.a === 'c' || style.a === 'r') return false; // 명시적 가운데/오른쪽 정렬 — 절대 안 넘친다
@@ -1334,7 +1352,14 @@ function renderGridViewport() {
       if (isHit) classes.push('g-hit');
       if (hitKey === gridCurrentHit) classes.push('g-hit-current');
       if (gridState.selected && gridState.selected.row === r && gridState.selected.col === c) classes.push('g-selected');
-      const value = isEmpty ? '' : isHit ? markMatches(cell.v, searchState.lastQuery) : escapeHtml(cell.v);
+      const cellStyleObj = isEmpty || cell.s === undefined ? undefined : gridState.styles[cell.s];
+      const shown = isEmpty ? '' : formatGridNumber(cell.v, cellStyleObj);
+      // 엑셀 기본 정렬 — 정렬을 따로 지정하지 않은 칸에서 숫자·날짜는 오른쪽, 논리값은 가운데.
+      // (판정은 넘침 여부와 같은 규칙: isSpillEligible이 "기본 왼쪽 정렬인 텍스트"만 true를 준다.)
+      if (shown && !(cellStyleObj && cellStyleObj.a) && !isSpillEligible(cellStyleObj, shown)) {
+        classes.push(shown === 'TRUE' || shown === 'FALSE' ? 'g-bool' : 'g-num');
+      }
+      const value = isEmpty ? '' : isHit ? markMatches(shown, searchState.lastQuery) : escapeHtml(shown);
       const cls = classes.length > 0 ? ` class="${classes.join(' ')}"` : '';
       const span = merge ? ` colspan="${merge.cs}"${merge.rs > 1 ? ` rowspan="${merge.rs}"` : ''}` : '';
       // 실제 엑셀처럼 — 오른쪽으로 빈 칸이 이어지는 만큼 이 칸의 내용이 넘쳐 보이게 허용한다

@@ -20,6 +20,7 @@ import {
   type SheetStructure,
 } from '../collab/gridShared.js';
 import { dedupeByName, pickPresenceColorForName, renderPresenceAvatars, type AwarenessUserState } from './presence.js';
+import { parseTypedNumber, serialToDateText } from '../collab/cellValueShared.js';
 
 interface Permissions {
   readonly canPrint: boolean;
@@ -449,6 +450,9 @@ async function main(): Promise<void> {
   /** 원본 값(또는 수식 계산 결과)에 셀의 숫자 표시 형식(쉼표/통화/백분율)을 입힌다 — 저장된 값
    * 자체는 절대 안 바꾸고 "화면에 어떻게 보일지"만 바꾼다(수식 계산 결과 표시와 같은 원리). */
   function formatNumberForDisplay(text: string, style: CellStyleAttrs | undefined): string {
+    // 날짜 형식 칸에 숫자(날짜 일련번호 — 예: =A4+7의 계산 결과)가 오면 엑셀처럼 날짜로 보여준다.
+    // 날짜 텍스트 자체("2026-07-05")는 숫자가 아니라 그대로 통과한다.
+    if (style?.df && text.trim() !== '' && Number.isFinite(Number(text))) return serialToDateText(Number(text));
     if (!style?.nf || text.trim() === '') return text;
     const num = Number(text);
     if (!Number.isFinite(num)) return text;
@@ -1006,7 +1010,19 @@ async function main(): Promise<void> {
         cells.delete(key);
         return;
       }
-      cells.set(key, value);
+      // 엑셀처럼 "1,000"/"50%"/"₩1,000" 입력은 텍스트가 아니라 숫자로 저장하고, 칸에 숫자 서식이
+      // 없으면 입력 모양에 맞는 서식을 붙인다(예전엔 텍스트로 저장돼 이 칸을 참조하는 수식이 깨지고
+      // 저장한 엑셀에서도 "텍스트 숫자"가 됐다). 이미 서식이 있는 칸은 그 서식을 존중한다.
+      const typed = value.trim().startsWith('=') ? null : parseTypedNumber(value);
+      if (typed) {
+        cells.set(key, String(typed.value));
+        const currentStyle = styles.get(key) ?? {};
+        if (!currentStyle.nf && !currentStyle.df) {
+          styles.set(key, { ...currentStyle, nf: typed.kind, ...(typed.decimals ? { nd: typed.decimals } : {}) });
+        }
+      } else {
+        cells.set(key, value);
+      }
       const s = currentStructure();
       if (row >= s.rowCount || col >= s.colCount) {
         structure.set(String(activeSheet), {
