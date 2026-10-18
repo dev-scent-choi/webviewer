@@ -129,3 +129,15 @@ describe('그림·격자선', () => {
     }
   });
 });
+
+describe('메모가 있는 파일을 한 번 저장한 뒤에도 다시 읽힌다', () => {
+  test('ExcelJS가 쓴(메모 관계가 VML보다 앞인) 파일 — 메모용 VML을 떼지 않는다', async () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('단위테스트');
+    ws.getCell('A1').value = '결함';
+    ws.getCell('A1').note = '확인 필요';
+    const bytes = Buffer.from(await wb.xlsx.writeBuffer());
+    const grid = await parseXlsxToGrid(bytes);
+    expect(grid.sheets[0].rows[0][0]).toMatchObject({ v: '결함' });
+  });
+});

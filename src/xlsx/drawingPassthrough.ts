@@ -154,9 +154,11 @@ export function stripDrawings(xlsx: Uint8Array): { bytes: Uint8Array; stash: Dra
     sheets.push({ sheetName, drawingPath });
     for (const part of closureOf(entries, drawingPath)) stripped.add(part);
   }
-  // 어느 시트도 참조하지 않는 그리기 파트도 ExcelJS가 읽다가 죽을 수 있다 — 함께 떼어 둔다(되붙이지는 않는다)
+  // 어느 시트도 참조하지 않는 그리기 파트도 ExcelJS가 읽다가 죽을 수 있다 — 함께 떼어 둔다(되붙이지는 않는다).
+  // 단 메모·머리글 그림용 VML(vmlDrawingN.vml과 그 관계)은 남긴다 — 시트 관계가 그대로 가리키고 있어서,
+  // 떼면 ExcelJS가 메모를 읽다 "reading 'comments'"로 죽는다(편집기로 한 번 저장한 파일에서 재현).
   for (const name of Object.keys(entries)) {
-    if (/^xl\/(drawings|charts)\//.test(name) && !stripped.has(name)) stripped.add(name);
+    if (/^xl\/(drawings|charts)\//.test(name) && !/vmlDrawing[^/]*$/.test(name) && !stripped.has(name)) stripped.add(name);
   }
   for (const part of stripped) {
     parts[part] = entries[part];
