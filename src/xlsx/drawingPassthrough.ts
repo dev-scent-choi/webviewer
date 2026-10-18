@@ -8,6 +8,7 @@
  * 알려진 한계: 행/열 삽입·삭제로 칸이 밀려도 그리기 위치(앵커)와 차트 참조 범위는 옮기지 않는다.
  */
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
+import { buildChartAnchorXml, buildChartXml, chartAnchorsOf, parseChartXml, type GridChart } from './chartModel.js';
 
 export interface StashedSheetDrawing {
   /** 시트 이름 — ExcelJS가 저장하며 시트 파일 이름을 다시 매기므로 이름으로 다시 찾는다. */
@@ -263,6 +264,111 @@ export function restoreDrawings(xlsx: Uint8Array, stash: DrawingStash): Uint8Arr
     const rid = addRelationship(entries, relsPathOf(sheetPath), DRAWING_REL_TYPE, relativeTarget(sheetPath, drawing));
     sheetXml = insertDrawingElement(sheetXml, rid);
     entries[sheetPath] = strToU8(sheetXml);
+  }
+  if (typesXml) entries['[Content_Types].xml'] = strToU8(typesXml);
+  return zipSync(entries);
+}
+
+// ---------------------------------------------------------------------------
+// 차트 읽기(편집기 표시용)·새 차트 붙이기(저장)
+// ---------------------------------------------------------------------------
+
+/** 파일의 시트별 차트 — 편집기가 같은 자리에 SVG로 그린다(파일 쪽 차트는 저장 때 원본 그대로 보존). */
+export function readSheetCharts(xlsx: Uint8Array): GridChart[] {
+  const entries: Record<string, Uint8Array> = unzipSync(xlsx);
+  const charts: GridChart[] = [];
+  for (const [sheetName, sheetPath] of sheetPathsByName(entries)) {
+    const sheetBytes = entries[sheetPath];
+    const sheetRels = entries[relsPathOf(sheetPath)];
+    if (!sheetBytes || !sheetRels) continue;
+    const rid = /<drawing\b[^>]*r:id="([^"]+)"/.exec(strFromU8(sheetBytes))?.[1];
+    const rel = relationshipsOf(strFromU8(sheetRels)).find((r) => r.id === rid);
+    if (!rel) continue;
+    const drawingPath = resolvePartPath(sheetPath, rel.target);
+    const drawing = entries[drawingPath];
+    const drawingRels = entries[relsPathOf(drawingPath)];
+    if (!drawing || !drawingRels) continue;
+    const relById = new Map(relationshipsOf(strFromU8(drawingRels)).map((r) => [r.id, r]));
+    for (const anchor of chartAnchorsOf(strFromU8(drawing))) {
+      const chartRel = relById.get(anchor.rid);
+      const chartBytes = chartRel ? entries[resolvePartPath(drawingPath, chartRel.target)] : undefined;
+      const parsed = chartBytes ? parseChartXml(strFromU8(chartBytes)) : null;
+      if (!parsed) continue;
+      charts.push({ id: `file:${drawingPath}:${anchor.rid}`, sheetName, from: anchor.from, to: anchor.to, size: anchor.size, source: 'file', ...parsed });
+    }
+  }
+  return charts;
+}
+
+/** 새 앵커는 xdr:·a:·r: 접두사로 쓰므로 그리기 루트에 세 네임스페이스가 모두 선언돼 있게 한다. */
+function withRootNamespaces(drawingXml: string): string {
+  const rootMatch = /<((?:[\w.-]+:)?wsDr)\b[^>]*>/.exec(drawingXml);
+  if (!rootMatch) return drawingXml;
+  let root = rootMatch[0];
+  const required: ReadonlyArray<[string, string]> = [
+    ['xdr', 'http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing'],
+    ['a', 'http://schemas.openxmlformats.org/drawingml/2006/main'],
+    ['r', REL_NS],
+  ];
+  for (const [prefix, uri] of required) {
+    if (!new RegExp(`\\sxmlns:${prefix}=`).test(root)) root = root.replace(/\/?>$/, (end) => ` xmlns:${prefix}="${uri}"${end}`);
+  }
+  return drawingXml.replace(rootMatch[0], root);
+}
+
+export interface ChartCache {
+  readonly categories: readonly string[];
+  readonly series: ReadonlyArray<{ name: string; values: readonly number[] }>;
+}
+
+/**
+ * 편집기에서 넣은 차트를 저장 파일에 붙인다 — 시트에 이미 그리기가 있으면 그 그리기에 앵커를 더하고,
+ * 없으면 그리기 파트를 새로 만든다. 차트 파트·관계·콘텐츠 형식을 모두 등록한다.
+ */
+export function addNewCharts(xlsx: Uint8Array, charts: ReadonlyArray<{ chart: GridChart; cache: ChartCache }>): Uint8Array {
+  if (charts.length === 0) return xlsx;
+  const entries: Record<string, Uint8Array> = unzipSync(xlsx);
+  const byName = sheetPathsByName(entries);
+  let typesXml = entries['[Content_Types].xml'] ? strFromU8(entries['[Content_Types].xml']) : '';
+  const addOverride = (part: string, type: string) => {
+    if (!typesXml.includes(`PartName="/${part}"`)) typesXml = typesXml.replace('</Types>', `<Override PartName="/${part}" ContentType="${type}"/></Types>`);
+  };
+  const freeName = (dir: string, base: string) => {
+    let n = 1;
+    while (entries[`${dir}/${base}${n}.xml`]) n += 1;
+    return `${dir}/${base}${n}.xml`;
+  };
+  let shapeId = 5000;
+  for (const { chart, cache } of charts) {
+    const sheetPath = byName.get(chart.sheetName);
+    if (!sheetPath || !entries[sheetPath]) continue;
+    let sheetXml = strFromU8(entries[sheetPath]);
+    const sheetRelsPath = relsPathOf(sheetPath);
+    const sheetRid = /<drawing\b[^>]*r:id="([^"]+)"/.exec(sheetXml)?.[1];
+    const existing = sheetRid && entries[sheetRelsPath] ? relationshipsOf(strFromU8(entries[sheetRelsPath])).find((r) => r.id === sheetRid) : undefined;
+    let drawingPath: string;
+    if (existing) {
+      drawingPath = resolvePartPath(sheetPath, existing.target);
+    } else {
+      drawingPath = freeName('xl/drawings', 'drawing');
+      entries[drawingPath] = strToU8(
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"></xdr:wsDr>',
+      );
+      addOverride(drawingPath, DRAWING_CONTENT_TYPE);
+      const rid = addRelationship(entries, sheetRelsPath, DRAWING_REL_TYPE, relativeTarget(sheetPath, drawingPath));
+      sheetXml = insertDrawingElement(sheetXml, rid);
+      entries[sheetPath] = strToU8(sheetXml);
+    }
+    const chartPath = freeName('xl/charts', 'chart');
+    entries[chartPath] = strToU8(buildChartXml(chart, cache));
+    addOverride(chartPath, CHART_CONTENT_TYPE);
+    const chartRid = addRelationship(entries, relsPathOf(drawingPath), `${REL_NS}/chart`, relativeTarget(drawingPath, chartPath));
+    let drawingXml = strFromU8(entries[drawingPath]);
+    drawingXml = withRootNamespaces(drawingXml);
+    shapeId += 1;
+    // 루트가 접두사 없이(기본 네임스페이스) 쓰인 파일(openpyxl 등)도 있다 — 닫는 태그를 접두사와 무관하게 찾는다
+    drawingXml = drawingXml.replace(/(<\/(?:[\w.-]+:)?wsDr>)\s*$/, `${buildChartAnchorXml(chart, chartRid, shapeId)}$1`);
+    entries[drawingPath] = strToU8(drawingXml);
   }
   if (typesXml) entries['[Content_Types].xml'] = strToU8(typesXml);
   return zipSync(entries);

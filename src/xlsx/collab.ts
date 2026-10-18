@@ -1,4 +1,5 @@
-import { restoreDrawings, stripDrawings } from './drawingPassthrough.js';
+import { addNewCharts, restoreDrawings, stripDrawings, type ChartCache } from './drawingPassthrough.js';
+import { cellsOf, type GridChart } from './chartModel.js';
 import ExcelJS from 'exceljs';
 import * as Y from 'yjs';
 import {
@@ -586,6 +587,35 @@ export interface XlsxExportOptions {
   readonly removedSheetIndices?: ReadonlySet<number>;
   /** 시트 자리 번호 → 화면(탭) 순서. 주지 않으면 원본 파일의 순서를 그대로 둔다. */
   readonly sheetDisplayOrder?: ReadonlyMap<number, number>;
+  /** 편집기에서 새로 넣은 차트 — 저장 파일에 차트 파트로 붙인다(삽입 탭). */
+  readonly newCharts?: readonly GridChart[];
+}
+
+/** 차트가 참조하는 칸의 지금 값(편집 반영 후) — 차트 파트의 캐시로 쓴다. */
+function chartCacheFrom(workbook: ExcelJS.Workbook, chart: GridChart): ChartCache {
+  const valueOf = (sheetName: string | undefined, r: number, c: number): unknown => {
+    const cell = workbook.getWorksheet(sheetName ?? chart.sheetName)?.getCell(r + 1, c + 1);
+    const value = cell?.value as unknown;
+    if (value && typeof value === 'object') {
+      const v = value as { result?: unknown; richText?: Array<{ text: string }>; text?: unknown };
+      if ('result' in v) return v.result;
+      if (v.richText) return v.richText.map((t) => t.text).join('');
+      if (v.text !== undefined) return v.text;
+    }
+    return value;
+  };
+  const textAt = (sheetName: string | undefined, r: number, c: number) => {
+    const v = valueOf(sheetName, r, c);
+    return v instanceof Date ? v.toISOString().slice(0, 10) : v === null || v === undefined ? '' : String(v);
+  };
+  const categories = chart.categories.ref
+    ? cellsOf(chart.categories.ref).map(([r, c]) => textAt(chart.categories.ref?.sheetName, r, c))
+    : [...chart.categories.cache];
+  const series = chart.series.map((ser) => ({
+    name: ser.nameRef ? textAt(ser.nameRef.sheetName, ser.nameRef.r1, ser.nameRef.c1) || ser.name : ser.name,
+    values: ser.values.ref ? cellsOf(ser.values.ref).map(([r, c]) => Number(valueOf(ser.values.ref?.sheetName, r, c)) || 0) : [...ser.values.cache],
+  }));
+  return { categories, series };
 }
 
 const EMPTY_REMOVED_SHEETS: ReadonlySet<number> = new Set<number>();
@@ -786,8 +816,9 @@ export async function exportXlsxFromGrid(
 
   applySheetDisplayOrder(workbook, visibleSheets, store, removedSheets, options.sheetDisplayOrder);
 
+  const chartJobs = (options.newCharts ?? []).map((chart) => ({ chart, cache: chartCacheFrom(workbook, chart) }));
   const buffer = await workbook.xlsx.writeBuffer();
-  return restoreDrawings(new Uint8Array(buffer as ArrayBuffer), drawings);
+  return addNewCharts(restoreDrawings(new Uint8Array(buffer as ArrayBuffer), drawings), chartJobs);
 }
 
 /**

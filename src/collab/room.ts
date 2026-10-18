@@ -44,6 +44,8 @@ import {
   type GridSheet,
 } from '../spreadsheet.js';
 import { exportXlsxFromGridStreaming } from '../xlsx/exportStreaming.js';
+import { GRID_CHARTS_MAP, type GridChart } from '../xlsx/chartModel.js';
+import { readSheetCharts } from '../xlsx/drawingPassthrough.js';
 import {
   exportXlsxFromGrid,
   findOrAddGridStyleIndex,
@@ -870,7 +872,17 @@ function exportOptionsFor(room: Room) {
   return {
     removedSheetIndices: room.removedSheetIndices,
     sheetDisplayOrder: room.sheetDisplayOrder,
+    newCharts: [...room.ydoc.getMap<GridChart>(GRID_CHARTS_MAP).values()].filter((chart) => chart.source === 'new'),
   };
+}
+
+/** 편집기가 그릴 파일 차트 — 룸이 열려 있으면 룸을 연 시점의 원본 기준(저장 후 디스크 파일에는 편집기에서
+ * 넣은 차트까지 들어가 있어, 그걸 "파일 차트"로 또 그리면 같은 차트가 둘로 보인다). */
+export async function getFileCharts(docId: string): Promise<GridChart[]> {
+  const room = rooms.get(docId);
+  if (room) await room.ready;
+  const bytes = room?.originalXlsxBytes ?? (await store.readOriginal(docId, 'xlsx'));
+  return readSheetCharts(bytes);
 }
 
 /**

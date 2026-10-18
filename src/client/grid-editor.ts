@@ -23,6 +23,8 @@ import { dedupeByName, pickPresenceColorForName, renderPresenceAvatars, type Awa
 import { parseTypedNumber, serialToDateText } from '../collab/cellValueShared.js';
 import { initOfficeShell } from './officeShell.js';
 import { bindDropdown } from './ribbonMenus.js';
+import { currentRegion, setupGridCharts } from './gridCharts.js';
+import type { ChartKind } from '../xlsx/chartModel.js';
 
 interface Permissions {
   readonly canPrint: boolean;
@@ -73,6 +75,8 @@ const editorHost = document.getElementById('grid-editor') as HTMLElement;
 const zoomHost = document.getElementById('grid-zoom-host') as HTMLElement;
 const tableEl = document.getElementById('grid-edit-table') as HTMLTableElement;
 const scrollHostEl = document.querySelector('.grid-editor-scroll') as HTMLElement;
+/** 표를 통째로 다시 그린 뒤(시트 전환·구조 변경·확대축소) — 차트 위치를 다시 맞춘다(차트 준비 전엔 아무것도 안 한다). */
+let afterGridRender: () => void = () => undefined;
 const sheetTabsEl = document.getElementById('sheet-tabs') as HTMLElement;
 const cellRefBoxEl = document.getElementById('cell-ref-box') as HTMLElement;
 const formulaInputEl = document.getElementById('formula-input') as HTMLInputElement;
@@ -383,7 +387,7 @@ async function main(): Promise<void> {
   postPresenceToParent();
 
   const undoManager = new Y.UndoManager([cells, structure, styles]);
-  initOfficeShell({
+  const shell = initOfficeShell({
     token,
     docName: info.name,
     canEdit,
@@ -1454,6 +1458,10 @@ async function main(): Promise<void> {
    * 전체 시트 높이)가 정확히 나오고, 보이는 행들은 정상 흐름 안에서 실제로 그렸을 때와 똑같은
    * 자리에 놓인다 — 수동으로 top을 계산해 줄 필요가 없다. */
   function renderTableVirtualized(): void {
+    renderTableVirtualizedInner();
+    afterGridRender();
+  }
+  function renderTableVirtualizedInner(): void {
     renderGeneration += 1;
     // 다시 그리면 이전 <td>들은 전부 버려지므로, 그 순간 실제로 "편집 중"이던 칸도 이제 없다 —
     // blur가 안전하게 안 오는 경우에도(과거 stale-blur 버그) 여기서 확실히 리셋해 둔다.
@@ -2899,6 +2907,129 @@ async function main(): Promise<void> {
   }
   bindDropdown(document.getElementById('border-dropdown'), (value) => applyBorderPreset(value as BorderPreset));
   document.getElementById('btn-border')?.addEventListener('click', () => applyBorderPreset('all'));
+
+  // ---------- 삽입: 차트·표 서식 ----------
+  const sheetIndexByName = (name: string): number => {
+    let found = -1;
+    structure.forEach((s, key) => {
+      if (found < 0 && s.name === name) found = Number(key);
+    });
+    return found;
+  };
+  const valueText = (sheetName: string, row: number, col: number): string => {
+    const idx = sheetIndexByName(sheetName);
+    return idx < 0 ? '' : formatComputedValue(computeCellDisplay(idx, row, col));
+  };
+  const measuredRowHeight = (): number => {
+    const tr = tableEl.tBodies[0]?.querySelector<HTMLElement>('tr:not([aria-hidden])');
+    return tr?.offsetHeight || ROW_HEIGHT_PX;
+  };
+  const headerHeight = (): number => tableEl.tHead?.offsetHeight || ROW_HEIGHT_PX;
+  const rownumWidth = (): number => tableEl.querySelector<HTMLElement>('.g-edit-rownum')?.offsetWidth || ROWNUM_COL_WIDTH_PX;
+  const colWidthAt = (col: number): number => structure.get(String(activeSheet))?.colWidths?.[col] ?? DEFAULT_COL_WIDTH_PX;
+  const colLeft = (col: number): number => {
+    let x = rownumWidth();
+    for (let c = 0; c < col; c += 1) x += colWidthAt(c);
+    return x;
+  };
+  const charts = setupGridCharts({
+    ydoc,
+    token,
+    canEdit,
+    scrollHost: scrollHostEl,
+    table: tableEl,
+    activeSheetName: () => structure.get(String(activeSheet))?.name ?? '',
+    valueText,
+    colLeft,
+    rowTop: (row) => headerHeight() + row * measuredRowHeight(),
+    cellAt: (x, y) => {
+      let col = 0;
+      let left = rownumWidth();
+      while (col < 16384 && left + colWidthAt(col) <= x) {
+        left += colWidthAt(col);
+        col += 1;
+      }
+      return { row: Math.max(0, Math.floor((y - headerHeight()) / measuredRowHeight())), col };
+    },
+    selection: () => {
+      const { r0, r1, c0, c1 } = rangeBounds();
+      return { r1: r0, c1: c0, r2: r1, c2: c1 };
+    },
+    extent: () => {
+      const sheet = structure.get(String(activeSheet));
+      return { rows: sheet?.rowCount ?? 1, cols: sheet?.colCount ?? 1 };
+    },
+    setChartTabVisible: (visible) => shell.setContextualTab('chart', visible),
+  });
+  afterGridRender = () => charts.render();
+  let chartRenderScheduled = false;
+  const scheduleChartRender = () => {
+    if (chartRenderScheduled) return;
+    chartRenderScheduled = true;
+    requestAnimationFrame(() => {
+      chartRenderScheduled = false;
+      charts.render();
+    });
+  };
+  cells.observe(scheduleChartRender);
+  computed.observe(scheduleChartRender);
+  charts.render();
+  for (const button of document.querySelectorAll<HTMLElement>('[data-insert-chart]')) {
+    button.addEventListener('click', () => charts.insert(button.dataset.insertChart as ChartKind));
+  }
+
+  /** 표 서식 — 머리글 행(진한 색·흰 굵은 글자)과 줄무늬 행, 모든 테두리. 칸 하나만 골랐으면 둘러싼 데이터 영역. */
+  const TABLE_STYLES: Readonly<Record<string, { head: string; band: string }>> = {
+    blue: { head: '#4472c4', band: '#d9e1f2' },
+    orange: { head: '#ed7d31', band: '#fce4d6' },
+    green: { head: '#70ad47', band: '#e2efda' },
+    gold: { head: '#ffc000', band: '#fff2cc' },
+    gray: { head: '#595959', band: '#ededed' },
+  };
+  function applyTableStyle(preset: string): void {
+    const colors = TABLE_STYLES[preset];
+    if (!colors || !activeCellKey || !canEdit) return;
+    const sel = rangeBounds();
+    const sheetName = structure.get(String(activeSheet))?.name ?? '';
+    const sheet = structure.get(String(activeSheet));
+    const region =
+      sel.r0 === sel.r1 && sel.c0 === sel.c1
+        ? currentRegion({ row: sel.r0, col: sel.c0 }, (r, c) => valueText(sheetName, r, c).trim() !== '', { rows: sheet?.rowCount ?? 1, cols: sheet?.colCount ?? 1 })
+        : { r1: sel.r0, c1: sel.c0, r2: sel.r1, c2: sel.c1 };
+    if (!region) {
+      window.alert('표 서식을 입힐 데이터 범위를 선택하세요.');
+      return;
+    }
+    ydoc.transact(() => {
+      for (let r = region.r1; r <= region.r2; r += 1) {
+        for (let c = region.c1; c <= region.c2; c += 1) {
+          const key = gridCellKey(activeSheet, r, c);
+          const current: { -readonly [K in keyof CellStyleAttrs]?: CellStyleAttrs[K] } = { ...(styles.get(key) ?? {}) };
+          current.bt = 1;
+          current.bb = 1;
+          current.bl = 1;
+          current.br = 1;
+          if (r === region.r1) {
+            current.bg = colors.head;
+            current.col = preset === 'gold' ? '#000000' : '#ffffff';
+            current.b = 1;
+          } else {
+            delete current.b;
+            delete current.col;
+            if ((r - region.r1) % 2 === 1) current.bg = colors.band;
+            else delete current.bg;
+          }
+          styles.set(key, current as CellStyleAttrs);
+          const td = tdFor(r, c);
+          if (td) {
+            applyStyleToTd(td, styles.get(key));
+            renderCellDisplay(td, key);
+          }
+        }
+      }
+    });
+  }
+  bindDropdown(document.getElementById('table-style-dropdown'), applyTableStyle);
 
   // ---------- 확대/축소 (엑셀처럼 드래그 슬라이더 포함) ----------
   const zoomLevelEl = document.getElementById('zoom-level') as HTMLElement;

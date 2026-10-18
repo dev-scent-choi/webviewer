@@ -3381,3 +3381,27 @@ body.review-pane-open #editor-zoom-host { margin-right: 320px; }
 .office-dialog-stats { display: grid; grid-template-columns: 1fr auto; gap: 0.45rem 2rem; margin: 0 0 1rem; }
 .office-dialog-stats dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
 .office-dialog-actions { display: flex; justify-content: flex-end; }
+
+/* ---------- Excel 차트(시트 위 SVG) · 표 서식 ---------- */
+.grid-chart-layer { position: absolute; left: 0; top: 0; width: 0; height: 0; z-index: 3; }
+.grid-chart {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1px solid #d9d9d9;
+  background: #ffffff;
+  cursor: move;
+  user-select: none;
+}
+.grid-chart svg { display: block; width: 100%; height: 100%; pointer-events: none; }
+.grid-chart.is-file { cursor: default; }
+.grid-chart:focus { outline: none; }
+.grid-chart.is-selected { border-color: var(--app-accent, var(--v-accent)); box-shadow: 0 0 0 1px var(--app-accent, var(--v-accent)); }
+.grid-chart-resize { position: absolute; right: -5px; bottom: -5px; width: 10px; height: 10px; background: #ffffff; border: 1px solid var(--app-accent, var(--v-accent)); cursor: nwse-resize; display: none; }
+.grid-chart.is-selected .grid-chart-resize { display: block; }
+.dropdown-menu.table-style-menu { flex-direction: row; gap: 0.4rem; padding: 0.5rem; }
+.dropdown-menu .table-style-swatch { display: grid; grid-template-rows: 9px 9px 9px; gap: 1px; width: 46px; padding: 3px; border: 1px solid #e1dfdd; background: #ffffff; }
+.dropdown-menu .table-style-swatch:hover { border-color: var(--app-accent, var(--v-accent)); background: #ffffff; }
+.table-style-swatch i { display: block; background: #ffffff; border: 1px solid var(--ts-head); }
+.table-style-swatch i:first-child { background: var(--ts-head); }
+.table-style-swatch i:nth-child(2) { background: var(--ts-band); }
+.chart-title-field { grid-template-columns: 2.6rem 12rem; }

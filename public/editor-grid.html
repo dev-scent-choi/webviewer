@@ -65,8 +65,10 @@
     <div class="ribbon-tabs" role="tablist" aria-label="리본">
       <button class="ribbon-tab ribbon-tab-file" role="tab" data-tab="file">파일</button>
       <button class="ribbon-tab" role="tab" data-tab="home" data-edit-only>홈</button>
+      <button class="ribbon-tab" role="tab" data-tab="insert" data-edit-only>삽입</button>
       <button class="ribbon-tab" role="tab" data-tab="formulas" data-edit-only>수식</button>
       <button class="ribbon-tab" role="tab" data-tab="view">보기</button>
+      <button class="ribbon-tab ribbon-tab-contextual" role="tab" data-tab="chart" data-edit-only hidden>차트 디자인</button>
       <span class="ribbon-tabs-spacer"></span>
       <button id="ribbon-collapse" class="ribbon-collapse" title="리본 축소 (Ctrl+F1)" aria-label="리본 축소">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 15 6-6 6 6"/></svg>
@@ -251,6 +253,89 @@
         <span class="ribbon-group-label">편집</span>
       </div>
     </div>
+    <!-- ===== 삽입 ===== -->
+    <div class="toolbar-group toolbar-format ribbon-panel" data-panel="insert" role="tabpanel" hidden>
+      <div class="ribbon-group">
+        <div class="ribbon-group-buttons">
+          <span class="dropdown-btn" id="table-style-dropdown">
+            <button class="icon-btn icon-btn-big dropdown-caret" title="표 서식 — 선택한 범위(칸 하나면 둘러싼 데이터 영역)에 머리글·줄무늬·테두리 서식">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4.5" width="17" height="15" rx="1"/><path d="M3.5 9h17M3.5 14h17M9 4.5v15M15 4.5v15"/><rect x="3.5" y="4.5" width="17" height="4.5" fill="currentColor" fill-opacity="0.25" stroke="none"/></svg>
+              <span>표 서식 ▾</span>
+            </button>
+            <div class="dropdown-menu table-style-menu" hidden>
+              <button data-value="blue" class="table-style-swatch" style="--ts-head:#4472c4;--ts-band:#d9e1f2" title="파랑"><i></i><i></i><i></i></button>
+              <button data-value="orange" class="table-style-swatch" style="--ts-head:#ed7d31;--ts-band:#fce4d6" title="주황"><i></i><i></i><i></i></button>
+              <button data-value="green" class="table-style-swatch" style="--ts-head:#70ad47;--ts-band:#e2efda" title="녹색"><i></i><i></i><i></i></button>
+              <button data-value="gold" class="table-style-swatch" style="--ts-head:#ffc000;--ts-band:#fff2cc" title="금색"><i></i><i></i><i></i></button>
+              <button data-value="gray" class="table-style-swatch" style="--ts-head:#595959;--ts-band:#ededed" title="회색"><i></i><i></i><i></i></button>
+            </div>
+          </span>
+        </div>
+        <span class="ribbon-group-label">표</span>
+      </div>
+      <div class="ribbon-group">
+        <div class="ribbon-group-buttons">
+          <button class="icon-btn icon-btn-big" data-insert-chart="column" title="세로 막대형 차트">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 20h18"/><rect x="5" y="11" width="3" height="9" fill="#4472c4" stroke="none"/><rect x="10.5" y="6" width="3" height="14" fill="#ed7d31" stroke="none"/><rect x="16" y="9" width="3" height="11" fill="#a5a5a5" stroke="none"/></svg>
+            <span>세로 막대형</span>
+          </button>
+          <button class="icon-btn icon-btn-big" data-insert-chart="bar" title="가로 막대형 차트">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 3v18"/><rect x="4" y="5" width="9" height="3" fill="#4472c4" stroke="none"/><rect x="4" y="10.5" width="15" height="3" fill="#ed7d31" stroke="none"/><rect x="4" y="16" width="11" height="3" fill="#a5a5a5" stroke="none"/></svg>
+            <span>가로 막대형</span>
+          </button>
+          <button class="icon-btn icon-btn-big" data-insert-chart="line" title="꺾은선형 차트">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 20h18" stroke="currentColor" stroke-width="1.6"/><path d="m4 16 5-6 4 3 7-8" stroke="#4472c4"/></svg>
+            <span>꺾은선형</span>
+          </button>
+          <button class="icon-btn icon-btn-big" data-insert-chart="pie" title="원형 차트">
+            <svg viewBox="0 0 24 24" stroke="#fff" stroke-width="0.8"><path d="M12 12V3a9 9 0 0 1 8.5 6Z" fill="#ed7d31"/><path d="M12 12 20.5 9A9 9 0 1 1 12 3Z" fill="#4472c4"/></svg>
+            <span>원형</span>
+          </button>
+        </div>
+        <span class="ribbon-group-label">차트</span>
+      </div>
+    </div>
+
+    <!-- ===== 차트 디자인(넣은 차트를 골랐을 때만) ===== -->
+    <div class="toolbar-group toolbar-format ribbon-panel" data-panel="chart" role="tabpanel" hidden>
+      <div class="ribbon-group">
+        <div class="ribbon-group-buttons">
+          <button class="icon-btn icon-btn-big" data-chart-kind="column" title="세로 막대형">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 20h18"/><rect x="5" y="11" width="3" height="9" fill="#4472c4" stroke="none"/><rect x="10.5" y="6" width="3" height="14" fill="#ed7d31" stroke="none"/><rect x="16" y="9" width="3" height="11" fill="#a5a5a5" stroke="none"/></svg>
+            <span>세로 막대형</span>
+          </button>
+          <button class="icon-btn icon-btn-big" data-chart-kind="bar" title="가로 막대형">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 3v18"/><rect x="4" y="5" width="9" height="3" fill="#4472c4" stroke="none"/><rect x="4" y="10.5" width="15" height="3" fill="#ed7d31" stroke="none"/><rect x="4" y="16" width="11" height="3" fill="#a5a5a5" stroke="none"/></svg>
+            <span>가로 막대형</span>
+          </button>
+          <button class="icon-btn icon-btn-big" data-chart-kind="line" title="꺾은선형">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round"><path d="M3 20h18" stroke="currentColor" stroke-width="1.6"/><path d="m4 16 5-6 4 3 7-8" stroke="#4472c4"/></svg>
+            <span>꺾은선형</span>
+          </button>
+          <button class="icon-btn icon-btn-big" data-chart-kind="pie" title="원형">
+            <svg viewBox="0 0 24 24" stroke="#fff" stroke-width="0.8"><path d="M12 12V3a9 9 0 0 1 8.5 6Z" fill="#ed7d31"/><path d="M12 12 20.5 9A9 9 0 1 1 12 3Z" fill="#4472c4"/></svg>
+            <span>원형</span>
+          </button>
+        </div>
+        <span class="ribbon-group-label">차트 종류 변경</span>
+      </div>
+      <div class="ribbon-group">
+        <div class="ribbon-group-buttons layout-fields">
+          <label class="layout-field chart-title-field"><span>제목</span><input id="chart-title-input" type="text" placeholder="차트 제목" /></label>
+        </div>
+        <span class="ribbon-group-label">차트 요소</span>
+      </div>
+      <div class="ribbon-group">
+        <div class="ribbon-group-buttons">
+          <button id="btn-chart-delete" class="icon-btn icon-btn-big" title="차트 삭제 (Delete)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M10 11v6M14 11v6"/><path d="M6 7l1 13a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-13"/><path d="M9 7V4h6v3"/></svg>
+            <span>삭제</span>
+          </button>
+        </div>
+        <span class="ribbon-group-label">차트</span>
+      </div>
+    </div>
+
     <!-- ===== 수식 ===== -->
     <div class="toolbar-group toolbar-format ribbon-panel" data-panel="formulas" role="tabpanel" hidden>
       <div class="ribbon-group">
