@@ -208,7 +208,9 @@ function runInlineNodesOf(runChildren: readonly XmlNode[], marks: RunMarks): PMN
       const node = textNodeWithMarks(textOf(childrenOf(child)), marks);
       if (node) nodes.push(node);
     } else if (tag === 'w:br') {
-      nodes.push(docxSchema.nodes.hard_break.create());
+      nodes.push(
+        attrsOf(child)['@_w:type'] === 'page' ? docxSchema.nodes.page_break.create() : docxSchema.nodes.hard_break.create(),
+      );
     }
   }
   return nodes;
@@ -277,10 +279,11 @@ function indentOf(pPrChildren: readonly XmlNode[]): ParagraphIndent | null {
   const attrs = attrsOf(ind);
   const indent = {
     left: intAttr(attrs, 'left', 'start') ?? 0,
+    right: intAttr(attrs, 'right', 'end') ?? 0,
     firstLine: intAttr(attrs, 'firstLine') ?? 0,
     hanging: intAttr(attrs, 'hanging') ?? 0,
   };
-  return indent.left || indent.firstLine || indent.hanging ? indent : null;
+  return indent.left || indent.right || indent.firstLine || indent.hanging ? indent : null;
 }
 
 /** w:spacing — 줄 간격과 단락 앞/뒤 간격. 하나도 없으면 속성 없음. */

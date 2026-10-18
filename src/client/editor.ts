@@ -23,7 +23,7 @@ import type { Node as PMNode } from 'prosemirror-model';
 import * as Y from 'yjs';
 import { WebsocketProvider } from 'y-websocket';
 import { redo, undo, ySyncPlugin, yCursorPlugin, yUndoPlugin, yUndoPluginKey } from 'y-prosemirror';
-import { docxSchema, type PageSetup } from '../docx/schema.js';
+import { DOCX_PAGE_MAP, DOCX_PAGE_SETUP_KEY, docxSchema, type DocxPageSetup, type PageSetup } from '../docx/schema.js';
 import { pickPresenceColorForName, renderPresenceAvatars } from './presence.js';
 import { DOC_META_MAP, DOC_META_SAVED_AT_KEY, DOC_META_SAVE_ERROR_AT_KEY } from '../collab/gridShared.js';
 import { initOfficeShell } from './officeShell.js';
@@ -37,7 +37,11 @@ import {
   copyFormat,
   currentFontName,
   currentFontSize,
+  currentParagraphBox,
   currentParagraphStyle,
+  insertPageBreak,
+  setIndentSide,
+  setSpacingSide,
   multilevelList,
   pasteFormat,
   replaceAll,
@@ -51,6 +55,24 @@ import {
   type CaseMode,
   type CopiedFormat,
 } from './wordCommands.js';
+
+/** 레이아웃 탭 용지 크기(dxa, 세로 기준) */
+const PAPER_SIZES = {
+  A4: { width: 11906, height: 16838 },
+  A3: { width: 16838, height: 23811 },
+  B5: { width: 10319, height: 14572 },
+  B4: { width: 14572, height: 20639 },
+  Letter: { width: 12240, height: 15840 },
+  Legal: { width: 12240, height: 20160 },
+} as const;
+/** 레이아웃 탭 여백 미리 설정(dxa, 1cm = 567) */
+const MARGIN_PRESETS = {
+  normal: { top: 1440, bottom: 1440, left: 1440, right: 1440 },
+  korean: { top: 1701, bottom: 1440, left: 1440, right: 1440 },
+  narrow: { top: 720, bottom: 720, left: 720, right: 720 },
+  moderate: { top: 1440, bottom: 1440, left: 1080, right: 1080 },
+  wide: { top: 1440, bottom: 1440, left: 2880, right: 2880 },
+} as const;
 
 /** Word 텍스트 강조 색 15가지(이름 있는 강조색 — 저장 시 w:highlight) */
 const HIGHLIGHT_PALETTE: readonly PaletteColor[] = [
@@ -305,6 +327,7 @@ function buildKeymap(defaultSizePt: number): Record<string, Command> {
       dispatch?.(state.tr.setSelection(Selection.atStart(state.doc)).scrollIntoView());
       return true;
     },
+    'Mod-Enter': insertPageBreak,
     'Mod-Alt-1': setHeading(1),
     'Mod-Alt-2': setHeading(2),
     'Mod-Alt-3': setHeading(3),
@@ -610,6 +633,7 @@ async function main(): Promise<void> {
   // 클릭 핸들러)는 우회한다 — 그래서 이 옵션만으로는 부족하고, 툴바(.toolbar-format) 자체를
   // 위에서 이미 숨겨 그 우회로를 원천 차단했다.
   const view = new EditorView(editorHost, { state, editable: () => canEdit });
+  let syncLayoutFields: (state: EditorState) => void = () => undefined;
   const shell = initOfficeShell({
     token,
     docName: info.name,
@@ -641,6 +665,7 @@ async function main(): Promise<void> {
       view.updateState(newState);
       syncToolbarState(newState, defaultSizePt, defaultFontName);
       shell.setContextualTab('table', canEdit && isInTable(newState));
+      syncLayoutFields(newState);
       if (tr.docChanged || tr.selectionSet) scheduleStatusUpdate();
     },
   });
@@ -828,6 +853,85 @@ async function main(): Promise<void> {
   bind('btn-merge-cells', mergeCells);
   bind('btn-split-cell', splitCell);
 
+  // ---------- 레이아웃: 용지 설정(여백·방향·크기) — 공유 Y.Map이라 함께 편집하는 사람에게도 바로 보인다 ----------
+  const pageMap = ydoc.getMap<unknown>(DOCX_PAGE_MAP);
+  const TWIPS_PER_PX = 15;
+  const basePage: DocxPageSetup = info.pageSetup
+    ? {
+        width: info.pageSetup.widthPx * TWIPS_PER_PX,
+        height: info.pageSetup.heightPx * TWIPS_PER_PX,
+        orientation: info.pageSetup.orientation,
+        top: info.pageSetup.marginTopPx * TWIPS_PER_PX,
+        bottom: info.pageSetup.marginBottomPx * TWIPS_PER_PX,
+        left: info.pageSetup.marginLeftPx * TWIPS_PER_PX,
+        right: info.pageSetup.marginRightPx * TWIPS_PER_PX,
+      }
+    : { ...PAPER_SIZES.A4, orientation: 'portrait', ...MARGIN_PRESETS.normal };
+  const effectivePage = (): DocxPageSetup => (pageMap.get(DOCX_PAGE_SETUP_KEY) as DocxPageSetup | undefined) ?? basePage;
+  function renderPage(): void {
+    const page = effectivePage();
+    applyPageSetup({
+      widthPx: page.width / TWIPS_PER_PX,
+      heightPx: page.height / TWIPS_PER_PX,
+      marginTopPx: page.top / TWIPS_PER_PX,
+      marginBottomPx: page.bottom / TWIPS_PER_PX,
+      marginLeftPx: page.left / TWIPS_PER_PX,
+      marginRightPx: page.right / TWIPS_PER_PX,
+      orientation: page.orientation,
+    });
+  }
+  pageMap.observe(renderPage);
+  const setPage = (patch: Partial<DocxPageSetup>) => pageMap.set(DOCX_PAGE_SETUP_KEY, { ...effectivePage(), ...patch });
+  bindDropdown(document.getElementById('margins-dropdown'), (value) => {
+    const preset = MARGIN_PRESETS[value as keyof typeof MARGIN_PRESETS];
+    if (preset) setPage(preset);
+  });
+  bindDropdown(document.getElementById('orientation-dropdown'), (value) => {
+    const page = effectivePage();
+    const long = Math.max(page.width, page.height);
+    const short = Math.min(page.width, page.height);
+    setPage(value === 'landscape' ? { orientation: 'landscape', width: long, height: short } : { orientation: 'portrait', width: short, height: long });
+  });
+  bindDropdown(document.getElementById('paper-size-dropdown'), (value) => {
+    const size = PAPER_SIZES[value as keyof typeof PAPER_SIZES];
+    if (!size) return;
+    const landscape = effectivePage().orientation === 'landscape';
+    setPage(landscape ? { width: size.height, height: size.width } : size);
+  });
+  bind('btn-page-break', insertPageBreak);
+
+  // ---------- 레이아웃: 단락 들여쓰기(cm)·간격(pt) ----------
+  const DXA_PER_CM = 567;
+  const DXA_PER_PT = 20;
+  const layoutFields: ReadonlyArray<{ id: string; unit: number; apply: (dxa: number) => Command; read: (box: ReturnType<typeof currentParagraphBox>) => number }> = [
+    { id: 'indent-left', unit: DXA_PER_CM, apply: (dxa) => setIndentSide('left', dxa), read: (box) => box.left },
+    { id: 'indent-right', unit: DXA_PER_CM, apply: (dxa) => setIndentSide('right', dxa), read: (box) => box.right },
+    { id: 'spacing-before', unit: DXA_PER_PT, apply: (dxa) => setSpacingSide('before', dxa), read: (box) => box.before ?? 0 },
+    { id: 'spacing-after', unit: DXA_PER_PT, apply: (dxa) => setSpacingSide('after', dxa), read: (box) => box.after ?? 0 },
+  ];
+  for (const field of layoutFields) {
+    const input = document.getElementById(field.id) as HTMLInputElement | null;
+    input?.addEventListener('change', () => {
+      const value = Number(input.value);
+      if (Number.isFinite(value) && value >= 0) run(field.apply(value * field.unit));
+    });
+    input?.addEventListener('keydown', (event) => {
+      // Enter의 기본 동작을 막지 않으면, 값 적용 후 편집기로 돌아간 포커스에 같은 Enter가 들어가 문단이 나뉜다.
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        input.blur();
+      }
+    });
+  }
+  syncLayoutFields = (state: EditorState) => {
+    const box = currentParagraphBox(state);
+    for (const field of layoutFields) {
+      const input = document.getElementById(field.id) as HTMLInputElement | null;
+      if (input && document.activeElement !== input) input.value = String(Number((field.read(box) / field.unit).toFixed(field.unit === DXA_PER_CM ? 2 : 1)));
+    }
+  };
+  syncLayoutFields(view.state);
+
   // ---------- 상태 표시줄: 단어 수(선택하면 "선택/전체") ----------
   const statusWords = document.getElementById('status-words');
   const statusChars = document.getElementById('status-chars');
@@ -870,7 +974,9 @@ async function main(): Promise<void> {
   function fitZoom(maxWidthPx: number): number {
     if (!info.pageSetup) return 1;
     const availableWidthPx = Math.min(maxWidthPx, window.innerWidth) - VIEWER_PAGE_CONTAINER_PADDING_PX;
-    return clampZoom(Math.round((availableWidthPx / info.pageSetup.widthPx) * 10) / 10);
+    // 레이아웃 탭에서 용지 방향·크기를 바꿨으면 지금 용지 폭 기준으로 맞춘다
+    const pageWidthPx = parseFloat(editorHost.style.width) || info.pageSetup.widthPx;
+    return clampZoom(Math.round((availableWidthPx / pageWidthPx) * 10) / 10);
   }
   let zoom = fitZoom(VIEWER_PAGE_CONTAINER_MAX_PX);
   function applyZoom(): void {

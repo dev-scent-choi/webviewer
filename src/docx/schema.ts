@@ -14,6 +14,8 @@ export interface ParagraphIndent {
   readonly left: number;
   readonly firstLine: number;
   readonly hanging: number;
+  /** 오른쪽 들여쓰기(w:right) — 예전 데이터엔 없을 수 있다. */
+  readonly right?: number;
 }
 
 /** docx의 w:spacing — before/after는 dxa, line은 lineRule이 auto면 240분의 1줄 단위, 아니면 dxa. */
@@ -27,6 +29,20 @@ export interface ParagraphSpacing {
 /** 편집기가 스타일 갤러리로 붙이는 문단 스타일 — 저장 시 원본 styles.xml의 같은 이름 스타일로
  * 연결하거나, 없으면 정의를 추가한다(export.ts의 resolveGalleryStyles). */
 export const GALLERY_PARAGRAPH_STYLES = ['NoSpacing', 'Title', 'Subtitle', 'Quote', 'IntenseQuote'] as const;
+/** 문서 전체 용지 설정(dxa) — 레이아웃 탭이 고친 값만 Y.Map(DOCX_PAGE_MAP)의 'setup'에 담긴다.
+ * 저장 시 원본 w:sectPr의 pgSz/pgMar 값만 이것으로 바꾼다(머리글 참조 등 나머지는 그대로). */
+export interface DocxPageSetup {
+  readonly width: number;
+  readonly height: number;
+  readonly orientation: 'portrait' | 'landscape';
+  readonly top: number;
+  readonly bottom: number;
+  readonly left: number;
+  readonly right: number;
+}
+export const DOCX_PAGE_MAP = 'docxPage';
+export const DOCX_PAGE_SETUP_KEY = 'setup';
+
 export type GalleryStyleId = (typeof GALLERY_PARAGRAPH_STYLES)[number];
 /** 갤러리 스타일의 Word 내장 이름(styles.xml w:name, 소문자) — 한국어 Word는 id가 달라도 이름은 같다. */
 export const GALLERY_STYLE_NAMES: Readonly<Record<GalleryStyleId, string>> = {
@@ -60,6 +76,7 @@ function paragraphDOMAttrs(attrs: Record<string, unknown>): Record<string, strin
   const indent = attrs.indent as ParagraphIndent | null;
   if (indent) {
     if (indent.left) styles.push(`margin-left: ${indent.left / TWIPS_PER_PX}px`);
+    if (indent.right) styles.push(`margin-right: ${indent.right / TWIPS_PER_PX}px`);
     const textIndent = indent.firstLine ? indent.firstLine : indent.hanging ? -indent.hanging : 0;
     if (textIndent) styles.push(`text-indent: ${textIndent / TWIPS_PER_PX}px`);
     out['data-indent'] = JSON.stringify(indent);
@@ -144,6 +161,15 @@ const baseNodes: Record<string, NodeSpec> = {
     selectable: false,
     parseDOM: [{ tag: 'br' }],
     toDOM: () => ['br'],
+  },
+
+  /** docx의 w:br w:type="page" — 페이지 나누기. 편집 화면엔 점선 줄로 보인다. */
+  page_break: {
+    inline: true,
+    group: 'inline',
+    atom: true,
+    parseDOM: [{ tag: 'span.page-break' }],
+    toDOM: () => ['span', { class: 'page-break', contenteditable: 'false' }],
   },
 };
 

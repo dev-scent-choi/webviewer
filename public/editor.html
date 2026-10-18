@@ -63,6 +63,7 @@
       <button class="ribbon-tab ribbon-tab-file" role="tab" data-tab="file">파일</button>
       <button class="ribbon-tab" role="tab" data-tab="home" data-edit-only>홈</button>
       <button class="ribbon-tab" role="tab" data-tab="insert" data-edit-only>삽입</button>
+      <button class="ribbon-tab" role="tab" data-tab="layout" data-edit-only>레이아웃</button>
       <button class="ribbon-tab" role="tab" data-tab="view">보기</button>
       <button class="ribbon-tab ribbon-tab-contextual" role="tab" data-tab="table" data-edit-only hidden>표 레이아웃</button>
       <span class="ribbon-tabs-spacer"></span>
@@ -352,6 +353,76 @@
           </button>
         </div>
         <span class="ribbon-group-label">나누기</span>
+      </div>
+    </div>
+
+    <!-- ===== 레이아웃 ===== -->
+    <div class="toolbar-group toolbar-format ribbon-panel" data-panel="layout" role="tabpanel" hidden>
+      <div class="ribbon-group">
+        <div class="ribbon-group-buttons">
+          <span class="dropdown-btn" id="margins-dropdown">
+            <button class="icon-btn icon-btn-big dropdown-caret" title="여백">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="1"/><rect x="8" y="6" width="8" height="12" stroke-dasharray="2 1.6"/></svg>
+              <span>여백 ▾</span>
+            </button>
+            <div class="dropdown-menu layout-menu" hidden>
+              <button data-value="normal"><strong>보통</strong><small>위·아래·왼쪽·오른쪽 2.54cm</small></button>
+              <button data-value="korean"><strong>한국어 기본</strong><small>위 3cm, 아래·왼쪽·오른쪽 2.54cm</small></button>
+              <button data-value="narrow"><strong>좁게</strong><small>위·아래·왼쪽·오른쪽 1.27cm</small></button>
+              <button data-value="moderate"><strong>중간</strong><small>위·아래 2.54cm, 왼쪽·오른쪽 1.91cm</small></button>
+              <button data-value="wide"><strong>넓게</strong><small>위·아래 2.54cm, 왼쪽·오른쪽 5.08cm</small></button>
+            </div>
+          </span>
+          <span class="dropdown-btn" id="orientation-dropdown">
+            <button class="icon-btn icon-btn-big dropdown-caret" title="용지 방향">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="7" width="14" height="10" rx="1"/><rect x="11" y="3" width="10" height="14" rx="1" stroke-dasharray="2 1.6"/></svg>
+              <span>용지 방향 ▾</span>
+            </button>
+            <div class="dropdown-menu layout-menu" hidden>
+              <button data-value="portrait"><strong>세로</strong></button>
+              <button data-value="landscape"><strong>가로</strong></button>
+            </div>
+          </span>
+          <span class="dropdown-btn" id="paper-size-dropdown">
+            <button class="icon-btn icon-btn-big dropdown-caret" title="크기">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="3" width="12" height="18" rx="1"/><path d="M3 6v12M2 7l1-1 1 1M2 17l1 1 1-1"/></svg>
+              <span>크기 ▾</span>
+            </button>
+            <div class="dropdown-menu layout-menu" hidden>
+              <button data-value="A4"><strong>A4</strong><small>21cm × 29.7cm</small></button>
+              <button data-value="A3"><strong>A3</strong><small>29.7cm × 42cm</small></button>
+              <button data-value="B5"><strong>B5 (JIS)</strong><small>18.2cm × 25.7cm</small></button>
+              <button data-value="B4"><strong>B4 (JIS)</strong><small>25.7cm × 36.4cm</small></button>
+              <button data-value="Letter"><strong>Letter</strong><small>21.59cm × 27.94cm</small></button>
+              <button data-value="Legal"><strong>Legal</strong><small>21.59cm × 35.56cm</small></button>
+            </div>
+          </span>
+        </div>
+        <span class="ribbon-group-label">페이지 설정</span>
+      </div>
+      <div class="ribbon-group">
+        <div class="ribbon-group-buttons">
+          <button id="btn-page-break" class="icon-btn icon-btn-big" title="페이지 나누기 (Ctrl+Enter)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3v6h12V3M6 21v-6h12v6"/><path d="M3 12h3M9 12h2M13 12h2M18 12h3"/></svg>
+            <span>페이지 나누기</span>
+          </button>
+        </div>
+        <span class="ribbon-group-label">나누기</span>
+      </div>
+      <div class="ribbon-group">
+        <div class="ribbon-group-buttons layout-fields">
+          <div class="layout-field-col">
+            <span class="layout-field-title">들여쓰기</span>
+            <label class="layout-field"><span>왼쪽</span><input id="indent-left" type="number" min="0" max="50" step="0.1" /><em>cm</em></label>
+            <label class="layout-field"><span>오른쪽</span><input id="indent-right" type="number" min="0" max="50" step="0.1" /><em>cm</em></label>
+          </div>
+          <div class="layout-field-col">
+            <span class="layout-field-title">간격</span>
+            <label class="layout-field"><span>앞</span><input id="spacing-before" type="number" min="0" max="200" step="6" /><em>pt</em></label>
+            <label class="layout-field"><span>뒤</span><input id="spacing-after" type="number" min="0" max="200" step="6" /><em>pt</em></label>
+          </div>
+        </div>
+        <span class="ribbon-group-label">단락</span>
       </div>
     </div>
 

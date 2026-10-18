@@ -332,3 +332,36 @@ export function replaceAll(state: EditorState, dispatch: (tr: Transaction) => vo
   dispatch(tr);
   return hits.length;
 }
+
+/** 페이지 나누기(Ctrl+Enter) — 지금 위치에 w:br type=page를 넣는다. */
+export const insertPageBreak: Command = (state, dispatch) => {
+  if (dispatch) dispatch(state.tr.replaceSelectionWith(nodes.page_break.create()).scrollIntoView());
+  return true;
+};
+
+/** 레이아웃 탭의 왼쪽/오른쪽 들여쓰기 값(dxa)을 선택한 문단들에 넣는다. */
+export function setIndentSide(side: 'left' | 'right', dxa: number): Command {
+  return (state, dispatch) =>
+    updateParagraphs(state, dispatch, (node) => {
+      const prev = (node.attrs.indent as ParagraphIndent | null) ?? { left: 0, firstLine: 0, hanging: 0 };
+      const next = { ...prev, [side]: Math.max(0, Math.round(dxa)) };
+      return { indent: next.left || next.right || next.firstLine || next.hanging ? next : null };
+    });
+}
+
+/** 레이아웃 탭의 단락 앞/뒤 간격(dxa)을 선택한 문단들에 넣는다. */
+export function setSpacingSide(side: 'before' | 'after', dxa: number): Command {
+  return (state, dispatch) =>
+    updateParagraphs(state, dispatch, (node) => {
+      const prev = (node.attrs.spacing as ParagraphSpacing | null) ?? { line: null, lineRule: null, before: null, after: null };
+      return { spacing: { ...prev, [side]: Math.max(0, Math.round(dxa)) } };
+    });
+}
+
+/** 커서 문단의 들여쓰기·간격(dxa) — 레이아웃 탭 입력칸 표시용. */
+export function currentParagraphBox(state: EditorState): { left: number; right: number; before: number | null; after: number | null } {
+  const parent = state.selection.$from.parent;
+  const indent = parent.attrs.indent as ParagraphIndent | null | undefined;
+  const spacing = parent.attrs.spacing as ParagraphSpacing | null | undefined;
+  return { left: indent?.left ?? 0, right: indent?.right ?? 0, before: spacing?.before ?? null, after: spacing?.after ?? null };
+}

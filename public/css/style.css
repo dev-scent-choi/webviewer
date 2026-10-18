@@ -3315,3 +3315,19 @@ body[data-app] { --v-accent: var(--app-accent); --v-accent-ink: #ffffff; }
 }
 .editor-surface .ProseMirror mark { color: inherit; }
 .format-painting .ProseMirror { cursor: copy; }
+
+/* ---------- Word 레이아웃 탭 ---------- */
+.dropdown-menu.layout-menu { min-width: 15rem; }
+.dropdown-menu.layout-menu button { display: flex; flex-direction: column; align-items: flex-start; gap: 0.1rem; padding: 0.45rem 0.7rem; }
+.dropdown-menu.layout-menu small { color: var(--v-text-dim); font-size: 0.72rem; }
+.layout-fields { gap: 1.1rem; align-items: flex-start; }
+.layout-field-col { display: flex; flex-direction: column; gap: 0.3rem; }
+.layout-field-title { font-size: 0.74rem; font-weight: 600; color: #484644; }
+.layout-field { display: grid; grid-template-columns: 2.6rem 4.4rem 1.4rem; align-items: center; gap: 0.3rem; font-size: 0.76rem; color: #484644; }
+.layout-field input { width: 100%; padding: 0.15rem 0.3rem; border: 1px solid #c8c6c4; border-radius: 2px; font: inherit; text-align: right; }
+.layout-field input:focus { outline: 2px solid var(--app-accent, var(--v-accent)); outline-offset: -1px; border-color: transparent; }
+.layout-field em { font-style: normal; color: var(--v-text-dim); }
+/* 페이지 나누기(w:br type=page) — Word의 "페이지 나누기" 표시처럼 점선과 글자로 보인다 */
+.editor-surface .ProseMirror .page-break { display: block; position: relative; height: 1.4em; margin: 0.4em 0; border-top: 1px dashed #8a8886; user-select: none; }
+.editor-surface .ProseMirror .page-break::after { content: "페이지 나누기"; position: absolute; top: -0.65em; left: 50%; transform: translateX(-50%); padding: 0 0.5em; background: var(--color-surface); color: #8a8886; font-size: 0.7rem; line-height: 1.2; }
+.editor-surface .ProseMirror .page-break.ProseMirror-selectednode { border-top-color: var(--app-accent, var(--v-accent)); }

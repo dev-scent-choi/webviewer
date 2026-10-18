@@ -10,6 +10,7 @@ import {
   type CellBorderSide,
   type CellBorders,
   type CellPadding,
+  type DocxPageSetup,
   type ParagraphIndent,
   type ParagraphSpacing,
   type RowHeight,
@@ -86,6 +87,7 @@ function pPrXml(styleXml: string, attrs: Record<string, unknown>): string {
   if (indent) {
     const indentAttrs = [
       indent.left ? `w:left="${indent.left}"` : '',
+      indent.right ? `w:right="${indent.right}"` : '',
       indent.firstLine ? `w:firstLine="${indent.firstLine}"` : '',
       indent.hanging ? `w:hanging="${indent.hanging}"` : '',
     ].filter(Boolean);
@@ -104,6 +106,8 @@ function renderInline(node: PMNode): string {
       xml += renderRun(child.text ?? '', child.marks);
     } else if (child.type.name === 'hard_break') {
       xml += '<w:r><w:br/></w:r>';
+    } else if (child.type.name === 'page_break') {
+      xml += '<w:r><w:br w:type="page"/></w:r>';
     }
   });
   return xml;
@@ -472,10 +476,49 @@ function registerStylesPart(entries: Record<string, Uint8Array>): void {
   }
 }
 
-export function exportDocx(originalDocxBytes: Uint8Array, doc: PMNode): Uint8Array {
+/**
+ * 원본 w:sectPr에서 용지 크기(pgSz)와 여백(pgMar의 위·아래·왼쪽·오른쪽)만 바꾼다 — 머리글/바닥글
+ * 참조, 제본 여백, 단 설정 등 나머지는 원본 그대로 둔다. CT_SectPr 순서상 pgSz·pgMar는
+ * 머리글/바닥글 참조·각주 설정·구역 종류 뒤에 온다.
+ */
+export function applyPageSetupToSectPr(sectPrXml: string, page: DocxPageSetup): string {
+  let xml = /^<w:sectPr\b[^>]*\/>$/.test(sectPrXml) ? sectPrXml.replace(/\/>$/, '></w:sectPr>') : sectPrXml;
+  const orient = page.orientation === 'landscape' ? ' w:orient="landscape"' : '';
+  const pgSz = `<w:pgSz w:w="${Math.round(page.width)}" w:h="${Math.round(page.height)}"${orient}/>`;
+  const margins: ReadonlyArray<[string, number]> = [
+    ['top', page.top],
+    ['right', page.right],
+    ['bottom', page.bottom],
+    ['left', page.left],
+  ];
+  const oldPgMar = /<w:pgMar\b[^>]*\/>/.exec(xml)?.[0];
+  if (oldPgMar) {
+    let pgMar = oldPgMar;
+    for (const [side, value] of margins) {
+      const pattern = new RegExp(`\\bw:${side}="[^"]*"`);
+      const attr = `w:${side}="${Math.round(value)}"`;
+      pgMar = pattern.test(pgMar) ? pgMar.replace(pattern, attr) : pgMar.replace('<w:pgMar', `<w:pgMar ${attr}`);
+    }
+    xml = xml.replace(oldPgMar, pgMar);
+  }
+  const newPgMar = oldPgMar
+    ? ''
+    : `<w:pgMar w:top="${Math.round(page.top)}" w:right="${Math.round(page.right)}" w:bottom="${Math.round(page.bottom)}" ` +
+      `w:left="${Math.round(page.left)}" w:header="851" w:footer="992" w:gutter="0"/>`;
+  if (/<w:pgSz\b[^>]*\/>/.test(xml)) return xml.replace(/<w:pgSz\b[^>]*\/>/, pgSz + newPgMar);
+  // pgSz 앞에 와야 하는 요소들(머리글/바닥글 참조, 각주·미주 설정, 구역 종류) 뒤에 넣는다
+  const leading =
+    /^<w:sectPr\b[^>]*>(?:\s*<w:(?:headerReference|footerReference|type)\b[^>]*\/>|\s*<w:(?:footnotePr|endnotePr)\b[\s\S]*?<\/w:(?:footnotePr|endnotePr)>)*/.exec(
+      xml,
+    )?.[0] ?? '';
+  return leading + pgSz + newPgMar + xml.slice(leading.length);
+}
+
+export function exportDocx(originalDocxBytes: Uint8Array, doc: PMNode, page: DocxPageSetup | null = null): Uint8Array {
   const entries = guardedUnzipSync(originalDocxBytes, 'exportDocx');
   const originalDocumentXml = entries['word/document.xml'];
-  const sectPrXml = (originalDocumentXml && extractSectPrXml(strFromU8(originalDocumentXml))) ?? '<w:sectPr/>';
+  const originalSectPr = (originalDocumentXml && extractSectPrXml(strFromU8(originalDocumentXml))) ?? '<w:sectPr/>';
+  const sectPrXml = page ? applyPageSetupToSectPr(originalSectPr, page) : originalSectPr;
   const stylesEntry = entries['word/styles.xml'];
   const baseStyles = stylesEntry ? strFromU8(stylesEntry) : `${DOCUMENT_XML_HEADER}<w:styles xmlns:w="${NS_W}"></w:styles>`;
   const styles = resolveGalleryStyles(doc, baseStyles);

@@ -24,7 +24,7 @@ import { prosemirrorToYXmlFragment, yXmlFragmentToProseMirrorRootNode } from 'y-
 import { recordAudit } from '../audit.js';
 import { persistChangeLog } from './changeLogPersistence.js';
 import { findConverter } from '../converters/index.js';
-import { docxSchema } from '../docx/schema.js';
+import { docxSchema, DOCX_PAGE_MAP, DOCX_PAGE_SETUP_KEY, type DocxPageSetup } from '../docx/schema.js';
 import { DocxChangeTracker, type ParagraphChangeSummary } from './docxChangeLog.js';
 import { PptxChangeTracker, type PptxChangeSummary } from './pptxChangeLog.js';
 import { exportDocx } from '../docx/export.js';
@@ -1558,7 +1558,7 @@ async function flushToStore(room: Room): Promise<void> {
     const fragment = ydoc.getXmlFragment(XML_FRAGMENT_NAME);
     const pmDoc = yXmlFragmentToProseMirrorRootNode(fragment, docxSchema);
     const original = await store.readOriginal(docId, meta.ext);
-    const newDocxBytes = exportDocx(original, pmDoc);
+    const newDocxBytes = exportDocx(original, pmDoc, docxPageSetupOf(room.ydoc));
     await store.saveOriginal(docId, meta.ext, Buffer.from(newDocxBytes));
 
     const converter = findConverter(meta.ext);
@@ -1662,7 +1662,13 @@ export async function getCurrentBytes(docId: string): Promise<Uint8Array | null>
   }
   const fragment = room.ydoc.getXmlFragment(XML_FRAGMENT_NAME);
   const pmDoc = yXmlFragmentToProseMirrorRootNode(fragment, docxSchema);
-  return exportDocx(original, pmDoc);
+  return exportDocx(original, pmDoc, docxPageSetupOf(room.ydoc));
+}
+
+/** 레이아웃 탭이 바꾼 용지 설정 — 없으면 null(원본 w:sectPr 그대로). */
+function docxPageSetupOf(ydoc: Y.Doc): DocxPageSetup | null {
+  const value = ydoc.getMap<unknown>(DOCX_PAGE_MAP).get(DOCX_PAGE_SETUP_KEY) as DocxPageSetup | undefined;
+  return value && value.width > 0 && value.height > 0 ? value : null;
 }
 
 function scheduleAutosave(room: Room): void {

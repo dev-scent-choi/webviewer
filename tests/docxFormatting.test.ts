@@ -1,6 +1,6 @@
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 import { describe, expect, test } from 'vitest';
-import { exportDocx } from '../src/docx/export.js';
+import { applyPageSetupToSectPr, exportDocx } from '../src/docx/export.js';
 import { importDocx } from '../src/docx/import.js';
 import { docxSchema } from '../src/docx/schema.js';
 import { makeSampleDocx } from './helpers.js';
@@ -106,5 +106,49 @@ describe('styles.xml이 없는 문서에 갤러리 스타일', () => {
     expect(strFromU8(out['word/styles.xml'])).toContain('w:styleId="Quote"');
     expect(strFromU8(out['[Content_Types].xml'])).toContain('PartName="/word/styles.xml"');
     expect(strFromU8(out['word/_rels/document.xml.rels'])).toMatch(/relationships\/styles" Target="styles.xml"/);
+  });
+});
+
+describe('레이아웃: 페이지 나누기·오른쪽 들여쓰기·용지 설정', () => {
+  test('w:br type=page는 page_break로 읽고 그대로 저장, 오른쪽 들여쓰기도 왕복', () => {
+    const bytes = docxWith(
+      '<w:p><w:pPr><w:ind w:left="400" w:right="600"/></w:pPr><w:r><w:t>앞</w:t></w:r><w:r><w:br w:type="page"/></w:r><w:r><w:t>뒤</w:t></w:r></w:p>',
+    );
+    const { doc } = importDocx(bytes);
+    const names: string[] = [];
+    doc.child(0).forEach((node) => names.push(node.type.name));
+    expect(names).toEqual(['text', 'page_break', 'text']);
+    expect(doc.child(0).attrs.indent).toMatchObject({ left: 400, right: 600 });
+    const { documentXml } = roundTrip(bytes);
+    expect(documentXml).toContain('<w:r><w:br w:type="page"/></w:r>');
+    expect(documentXml).toContain('<w:ind w:left="400" w:right="600"/>');
+  });
+
+  const a4Landscape = { width: 16838, height: 11906, orientation: 'landscape' as const, top: 720, bottom: 720, left: 720, right: 720 };
+
+  test('용지 설정: 기존 pgSz/pgMar 값만 바꾸고 머리글 참조·제본 여백은 그대로', () => {
+    const sectPr =
+      '<w:sectPr><w:headerReference w:type="default" r:id="rId8"/><w:pgSz w:w="11906" w:h="16838"/>' +
+      '<w:pgMar w:top="1701" w:right="1440" w:bottom="1440" w:left="1440" w:header="851" w:footer="992" w:gutter="10"/><w:cols w:space="425"/></w:sectPr>';
+    expect(applyPageSetupToSectPr(sectPr, a4Landscape)).toBe(
+      '<w:sectPr><w:headerReference w:type="default" r:id="rId8"/><w:pgSz w:w="16838" w:h="11906" w:orient="landscape"/>' +
+        '<w:pgMar w:top="720" w:right="720" w:bottom="720" w:left="720" w:header="851" w:footer="992" w:gutter="10"/><w:cols w:space="425"/></w:sectPr>',
+    );
+  });
+
+  test('용지 설정: 빈 sectPr에는 pgSz·pgMar를 새로 넣는다', () => {
+    expect(applyPageSetupToSectPr('<w:sectPr/>', a4Landscape)).toMatch(
+      /^<w:sectPr><w:pgSz w:w="16838" w:h="11906" w:orient="landscape"\/><w:pgMar w:top="720" [^>]*\/><\/w:sectPr>$/,
+    );
+    expect(applyPageSetupToSectPr('<w:sectPr><w:headerReference w:type="default" r:id="rId1"/><w:cols/></w:sectPr>', a4Landscape)).toMatch(
+      /^<w:sectPr><w:headerReference [^>]*\/><w:pgSz [^>]*\/><w:pgMar [^>]*\/><w:cols\/><\/w:sectPr>$/,
+    );
+  });
+
+  test('exportDocx에 용지 설정을 넘기면 document.xml의 sectPr에 반영된다', () => {
+    const bytes = makeSampleDocx(['x']);
+    const { doc } = importDocx(bytes);
+    const out = strFromU8(unzipSync(exportDocx(new Uint8Array(bytes), doc, a4Landscape))['word/document.xml']);
+    expect(out).toContain('<w:pgSz w:w="16838" w:h="11906" w:orient="landscape"/>');
   });
 });

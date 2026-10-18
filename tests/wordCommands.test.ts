@@ -126,3 +126,16 @@ describe('Word 홈 리본 명령', () => {
     expect(state.doc.child(0).child(0).marks.map((m) => m.type.name)).toEqual(['strong']);
   });
 });
+
+describe('Word 레이아웃 탭 명령', () => {
+  test('페이지 나누기·들여쓰기 왼쪽/오른쪽·단락 앞/뒤 간격', async () => {
+    const { insertPageBreak, setIndentSide, setSpacingSide, currentParagraphBox } = await import('../src/client/wordCommands.js');
+    let state = stateOf(['abc'], [2, 2]);
+    state = run(state, insertPageBreak);
+    expect(state.doc.child(0).child(1).type.name).toBe('page_break');
+    state = run(state, setIndentSide('right', 567));
+    state = run(state, setIndentSide('left', 1134));
+    state = run(state, setSpacingSide('after', 240));
+    expect(currentParagraphBox(state)).toEqual({ left: 1134, right: 567, before: null, after: 240 });
+  });
+});
