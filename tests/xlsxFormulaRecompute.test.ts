@@ -503,6 +503,28 @@ describe('room.ts: formula cells recompute into GRID_COMPUTED_MAP', () => {
 });
 
 describe('xlsx/formulas.ts: computeGridCellDisplayAsync (LazyGridStore, cache-miss retry)', () => {
+  // 이 블록에도 위 블록과 같은 격리가 필요하다 — 없으면 아래 교차 시트 테스트들이 store.saveOriginal/
+  // writeMeta로 **저장소의 실제 data/ 폴더(운영 데이터)** 에 "x.xlsx" 문서를 남겼다(실측).
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'docview-formula-lazy-'));
+    vi.resetModules();
+    vi.stubEnv('DOCVIEW_DATA_DIR', tmpDir);
+    vi.stubEnv('DOCVIEW_STORAGE', 'memory');
+    vi.doMock('../src/converters/index.js', () => ({ findConverter: () => null }));
+    vi.doMock('../src/audit.js', () => ({ recordAudit: async () => undefined }));
+  });
+
+  afterEach(async () => {
+    vi.doUnmock('../src/converters/index.js');
+    vi.doUnmock('../src/audit.js');
+    vi.unstubAllEnvs();
+    vi.useRealTimers();
+    vi.resetModules();
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
   test('a formula referencing a row far outside any cached page is still evaluated correctly (forces at least one cache-miss retry)', async () => {
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet('Sheet1');

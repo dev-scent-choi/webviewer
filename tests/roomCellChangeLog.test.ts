@@ -7,7 +7,8 @@ import * as decoding from 'lib0/decoding';
 import * as encoding from 'lib0/encoding';
 import * as Y from 'yjs';
 import { messageYjsSyncStep2, messageYjsUpdate, readUpdate, writeSyncStep1, writeUpdate } from 'y-protocols/sync';
-import { describe, expect, test } from 'vitest';
+import path from 'node:path';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 /**
  * "누가/언제/어디를/무엇으로" 바꿨는지 조회하는 getCellChangeLog(room.ts) 기능의 테스트 —
@@ -160,6 +161,29 @@ async function flushEventLoop(turns = 50): Promise<void> {
 }
 
 describe('collab/room.ts: getCellChangeLog', () => {
+  // 다른 room 테스트 파일들과 같은 격리 — 없으면 이 파일의 테스트들이 store.saveOriginal/writeMeta로
+  // **저장소의 실제 data/ 폴더(운영 데이터)** 에 "x.xlsx"/"x.docx" 문서를 남겼다(실측: 운영 8000
+  // 서버의 문서 목록에 테스트 실행 시각과 일치하는 x.xlsx 7개·x.docx 1개가 생겼다).
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'docview-room-changelog-'));
+    vi.resetModules();
+    vi.stubEnv('DOCVIEW_DATA_DIR', tmpDir);
+    vi.stubEnv('DOCVIEW_STORAGE', 'memory');
+    vi.doMock('../src/converters/index.js', () => ({ findConverter: () => null }));
+    vi.doMock('../src/audit.js', () => ({ recordAudit: async () => undefined }));
+  });
+
+  afterEach(async () => {
+    vi.doUnmock('../src/converters/index.js');
+    vi.doUnmock('../src/audit.js');
+    vi.unstubAllEnvs();
+    vi.useRealTimers();
+    vi.resetModules();
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
   test('returns null when no room is open for the document', async () => {
     const { getCellChangeLog } = await import('../src/collab/room.js');
     expect(getCellChangeLog(randomUUID())).toBeNull();
