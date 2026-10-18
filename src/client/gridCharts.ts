@@ -188,6 +188,17 @@ function newId(): string {
   return typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `ch${Date.now()}${Math.random().toString(36).slice(2)}`;
 }
 
+/** /api/view/xlsx-images 응답 항목(서버 drawingPassthrough.ts의 GridImage) */
+interface FileImage {
+  readonly id: string;
+  readonly sheetName: string;
+  readonly name: string;
+  readonly from: GridChart['from'];
+  readonly to: GridChart['to'];
+  readonly size: GridChart['size'];
+  readonly src: string;
+}
+
 export function setupGridCharts(host: GridChartHost): { render(): void; insert(kind: ChartKind): void } {
   const map = host.ydoc.getMap<GridChart>(GRID_CHARTS_MAP);
   let fileCharts: GridChart[] = [];
@@ -195,6 +206,16 @@ export function setupGridCharts(host: GridChartHost): { render(): void; insert(k
   const layer = document.createElement('div');
   layer.className = 'grid-chart-layer';
   host.scrollHost.append(layer);
+
+  // 파일에 있던 그림(로고 등) — 읽기 전용으로 칸 위치에 얹는다(저장할 때는 원본 그리기 파트째 보존된다)
+  let fileImages: FileImage[] = [];
+  void fetch(`/api/view/xlsx-images?token=${encodeURIComponent(host.token)}`)
+    .then((res) => res.json() as Promise<{ data?: { images?: FileImage[] } }>)
+    .then((json) => {
+      fileImages = json.data?.images ?? [];
+      render();
+    })
+    .catch(() => undefined);
 
   void fetch(`/api/view/xlsx-charts?token=${encodeURIComponent(host.token)}`)
     .then((res) => res.json() as Promise<{ data?: { charts?: GridChart[] } }>)
@@ -287,6 +308,38 @@ export function setupGridCharts(host: GridChartHost): { render(): void; insert(k
     }
     for (const el of [...layer.querySelectorAll<HTMLElement>('.grid-chart')]) if (!keep.has(el.dataset.chartId ?? '')) el.remove();
     if (selectedId && !keep.has(selectedId)) select(null);
+    renderImages(sheetName);
+  }
+
+  function renderImages(sheetName: string): void {
+    const keep = new Set<string>();
+    for (const image of fileImages) {
+      if (image.sheetName !== sheetName) continue;
+      const left = host.colLeft(image.from.col) + image.from.dx;
+      const top = host.rowTop(image.from.row) + image.from.dy;
+      const box = image.size
+        ? { left, top, width: image.size.width, height: image.size.height }
+        : image.to
+          ? { left, top, width: host.colLeft(image.to.col) + image.to.dx - left, height: host.rowTop(image.to.row) + image.to.dy - top }
+          : null;
+      if (!box || !(box.width > 0 && box.height > 0)) continue;
+      keep.add(image.id);
+      let img = layer.querySelector<HTMLImageElement>(`img[data-image-id="${CSS.escape(image.id)}"]`);
+      if (!img) {
+        img = document.createElement('img');
+        img.className = 'grid-image';
+        img.dataset.imageId = image.id;
+        img.alt = image.name;
+        img.draggable = false;
+        img.src = image.src;
+        layer.prepend(img);
+      }
+      img.style.left = `${box.left}px`;
+      img.style.top = `${box.top}px`;
+      img.style.width = `${box.width}px`;
+      img.style.height = `${box.height}px`;
+    }
+    for (const img of [...layer.querySelectorAll<HTMLImageElement>('img.grid-image')]) if (!keep.has(img.dataset.imageId ?? '')) img.remove();
   }
 
   function bindInteractions(el: HTMLElement): void {

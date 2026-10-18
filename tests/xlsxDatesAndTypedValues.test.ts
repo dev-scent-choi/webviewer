@@ -7,7 +7,7 @@ import { coerceCellValue, writeExportCellValue } from '../src/xlsx/collab.js';
 function grid(rows: Array<Array<{ v: string } | 0>>): GridDocument {
   return {
     styles: [],
-    sheets: [{ name: 'S', rowCount: rows.length, colCount: 4, colWidths: [], defaultColWidth: 64, defaultRowHeight: 20, rowHeights: [], merges: [], freezeRows: 0, freezeCols: 0, rows }],
+    sheets: [{ name: 'S', rowCount: rows.length, colCount: 4, colWidths: [], defaultColWidth: 64, defaultRowHeight: 20, rowHeights: [], showGridLines: true, merges: [], freezeRows: 0, freezeCols: 0, rows }],
   };
 }
 

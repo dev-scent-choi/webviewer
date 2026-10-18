@@ -575,9 +575,15 @@ async function main(): Promise<void> {
     }
     span.textContent = text;
     span.style.width = '';
+    span.style.marginLeft = '';
     if (!text.trim() || td.colSpan > 1) return; // 병합 칸은 이미 colspan으로 넓어져 있어 스필이 필요 없다
-    // 줄 바꿈 칸은 넘치지 않고 자기 칸 안에서 줄을 바꾼다(엑셀과 같다)
-    if (styles.get(key)?.wrap || !isSpillEligible(styles.get(key), text)) return;
+    // 줄 바꿈 칸은 넘치지 않고 자기 칸 안에서 줄을 바꾼다(엑셀과 같다). 가운데 정렬 글자는 양옆 빈 칸으로
+    // 고르게, 오른쪽 정렬 글자(숫자 아님)는 왼쪽 빈 칸으로 넘친다.
+    const cellStyle = styles.get(key);
+    if (cellStyle?.wrap) return;
+    const spillMode: 'right' | 'left' | 'center' | null =
+      cellStyle?.a === 'c' ? 'center' : cellStyle?.a === 'r' ? (NUMERIC_VALUE.test(text.trim()) ? null : 'left') : isSpillEligible(cellStyle, text) ? 'right' : null;
+    if (!spillMode) return;
     const parsed = parseGridCellKey(key);
     if (!parsed) return;
     const { sheetIdx, row, col } = parsed;
@@ -595,13 +601,19 @@ async function main(): Promise<void> {
     const useCache = vwValid && sheetIdx === vwSheetIdx;
     const colCount = useCache ? vwRenderColCount : renderCountsFor(sheet).cols;
     const { anchors, covered } = useCache ? { anchors: vwAnchors, covered: vwCovered } : buildMergeLookup(sheetIdx);
-    let width = colWidthOf(col);
-    for (let cc = col + 1; cc < colCount; cc += 1) {
-      if (covered.has(`${row}:${cc}`) || anchors.has(`${row}:${cc}`)) break;
-      if ((cells.get(gridCellKey(sheetIdx, row, cc)) ?? '').trim() !== '') break;
-      width += colWidthOf(cc);
-    }
-    if (width > colWidthOf(col)) span.style.width = `${width}px`;
+    const emptyAt = (cc: number) =>
+      cc >= 0 &&
+      cc < colCount &&
+      !covered.has(`${row}:${cc}`) &&
+      !anchors.has(`${row}:${cc}`) &&
+      (cells.get(gridCellKey(sheetIdx, row, cc)) ?? '').trim() === '';
+    let right = 0;
+    if (spillMode !== 'left') for (let cc = col + 1; emptyAt(cc); cc += 1) right += colWidthOf(cc);
+    let left = 0;
+    if (spillMode !== 'right') for (let cc = col - 1; emptyAt(cc); cc -= 1) left += colWidthOf(cc);
+    if (spillMode === 'center') left = right = Math.min(left, right);
+    if (left + right > 0) span.style.width = `${colWidthOf(col) + left + right}px`;
+    if (left > 0) span.style.marginLeft = `-${left}px`;
   }
 
   /** key가 가리키는 칸이 바뀌면, 그 칸 자신뿐 아니라 왼쪽에서 그 칸으로 넘쳐 들어오고 있었을 수
@@ -1499,6 +1511,7 @@ async function main(): Promise<void> {
     vwValid = false;
     tableEl.replaceChildren();
     if (!sheet) return;
+    tableEl.classList.toggle('g-no-gridlines', sheet.showGridLines === false);
 
     warningEl.hidden = !(sheet.rowCount > EDIT_SOFT_ROW_LIMIT || sheet.colCount > EDIT_SOFT_COL_LIMIT);
     const { rows: renderRowCount, cols: renderColCount } = renderCountsFor(sheet);

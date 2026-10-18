@@ -46,7 +46,7 @@ import {
 } from '../spreadsheet.js';
 import { exportXlsxFromGridStreaming } from '../xlsx/exportStreaming.js';
 import { GRID_CHARTS_MAP, type GridChart } from '../xlsx/chartModel.js';
-import { readSheetCharts } from '../xlsx/drawingPassthrough.js';
+import { readSheetCharts, readSheetImages, type GridImage } from '../xlsx/drawingPassthrough.js';
 import { readAutoFilters } from '../xlsx/autoFilter.js';
 import { PPTX_SLIDE_DESIGN_MAP, PPTX_SLIDE_DESIGN_ORIGINAL_MAP, readSlideDesign, type SlideDesign } from '../pptx/slideDesign.js';
 import { GRID_FILTERS_MAP, type SheetFilter } from '../xlsx/filterModel.js';
@@ -770,6 +770,7 @@ function makeEmptyLazySheetMeta(name: string): LazyGridSheetMeta {
     defaultColWidth: defaultColWidthPx(),
     defaultRowHeight: rowHeightPtToPx(EXCEL_DEFAULT_ROW_HEIGHT_PT),
     rowHeights: [],
+    showGridLines: true,
     merges: [],
     freezeRows: 0,
     freezeCols: 0,
@@ -908,6 +909,14 @@ export async function getFileCharts(docId: string): Promise<GridChart[]> {
   if (room) await room.ready;
   const bytes = room?.originalXlsxBytes ?? (await store.readOriginal(docId, 'xlsx'));
   return readSheetCharts(bytes);
+}
+
+/** 파일에 있는 그림(로고 등) — 보기·편집 화면이 칸 위치에 맞춰 얹는다. 열린 룸이 있으면 그 원본 기준. */
+export async function getFileImages(docId: string): Promise<GridImage[]> {
+  const room = rooms.get(docId);
+  if (room) await room.ready;
+  const bytes = room?.originalXlsxBytes ?? (await store.readOriginal(docId, 'xlsx'));
+  return readSheetImages(bytes);
 }
 
 /**

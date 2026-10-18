@@ -163,6 +163,7 @@ export async function seedGridFromXlsx(ydoc: Y.Doc, grid: GridDocument): Promise
         defaultColWidth: sheet.defaultColWidth,
         defaultRowHeight: sheet.defaultRowHeight,
         rowHeights: sheet.rowHeights,
+        showGridLines: sheet.showGridLines,
       });
       if (sheet.merges.length > 0) merges.set(String(sheetIdx), sheet.merges);
     });
@@ -456,6 +457,7 @@ export async function seedGridStructureOnly(ydoc: Y.Doc, sheets: readonly LazyGr
         defaultColWidth: sheet.defaultColWidth,
         defaultRowHeight: sheet.defaultRowHeight,
         rowHeights: sheet.rowHeights,
+        showGridLines: sheet.showGridLines,
       });
       if (sheet.merges.length > 0) merges.set(String(sheetIdx), sheet.merges);
     }, GRID_WINDOW_SEED_ORIGIN);

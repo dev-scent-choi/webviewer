@@ -4,14 +4,17 @@ import type { DocumentMeta } from './types.js';
 import { buildSheetNameIndex, computeGridCellDisplay } from './xlsx/formulas.js';
 import { isDateNumFmt, serialToDateText } from './collab/cellValueShared.js';
 import { stripDrawings } from './xlsx/drawingPassthrough.js';
+import { unzipSync, strFromU8 } from 'fflate';
 import {
   EXCEL_DEFAULT_FONT_PX,
   EXCEL_DEFAULT_ROW_HEIGHT_PT,
   autoFitRowHeightPx,
   defaultColWidthPx,
+  defaultFontOfStylesXml,
   encodeRowHeights,
   estimateWrappedLines,
   excelColWidthToPx,
+  maxDigitWidthPx,
   rowHeightPtToPx,
   type RowHeightRuns,
 } from './xlsx/sheetGeometry.js';
@@ -60,6 +63,8 @@ export interface GridSheet {
   /** 기본 행 높이(px)와, 그와 다른 행(숨긴 행은 0)의 높이 묶음 — sheetGeometry.ts 참고 */
   readonly defaultRowHeight: number;
   readonly rowHeights: RowHeightRuns;
+  /** 시트 보기에서 격자선을 껐으면 false */
+  readonly showGridLines: boolean;
   readonly merges: readonly GridMerge[];
   /** 엑셀 "틀 고정" — 위 N행/왼쪽 N열은 스크롤해도 계속 보인다. 없으면 둘 다 0. */
   readonly freezeRows: number;
@@ -822,6 +827,10 @@ export async function parseXlsxToGrid(xlsxBytes: Buffer): Promise<GridDocument> 
   // 없다 — 배열(workbook.worksheets)을 직접 도는 for 루프로 바꿔, 대형 시트를 열 때 그 문서를 연
   // 사용자뿐 아니라 그 순간 서버에 접속한 다른 모든 사용자·다른 문서 요청까지 함께 멈추지 않도록
   // 주기적으로 양보한다.
+  // 열 너비 단위의 기준 — 통합 문서 기본 글꼴(표준 스타일)의 숫자 폭
+  const stylesPart = unzipSync(new Uint8Array(xlsxBytes), { filter: (file) => file.name === 'xl/styles.xml' })['xl/styles.xml'];
+  const defaultFont = defaultFontOfStylesXml(stylesPart ? strFromU8(stylesPart) : undefined);
+  const mdw = maxDigitWidthPx(defaultFont.name, defaultFont.size);
   for (const sheet of workbook.worksheets) {
     if (sheet.state && sheet.state !== 'visible') continue;
     // sheet.actualRowCount는 ExcelJS 자체 문서상 "실제 값이 있는 행의 '개수'"라, 성긴 시트(예:
@@ -888,13 +897,21 @@ export async function parseXlsxToGrid(xlsxBytes: Buffer): Promise<GridDocument> 
     }
 
     const sheetFormat = sheet.properties as { defaultRowHeight?: number; defaultColWidth?: number };
-    const defaultColWidth = defaultColWidthPx(sheetFormat.defaultColWidth);
+    const defaultColWidth = defaultColWidthPx(sheetFormat.defaultColWidth, 8, mdw);
     const defaultRowHeight = rowHeightPtToPx(sheetFormat.defaultRowHeight || EXCEL_DEFAULT_ROW_HEIGHT_PT);
     const colWidths: number[] = [];
     for (let c = 1; c <= colCount; c += 1) {
       const column = sheet.getColumn(c);
-      colWidths.push(column.hidden ? 0 : column.width ? excelColWidthToPx(column.width) : defaultColWidth);
+      colWidths.push(column.hidden ? 0 : column.width ? excelColWidthToPx(column.width, mdw) : defaultColWidth);
     }
+    // 값이 없는 오른쪽 열도 너비를 따로 정해 두었으면(양식 문서가 흔히 그렇다) 그 열까지 너비를 싣는다
+    const extraWidths: number[] = [];
+    for (let c = colCount + 1; c <= MAX_COLS; c += 1) {
+      const column = sheet.getColumn(c);
+      extraWidths.push(column.hidden ? 0 : column.width ? excelColWidthToPx(column.width, mdw) : defaultColWidth);
+    }
+    while (extraWidths.length > 0 && extraWidths[extraWidths.length - 1] === defaultColWidth) extraWidths.pop();
+    colWidths.push(...extraWidths);
     // 파일에 적힌 행 높이·숨김 — 값이 없는 꼬리 행도(서식만 있는 행) 화면 여백 행으로 그려지므로 다 읽는다
     const explicitRowPx = new Map<number, number>();
     for (let r = 1; r <= rowCount; r += 1) {
@@ -926,6 +943,7 @@ export async function parseXlsxToGrid(xlsxBytes: Buffer): Promise<GridDocument> 
     const freezeCols = frozenView ? ((frozenView as { xSplit?: number }).xSplit ?? 0) : 0;
 
     const rowHeights = computeRowHeights(rows, palette.toArray(), colWidths, merges, explicitRowPx, defaultRowHeight);
+    const showGridLines = (sheet.views?.[0] as { showGridLines?: boolean } | undefined)?.showGridLines !== false;
     sheets.push({
       name: sheet.name,
       rowCount: rows.length,
@@ -934,6 +952,7 @@ export async function parseXlsxToGrid(xlsxBytes: Buffer): Promise<GridDocument> 
       defaultColWidth,
       defaultRowHeight,
       rowHeights,
+      showGridLines,
       merges,
       freezeRows,
       freezeCols,
@@ -1007,6 +1026,7 @@ export function parseCsvToGrid(text: string): GridDocument {
         defaultColWidth: defaultColWidthPx(),
         defaultRowHeight: rowHeightPtToPx(EXCEL_DEFAULT_ROW_HEIGHT_PT),
         rowHeights: [],
+        showGridLines: true,
         merges: [],
         freezeRows: 0,
         freezeCols: 0,

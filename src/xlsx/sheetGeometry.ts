@@ -9,17 +9,61 @@ export const EXCEL_MAX_DIGIT_WIDTH_PX = 7;
 /** 시트에 기본 행 높이가 없을 때 엑셀이 쓰는 값(pt) */
 export const EXCEL_DEFAULT_ROW_HEIGHT_PT = 15;
 
-/** 파일에 저장된 열 너비(문자 단위, 여백 포함) → 화면 px. OOXML 명세의 변환식 그대로다. */
-export function excelColWidthToPx(width: number): number {
-  const mdw = EXCEL_MAX_DIGIT_WIDTH_PX;
+/** 파일에 저장된 열 너비(문자 단위, 여백 포함) → 화면 px. OOXML 명세의 변환식 그대로다.
+ * mdw는 통합 문서 기본 글꼴의 숫자 한 자 폭(maxDigitWidthPx). */
+export function excelColWidthToPx(width: number, mdw = EXCEL_MAX_DIGIT_WIDTH_PX): number {
   return Math.trunc(((256 * width + Math.trunc(128 / mdw)) / 256) * mdw);
 }
 
 /** 너비를 따로 정하지 않은 열의 폭 — sheetFormatPr의 defaultColWidth가 있으면 그것, 없으면
- * baseColWidth(기본 8자)에 여백 5px을 더해 8px 단위로 올린 값(엑셀 기본 64px). */
-export function defaultColWidthPx(defaultColWidth?: number, baseColWidth = 8): number {
-  if (defaultColWidth && defaultColWidth > 0) return excelColWidthToPx(defaultColWidth);
-  return Math.ceil((baseColWidth * EXCEL_MAX_DIGIT_WIDTH_PX + 5) / 8) * 8;
+ * baseColWidth(기본 8자)에 여백 5px을 더해 8px 단위로 올린 값(Calibri 기본 64px). */
+export function defaultColWidthPx(defaultColWidth?: number, baseColWidth = 8, mdw = EXCEL_MAX_DIGIT_WIDTH_PX): number {
+  if (defaultColWidth && defaultColWidth > 0) return excelColWidthToPx(defaultColWidth, mdw);
+  return Math.ceil((baseColWidth * mdw + 5) / 8) * 8;
+}
+
+/** 글꼴별 숫자 폭(글자 크기 대비) — 엑셀이 화면(96dpi)에서 재는 값에 맞춘 근사치. 한글 글꼴은 숫자가
+ * 넓다(예: 돋움 11pt는 한 자 9px — 같은 "너비 3.66"이 Calibri 26px, 돋움 33px로 그려진다). */
+const DIGIT_WIDTH_RATIO: Readonly<Record<string, number>> = {
+  calibri: 0.507,
+  arial: 0.556,
+  'times new roman': 0.5,
+  tahoma: 0.546,
+  verdana: 0.636,
+  '맑은 고딕': 0.55,
+  'malgun gothic': 0.55,
+  '나눔고딕': 0.55,
+  'nanumgothic': 0.55,
+  '돋움': 0.6,
+  dotum: 0.6,
+  '돋움체': 0.6,
+  dotumche: 0.6,
+  '굴림': 0.6,
+  gulim: 0.6,
+  '굴림체': 0.6,
+  gulimche: 0.6,
+  '바탕': 0.6,
+  batang: 0.6,
+  '바탕체': 0.6,
+  batangche: 0.6,
+  '궁서': 0.6,
+  gungsuh: 0.6,
+};
+
+/** 통합 문서 기본 글꼴(styles.xml 첫 글꼴 = 표준 스타일)의 숫자 한 자 폭(px) — 열 너비 단위의 기준 */
+export function maxDigitWidthPx(fontName: string | undefined, sizePt: number | undefined): number {
+  const ratio = DIGIT_WIDTH_RATIO[(fontName ?? 'Calibri').trim().toLowerCase()] ?? 0.55;
+  const px = ((sizePt && sizePt > 0 ? sizePt : 11) * 96) / 72;
+  return Math.max(1, Math.round(px * ratio));
+}
+
+/** styles.xml에서 기본 글꼴(첫 <font>)의 이름·크기 */
+export function defaultFontOfStylesXml(stylesXml: string | undefined): { name?: string; size?: number } {
+  const first = stylesXml && /<(?:\w+:)?fonts\b[^>]*>\s*<(?:\w+:)?font\b[^>]*>([\s\S]*?)<\/(?:\w+:)?font>/.exec(stylesXml)?.[1];
+  if (!first) return {};
+  const size = Number(/<(?:\w+:)?sz\b[^>]*\bval="([^"]+)"/.exec(first)?.[1]);
+  const name = /<(?:\w+:)?name\b[^>]*\bval="([^"]+)"/.exec(first)?.[1];
+  return { name, size: Number.isFinite(size) && size > 0 ? size : undefined };
 }
 
 export function rowHeightPtToPx(pt: number): number {

@@ -208,6 +208,27 @@ function anchorPoint(xml: string, tag: 'from' | 'to'): ChartAnchorPoint | null {
   return { col: num('col'), row: num('row'), dx: num('colOff') / EMU_PER_PX, dy: num('rowOff') / EMU_PER_PX };
 }
 
+/** 그리기 XML의 그림(<pic>) 앵커들 — 이미지 관계 id(blip r:embed)와 위치. 크기가 0인 그림은 뺀다. */
+export function pictureAnchorsOf(source: string): Array<{ rid: string; name: string; from: ChartAnchorPoint; to: ChartAnchorPoint | null; size: GridChart['size'] }> {
+  const xml = unprefixed(source);
+  const out: Array<{ rid: string; name: string; from: ChartAnchorPoint; to: ChartAnchorPoint | null; size: GridChart['size'] }> = [];
+  for (const m of xml.matchAll(/<(twoCellAnchor|oneCellAnchor|absoluteAnchor)\b[^>]*>([\s\S]*?)<\/\1>/g)) {
+    const body = m[2];
+    if (!/<pic\b/.test(body)) continue;
+    const rid = /<blip\b[^>]*\br:embed="([^"]+)"/.exec(body)?.[1];
+    if (!rid) continue;
+    const from = anchorPoint(body, 'from') ?? { row: 0, col: 0, dx: 0, dy: 0 };
+    const to = m[1] === 'twoCellAnchor' ? anchorPoint(body, 'to') : null;
+    const ext = /<ext\b[^>]*cx="(\d+)"[^>]*cy="(\d+)"/.exec(body);
+    const size = m[1] !== 'twoCellAnchor' && ext ? { width: Number(ext[1]) / EMU_PER_PX, height: Number(ext[2]) / EMU_PER_PX } : null;
+    // 폭이나 높이가 0인 그림(파일에 남아 있지만 화면에는 안 보이는 것)
+    if (to && ((to.row === from.row && to.dy <= from.dy) || (to.col === from.col && to.dx <= from.dx))) continue;
+    if (size && (size.width <= 0 || size.height <= 0)) continue;
+    out.push({ rid, name: /<cNvPr\b[^>]*\bname="([^"]*)"/.exec(body)?.[1] ?? '', from, to, size });
+  }
+  return out;
+}
+
 /** 그리기 XML의 차트 앵커들 — 차트 관계 id와 위치 */
 export function chartAnchorsOf(source: string): Array<{ rid: string; from: ChartAnchorPoint; to: ChartAnchorPoint | null; size: GridChart['size'] }> {
   const xml = unprefixed(source);

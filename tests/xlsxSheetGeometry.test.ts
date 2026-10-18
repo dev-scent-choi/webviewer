@@ -6,6 +6,8 @@ import fs from 'node:fs/promises';
 import {
   RowLayout,
   defaultColWidthPx,
+  defaultFontOfStylesXml,
+  maxDigitWidthPx,
   encodeRowHeights,
   excelColWidthToPx,
   shiftRowHeightRuns,
@@ -13,9 +15,21 @@ import {
 
 describe('엑셀 열 너비·행 높이 → 화면 px', () => {
   test('열 너비는 OOXML 변환식(숫자 폭 7px), 기본 열은 64px', () => {
-    expect([5, 9.140625, 22, 40].map(excelColWidthToPx)).toEqual([35, 64, 154, 280]);
+    expect([5, 9.140625, 22, 40].map((w) => excelColWidthToPx(w))).toEqual([35, 64, 154, 280]);
     expect(defaultColWidthPx()).toBe(64);
     expect(defaultColWidthPx(18)).toBe(126);
+  });
+
+  test('열 너비 단위는 통합 문서 기본 글꼴의 숫자 폭(Calibri 7·맑은 고딕 8·돋움 9px)', () => {
+    expect(maxDigitWidthPx('Calibri', 11)).toBe(7);
+    expect(maxDigitWidthPx('맑은 고딕', 11)).toBe(8);
+    expect(maxDigitWidthPx('돋움', 11)).toBe(9);
+    // 돋움 기본 문서: 너비 3.66 → 33px(엑셀 화면 실측과 같다), 기본 8.89 → 80px
+    expect(excelColWidthToPx(3.6640625, 9)).toBe(33);
+    expect(defaultColWidthPx(8.88671875, 8, 9)).toBe(80);
+    // 한국어 엑셀 기본 열(맑은 고딕 11, 8.38자) = 72px
+    expect(excelColWidthToPx(8.38 + 5 / 8, 8)).toBe(72);
+    expect(defaultFontOfStylesXml('<styleSheet><fonts count="2"><font><sz val="11"/><name val="돋움"/></font><font/></fonts></styleSheet>')).toEqual({ name: '돋움', size: 11 });
   });
 
   test('RowLayout: 높이가 다른 행·숨긴 행(0)·필터로 숨긴 행을 반영한 위치', () => {
@@ -83,6 +97,33 @@ describe('보기·편집 양쪽 추출이 같은 열 너비·행 높이를 낸�
       expect(lazy.sheetMeta.map((m) => m.name)).toEqual(['점검표', '둘째']);
       expect(grid.sheets[1].defaultColWidth).toBe(126);
       expect(lazy.sheetMeta[1].defaultColWidth).toBe(126);
+    } finally {
+      await fs.rm(lazy.rowStorePath, { force: true });
+    }
+  });
+});
+
+describe('그림·격자선', () => {
+  test('그림 위치·내용을 읽고, 격자선을 끈 시트를 알려 준다', async () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('표지', { views: [{ showGridLines: false }] });
+    ws.getCell('C3').value = '제목';
+    // 1x1 png
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
+    const imageId = wb.addImage({ buffer: png as unknown as ExcelJS.Buffer, extension: 'png' });
+    ws.addImage(imageId, { tl: { col: 1, row: 1 }, ext: { width: 120, height: 40 } });
+    const bytes = Buffer.from(await wb.xlsx.writeBuffer());
+    const { readSheetImages } = await import('../src/xlsx/drawingPassthrough.js');
+    const images = readSheetImages(new Uint8Array(bytes));
+    expect(images).toHaveLength(1);
+    expect(images[0].sheetName).toBe('표지');
+    expect(images[0].from).toMatchObject({ col: 1, row: 1 });
+    expect(images[0].src.startsWith('data:image/png;base64,')).toBe(true);
+    const grid = await parseXlsxToGrid(bytes);
+    expect(grid.sheets[0].showGridLines).toBe(false);
+    const lazy = await ingestXlsxLazily('geom-grid', bytes);
+    try {
+      expect(lazy.sheetMeta[0].showGridLines).toBe(false);
     } finally {
       await fs.rm(lazy.rowStorePath, { force: true });
     }

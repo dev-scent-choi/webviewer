@@ -62,6 +62,8 @@ export interface SheetStructure {
   /** 기본 행 높이(px)와 그와 다른 행(숨긴 행은 0)의 높이 묶음 [시작 행, 행 수, px] — xlsx/sheetGeometry.ts */
   readonly defaultRowHeight?: number;
   readonly rowHeights?: ReadonlyArray<readonly [number, number, number]>;
+  /** 시트 보기에서 격자선을 껐으면 false(없으면 켜짐) */
+  readonly showGridLines?: boolean;
   /** 시트 탭이 표시되는 순서 — 시트를 가리키는 안정적인 키(cells/styles/merges가 전부 이 번호로
    * 참조된다)와 화면상 순서를 분리해 둬야, 탭을 드래그해 순서를 바꿔도 그 많은 셀 데이터를 전부
    * 다시 키잉하지 않고 이 작은 숫자 하나만 바꾸면 된다. 없으면(구버전 문서) 키 번호 자체를 순서로

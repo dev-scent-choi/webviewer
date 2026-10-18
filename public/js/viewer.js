@@ -1021,6 +1021,8 @@ const GRID_COL_PADDING = 8;
 const GRID_MIN_DISPLAY_ROWS = 40;
 const GRID_MIN_DISPLAY_COLS = 14;
 const GRID_DEFAULT_COL_WIDTH = 64;
+/** 엑셀 기본 글꼴(맑은 고딕) — 칸 글꼴이 없는 PC에서도 엑셀과 글자 폭이 비슷하게(grid-editor.ts와 같은 값) */
+const GRID_FONT_STACK = "'맑은 고딕','Malgun Gothic',Calibri,sans-serif";
 
 /**
  * 행마다 높이가 다른(숨긴 행은 0) 시트의 세로 위치 계산 — src/xlsx/sheetGeometry.ts의 RowLayout과
@@ -1101,6 +1103,8 @@ const gridState = {
   active: 0,
   /** 지금 시트의 행 높이 계산(GridRowLayout) — activateSheet가 만든다 */
   layout: new GridRowLayout(GRID_DEFAULT_ROW_H, []),
+  /** 파일에 있는 그림(로고 등) — /api/view/xlsx-images */
+  images: [],
   chunks: new Map(), // `${sheet}:${chunkIdx}` -> rows | 'loading'
   mergeStarts: new Map(),
   mergeCovered: new Map(), // `${r}:${c}` -> 그 칸을 덮는 병합(m). 같은 key로 .has()만 쓰면 예전 Set과 동일하게 동작한다.
@@ -1133,6 +1137,8 @@ function injectGridStyles(styles) {
     if (style.st) lines.push('line-through');
     if (lines.length > 0) parts.push(`text-decoration:${lines.join(' ')}`);
     if (style.fs) parts.push(`font-size:${style.fs}px`);
+    // 칸 글꼴(돋움·굴림 등) — 없는 PC에서는 엑셀 기본 글꼴로
+    if (style.ff) parts.push(`font-family:"${String(style.ff).replace(/["\<>;{}]/g, '')}",${GRID_FONT_STACK}`);
     if (style.col) parts.push(`color:${style.col}`);
     if (style.bg) parts.push(`background:${style.bg}`);
     if (style.a === 'c') parts.push('text-align:center');
@@ -1313,6 +1319,12 @@ function formatGridNumber(text, style) {
   return text;
 }
 
+/** 숫자처럼 보이는 글자(쉼표·통화·% 포함) — 엑셀은 숫자를 옆 칸으로 넘기지 않는다 */
+function isGridNumericText(rawText) {
+  const stripped = String(rawText).trim().replace(/[₩$€£¥,%s()]/g, '');
+  return stripped !== '' && Number.isFinite(Number(stripped));
+}
+
 function isSpillEligible(style, rawText) {
   if (style) {
     if (style.a === 'c' || style.a === 'r') return false; // 명시적 가운데/오른쪽 정렬 — 절대 안 넘친다
@@ -1433,20 +1445,36 @@ function renderGridViewport() {
       }
       const value = isEmpty ? '' : isHit ? markMatches(shown, searchState.lastQuery) : escapeHtml(shown);
       const span = merge ? ` colspan="${merge.cs}"${merge.rs > 1 ? ` rowspan="${merge.rs}"` : ''}` : '';
-      // 실제 엑셀처럼 — 오른쪽으로 빈 칸이 이어지는 만큼 이 칸의 내용이 넘쳐 보이게 허용한다
-      // (병합 칸이나 값 있는 칸을 만나면 거기서 멈춘다). 단, 기본이 왼쪽 정렬인 칸만 — 가운데/
-      // 오른쪽 정렬 칸은 실제 엑셀에서도 넘치지 않는다(isSpillEligible 문서 주석 참고).
+      // 실제 엑셀처럼 빈 이웃 칸 위로 내용이 넘쳐 보이게 한다(병합 칸이나 값 있는 칸에서 멈춘다).
+      // 줄 바꿈 칸은 넘치지 않고 자기 칸 안에서 줄을 바꾼다.
       let spillStyle = '';
-      // 줄 바꿈 칸은 넘치지 않고 자기 칸 안에서 줄을 바꾼다(엑셀과 같다)
-      if (!isEmpty && !merge && !(cellStyleObj && cellStyleObj.w) && isSpillEligible(cellStyleObj, cell.v)) {
-        let spillWidth = colWidthAt(sheet, c);
-        for (let cc = c + 1; cc <= colCount; cc += 1) {
-          if (gridState.mergeCovered.has(`${r}:${cc}`) || gridState.mergeStarts.has(`${r}:${cc}`)) break;
-          const nextCell = cellAt(gridState.active, r, cc - 1);
-          if (nextCell && nextCell !== 0) break;
-          spillWidth += colWidthAt(sheet, cc);
+      // 가운데 정렬 글자는 양옆 빈 칸으로 고르게, 오른쪽 정렬 글자(숫자 아님)는 왼쪽 빈 칸으로 넘친다(엑셀과 같다)
+      const align = cellStyleObj && cellStyleObj.a;
+      const spillMode = isEmpty || merge || (cellStyleObj && cellStyleObj.w)
+        ? null
+        : align === 'c'
+          ? 'center'
+          : align === 'r'
+            ? (isGridNumericText(cell.v) ? null : 'left')
+            : isSpillEligible(cellStyleObj, cell.v) ? 'right' : null;
+      if (spillMode) {
+        const emptyAt = (cc) => {
+          if (cc < 1 || cc > colCount) return false;
+          if (gridState.mergeCovered.has(`${r}:${cc}`) || gridState.mergeStarts.has(`${r}:${cc}`)) return false;
+          const other = cellAt(gridState.active, r, cc - 1);
+          return !other || other === 0 || other.v === '';
+        };
+        let right = 0;
+        if (spillMode !== 'left') for (let cc = c + 1; emptyAt(cc); cc += 1) right += colWidthAt(sheet, cc);
+        let left = 0;
+        if (spillMode !== 'right') for (let cc = c - 1; emptyAt(cc); cc -= 1) left += colWidthAt(sheet, cc);
+        if (spillMode === 'center') {
+          const side = Math.min(left, right);
+          left = side;
+          right = side;
         }
-        if (spillWidth > colWidthAt(sheet, c)) spillStyle = ` style="width:${spillWidth}px"`;
+        const own = colWidthAt(sheet, c);
+        if (left + right > 0) spillStyle = ` style="width:${own + left + right}px${left ? `;margin-left:-${left}px` : ''}"`;
       }
       // 내용이 행 높이를 넘어도 행이 늘어나지 않게(엑셀처럼 잘린다) — 병합이면 걸친 행 높이의 합
       const cellH = merge && merge.rs > 1 ? layout.top(r - 1 + merge.rs) - layout.top(r - 1) : rowH;
@@ -1557,11 +1585,53 @@ function setupGridZoom() {
   applyGridZoom();
 }
 
+/** 0-based 열 c의 왼쪽 x(px, 행 번호 열 포함) */
+function gridColLeft(sheet, c) {
+  let x = GRID_ROWNUM_W;
+  for (let i = 1; i <= c; i += 1) x += colWidthAt(sheet, i);
+  return x;
+}
+
+/** 파일에 있던 그림을 칸 위치(앵커)에 맞춰 얹는다 — 표 위에, 클릭은 칸으로 그대로 지나가게 */
+function renderGridImages() {
+  const sheet = gridState.sheets[gridState.active];
+  const inner = document.getElementById('grid-inner');
+  let layer = document.getElementById('grid-image-layer');
+  if (!layer) {
+    layer = document.createElement('div');
+    layer.id = 'grid-image-layer';
+    layer.className = 'grid-image-layer';
+    inner.append(layer);
+  }
+  layer.replaceChildren();
+  if (!sheet) return;
+  const layout = gridState.layout;
+  for (const image of gridState.images) {
+    if (image.sheetName !== sheet.name) continue;
+    const left = gridColLeft(sheet, image.from.col) + image.from.dx;
+    const top = layout.top(image.from.row) + image.from.dy;
+    const width = image.size ? image.size.width : gridColLeft(sheet, image.to.col) + image.to.dx - left;
+    const height = image.size ? image.size.height : layout.top(image.to.row) + image.to.dy - top;
+    if (!(width > 0 && height > 0)) continue;
+    const img = document.createElement('img');
+    img.className = 'grid-image';
+    img.src = image.src;
+    img.alt = image.name || '';
+    img.draggable = false;
+    img.style.left = `${left}px`;
+    img.style.top = `${top}px`;
+    img.style.width = `${width}px`;
+    img.style.height = `${height}px`;
+    layer.append(img);
+  }
+}
+
 function activateSheet(index) {
   gridState.active = index;
   const sheet = gridState.sheets[index];
   buildMergeIndex(sheet);
   gridState.layout = new GridRowLayout(sheet.defaultRowHeight || GRID_DEFAULT_ROW_H, sheet.rowHeights || []);
+  document.getElementById('grid-table').classList.toggle('g-no-gridlines', sheet.showGridLines === false);
   const inner = document.getElementById('grid-inner');
   inner.style.height = `${gridState.layout.top(displayRowCount(sheet))}px`;
   let totalWidth = 0;
@@ -1577,6 +1647,7 @@ function activateSheet(index) {
     tab.classList.toggle('active', i === index);
   }
   renderGridHead();
+  renderGridImages();
   gridState.selected = { row: 1, col: 1 };
   renderGridViewport();
   updateSelectionDisplays();
@@ -1735,6 +1806,13 @@ async function initGridView() {
 
   const meta = await fetchJsonView(`/api/view/grid/meta?${tokenQuery}`);
   gridState.sheets = meta.sheets;
+  // 그림은 늦게 와도 된다 — 도착하면 지금 시트에 얹는다
+  void fetchJsonView(`/api/view/xlsx-images?${tokenQuery}`)
+    .then((data) => {
+      gridState.images = (data && data.images) || [];
+      renderGridImages();
+    })
+    .catch(() => undefined);
   gridState.styles = meta.styles;
   injectGridStyles(meta.styles);
 

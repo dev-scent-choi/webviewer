@@ -1203,7 +1203,9 @@ h2 {
   left: 0;
   border-collapse: collapse;
   table-layout: fixed;
-  /* 엑셀 기본 글꼴 크기(11pt)·줄 높이 — 행 높이(기본 15pt=20px)에 한 줄이 꼭 들어가야 행이 늘지 않는다 */
+  /* 엑셀 기본 글꼴·크기(11pt)·줄 높이 — 행 높이(기본 15pt=20px)에 한 줄이 꼭 들어가야 행이 늘지 않는다.
+     글꼴이 다르면 글자 폭이 달라 줄 바꿈·잘림이 엑셀과 달라진다. */
+  font-family: '맑은 고딕', 'Malgun Gothic', Calibri, sans-serif;
   font-size: 11pt;
   line-height: 1.25;
   will-change: transform;
@@ -1224,6 +1226,12 @@ h2 {
 }
 /* 숨긴 행·열 — 높이/폭 0으로 자리만 지킨다(병합 rowspan/colspan 계산이 어긋나지 않게) */
 .grid-table tr.g-hidden-row { visibility: collapse; }
+/* 시트 보기에서 격자선을 끈 시트 — 칸 서식 테두리(.grid-table td.gsN, 나중에 붙는 규칙)는 그대로 보인다 */
+.grid-table.g-no-gridlines td { border-color: transparent; }
+.grid-table.g-no-gridlines td.g-rownum { border-color: #d7dae0; }
+/* 파일에 있던 그림 — 칸 위에 얹되 클릭은 칸으로 지나간다 */
+.grid-image-layer { position: absolute; inset: 0; pointer-events: none; z-index: 3; }
+.grid-image { position: absolute; display: block; max-width: none; user-select: none; pointer-events: none; }
 .grid-table tr.g-hidden-row td { padding: 0; border-top: 0; border-bottom: 0; line-height: 0; }
 .grid-table td.g-hidden-col { padding: 0; border-left: 0; border-right: 0; }
 /* 엑셀 기본 정렬(명시 정렬이 없는 칸만 — renderGridViewport가 판단해 붙인다): 숫자·날짜 오른쪽,
@@ -1737,7 +1745,8 @@ body.home-hidden .doclist-link { display: none !important; }
   border-collapse: separate;
   border-spacing: 0;
   table-layout: fixed;
-  /* 엑셀 기본 글꼴 크기(11pt) — 행 높이는 파일 값을 <tr>에 그대로 준다 */
+  /* 엑셀 기본 글꼴·크기(11pt) — 행 높이는 파일 값을 <tr>에 그대로 준다 */
+  font-family: '맑은 고딕', 'Malgun Gothic', Calibri, sans-serif;
   font-size: 11pt;
   line-height: 1.25;
 }
@@ -1767,6 +1776,9 @@ body.home-hidden .doclist-link { display: none !important; }
 .grid-edit-table tr.g-hidden-row > td,
 .grid-edit-table tr.g-hidden-row > th { padding: 0; border-bottom: 0; line-height: 0; font-size: 0; overflow: hidden; }
 .grid-edit-table td.g-hidden-col { padding: 0; border-right: 0; font-size: 0; overflow: hidden; }
+/* 격자선을 끈 시트 — 칸 서식 테두리는 인라인 스타일이라 그대로 남는다 */
+.grid-edit-table.g-no-gridlines tbody td { border-right-color: transparent; border-bottom-color: transparent; }
+.grid-edit-table.g-no-gridlines tbody tr:first-child td { border-top-color: transparent; }
 
 .grid-edit-table tr:first-child th,
 .grid-edit-table tr:first-child td {

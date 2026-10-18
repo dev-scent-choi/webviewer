@@ -26,7 +26,9 @@ import { extractThemeColorsFromLoadedZip } from './themeExtract.js';
 import {
   EXCEL_DEFAULT_ROW_HEIGHT_PT,
   defaultColWidthPx,
+  defaultFontOfStylesXml,
   encodeRowHeights,
+  maxDigitWidthPx,
   excelColWidthToPx,
   rowHeightPtToPx,
   type RowHeightRuns,
@@ -42,6 +44,7 @@ export interface LazyGridSheetMeta {
   defaultColWidth: number;
   defaultRowHeight: number;
   rowHeights: RowHeightRuns;
+  showGridLines: boolean;
   merges: readonly GridMerge[];
   freezeRows: number;
   freezeCols: number;
@@ -216,14 +219,14 @@ interface RawColSpec {
 }
 
 /** <sheetFormatPr defaultColWidth baseColWidth defaultRowHeight> → 기본 열 폭·행 높이(px) */
-function extractSheetFormatFromSheetXml(xml: string): { defaultColWidth: number; defaultRowHeight: number } {
+function extractSheetFormatFromSheetXml(xml: string, mdw: number): { defaultColWidth: number; defaultRowHeight: number } {
   const attrs = xml.match(/<sheetFormatPr\b([^>]*)>/)?.[1] ?? '';
   const num = (name: string) => {
     const v = Number(attrs.match(new RegExp(`\\b${name}="([^"]*)"`))?.[1]);
     return Number.isFinite(v) && v > 0 ? v : undefined;
   };
   return {
-    defaultColWidth: defaultColWidthPx(num('defaultColWidth'), num('baseColWidth') ?? 8),
+    defaultColWidth: defaultColWidthPx(num('defaultColWidth'), num('baseColWidth') ?? 8, mdw),
     defaultRowHeight: rowHeightPtToPx(num('defaultRowHeight') ?? EXCEL_DEFAULT_ROW_HEIGHT_PT),
   };
 }
@@ -255,7 +258,7 @@ function extractColSpecsFromSheetXml(xml: string): RawColSpec[] {
  * 다만 `count`가 `colCount`를 넘어서면 더 볼 필요가 없으니 그 지점에서 순회를 멈춘다(원본은
  * col.max까지, 예: 16384까지 무조건 순회함).
  */
-function computeColWidthsPx(colSpecs: readonly RawColSpec[], colCount: number, defaultPx: number): number[] {
+function computeColWidthsPx(colSpecs: readonly RawColSpec[], colCount: number, defaultPx: number, mdw: number): number[] {
   const sorted = [...colSpecs].sort((a, b) => a.min - b.min);
   const widthAt: Array<number | undefined> = new Array(colCount + 1).fill(undefined); // 1-based
   let count = 1;
@@ -270,7 +273,7 @@ function computeColWidthsPx(colSpecs: readonly RawColSpec[], colCount: number, d
   const colWidths: number[] = [];
   for (let c = 1; c <= colCount; c += 1) {
     const width = widthAt[c];
-    colWidths.push(width === 0 ? 0 : width ? excelColWidthToPx(width) : defaultPx);
+    colWidths.push(width === 0 ? 0 : width ? excelColWidthToPx(width, mdw) : defaultPx);
   }
   return colWidths;
 }
@@ -281,6 +284,9 @@ export async function ingestXlsxLazily(docId: string, xlsxBytes: Buffer): Promis
   const zip = await JSZip.loadAsync(xlsxBytes);
   const themeColors = await extractThemeColorsFromLoadedZip(zip);
   const worksheetXmlsByPath = await loadWorksheetXmlsByPath(zip);
+  // 열 너비 단위의 기준 — 통합 문서 기본 글꼴의 숫자 폭
+  const defaultFont = defaultFontOfStylesXml(await zip.file('xl/styles.xml')?.async('text'));
+  const mdw = maxDigitWidthPx(defaultFont.name, defaultFont.size);
   const rowStorePath = path.join(os.tmpdir(), `docview-lazygrid-${docId}-${randomUUID()}.jsonl`);
   const writeHandle = await fs.open(rowStorePath, 'w');
 
@@ -349,10 +355,12 @@ export async function ingestXlsxLazily(docId: string, xlsxBytes: Buffer): Promis
         const sheetXml = rel ? worksheetXmlsByPath.get(`xl/${rel.Target}`) : undefined;
 
         // 행 높이(파일 값·숨김·자동 맞춤)를 행을 읽으면서 바로 계산하려면 열 폭과 병합을 미리 알아야 한다
-        const sheetFormat = sheetXml ? extractSheetFormatFromSheetXml(sheetXml) : { defaultColWidth: defaultColWidthPx(), defaultRowHeight: rowHeightPtToPx(EXCEL_DEFAULT_ROW_HEIGHT_PT) };
+        const sheetFormat = sheetXml
+          ? extractSheetFormatFromSheetXml(sheetXml, mdw)
+          : { defaultColWidth: defaultColWidthPx(undefined, 8, mdw), defaultRowHeight: rowHeightPtToPx(EXCEL_DEFAULT_ROW_HEIGHT_PT) };
         const colSpecs = sheetXml ? extractColSpecsFromSheetXml(sheetXml) : [];
         const maxSpecCol = colSpecs.reduce((m, s) => Math.max(m, Math.min(s.max, MAX_COLS)), 0);
-        const specWidths = computeColWidthsPx(colSpecs, maxSpecCol, sheetFormat.defaultColWidth);
+        const specWidths = computeColWidthsPx(colSpecs, maxSpecCol, sheetFormat.defaultColWidth, mdw);
         const widthForFit = (c: number) => specWidths[c] ?? sheetFormat.defaultColWidth;
         const mergeRoles = mergeRolesByRow(
           sheetXml ? extractMergeRefsFromSheetXml(sheetXml).map(parseMergeRange).filter((m): m is GridMerge => m !== null) : [],
@@ -438,7 +446,15 @@ export async function ingestXlsxLazily(docId: string, xlsxBytes: Buffer): Promis
         const merges = rawMerges.filter((m) => m.r <= rowCount && m.c <= colCount);
         const frozen = sheetXml ? extractFrozenSplitFromSheetXml(sheetXml) : undefined;
 
-        const colWidths = computeColWidthsPx(colSpecs, colCount, sheetFormat.defaultColWidth);
+        // 값이 없는 오른쪽 열도 너비를 따로 정해 두었으면 그 열까지 싣는다(spreadsheet.ts와 같은 규칙)
+        let widthExtent = colCount;
+        for (let c = specWidths.length; c > colCount; c -= 1) {
+          if (specWidths[c - 1] !== sheetFormat.defaultColWidth) {
+            widthExtent = c;
+            break;
+          }
+        }
+        const colWidths = computeColWidthsPx(colSpecs, widthExtent, sheetFormat.defaultColWidth, mdw);
 
         sheetMeta.push({
           name: rawWorksheetReader.name,
@@ -448,6 +464,7 @@ export async function ingestXlsxLazily(docId: string, xlsxBytes: Buffer): Promis
           defaultColWidth: sheetFormat.defaultColWidth,
           defaultRowHeight: sheetFormat.defaultRowHeight,
           rowHeights: encodeRowHeights(rowHeightEntries.sort((a, b) => a[0] - b[0]), sheetFormat.defaultRowHeight),
+          showGridLines: !(sheetXml && /<sheetView\b[^>]*\bshowGridLines="(0|false)"/.test(sheetXml)),
           merges,
           freezeRows: frozen?.ySplit ?? 0,
           freezeCols: frozen?.xSplit ?? 0,

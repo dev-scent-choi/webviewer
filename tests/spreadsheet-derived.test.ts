@@ -34,7 +34,7 @@ function makeTestGrid(): GridDocument {
         name: 'Sheet1',
         rowCount: 2,
         colCount: 1,
-        colWidths: [], defaultColWidth: 64, defaultRowHeight: 20, rowHeights: [],
+        colWidths: [], defaultColWidth: 64, defaultRowHeight: 20, rowHeights: [], showGridLines: true,
         merges: [],
         freezeRows: 0,
         freezeCols: 0,
