@@ -46,6 +46,8 @@ import {
 import { exportXlsxFromGridStreaming } from '../xlsx/exportStreaming.js';
 import { GRID_CHARTS_MAP, type GridChart } from '../xlsx/chartModel.js';
 import { readSheetCharts } from '../xlsx/drawingPassthrough.js';
+import { readAutoFilters } from '../xlsx/autoFilter.js';
+import { GRID_FILTERS_MAP, type SheetFilter } from '../xlsx/filterModel.js';
 import {
   exportXlsxFromGrid,
   findOrAddGridStyleIndex,
@@ -724,8 +726,11 @@ async function applyStylesChangeToCanonical(
       // 날아간다. 값도 원래 비어 있던 칸(서식만 있던 칸)만 완전한 빈 칸(0)으로 되돌린다.
       const meta = store.sheetMeta[c.sheetIdx];
       if (c.row >= meta.rowCount || c.col >= meta.colCount) continue;
-      if (current === 0 || current === undefined) continue;
-      setDirtyCell(store, c.sheetIdx, c.row, c.col, current.v === '' ? 0 : { v: current.v });
+      // 값은 await 이전 사본(current)이 아니라 지금 값으로 — 같은 트랜잭션에 값도 바뀌었으면(정렬 등)
+      // 낡은 사본으로 쓰면 방금 들어온 새 값을 지운다(아래 서식 적용 경로와 같은 이유).
+      const latest = latestCell(store, c.sheetIdx, c.row, c.col, current);
+      if (latest === 0 || latest === undefined) continue;
+      setDirtyCell(store, c.sheetIdx, c.row, c.col, latest.v === '' ? 0 : { v: latest.v });
       continue;
     }
     // 들어온 서식을 canonical의 현재 서식 **위에 얹는다**(통째로 갈아치우지 않는다) — 아래
@@ -873,6 +878,7 @@ function exportOptionsFor(room: Room) {
     removedSheetIndices: room.removedSheetIndices,
     sheetDisplayOrder: room.sheetDisplayOrder,
     newCharts: [...room.ydoc.getMap<GridChart>(GRID_CHARTS_MAP).values()].filter((chart) => chart.source === 'new'),
+    filters: new Map([...room.ydoc.getMap<SheetFilter>(GRID_FILTERS_MAP).entries()].map(([key, filter]) => [Number(key), filter])),
   };
 }
 
@@ -1309,6 +1315,18 @@ async function seedRoom(room: Room): Promise<void> {
       room.originalXlsxBytes = new Uint8Array(original);
       // 전체 그리드가 아니라 시트별 크기만 남긴다 — Room.baselineSheetExtents 주석 참고.
       room.baselineSheetExtents = lazyStore.sheetMeta.map((s) => ({ rowCount: s.rowCount, colCount: s.colCount }));
+      // 파일에 있던 자동 필터를 데이터 탭이 보도록 옮겨 둔다(사용자 편집이 아니라 자동저장을 부르지 않는다)
+      try {
+        const fileFilters = readAutoFilters(new Uint8Array(original), lazyStore.sheetMeta.map((s) => s.name));
+        if (fileFilters.size > 0) {
+          const filtersMap = ydoc.getMap<SheetFilter>(GRID_FILTERS_MAP);
+          ydoc.transact(() => {
+            for (const [index, filter] of fileFilters) filtersMap.set(String(index), filter);
+          }, GRID_WINDOW_SEED_ORIGIN);
+        }
+      } catch (error) {
+        console.warn(`자동 필터 읽기 실패 (문서 ${docId}):`, error);
+      }
       // 셀 데이터·서식은 여기서 채우지 않는다(윈도잉 컷오버) — 구조/병합 메타데이터만 전량 채우고,
       // 실제 셀 값과 서식은 클라이언트가 "이 페이지들을 보고 있다"고 알려올 때 그 페이지만 함께
       // 채운다(reconcilePageSubscriptions → seedGridPageFromXlsx, xlsx/collab.ts docblock 참고).

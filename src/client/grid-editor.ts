@@ -24,7 +24,8 @@ import { parseTypedNumber, serialToDateText } from '../collab/cellValueShared.js
 import { initOfficeShell } from './officeShell.js';
 import { bindDropdown } from './ribbonMenus.js';
 import { currentRegion, setupGridCharts } from './gridCharts.js';
-import type { ChartKind } from '../xlsx/chartModel.js';
+import type { CellRangeRef, ChartKind } from '../xlsx/chartModel.js';
+import { compareCells, filteredRows, GRID_FILTERS_MAP, shiftFormulaRows, sortOrder, type SheetFilter } from './gridSort.js';
 
 interface Permissions {
   readonly canPrint: boolean;
@@ -77,6 +78,42 @@ const tableEl = document.getElementById('grid-edit-table') as HTMLTableElement;
 const scrollHostEl = document.querySelector('.grid-editor-scroll') as HTMLElement;
 /** 표를 통째로 다시 그린 뒤(시트 전환·구조 변경·확대축소) — 차트 위치를 다시 맞춘다(차트 준비 전엔 아무것도 안 한다). */
 let afterGridRender: () => void = () => undefined;
+
+/** 필터로 숨긴 행(지금 시트, 오름차순) — 가상 스크롤은 '보이는 행 순번'으로 계산하고 실제 행 번호로 바꿔 그린다.
+ * 숨긴 행이 없으면 두 번호가 같아 예전과 똑같이 동작한다. */
+/** 지금 구독 중(서버가 채워 둔) 500행 페이지 — 정렬·필터는 이 안의 데이터로만 계산한다 */
+let lastSubscribedPages: ReadonlySet<number> = new Set();
+let hiddenRowsSorted: number[] = [];
+let hiddenRowSet: ReadonlySet<number> = new Set();
+function hiddenBefore(row: number): number {
+  let lo = 0;
+  let hi = hiddenRowsSorted.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (hiddenRowsSorted[mid] < row) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+/** 실제 행 → 화면에서 몇 번째 보이는 행인지 */
+function visualRow(row: number): number {
+  return row - hiddenBefore(row);
+}
+/** 보이는 행 순번 → 실제 행(숨긴 행은 건너뛴다) */
+function logicalRow(visual: number): number {
+  const v = Math.max(0, visual);
+  if (hiddenRowsSorted.length === 0) return v;
+  let lo = v;
+  let hi = v + hiddenRowsSorted.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (visualRow(mid) < v) lo = mid + 1;
+    else hi = mid;
+  }
+  let row = lo;
+  while (hiddenRowSet.has(row)) row += 1;
+  return row;
+}
 const sheetTabsEl = document.getElementById('sheet-tabs') as HTMLElement;
 const cellRefBoxEl = document.getElementById('cell-ref-box') as HTMLElement;
 const formulaInputEl = document.getElementById('formula-input') as HTMLInputElement;
@@ -1553,10 +1590,10 @@ async function main(): Promise<void> {
     // replaceChildren()이 clamp한 값(0)이 나온다.)
     const scrollTop = scrollTopSnapshot;
     const viewportHeight = viewportHeightSnapshot;
-    const firstVisible = Math.max(freezeRows, Math.floor(scrollTop / ROW_HEIGHT_PX) - OVERSCAN_ROWS);
+    const firstVisible = Math.max(freezeRows, logicalRow(Math.floor(scrollTop / ROW_HEIGHT_PX) - OVERSCAN_ROWS));
     const lastVisible = Math.min(
       renderRowCount - 1,
-      Math.ceil((scrollTop + viewportHeight) / ROW_HEIGHT_PX) + OVERSCAN_ROWS,
+      logicalRow(Math.ceil((scrollTop + viewportHeight) / ROW_HEIGHT_PX) + OVERSCAN_ROWS),
     );
 
     const tbody = document.createElement('tbody');
@@ -1573,14 +1610,15 @@ async function main(): Promise<void> {
       newRowEls.set(r, tr);
       tbody.appendChild(tr);
     }
-    const topSpacer = buildSpacerRow(firstVisible - freezeRows);
+    const topSpacer = buildSpacerRow(visualRow(firstVisible) - visualRow(freezeRows));
     if (topSpacer) tbody.appendChild(topSpacer);
     for (let r = firstVisible; r <= lastVisible; r += 1) {
+      if (hiddenRowSet.has(r)) continue;
       const tr = buildRow(r);
       newRowEls.set(r, tr);
       tbody.appendChild(tr);
     }
-    const bottomSpacer = buildSpacerRow(renderRowCount - 1 - lastVisible);
+    const bottomSpacer = buildSpacerRow(visualRow(renderRowCount) - visualRow(lastVisible + 1));
     if (bottomSpacer) tbody.appendChild(bottomSpacer);
     tableEl.appendChild(tbody);
     // 표 내용이 다시 채워져 스크롤 가능한 실제 높이가 복구된 지금(스페이서 행 포함), 함수 맨 위의
@@ -1653,10 +1691,10 @@ async function main(): Promise<void> {
     const freezeRows = vwFreezeRows;
     const scrollTop = scrollHostEl.scrollTop;
     const viewportHeight = scrollHostEl.clientHeight;
-    const firstVisible = Math.max(freezeRows, Math.floor(scrollTop / ROW_HEIGHT_PX) - OVERSCAN_ROWS);
+    const firstVisible = Math.max(freezeRows, logicalRow(Math.floor(scrollTop / ROW_HEIGHT_PX) - OVERSCAN_ROWS));
     const lastVisible = Math.min(
       renderRowCount - 1,
-      Math.ceil((scrollTop + viewportHeight) / ROW_HEIGHT_PX) + OVERSCAN_ROWS,
+      logicalRow(Math.ceil((scrollTop + viewportHeight) / ROW_HEIGHT_PX) + OVERSCAN_ROWS),
     );
     if (firstVisible === vwFirstVisible && lastVisible === vwLastVisible) return; // 창이 그대로면 할 일 없음
 
@@ -1680,6 +1718,7 @@ async function main(): Promise<void> {
     // 오름차순으로 이어가며 "직전에 처리한(기존 또는 방금 만든) 행 바로 뒤"에 놓는다.
     let anchor: ChildNode | null = freezeRows > 0 ? vwRowEls.get(freezeRows - 1) ?? null : null;
     for (let r = firstVisible; r <= lastVisible; r += 1) {
+      if (hiddenRowSet.has(r)) continue;
       const existing = vwRowEls.get(r);
       if (existing) {
         anchor = existing;
@@ -1692,13 +1731,13 @@ async function main(): Promise<void> {
       anchor = tr;
     }
 
-    const topSpacer = buildSpacerRow(firstVisible - freezeRows);
+    const topSpacer = buildSpacerRow(visualRow(firstVisible) - visualRow(freezeRows));
     if (topSpacer) {
       const firstWindowRow = vwRowEls.get(firstVisible) ?? null;
       if (firstWindowRow) tbody.insertBefore(topSpacer, firstWindowRow);
       else tbody.appendChild(topSpacer); // 방어적 처리 — 이론상 창이 비어 있을 때만 여기로 온다
     }
-    const bottomSpacer = buildSpacerRow(renderRowCount - 1 - lastVisible);
+    const bottomSpacer = buildSpacerRow(visualRow(renderRowCount) - visualRow(lastVisible + 1));
     if (bottomSpacer) tbody.appendChild(bottomSpacer); // 항상 마지막 자식이 맞다(그 뒤엔 아무것도 없다)
     vwTopSpacer = topSpacer;
     vwBottomSpacer = bottomSpacer;
@@ -1822,7 +1861,10 @@ async function main(): Promise<void> {
     let row = fromRow;
     let col = fromCol;
     for (let attempt = 0; attempt < 30; attempt += 1) {
-      const nextRow = Math.min(Math.max(row + dRow, 0), rowCount - 1);
+      let nextRow = Math.min(Math.max(row + dRow, 0), rowCount - 1);
+      // 필터로 숨긴 행은 건너뛴다(Excel과 같다)
+      while (dRow !== 0 && hiddenRowSet.has(nextRow) && nextRow + dRow >= 0 && nextRow + dRow < rowCount) nextRow += dRow;
+      if (hiddenRowSet.has(nextRow)) nextRow = row;
       const nextCol = Math.min(Math.max(col + dCol, 0), colCount - 1);
       if (nextRow === row && nextCol === col) return; // 끝에 닿아 더 못 감
       row = nextRow;
@@ -2453,7 +2495,7 @@ async function main(): Promise<void> {
     const existing = tdFor(row, col);
     if (existing) return existing;
     const viewportHeight = scrollHostEl.clientHeight;
-    scrollHostEl.scrollTop = Math.max(0, row * ROW_HEIGHT_PX - viewportHeight / 2);
+    scrollHostEl.scrollTop = Math.max(0, visualRow(row) * ROW_HEIGHT_PX - viewportHeight / 2);
     renderTableVirtualized();
     return tdFor(row, col);
   }
@@ -2941,7 +2983,7 @@ async function main(): Promise<void> {
     activeSheetName: () => structure.get(String(activeSheet))?.name ?? '',
     valueText,
     colLeft,
-    rowTop: (row) => headerHeight() + row * measuredRowHeight(),
+    rowTop: (row) => headerHeight() + visualRow(row) * measuredRowHeight(),
     cellAt: (x, y) => {
       let col = 0;
       let left = rownumWidth();
@@ -2949,7 +2991,7 @@ async function main(): Promise<void> {
         left += colWidthAt(col);
         col += 1;
       }
-      return { row: Math.max(0, Math.floor((y - headerHeight()) / measuredRowHeight())), col };
+      return { row: logicalRow(Math.floor((y - headerHeight()) / measuredRowHeight())), col };
     },
     selection: () => {
       const { r0, r1, c0, c1 } = rangeBounds();
@@ -3030,6 +3072,320 @@ async function main(): Promise<void> {
     });
   }
   bindDropdown(document.getElementById('table-style-dropdown'), applyTableStyle);
+
+  // ---------- 데이터: 정렬·필터 ----------
+  const filtersMap = ydoc.getMap<SheetFilter>(GRID_FILTERS_MAP);
+  const activeSheetName = () => structure.get(String(activeSheet))?.name ?? '';
+  const displayAt = (r: number, c: number) => valueText(activeSheetName(), r, c);
+  /** 서버가 채워 둔(구독 중인) 페이지 안의 행인지 — 정렬·필터는 화면 근처 데이터로만 계산한다 */
+  const rowsLoaded = (r1: number, r2: number) => {
+    for (let page = Math.floor(r1 / PAGE_SIZE_ROWS); page <= Math.floor(r2 / PAGE_SIZE_ROWS); page += 1) {
+      if (!lastSubscribedPages.has(page)) return false;
+    }
+    return true;
+  };
+  /** 칸 하나만 골랐으면 둘러싼 데이터 영역, 범위를 골랐으면 그 범위 */
+  function dataRegion(): CellRangeRef | null {
+    const sel = rangeBounds();
+    const sheet = structure.get(String(activeSheet));
+    if (sel.r0 !== sel.r1 || sel.c0 !== sel.c1) return { r1: sel.r0, c1: sel.c0, r2: sel.r1, c2: sel.c1 };
+    return currentRegion({ row: sel.r0, col: sel.c0 }, (r, c) => displayAt(r, c).trim() !== '', { rows: sheet?.rowCount ?? 1, cols: sheet?.colCount ?? 1 });
+  }
+  /** 첫 행이 머리글로 보이는지(Excel처럼): 모든 칸이 차 있고 글자가 섞여 있으며, 아래 행과 모양이 다르다 */
+  function looksLikeHeader(region: CellRangeRef): boolean {
+    if (region.r2 <= region.r1) return false;
+    let allFilled = true;
+    let hasText = false;
+    let belowAllText = true;
+    for (let c = region.c1; c <= region.c2; c += 1) {
+      const head = displayAt(region.r1, c).trim();
+      if (!head) allFilled = false;
+      if (head && !Number.isFinite(Number(head))) hasText = true;
+      const below = displayAt(region.r1 + 1, c).trim();
+      if (below && Number.isFinite(Number(below))) belowAllText = false;
+    }
+    const boldHead = Boolean(styles.get(gridCellKey(activeSheet, region.r1, region.c1))?.b);
+    return allFilled && hasText && (!belowAllText || boldHead || region.r2 - region.r1 >= 1);
+  }
+
+  /** 범위의 행을 keyCol 기준으로 다시 쓴다 — 값·서식이 행째 움직이고, 수식의 상대 행 참조도 따라 옮긴다. */
+  function sortRegion(region: CellRangeRef, keyCol: number, descending: boolean, hasHeader: boolean): void {
+    if (!canEdit) return;
+    const first = region.r1 + (hasHeader ? 1 : 0);
+    if (first >= region.r2) return;
+    if (!rowsLoaded(region.r1, region.r2)) {
+      window.alert(`정렬할 범위가 너무 큽니다(${region.r2 - region.r1 + 1}행). 화면 근처 ${PAGE_SIZE_ROWS}행 단위 범위 안에서만 정렬할 수 있습니다.`);
+      return;
+    }
+    const keys: string[] = [];
+    for (let r = first; r <= region.r2; r += 1) keys.push(displayAt(r, keyCol));
+    const order = sortOrder(keys, descending);
+    if (order.every((from, i) => from === i)) return;
+    const snapshot = new Map<string, { value: string; style: CellStyleAttrs | undefined }>();
+    for (let r = first; r <= region.r2; r += 1) {
+      for (let c = region.c1; c <= region.c2; c += 1) {
+        const key = gridCellKey(activeSheet, r, c);
+        snapshot.set(key, { value: cells.get(key) ?? '', style: styles.get(key) });
+      }
+    }
+    ydoc.transact(() => {
+      order.forEach((fromOffset, toOffset) => {
+        const fromRow = first + fromOffset;
+        const toRow = first + toOffset;
+        for (let c = region.c1; c <= region.c2; c += 1) {
+          const source = snapshot.get(gridCellKey(activeSheet, fromRow, c));
+          const key = gridCellKey(activeSheet, toRow, c);
+          const value = source ? shiftFormulaRows(source.value, toRow - fromRow) : '';
+          if (value === '') cells.delete(key);
+          else cells.set(key, value);
+          styles.set(key, source?.style ?? {});
+        }
+      });
+    });
+    renderTableVirtualized();
+  }
+
+  function sortActiveColumn(descending: boolean): void {
+    const region = dataRegion();
+    if (!region) {
+      window.alert('정렬할 데이터를 선택하세요.');
+      return;
+    }
+    const keyCol = Math.min(Math.max(selFocusCol, region.c1), region.c2);
+    const filter = filtersMap.get(String(activeSheet));
+    const inFilter = filter && region.r1 >= filter.r1 && region.r2 <= filter.r2;
+    sortRegion(inFilter ? filter : region, keyCol, descending, inFilter ? true : looksLikeHeader(region));
+  }
+  document.getElementById('btn-sort-asc')?.addEventListener('click', () => sortActiveColumn(false));
+  document.getElementById('btn-sort-desc')?.addEventListener('click', () => sortActiveColumn(true));
+
+  // 사용자 지정 정렬 대화상자
+  const sortDialog = document.getElementById('sort-dialog') as HTMLElement | null;
+  const sortColumnSelect = document.getElementById('sort-dialog-column') as HTMLSelectElement | null;
+  const sortOrderSelect = document.getElementById('sort-dialog-order') as HTMLSelectElement | null;
+  const sortHeaderCheck = document.getElementById('sort-dialog-header') as HTMLInputElement | null;
+  let sortDialogRegion: CellRangeRef | null = null;
+  function fillSortColumns(): void {
+    if (!sortDialogRegion || !sortColumnSelect || !sortHeaderCheck) return;
+    const keep = sortColumnSelect.value;
+    sortColumnSelect.replaceChildren();
+    for (let c = sortDialogRegion.c1; c <= sortDialogRegion.c2; c += 1) {
+      const option = document.createElement('option');
+      option.value = String(c);
+      const head = displayAt(sortDialogRegion.r1, c);
+      option.textContent = sortHeaderCheck.checked && head ? head : `${colLetter(c)}열`;
+      sortColumnSelect.append(option);
+    }
+    if (keep && [...sortColumnSelect.options].some((o) => o.value === keep)) sortColumnSelect.value = keep;
+  }
+  document.getElementById('btn-sort-custom')?.addEventListener('click', () => {
+    sortDialogRegion = dataRegion();
+    if (!sortDialogRegion || !sortDialog || !sortHeaderCheck || !sortColumnSelect) {
+      window.alert('정렬할 데이터를 선택하세요.');
+      return;
+    }
+    sortHeaderCheck.checked = looksLikeHeader(sortDialogRegion);
+    fillSortColumns();
+    sortColumnSelect.value = String(Math.min(Math.max(selFocusCol, sortDialogRegion.c1), sortDialogRegion.c2));
+    (document.getElementById('sort-dialog-range') as HTMLElement).textContent =
+      `범위 ${colLetter(sortDialogRegion.c1)}${sortDialogRegion.r1 + 1}:${colLetter(sortDialogRegion.c2)}${sortDialogRegion.r2 + 1}`;
+    sortDialog.hidden = false;
+    sortColumnSelect.focus();
+  });
+  sortHeaderCheck?.addEventListener('change', fillSortColumns);
+  const closeSortDialog = () => {
+    if (sortDialog) sortDialog.hidden = true;
+  };
+  document.getElementById('sort-dialog-cancel')?.addEventListener('click', closeSortDialog);
+  sortDialog?.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') closeSortDialog();
+  });
+  document.getElementById('sort-dialog-ok')?.addEventListener('click', () => {
+    closeSortDialog();
+    if (sortDialogRegion && sortColumnSelect && sortOrderSelect && sortHeaderCheck) {
+      sortRegion(sortDialogRegion, Number(sortColumnSelect.value), sortOrderSelect.value === 'desc', sortHeaderCheck.checked);
+    }
+  });
+
+  // ---------- 필터: 머리글 ▾ 단추, 값 목록으로 거르기, 숨긴 행 ----------
+  const filterLayer = document.createElement('div');
+  filterLayer.className = 'grid-filter-layer';
+  scrollHostEl.append(filterLayer);
+  const filterBtn = document.getElementById('btn-filter');
+  let hiddenForSheet = -1;
+
+  function recomputeHiddenRows(): void {
+    const filter = filtersMap.get(String(activeSheet));
+    hiddenForSheet = activeSheet;
+    const next = filter ? filteredRows(filter, displayAt) : [];
+    const changed = next.length !== hiddenRowsSorted.length || next.some((r, i) => r !== hiddenRowsSorted[i]);
+    if (changed) {
+      hiddenRowsSorted = next;
+      hiddenRowSet = new Set(next);
+      renderTableVirtualized();
+    }
+    renderFilterButtons();
+  }
+
+  function renderFilterButtons(): void {
+    const filter = filtersMap.get(String(activeSheet));
+    filterBtn?.setAttribute('aria-pressed', String(Boolean(filter)));
+    filterLayer.replaceChildren();
+    if (!filter) return;
+    filterLayer.style.left = `${tableEl.offsetLeft}px`;
+    filterLayer.style.top = `${tableEl.offsetTop}px`;
+    const top = headerHeight() + visualRow(filter.r1) * measuredRowHeight();
+    for (let c = filter.c1; c <= filter.c2; c += 1) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'grid-filter-btn';
+      button.classList.toggle('is-active', Boolean(filter.criteria[String(c)]));
+      button.dataset.col = String(c);
+      button.title = filter.criteria[String(c)] ? '필터 적용됨 — 눌러서 바꾸기' : '정렬 및 필터';
+      button.setAttribute('aria-label', `${colLetter(c)}열 필터`);
+      button.innerHTML = filter.criteria[String(c)]
+        ? '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 5h16l-6 7.5V19l-4-2v-4.5z"/></svg>'
+        : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>';
+      button.style.left = `${colLeft(c + 1) - 20}px`;
+      button.style.top = `${top + (measuredRowHeight() - 18) / 2}px`;
+      button.addEventListener('click', (event) => {
+        event.stopPropagation();
+        openFilterMenu(c, button);
+      });
+      filterLayer.append(button);
+    }
+  }
+
+  const filterMenu = document.createElement('div');
+  filterMenu.className = 'dropdown-menu dropdown-menu-floating filter-menu';
+  filterMenu.hidden = true;
+  document.body.append(filterMenu);
+  document.addEventListener('mousedown', (event) => {
+    if (!filterMenu.hidden && !filterMenu.contains(event.target as Node) && !(event.target as HTMLElement).closest('.grid-filter-btn')) filterMenu.hidden = true;
+  });
+
+  function openFilterMenu(col: number, anchor: HTMLElement): void {
+    const filter = filtersMap.get(String(activeSheet));
+    if (!filter) return;
+    const values = new Set<string>();
+    for (let r = filter.r1 + 1; r <= filter.r2; r += 1) values.add(displayAt(r, col));
+    const sorted = [...values].sort((a, b) => compareCells(a, b, false));
+    const allowed = filter.criteria[String(col)];
+    const checked = new Set(allowed ?? sorted);
+    filterMenu.replaceChildren();
+    const action = (label: string, run: () => void) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.addEventListener('click', () => {
+        filterMenu.hidden = true;
+        run();
+      });
+      filterMenu.append(b);
+    };
+    action('오름차순 정렬', () => sortRegion(filter, col, false, true));
+    action('내림차순 정렬', () => sortRegion(filter, col, true, true));
+    if (allowed) {
+      action(`"${displayAt(filter.r1, col) || colLetter(col)}"에서 필터 해제`, () => {
+        const criteria = { ...filter.criteria };
+        delete criteria[String(col)];
+        filtersMap.set(String(activeSheet), { ...filter, criteria });
+      });
+    }
+    const list = document.createElement('div');
+    list.className = 'filter-values';
+    const all = document.createElement('label');
+    const allBox = document.createElement('input');
+    allBox.type = 'checkbox';
+    allBox.checked = checked.size === sorted.length;
+    all.append(allBox, ' (모두 선택)');
+    list.append(all);
+    const boxes: HTMLInputElement[] = [];
+    for (const value of sorted) {
+      const label = document.createElement('label');
+      const box = document.createElement('input');
+      box.type = 'checkbox';
+      box.checked = checked.has(value);
+      box.dataset.value = value;
+      boxes.push(box);
+      label.append(box, ` ${value === '' ? '(필드 값 없음)' : value}`);
+      list.append(label);
+      box.addEventListener('change', () => {
+        allBox.checked = boxes.every((b) => b.checked);
+      });
+    }
+    allBox.addEventListener('change', () => {
+      for (const box of boxes) box.checked = allBox.checked;
+    });
+    filterMenu.append(list);
+    const actions = document.createElement('div');
+    actions.className = 'filter-actions';
+    const ok = document.createElement('button');
+    ok.type = 'button';
+    ok.className = 'btn-mini filter-ok';
+    ok.textContent = '확인';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'btn-mini';
+    cancel.textContent = '취소';
+    actions.append(ok, cancel);
+    filterMenu.append(actions);
+    cancel.addEventListener('click', () => {
+      filterMenu.hidden = true;
+    });
+    ok.addEventListener('click', () => {
+      filterMenu.hidden = true;
+      const picked = boxes.filter((b) => b.checked).map((b) => b.dataset.value ?? '');
+      const criteria = { ...filter.criteria };
+      if (picked.length === sorted.length) delete criteria[String(col)];
+      else criteria[String(col)] = picked;
+      filtersMap.set(String(activeSheet), { ...filter, criteria });
+    });
+    filterMenu.hidden = false;
+    const rect = anchor.getBoundingClientRect();
+    filterMenu.style.left = `${Math.max(4, Math.min(rect.left, window.innerWidth - filterMenu.offsetWidth - 4))}px`;
+    filterMenu.style.top = `${rect.bottom + 2}px`;
+  }
+
+  filterBtn?.addEventListener('click', () => {
+    if (!canEdit) return;
+    const key = String(activeSheet);
+    if (filtersMap.has(key)) {
+      filtersMap.delete(key);
+      return;
+    }
+    const region = dataRegion();
+    if (!region || region.r2 <= region.r1) {
+      window.alert('필터를 걸 데이터 범위(머리글 + 데이터)를 선택하세요.');
+      return;
+    }
+    filtersMap.set(key, { r1: region.r1, c1: region.c1, r2: region.r2, c2: region.c2, criteria: {} });
+  });
+  document.getElementById('btn-filter-clear')?.addEventListener('click', () => {
+    const filter = filtersMap.get(String(activeSheet));
+    if (filter) filtersMap.set(String(activeSheet), { ...filter, criteria: {} });
+  });
+
+  filtersMap.observe(recomputeHiddenRows);
+  let filterRecomputeScheduled = false;
+  const scheduleFilterRecompute = () => {
+    if (filterRecomputeScheduled) return;
+    filterRecomputeScheduled = true;
+    requestAnimationFrame(() => {
+      filterRecomputeScheduled = false;
+      recomputeHiddenRows();
+    });
+  };
+  cells.observe(scheduleFilterRecompute);
+  computed.observe(scheduleFilterRecompute);
+  const previousAfterGridRender = afterGridRender;
+  afterGridRender = () => {
+    previousAfterGridRender();
+    // 시트를 바꾸면 그 시트의 필터로 숨길 행을 다시 계산한다
+    if (hiddenForSheet !== activeSheet) scheduleFilterRecompute();
+    renderFilterButtons();
+  };
+  recomputeHiddenRows();
 
   // ---------- 확대/축소 (엑셀처럼 드래그 슬라이더 포함) ----------
   const zoomLevelEl = document.getElementById('zoom-level') as HTMLElement;
@@ -3161,8 +3517,8 @@ async function main(): Promise<void> {
       subscriptionDebounceTimer = null;
       const scrollTop = scrollHostEl.scrollTop;
       const viewportHeight = scrollHostEl.clientHeight;
-      const firstRow = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT_PX) - OVERSCAN_ROWS);
-      const lastRow = Math.ceil((scrollTop + viewportHeight) / ROW_HEIGHT_PX) + OVERSCAN_ROWS;
+      const firstRow = logicalRow(Math.floor(scrollTop / ROW_HEIGHT_PX) - OVERSCAN_ROWS);
+      const lastRow = logicalRow(Math.ceil((scrollTop + viewportHeight) / ROW_HEIGHT_PX) + OVERSCAN_ROWS);
       const firstPage = Math.floor(firstRow / PAGE_SIZE_ROWS);
       const lastPage = Math.floor(lastRow / PAGE_SIZE_ROWS);
       const pages = new Set<number>();
@@ -3172,6 +3528,7 @@ async function main(): Promise<void> {
       // 구독해 둔다 — 안 그러면 멀리 스크롤했을 때 고정된 헤더 행이 빈 칸으로 보일 수 있다.
       const freezeRows = structure.get(String(activeSheet))?.freezeRows ?? 0;
       if (freezeRows > 0) pages.add(0);
+      lastSubscribedPages = pages;
       sendPageSubscription(activeSheet, [...pages].sort((a, b) => a - b));
     }, 200);
   }

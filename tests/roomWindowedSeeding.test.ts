@@ -998,6 +998,43 @@ describe('room.ts: xlsx seeding is windowed by subscribed page', () => {
     },
     60_000,
   );
+
+  test(
+    '값을 바꾸면서 같은 트랜잭션에 서식을 비워도(빈 서식) 새 값이 남는다 — 정렬처럼 값·서식을 함께 옮길 때 ' +
+      '서식 핸들러가 await 전 낡은 값으로 칸을 덮어쓰던 경쟁 회귀 방지',
+    async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+      const { joinEditSession, getRoomLazyGridForTest } = await import('../src/collab/room.js');
+      const { GRID_CELLS_MAP, GRID_STYLES_MAP, gridCellKey } = await import('../src/collab/gridShared.js');
+      const { getCell } = await import('../src/xlsx/lazyGridStore.js');
+
+      const docId = randomUUID();
+      await seedDoc(docId, await makeRichlyStyledXlsx());
+      const socket = new FakeSocket();
+      await joinEditSession(socket as never, {} as never, docId, 'xlsx', [], false);
+      await flushEventLoop();
+
+      const lazyGrid = getRoomLazyGridForTest(docId)!;
+      const key = gridCellKey(0, 0, 0);
+      const before = (await getCell(lazyGrid, 0, 0, 0)) as { v: string };
+      expect(before.v).not.toBe('바뀐 값');
+      const scratch = new Y.Doc();
+      scratch.clientID = 0xfffffffd;
+      scratch.transact(() => {
+        scratch.getMap<string>(GRID_CELLS_MAP).set(key, '바뀐 값');
+        scratch.getMap(GRID_STYLES_MAP).set(key, {});
+      });
+      const encoder = encoding.createEncoder();
+      encoding.writeVarUint(encoder, MESSAGE_SYNC);
+      writeUpdate(encoder, Y.encodeStateAsUpdate(scratch));
+      socket.emit('message', encoding.toUint8Array(encoder));
+      await flushEventLoop();
+
+      const cell = (await getCell(lazyGrid, 0, 0, 0)) as { v: string };
+      expect(cell.v).toBe('바뀐 값');
+    },
+    60_000,
+  );
 });
 
 /**

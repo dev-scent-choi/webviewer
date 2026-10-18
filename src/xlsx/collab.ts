@@ -1,5 +1,7 @@
 import { addNewCharts, restoreDrawings, stripDrawings, type ChartCache } from './drawingPassthrough.js';
 import { cellsOf, type GridChart } from './chartModel.js';
+import { writeFilterCriteria } from './autoFilter.js';
+import { filteredRows, type SheetFilter } from './filterModel.js';
 import ExcelJS from 'exceljs';
 import * as Y from 'yjs';
 import {
@@ -589,6 +591,19 @@ export interface XlsxExportOptions {
   readonly sheetDisplayOrder?: ReadonlyMap<number, number>;
   /** 편집기에서 새로 넣은 차트 — 저장 파일에 차트 파트로 붙인다(삽입 탭). */
   readonly newCharts?: readonly GridChart[];
+  /** 시트 자리 번호 → 자동 필터(데이터 탭). 주면 그대로 맞추고(없는 시트는 필터 제거), 안 주면 손대지 않는다. */
+  readonly filters?: ReadonlyMap<number, SheetFilter>;
+}
+
+/** 칸의 지금 값을 화면과 같은 글자로(수식은 계산 결과) — 차트 캐시·필터 조건 비교에 쓴다 */
+function workbookCellText(workbook: ExcelJS.Workbook, sheetName: string, r: number, c: number): string {
+  const cell = workbook.getWorksheet(sheetName)?.getCell(r + 1, c + 1);
+  let value = cell?.value as unknown;
+  if (value && typeof value === 'object' && !(value instanceof Date)) {
+    const v = value as { result?: unknown; richText?: Array<{ text: string }>; text?: unknown };
+    value = 'result' in v ? v.result : v.richText ? v.richText.map((t) => t.text).join('') : v.text;
+  }
+  return value instanceof Date ? value.toISOString().slice(0, 10) : value === null || value === undefined ? '' : String(value);
 }
 
 /** 차트가 참조하는 칸의 지금 값(편집 반영 후) — 차트 파트의 캐시로 쓴다. */
@@ -807,6 +822,27 @@ export async function exportXlsxFromGrid(
     }
   }
 
+  // 자동 필터: 범위를 맞추고 조건에 안 맞는 행을 숨긴다(조건 XML은 쓰기 뒤 writeFilterCriteria가 붙인다)
+  const filtersByName = new Map<string, SheetFilter>();
+  if (options.filters) {
+    for (let sheetIdx = 0; sheetIdx < store.sheetMeta.length; sheetIdx += 1) {
+      const sheet = visibleSheets[sheetIdx];
+      if (removedSheets.has(sheetIdx) || !sheet) continue;
+      const filter = options.filters.get(sheetIdx);
+      if (!filter) {
+        if (sheet.autoFilter) (sheet as unknown as { autoFilter?: unknown }).autoFilter = undefined;
+        continue;
+      }
+      sheet.autoFilter = { from: { row: filter.r1 + 1, column: filter.c1 + 1 }, to: { row: filter.r2 + 1, column: filter.c2 + 1 } };
+      const hidden = new Set(filteredRows(filter, (r, c) => workbookCellText(workbook, sheet.name, r, c)));
+      for (let r = filter.r1 + 1; r <= filter.r2; r += 1) {
+        const row = sheet.getRow(r + 1);
+        if (Boolean(row.hidden) !== hidden.has(r)) row.hidden = hidden.has(r);
+      }
+      filtersByName.set(sheet.name, filter);
+    }
+  }
+
   for (let i = 0; i < visibleSheets.length; i += 1) {
     if (removedSheets.has(i)) continue; // 이미 워크북에서 제거된 시트 — 다시 잠글 대상이 아니다
     if (wasProtected[i]) {
@@ -818,7 +854,7 @@ export async function exportXlsxFromGrid(
 
   const chartJobs = (options.newCharts ?? []).map((chart) => ({ chart, cache: chartCacheFrom(workbook, chart) }));
   const buffer = await workbook.xlsx.writeBuffer();
-  return addNewCharts(restoreDrawings(new Uint8Array(buffer as ArrayBuffer), drawings), chartJobs);
+  return writeFilterCriteria(addNewCharts(restoreDrawings(new Uint8Array(buffer as ArrayBuffer), drawings), chartJobs), filtersByName);
 }
 
 /**

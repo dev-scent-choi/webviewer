@@ -67,6 +67,7 @@
       <button class="ribbon-tab" role="tab" data-tab="home" data-edit-only>홈</button>
       <button class="ribbon-tab" role="tab" data-tab="insert" data-edit-only>삽입</button>
       <button class="ribbon-tab" role="tab" data-tab="formulas" data-edit-only>수식</button>
+      <button class="ribbon-tab" role="tab" data-tab="data" data-edit-only>데이터</button>
       <button class="ribbon-tab" role="tab" data-tab="view">보기</button>
       <button class="ribbon-tab ribbon-tab-contextual" role="tab" data-tab="chart" data-edit-only hidden>차트 디자인</button>
       <span class="ribbon-tabs-spacer"></span>
@@ -383,6 +384,45 @@
       </div>
     </div>
 
+    <!-- ===== 데이터 ===== -->
+    <div class="toolbar-group toolbar-format ribbon-panel" data-panel="data" role="tabpanel" hidden>
+      <div class="ribbon-group">
+        <div class="ribbon-group-buttons">
+          <div class="ribbon-group-buttons-wrap">
+            <div class="ribbon-row">
+              <button id="btn-sort-asc" class="icon-btn ribbon-btn-labeled" title="오름차순 정렬 — 지금 칸의 열 기준(숫자 → 글자, 빈 칸은 맨 뒤)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17 4v16M14 17l3 3 3-3"/><text x="3" y="10" font-size="8" fill="currentColor" stroke="none" font-family="sans-serif">가</text><text x="3" y="20" font-size="8" fill="currentColor" stroke="none" font-family="sans-serif">하</text></svg>
+                <span class="ribbon-btn-label">오름차순</span>
+              </button>
+            </div>
+            <div class="ribbon-row">
+              <button id="btn-sort-desc" class="icon-btn ribbon-btn-labeled" title="내림차순 정렬 — 지금 칸의 열 기준">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17 4v16M14 17l3 3 3-3"/><text x="3" y="10" font-size="8" fill="currentColor" stroke="none" font-family="sans-serif">하</text><text x="3" y="20" font-size="8" fill="currentColor" stroke="none" font-family="sans-serif">가</text></svg>
+                <span class="ribbon-btn-label">내림차순</span>
+              </button>
+            </div>
+          </div>
+          <button id="btn-sort-custom" class="icon-btn icon-btn-big" title="정렬 — 기준 열·순서·머리글 지정">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="1.5"/><path d="M7 9h6M7 13h8M7 17h4"/><path d="M18 8v9M16 15l2 2 2-2"/></svg>
+            <span>정렬</span>
+          </button>
+          <button id="btn-filter" class="icon-btn icon-btn-big" title="필터 — 머리글 칸에 ▾ 단추를 달아 값으로 거르고 정렬한다" aria-pressed="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16l-6 7.5V19l-4-2v-4.5z"/></svg>
+            <span>필터</span>
+          </button>
+          <div class="ribbon-group-buttons-wrap">
+            <div class="ribbon-row">
+              <button id="btn-filter-clear" class="icon-btn ribbon-btn-labeled" title="필터 조건 지우기(모든 행 다시 보이기)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h11l-4 5v6l-3-1.5V10z"/><path d="m15 14 5 5M20 14l-5 5"/></svg>
+                <span class="ribbon-btn-label">지우기</span>
+              </button>
+            </div>
+          </div>
+        </div>
+        <span class="ribbon-group-label">정렬 및 필터</span>
+      </div>
+    </div>
+
     <!-- ===== 보기 ===== -->
     <div class="toolbar-group toolbar-format ribbon-panel" data-panel="view" role="tabpanel" hidden>
       <div class="ribbon-group">
@@ -440,6 +480,19 @@
       <button id="search-replace-one" class="btn-mini">바꾸기</button>
       <button id="search-replace-all" class="btn-mini">모두 바꾸기</button>
       <button id="search-close" class="btn-mini">닫기</button>
+    </div>
+  </div>
+
+  <div id="sort-dialog" class="office-dialog" hidden role="dialog" aria-labelledby="sort-dialog-title">
+    <div class="office-dialog-card">
+      <h2 id="sort-dialog-title">정렬</h2>
+      <p id="sort-dialog-range" class="office-dialog-sub"></p>
+      <div class="sort-dialog-fields">
+        <label>정렬 기준 <select id="sort-dialog-column"></select></label>
+        <label>정렬 <select id="sort-dialog-order"><option value="asc">오름차순</option><option value="desc">내림차순</option></select></label>
+        <label class="sort-dialog-check"><input id="sort-dialog-header" type="checkbox" /> 내 데이터에 머리글 표시</label>
+      </div>
+      <div class="office-dialog-actions"><button id="sort-dialog-ok" class="btn-mini">확인</button><button id="sort-dialog-cancel" class="btn-mini">취소</button></div>
     </div>
   </div>
 

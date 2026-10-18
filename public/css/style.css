@@ -3405,3 +3405,34 @@ body.review-pane-open #editor-zoom-host { margin-right: 320px; }
 .table-style-swatch i:first-child { background: var(--ts-head); }
 .table-style-swatch i:nth-child(2) { background: var(--ts-band); }
 .chart-title-field { grid-template-columns: 2.6rem 12rem; }
+
+/* ---------- Excel 데이터 탭: 필터 단추·값 목록·정렬 대화상자 ---------- */
+.grid-filter-layer { position: absolute; left: 0; top: 0; width: 0; height: 0; z-index: 4; }
+.grid-filter-btn {
+  position: absolute;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid #c8c6c4;
+  border-radius: 2px;
+  background: #ffffff;
+  color: #605e5c;
+  cursor: pointer;
+}
+.grid-filter-btn svg { width: 11px; height: 11px; }
+.grid-filter-btn:hover { border-color: var(--app-accent, var(--v-accent)); color: var(--app-accent, var(--v-accent)); }
+.grid-filter-btn.is-active { color: var(--app-accent, var(--v-accent)); border-color: var(--app-accent, var(--v-accent)); }
+.dropdown-menu.filter-menu { min-width: 13rem; max-width: 18rem; }
+.filter-values { display: flex; flex-direction: column; gap: 2px; max-height: 14rem; overflow-y: auto; margin: 0.3rem 0; padding: 0.35rem 0.45rem; border: 1px solid #e1dfdd; font-size: 0.8rem; }
+.filter-values label { display: flex; align-items: center; gap: 0.35rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.filter-actions { display: flex; justify-content: flex-end; gap: 0.3rem; padding-top: 0.2rem; }
+.dropdown-menu .filter-actions .btn-mini { padding: 0.3rem 0.8rem; border: 1px solid #c8c6c4; text-align: center; }
+.dropdown-menu .filter-actions .filter-ok { background: var(--app-accent, var(--v-accent)); color: #ffffff; border-color: transparent; }
+.sort-dialog-fields { display: flex; flex-direction: column; gap: 0.6rem; margin-bottom: 1rem; font-size: 0.84rem; }
+.sort-dialog-fields label { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.sort-dialog-fields select { min-width: 10rem; padding: 0.25rem; }
+.sort-dialog-fields .sort-dialog-check { justify-content: flex-start; gap: 0.4rem; }
+.office-dialog-actions { gap: 0.4rem; }
