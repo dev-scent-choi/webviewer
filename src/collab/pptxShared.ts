@@ -81,7 +81,13 @@ export const NEW_SHAPE_GEOMS: readonly NewShapeGeom[] = ['rect', 'roundRect', 'e
 export const PPTX_SLIDE_VISUALS_MAP = 'slideVisuals';
 
 export interface SlideVisual {
-  readonly kind: 'image' | 'shape' | 'table' | 'placeholder';
+  readonly kind: 'image' | 'shape' | 'table' | 'placeholder' | 'snapshot';
+  /** true면 편집 화면이 이 영역을 직접 흉내 내지 않고, LibreOffice가 원본 그대로 렌더링한 슬라이드
+   * 이미지(/api/view/pages/N)에서 그 영역만 잘라 끼워 넣는다 — 표(색·열 너비·병합·글꼴), 차트,
+   * 스마트아트, 브라우저가 못 그리는 그림(EMF/WMF), 선·연결선처럼 편집 대상이 아니면서 직접 그리기엔
+   * 너무 복잡한 요소. 페이지 이미지가 없으면(새 빈 슬라이드 등) kind별 대체 표시로 돌아간다
+   * (kind 'snapshot'은 대체 표시가 없다). */
+  readonly snapshot?: boolean;
   readonly x: number | null;
   readonly y: number | null;
   readonly w: number | null;

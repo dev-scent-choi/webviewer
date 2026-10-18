@@ -683,8 +683,12 @@ export function parseSlideVisuals(zipEntries: Record<string, Uint8Array>, source
       const ext = xfrm?.['a:ext'] as XmlNode | undefined;
       const blip = (pic['p:blipFill'] as XmlNode | undefined)?.['a:blip'] as XmlNode | undefined;
       const mediaPath = resolveImageMediaPath(owner, blip?.['@_r:embed'] as string | undefined);
-      if (!mediaPath) continue; // 관계 유실 또는 브라우저가 못 그리는 포맷 — 자리표시자 없이 생략
       const pos = applyGroupTransforms(transforms, emuAttr(off, '@_x'), emuAttr(off, '@_y'), emuAttr(ext, '@_cx'), emuAttr(ext, '@_cy'));
+      // 브라우저가 못 그리는 포맷(EMF/WMF — 한글에서 붙여넣은 도식에 흔함)이면 원본 렌더링에서 잘라 쓴다
+      if (!mediaPath) {
+        visuals.push({ kind: 'snapshot', ...pos, snapshot: true });
+        continue;
+      }
       visuals.push({ kind: 'image', ...pos, mediaPath });
     }
 
@@ -716,11 +720,22 @@ export function parseSlideVisuals(zipEntries: Record<string, Uint8Array>, source
         const rows = asArray<XmlNode>(tbl?.['a:tr'] as XmlNode | XmlNode[] | undefined).map((tr) =>
           asArray<XmlNode>(tr['a:tc'] as XmlNode | XmlNode[] | undefined).map(tableCellText),
         );
-        visuals.push({ kind: 'table', x, y, w, h, rows });
+        visuals.push({ kind: 'table', x, y, w, h, rows, snapshot: true });
       } else {
         const label = uri === CHART_GRAPHIC_URI ? '차트' : uri?.includes('/diagram') ? '스마트아트' : '콘텐츠';
-        visuals.push({ kind: 'placeholder', x, y, w, h, label });
+        visuals.push({ kind: 'placeholder', x, y, w, h, label, snapshot: true });
       }
+    }
+
+    // 선·연결선(<p:cxnSp>) — 예전엔 아예 그리지 않았다(도형 사이 화살표·구분선이 사라짐)
+    for (const cxn of asArray<XmlNode>(node['p:cxnSp'] as XmlNode | XmlNode[] | undefined)) {
+      if (template && isPlaceholder(cxn, 'p:nvCxnSpPr')) continue;
+      const xfrm = (cxn['p:spPr'] as XmlNode | undefined)?.['a:xfrm'] as XmlNode | undefined;
+      const off = xfrm?.['a:off'] as XmlNode | undefined;
+      const ext = xfrm?.['a:ext'] as XmlNode | undefined;
+      const pos = applyGroupTransforms(transforms, emuAttr(off, '@_x'), emuAttr(off, '@_y'), emuAttr(ext, '@_cx'), emuAttr(ext, '@_cy'));
+      if (pos.x === null || pos.y === null) continue;
+      visuals.push({ kind: 'snapshot', ...pos, snapshot: true });
     }
 
     for (const grp of asArray<XmlNode>(node['p:grpSp'] as XmlNode | XmlNode[] | undefined)) {

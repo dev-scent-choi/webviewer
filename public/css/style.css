@@ -1500,6 +1500,13 @@ body.home-hidden .doclist-link { display: none !important; }
   height: 100%;
   object-fit: fill; /* 원본 도형의 w/h를 그대로 채운다(PowerPoint의 실제 배치와 같은 비율) */
 }
+/* 원본 렌더링에서 잘라 낸 영역(표·차트·스마트아트·EMF·선) — 안의 이미지는 슬라이드 전체 크기로
+   놓고 이 상자가 그 영역만 보이게 자른다(renderSnapshot). */
+.slide-visual-snapshot img {
+  position: absolute;
+  max-width: none;
+  display: block;
+}
 .slide-visual-table {
   border-collapse: collapse;
   font-size: 0.8rem;

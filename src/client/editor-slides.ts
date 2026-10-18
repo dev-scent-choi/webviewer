@@ -258,6 +258,47 @@ function showSlideUnavailablePlaceholder(): void {
   canvasEl.append(placeholder);
 }
 
+/**
+ * 표·차트·스마트아트·EMF 그림·선처럼 편집 대상이 아닌 복잡한 요소는, LibreOffice가 원본 그대로
+ * 렌더링한 슬라이드 이미지에서 그 영역만 잘라 같은 자리에 끼운다 — 직접 흉내 내면 표의 색·열 너비·
+ * 병합·글꼴이나 차트를 다 재현할 수 없지만, 이렇게 하면 뷰어(같은 렌더링)와 픽셀 단위로 같다.
+ * 페이지 이미지는 마지막 저장본 기준인데, 이 요소들은 편집기에서 바뀌지 않으므로 어긋나지 않는다.
+ * 얇은 선(높이·폭 0)은 앞뒤로 몇 px 여유를 두어 선 두께가 잘리지 않게 한다.
+ */
+function renderSnapshot(visual: SlideVisual, pageImageUrl: string): HTMLElement {
+  const pad = 3;
+  const x = emuToPx(visual.x ?? 0);
+  const y = emuToPx(visual.y ?? 0);
+  const w = emuToPx(visual.w ?? 0);
+  const h = emuToPx(visual.h ?? 0);
+  const padX = w < 6 ? pad : 0;
+  const padY = h < 6 ? pad : 0;
+  const el = document.createElement('div');
+  el.className = 'slide-visual slide-visual-snapshot';
+  el.style.left = `${x - padX}px`;
+  el.style.top = `${y - padY}px`;
+  el.style.width = `${w + padX * 2}px`;
+  el.style.height = `${h + padY * 2}px`;
+  const img = document.createElement('img');
+  img.alt = '';
+  img.style.left = `${-(x - padX)}px`;
+  img.style.top = `${-(y - padY)}px`;
+  img.style.width = `${emuToPx(SLIDE_W_EMU)}px`;
+  img.style.height = `${emuToPx(SLIDE_H_EMU)}px`;
+  // 저장 직후엔 PDF 재변환이 끝날 때까지 새 페이지가 잠깐 없을 수 있다(썸네일과 같은 재시도)
+  let attempt = 0;
+  img.addEventListener('error', () => {
+    if (attempt >= 8) return;
+    attempt += 1;
+    setTimeout(() => {
+      if (img.isConnected) img.src = `${pageImageUrl}&retry=${attempt}`;
+    }, 1000 + attempt * 400);
+  });
+  img.src = pageImageUrl;
+  el.append(img);
+  return el;
+}
+
 /** PowerPoint 기본 도형(prstGeom) 중 자주 쓰이는 다각형 모양 — CSS clip-path로 그 모양만 남긴다.
  * 조정 핸들(avLst)은 기본값 비율로 근사한다. 여기 없는 모양은 사각형으로 표시된다. */
 const PRESET_CLIP: Record<string, string> = {
@@ -295,7 +336,8 @@ const ROUNDED_ALIAS: Record<string, string> = {
 /** 이미지/단순 도형/표/차트·스마트아트 자리표시자 하나를 표시 전용 엘리먼트로 그린다 —
  * 텍스트박스(.slide-textbox)와 달리 클릭해도 편집기가 뜨지 않는다(pointer-events는 CSS에서
  * .slide-visual에 none으로 꺼둔다). */
-function renderSlideVisual(visual: SlideVisual): HTMLElement {
+function renderSlideVisual(visual: SlideVisual, pageImageUrl: string | null): HTMLElement {
+  if (visual.snapshot && pageImageUrl) return renderSnapshot(visual, pageImageUrl);
   const el = document.createElement(visual.kind === 'table' ? 'table' : 'div');
   el.className = `slide-visual slide-visual-${visual.kind}`;
   el.style.left = `${emuToPx(visual.x ?? 0)}px`;
@@ -380,8 +422,12 @@ function renderCanvasForSlide(entryId: string): void {
 
   // 이미지·단순 도형·표/차트·스마트아트 자리표시자 — 편집 대상이 아니라 텍스트박스보다 먼저
   // 그려서(DOM 순서상 뒤에 오는 형제가 위에 쌓이므로) 항상 텍스트박스 아래에 깔리게 한다.
+  const activeEntry = slidesArray.toArray().find((e) => e.id === entryId);
+  const pageNumber = activeEntry ? renderedPageNumberFor(activeEntry) : null;
+  const pageImageUrl =
+    pageNumber === null ? null : `/api/view/pages/${pageNumber}?scale=3&token=${encodeURIComponent(token ?? '')}`;
   for (const visual of slideVisuals.get(entryId) ?? []) {
-    canvasEl.append(renderSlideVisual(visual));
+    canvasEl.append(renderSlideVisual(visual, pageImageUrl));
   }
 
   const perSlide = slideContents.get(entryId);
@@ -491,21 +537,27 @@ function renderCanvasForSlide(entryId: string): void {
   }
 }
 
+/** 이 슬라이드를 LibreOffice가 렌더링한 페이지 번호(/api/view/pages/N). 복제본은 sourcePageNumber가
+ * null이라(자기 원본 페이지가 따로 없다) 같은 원본 슬라이드 파트를 가리키는 항목의 페이지를 빌려
+ * 쓴다 — 그대로 쓰면 /api/view/pages/null로 400이 났다. 빈 슬라이드는 렌더링이 없으니 null. */
+function renderedPageNumberFor(entry: SlideEntry): number | null {
+  if (entry.kind === 'blank') return null;
+  return (
+    entry.sourcePageNumber ??
+    (entry.sourceSlidePart
+      ? slidesArray.toArray().find((e) => e.sourceSlidePart === entry.sourceSlidePart && e.sourcePageNumber !== null)
+          ?.sourcePageNumber ?? null
+      : null)
+  );
+}
+
 function cardFor(entry: SlideEntry, index: number): HTMLElement {
   const fragment = cardTemplate.content.cloneNode(true) as DocumentFragment;
   const card = fragment.querySelector('.slide-card') as HTMLElement;
   card.dataset.index = String(index);
   card.dataset.id = entry.id;
   const img = card.querySelector('img') as HTMLImageElement;
-  // 복제본은 sourcePageNumber가 null이라(자기 원본 페이지가 따로 없다) 그대로 쓰면
-  // /api/view/pages/null로 400이 나며 썸네일이 깨졌다 — 같은 원본 슬라이드 파트를 가리키는 항목의
-  // 페이지 번호를 빌려 쓴다(빈 슬라이드를 복제했으면 원본 파트가 없으니 빈 슬라이드 그림).
-  const pageNumber =
-    entry.sourcePageNumber ??
-    (entry.sourceSlidePart
-      ? slidesArray.toArray().find((e) => e.sourceSlidePart === entry.sourceSlidePart && e.sourcePageNumber !== null)
-          ?.sourcePageNumber ?? null
-      : null);
+  const pageNumber = renderedPageNumberFor(entry);
   if (entry.kind === 'blank' || pageNumber === null) {
     img.src = '/img/blank-slide.svg';
   } else {

@@ -45,7 +45,7 @@ describe('parseSlideVisuals', () => {
     ]);
   });
 
-  test('skips an image whose media format the browser cannot render (emf)', () => {
+  test('an image the browser cannot render (emf) is cropped from the original rendering (snapshot)', () => {
     const slideXml =
       XML_HEAD +
       '<p:pic><p:nvPicPr><p:cNvPr id="4" name="Picture"/></p:nvPicPr>' +
@@ -63,10 +63,12 @@ describe('parseSlideVisuals', () => {
       'ppt/media/image1.emf': new Uint8Array([1, 2, 3]),
     });
 
-    expect(parseSlideVisuals(entries, 'slide1.xml')).toHaveLength(0);
+    expect(parseSlideVisuals(entries, 'slide1.xml')).toEqual([
+      { kind: 'snapshot', x: 0, y: 0, w: 1, h: 1, snapshot: true },
+    ]);
   });
 
-  test('skips an image whose relationship points at a media part missing from the zip', () => {
+  test('an image whose media part is missing is also left to the original rendering (snapshot)', () => {
     const slideXml =
       XML_HEAD +
       '<p:pic><p:nvPicPr><p:cNvPr id="4" name="Picture"/></p:nvPicPr>' +
@@ -84,7 +86,9 @@ describe('parseSlideVisuals', () => {
       // ppt/media/missing.png는 의도적으로 없다.
     });
 
-    expect(parseSlideVisuals(entries, 'slide1.xml')).toHaveLength(0);
+    expect(parseSlideVisuals(entries, 'slide1.xml')).toEqual([
+      { kind: 'snapshot', x: 0, y: 0, w: 1, h: 1, snapshot: true },
+    ]);
   });
 
   test('extracts a textless shape as a filled rectangle', () => {
@@ -132,6 +136,7 @@ describe('parseSlideVisuals', () => {
     expect(visuals).toEqual([
       {
         kind: 'table',
+        snapshot: true,
         x: 10,
         y: 20,
         w: 30,
@@ -155,7 +160,7 @@ describe('parseSlideVisuals', () => {
     const entries = zip({ 'ppt/slides/slide1.xml': slideXml });
 
     expect(parseSlideVisuals(entries, 'slide1.xml')).toEqual([
-      { kind: 'placeholder', x: 1, y: 2, w: 3, h: 4, label: '차트' },
+      { kind: 'placeholder', x: 1, y: 2, w: 3, h: 4, label: '차트', snapshot: true },
     ]);
   });
 
