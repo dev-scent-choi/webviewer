@@ -90,6 +90,8 @@ export interface SlideVisual {
    * 너무 복잡한 요소. 페이지 이미지가 없으면(새 빈 슬라이드 등) kind별 대체 표시로 돌아간다
    * (kind 'snapshot'은 대체 표시가 없다). */
   readonly snapshot?: boolean;
+  /** 슬라이드 배경(<p:bg>) — 디자인 탭에서 배경 색을 바꾸면 이 항목 대신 그 색을 깐다 */
+  readonly background?: boolean;
   readonly x: number | null;
   readonly y: number | null;
   readonly w: number | null;

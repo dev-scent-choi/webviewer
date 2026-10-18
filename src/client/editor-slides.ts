@@ -8,6 +8,7 @@ import { keymap } from 'prosemirror-keymap';
 import type { Mark, MarkType, Node as PMNode } from 'prosemirror-model';
 import { ySyncPlugin, yCursorPlugin, yUndoPlugin, ySyncPluginKey, undo, redo } from 'y-prosemirror';
 import { initOfficeShell } from './officeShell.js';
+import { setupSlideDesign } from './slideDesignUi.js';
 import {
   PPTX_SLIDES_ARRAY,
   PPTX_SLIDE_CONTENTS_MAP,
@@ -53,6 +54,10 @@ const titleEl = document.getElementById('doc-title')!;
 const connStatusEl = document.getElementById('conn-status')!;
 const railEl = document.getElementById('slides-rail') as HTMLElement;
 const canvasEl = document.getElementById('slide-canvas') as HTMLElement;
+/** 디자인·전환·애니메이션 탭(slideDesignUi.ts) — 캔버스·레일을 다시 그린 뒤 배경 색·순서 번호·★을 얹는다 */
+let designHooks: { onCanvasRendered(): void; onSlidesRendered(): void } | null = null;
+/** 마지막으로 커서를 둔 텍스트 상자·도형(애니메이션 탭의 대상) */
+let lastFocusedShapeId: string | null = null;
 const cardTemplate = document.getElementById('slide-card-template') as HTMLTemplateElement;
 const presenceListEl = document.getElementById('presence-list') as HTMLElement;
 
@@ -341,6 +346,7 @@ function renderSlideVisual(visual: SlideVisual, pageImageUrl: string | null): HT
   if (visual.snapshot && pageImageUrl) return renderSnapshot(visual, pageImageUrl);
   const el = document.createElement(visual.kind === 'table' ? 'table' : 'div');
   el.className = `slide-visual slide-visual-${visual.kind}`;
+  if (visual.background) el.dataset.background = '1';
   el.style.left = `${emuToPx(visual.x ?? 0)}px`;
   el.style.top = `${emuToPx(visual.y ?? 0)}px`;
   el.style.width = `${emuToPx(visual.w ?? 0)}px`;
@@ -384,6 +390,11 @@ function renderSlideVisual(visual: SlideVisual, pageImageUrl: string | null): HT
  * 감지해 이 함수를 다시 불러줄 때 그려진다(main()의 observe 콜백 참고).
  */
 function renderCanvasForSlide(entryId: string): void {
+  renderCanvasForSlideInner(entryId);
+  designHooks?.onCanvasRendered();
+}
+
+function renderCanvasForSlideInner(entryId: string): void {
   // y-prosemirror(1.3.7)의 ySyncPlugin/yCursorPlugin은 원격 갱신·커서 이동이 있을 때마다
   // "이 view에 적용할 setMeta"를 모듈 전역 큐에 넣고 setTimeout(0)으로 나중에 한꺼번에
   // flush한다(y-prosemirror 소스의 updateMetas). updateMetas는 flush 직전
@@ -514,6 +525,7 @@ function renderCanvasForSlide(entryId: string): void {
       handleDOMEvents: {
         focus: () => {
           focusedView = view;
+          lastFocusedShapeId = shapeId;
           refreshRibbonState(view);
           return false;
         },
@@ -586,6 +598,11 @@ function cardFor(entry: SlideEntry, index: number): HTMLElement {
 }
 
 function renderSlides(): void {
+  renderSlidesInner();
+  designHooks?.onSlidesRendered();
+}
+
+function renderSlidesInner(): void {
   queueMicrotask(updateSlideStatus);
   const entries = slidesArray.toArray();
   railEl.replaceChildren(...entries.map((entry, index) => cardFor(entry, index)));
@@ -1088,6 +1105,15 @@ async function main(): Promise<void> {
   slidesArray = ydoc.getArray<SlideEntry>(PPTX_SLIDES_ARRAY);
   slideContents = ydoc.getMap<PerSlideContentsMap>(PPTX_SLIDE_CONTENTS_MAP);
   slideVisuals = ydoc.getMap<readonly SlideVisual[]>(PPTX_SLIDE_VISUALS_MAP);
+  designHooks = setupSlideDesign({
+    ydoc,
+    canEdit,
+    canvas: canvasEl,
+    rail: railEl,
+    entries: () => slidesArray.toArray(),
+    activeEntry: () => slidesArray.toArray().find((entry) => entry.id === activeSlideId) ?? null,
+    selectedShapeId: () => lastFocusedShapeId,
+  });
   const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
   provider = new WebsocketProvider(`${wsProtocol}//${location.host}/ws/edit`, info.docId, ydoc, {
     params: { token },

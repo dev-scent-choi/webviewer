@@ -685,10 +685,10 @@ export function parseSlideVisuals(zipEntries: Record<string, Uint8Array>, source
     const blip = (bgPr?.['a:blipFill'] as XmlNode | undefined)?.['a:blip'] as XmlNode | undefined;
     const mediaPath = resolveImageMediaPath(bgOwner, blip?.['@_r:embed'] as string | undefined);
     if (mediaPath) {
-      visuals.push({ kind: 'image', x: 0, y: 0, w: cx, h: cy, mediaPath });
+      visuals.push({ kind: 'image', x: 0, y: 0, w: cx, h: cy, mediaPath, background: true });
     } else {
       const fill = bgPr ? fillColorFromSpPr(bgPr, theme) : bgRef && theme ? theme.resolve(bgRef) : undefined;
-      if (fill) visuals.push({ kind: 'shape', x: 0, y: 0, w: cx, h: cy, fill });
+      if (fill) visuals.push({ kind: 'shape', x: 0, y: 0, w: cx, h: cy, fill, background: true });
     }
   }
 

@@ -94,7 +94,7 @@ describe('loadThemeColors', () => {
 describe('parseSlideVisuals: 레이아웃·마스터 그래픽과 배경', () => {
   test('마스터 배경(bgRef 테마 색) → 마스터 로고·색 띠 → 레이아웃 장식 순서, 개체 틀은 제외', () => {
     const v = parseSlideVisuals(deck(), 'slide1.xml');
-    expect(v[0]).toEqual({ kind: 'shape', x: 0, y: 0, w: 9144000, h: 6858000, fill: '#4472C4' });
+    expect(v[0]).toEqual({ kind: 'shape', x: 0, y: 0, w: 9144000, h: 6858000, fill: '#4472C4', background: true });
     expect(v).toContainEqual({ kind: 'image', x: 100, y: 200, w: 300, h: 400, mediaPath: 'ppt/media/logo.png' });
     expect(v).toContainEqual(expect.objectContaining({ kind: 'shape', w: 9144000, h: 50, fill: '#17375E' })); // tx2(1F497D) 75%
     expect(v).toContainEqual(expect.objectContaining({ kind: 'shape', x: 10, y: 20, fill: '#ED7D31', geom: 'rightArrow' })); // fillRef → accent2
@@ -103,7 +103,7 @@ describe('parseSlideVisuals: 레이아웃·마스터 그래픽과 배경', () =>
 
   test('슬라이드 "배경 그래픽 숨기기"(showMasterSp=0)면 마스터·레이아웃 그래픽은 빼고 배경만', () => {
     const v = parseSlideVisuals(deck({ slideShowMasterSp: '0' }), 'slide1.xml');
-    expect(v).toEqual([{ kind: 'shape', x: 0, y: 0, w: 9144000, h: 6858000, fill: '#4472C4' }]);
+    expect(v).toEqual([{ kind: 'shape', x: 0, y: 0, w: 9144000, h: 6858000, fill: '#4472C4', background: true }]);
   });
 
   test('명시적 noFill은 스타일 fillRef보다 우선(투명)', () => {

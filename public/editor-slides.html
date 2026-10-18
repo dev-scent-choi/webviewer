@@ -61,6 +61,9 @@
       <button class="ribbon-tab ribbon-tab-file" role="tab" data-tab="file">파일</button>
       <button class="ribbon-tab" role="tab" data-tab="home" data-edit-only>홈</button>
       <button class="ribbon-tab" role="tab" data-tab="insert" data-edit-only>삽입</button>
+      <button class="ribbon-tab" role="tab" data-tab="design" data-edit-only>디자인</button>
+      <button class="ribbon-tab" role="tab" data-tab="transitions" data-edit-only>전환</button>
+      <button class="ribbon-tab" role="tab" data-tab="animations" data-edit-only>애니메이션</button>
       <span class="ribbon-tabs-spacer"></span>
       <button id="ribbon-collapse" class="ribbon-collapse" title="리본 축소 (Ctrl+F1)" aria-label="리본 축소">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 15 6-6 6 6"/></svg>
@@ -224,6 +227,115 @@
           </button>
         </div>
         <span class="ribbon-group-label">도형</span>
+      </div>
+    </div>
+    <!-- ===== 디자인 ===== -->
+    <div class="toolbar-group toolbar-format ribbon-panel" data-panel="design" role="tabpanel" hidden>
+      <div class="ribbon-group">
+        <div class="ribbon-group-buttons">
+          <div class="slide-bg-swatches" role="group" aria-label="배경 색">
+            <button class="slide-bg-swatch" data-slide-bg="#ffffff" style="background:#ffffff" title="흰색"></button>
+            <button class="slide-bg-swatch" data-slide-bg="#f2f2f2" style="background:#f2f2f2" title="연한 회색"></button>
+            <button class="slide-bg-swatch" data-slide-bg="#e7e6e6" style="background:#e7e6e6" title="회색"></button>
+            <button class="slide-bg-swatch" data-slide-bg="#fff2cc" style="background:#fff2cc" title="연한 금색"></button>
+            <button class="slide-bg-swatch" data-slide-bg="#deebf7" style="background:#deebf7" title="연한 파랑"></button>
+            <button class="slide-bg-swatch" data-slide-bg="#e2f0d9" style="background:#e2f0d9" title="연한 녹색"></button>
+            <button class="slide-bg-swatch" data-slide-bg="#fbe5d6" style="background:#fbe5d6" title="연한 주황"></button>
+            <button class="slide-bg-swatch" data-slide-bg="#1f4e79" style="background:#1f4e79" title="진한 파랑"></button>
+            <button class="slide-bg-swatch" data-slide-bg="#203864" style="background:#203864" title="남색"></button>
+            <button class="slide-bg-swatch" data-slide-bg="#385723" style="background:#385723" title="진한 녹색"></button>
+            <button class="slide-bg-swatch" data-slide-bg="#404040" style="background:#404040" title="진한 회색"></button>
+            <button class="slide-bg-swatch" data-slide-bg="#000000" style="background:#000000" title="검정"></button>
+          </div>
+          <div class="ribbon-group-buttons-wrap">
+            <div class="ribbon-row">
+              <label class="color-btn slide-bg-custom" title="다른 색">
+                <span class="color-btn-glyph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="M12 4v16M4 12h16"/></svg></span>
+                <input id="slide-bg-custom" class="color-btn-input" type="color" value="#ffffff" aria-label="배경 색 직접 고르기" />
+              </label>
+              <button id="btn-bg-apply-all" class="icon-btn ribbon-btn-labeled" title="이 슬라이드의 배경을 모든 슬라이드에">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="12" height="9" rx="1"/><rect x="9" y="10" width="12" height="9" rx="1"/></svg>
+                <span class="ribbon-btn-label">모두 적용</span>
+              </button>
+            </div>
+            <div class="ribbon-row">
+              <button id="btn-bg-reset" class="icon-btn ribbon-btn-labeled" title="이 슬라이드 배경을 원래대로">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10a8 8 0 1 1 2.3 5.7"/><path d="M4 4v6h6"/></svg>
+                <span class="ribbon-btn-label">배경 원래대로</span>
+              </button>
+            </div>
+          </div>
+        </div>
+        <span class="ribbon-group-label">배경 서식</span>
+      </div>
+    </div>
+
+    <!-- ===== 전환 ===== -->
+    <div class="toolbar-group toolbar-format ribbon-panel" data-panel="transitions" role="tabpanel" hidden>
+      <div class="ribbon-group">
+        <div class="ribbon-group-buttons">
+          <button id="btn-transition-preview" class="icon-btn icon-btn-big" title="이 슬라이드의 전환 미리 보기">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="13" rx="1.5"/><path d="m10 9 5 2.5-5 2.5z" fill="currentColor"/></svg>
+            <span>미리 보기</span>
+          </button>
+        </div>
+        <span class="ribbon-group-label">미리 보기</span>
+      </div>
+      <div class="ribbon-group">
+        <div class="ribbon-group-buttons effect-gallery">
+          <button class="effect-tile" data-transition="none" title="없음"><i class="fx-none"></i><span>없음</span></button>
+          <button class="effect-tile" data-transition="fade" title="밝기 변화"><i class="fx-fade"></i><span>밝기 변화</span></button>
+          <button class="effect-tile" data-transition="push" title="밀어내기"><i class="fx-push"></i><span>밀어내기</span></button>
+          <button class="effect-tile" data-transition="wipe" title="닦아내기"><i class="fx-wipe"></i><span>닦아내기</span></button>
+          <button class="effect-tile" data-transition="split" title="나누기"><i class="fx-split"></i><span>나누기</span></button>
+          <button class="effect-tile" data-transition="cover" title="덮기"><i class="fx-cover"></i><span>덮기</span></button>
+          <button class="effect-tile" data-transition="zoom" title="확대/축소"><i class="fx-zoom"></i><span>확대/축소</span></button>
+        </div>
+        <span class="ribbon-group-label">이 슬라이드로 전환</span>
+      </div>
+      <div class="ribbon-group">
+        <div class="ribbon-group-buttons layout-fields">
+          <div class="layout-field-col">
+            <label class="layout-field"><span>속도</span><select id="transition-speed"><option value="fast">빠르게</option><option value="med" selected>보통</option><option value="slow">느리게</option></select></label>
+            <button id="btn-transition-apply-all" class="icon-btn ribbon-btn-labeled" title="이 슬라이드의 전환을 모든 슬라이드에">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="12" height="9" rx="1"/><rect x="9" y="10" width="12" height="9" rx="1"/></svg>
+              <span class="ribbon-btn-label">모두 적용</span>
+            </button>
+          </div>
+        </div>
+        <span class="ribbon-group-label">타이밍</span>
+      </div>
+    </div>
+
+    <!-- ===== 애니메이션 ===== -->
+    <div class="toolbar-group toolbar-format ribbon-panel" data-panel="animations" role="tabpanel" hidden>
+      <div class="ribbon-group">
+        <div class="ribbon-group-buttons">
+          <button id="btn-animation-preview" class="icon-btn icon-btn-big" title="이 슬라이드의 애니메이션 미리 보기">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="13" rx="1.5"/><path d="m10 9 5 2.5-5 2.5z" fill="currentColor"/></svg>
+            <span>미리 보기</span>
+          </button>
+        </div>
+        <span class="ribbon-group-label">미리 보기</span>
+      </div>
+      <div class="ribbon-group">
+        <div class="ribbon-group-buttons effect-gallery">
+          <button class="effect-tile" data-animation="none" title="없음"><i class="fx-none"></i><span>없음</span></button>
+          <button class="effect-tile" data-animation="appear" title="나타내기"><i class="fx-appear"></i><span>나타내기</span></button>
+          <button class="effect-tile" data-animation="fade" title="밝기 변화"><i class="fx-fade"></i><span>밝기 변화</span></button>
+          <button class="effect-tile" data-animation="fly" title="날아오기(아래에서)"><i class="fx-fly"></i><span>날아오기</span></button>
+          <button class="effect-tile" data-animation="wipe" title="닦아내기(아래에서)"><i class="fx-wipe"></i><span>닦아내기</span></button>
+        </div>
+        <span class="ribbon-group-label">애니메이션</span>
+      </div>
+      <div class="ribbon-group">
+        <div class="ribbon-group-buttons layout-fields">
+          <div class="layout-field-col">
+            <label class="layout-field anim-trigger-field"><span>시작</span><select id="animation-trigger"><option value="click">클릭할 때</option><option value="with">이전 효과와 함께</option><option value="after">이전 효과 다음에</option></select></label>
+            <span id="animation-target" class="animation-target">텍스트 상자나 도형을 클릭하세요</span>
+          </div>
+        </div>
+        <span class="ribbon-group-label">타이밍</span>
       </div>
     </div>
   </header>

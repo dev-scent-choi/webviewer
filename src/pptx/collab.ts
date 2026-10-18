@@ -1,3 +1,4 @@
+import { applySlideDesign, type SlideDesign } from './slideDesign.js';
 import { randomUUID } from 'node:crypto';
 import { strFromU8, strToU8, zipSync } from 'fflate';
 import type { Zippable } from 'fflate';
@@ -367,6 +368,7 @@ export function exportPptxFromSlides(
   pptxBytes: Uint8Array,
   slidesArray: Y.Array<SlideEntry>,
   slideContents?: SlideContentsMap,
+  design?: ReadonlyMap<string, SlideDesign>,
 ): ExportedPptx {
   // 아래 zipEntries는 이 함수 안에서 계속 mutate된다(파트 추가/삭제/텍스트 병합) — 병합 루프가
   // "이 도형이 실제로 편집됐는가"를 판단하려면 mutate되기 "전"의 원본 슬라이드 XML이 그대로
@@ -712,6 +714,15 @@ export function exportPptxFromSlides(
   // 표시하고 나머지(XML/.rels 등, 실제로 압축 이득이 있는 텍스트)는 그대로 둬 기존 기본 레벨을
   // 유지한다 — 어느 엔트리든 압축 해제 시 나오는 바이트 자체는 이 분기와 무관하게 항상 동일하다
   // (압축 레벨은 압축 해제 결과에 영향을 주지 않는 순수 인코딩 파라미터).
+  // 디자인·전환·애니메이션 탭에서 바꾼 항목(슬라이드 항목 id별)을 그 슬라이드 XML에 반영한다
+  if (design) {
+    entryList.forEach((entry, i) => {
+      const changes = design.get(entry.id);
+      const path = `ppt/slides/${finalParts[i]}`;
+      if (changes && zipEntries[path]) zipEntries[path] = strToU8(applySlideDesign(strFromU8(zipEntries[path]), changes));
+    });
+  }
+
   const zippableEntries: Zippable = {};
   for (const [path, data] of Object.entries(zipEntries)) {
     zippableEntries[path] = isPrecompressedMediaPath(path) ? [data, { level: 0 }] : data;

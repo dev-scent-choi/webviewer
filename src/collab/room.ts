@@ -1,6 +1,7 @@
 import type { IncomingMessage } from 'node:http';
 import type { WebSocket } from 'ws';
 import { guardedUnzipSync } from '../zipGuard.js';
+import { strFromU8 } from 'fflate';
 import * as decoding from 'lib0/decoding';
 import * as encoding from 'lib0/encoding';
 import * as Y from 'yjs';
@@ -47,6 +48,7 @@ import { exportXlsxFromGridStreaming } from '../xlsx/exportStreaming.js';
 import { GRID_CHARTS_MAP, type GridChart } from '../xlsx/chartModel.js';
 import { readSheetCharts } from '../xlsx/drawingPassthrough.js';
 import { readAutoFilters } from '../xlsx/autoFilter.js';
+import { PPTX_SLIDE_DESIGN_MAP, PPTX_SLIDE_DESIGN_ORIGINAL_MAP, readSlideDesign, type SlideDesign } from '../pptx/slideDesign.js';
 import { GRID_FILTERS_MAP, type SheetFilter } from '../xlsx/filterModel.js';
 import {
   exportXlsxFromGrid,
@@ -1405,7 +1407,17 @@ async function seedRoom(room: Room): Promise<void> {
       // reconcilePageSubscriptions가 셀 데이터와 함께 채운다.
     } else if (kind === 'pptx') {
       const slidesArray = ydoc.getArray<SlideEntry>(PPTX_SLIDES_ARRAY);
-      ydoc.transact(() => seedSlidesFromPptx(original, slidesArray), PPTX_SEED_ORIGIN);
+      ydoc.transact(() => {
+        seedSlidesFromPptx(original, slidesArray);
+        // 슬라이드마다 원본의 배경 색·전환·애니메이션(편집기 탭 표시용) — 원본 슬라이드 파트 이름으로
+        const originals = ydoc.getMap<Required<SlideDesign>>(PPTX_SLIDE_DESIGN_ORIGINAL_MAP);
+        const zip = guardedUnzipSync(original, 'slideDesignOriginal');
+        for (const entry of slidesArray.toArray()) {
+          const part = entry.sourceSlidePart;
+          const xml = part ? zip[`ppt/slides/${part}`] : undefined;
+          if (part && xml) originals.set(part, readSlideDesign(strFromU8(xml)));
+        }
+      }, PPTX_SEED_ORIGIN);
       // 슬라이드 목록이 채워진 직후에 만든다 — 그 시점의 슬라이드 id·순서가 "룸이 열린 시점"이다.
       // 도형 내용은 슬라이드를 처음 열 때 지연 시딩되므로 그 슬라이드의 기준선은 doSeedSlideContent가
       // 시딩 직후 captureBaseline으로 남긴다.
@@ -1482,6 +1494,7 @@ async function flushToStore(room: Room): Promise<void> {
       original,
       slidesArray,
       slideContents,
+      slideDesignOf(ydoc),
     );
     await store.saveOriginal(docId, meta.ext, Buffer.from(newPptxBytes));
 
@@ -1690,11 +1703,17 @@ export async function getCurrentBytes(docId: string): Promise<Uint8Array | null>
       original,
       room.ydoc.getArray<SlideEntry>(PPTX_SLIDES_ARRAY),
       room.ydoc.getMap<PerSlideContentsMap>(PPTX_SLIDE_CONTENTS_MAP),
+      slideDesignOf(room.ydoc),
     ).bytes;
   }
   const fragment = room.ydoc.getXmlFragment(XML_FRAGMENT_NAME);
   const pmDoc = yXmlFragmentToProseMirrorRootNode(fragment, docxSchema);
   return exportDocx(original, pmDoc, docxPageSetupOf(room.ydoc), docxCommentsOf(room.ydoc));
+}
+
+/** 디자인·전환·애니메이션 탭에서 바꾼 슬라이드 설정 */
+function slideDesignOf(ydoc: Y.Doc): Map<string, SlideDesign> {
+  return new Map(ydoc.getMap<SlideDesign>(PPTX_SLIDE_DESIGN_MAP).entries());
 }
 
 /** 메모 내용(검토 탭) — 본문 범위 표시는 문서의 comment 마크에 있다. */

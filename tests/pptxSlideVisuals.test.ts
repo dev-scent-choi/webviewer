@@ -210,7 +210,7 @@ describe('parseSlideVisuals', () => {
     const visuals = parseSlideVisuals(entries, 'slide1.xml');
 
     expect(visuals).toEqual([
-      { kind: 'image', x: 0, y: 0, w: SLIDE_WIDTH_EMU, h: SLIDE_HEIGHT_EMU, mediaPath: 'ppt/media/bg.png' },
+      { kind: 'image', x: 0, y: 0, w: SLIDE_WIDTH_EMU, h: SLIDE_HEIGHT_EMU, mediaPath: 'ppt/media/bg.png', background: true },
       { kind: 'shape', x: 100, y: 200, w: 300, h: 400, fill: '#4472C4' },
     ]);
   });
@@ -230,7 +230,7 @@ describe('parseSlideVisuals', () => {
     const visuals = parseSlideVisuals(entries, 'slide1.xml');
 
     expect(visuals).toEqual([
-      { kind: 'shape', x: 0, y: 0, w: SLIDE_WIDTH_EMU, h: SLIDE_HEIGHT_EMU, fill: '#112233' },
+      { kind: 'shape', x: 0, y: 0, w: SLIDE_WIDTH_EMU, h: SLIDE_HEIGHT_EMU, fill: '#112233', background: true },
     ]);
   });
 
