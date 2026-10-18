@@ -4,6 +4,17 @@ import type { DocumentMeta } from './types.js';
 import { buildSheetNameIndex, computeGridCellDisplay } from './xlsx/formulas.js';
 import { isDateNumFmt, serialToDateText } from './collab/cellValueShared.js';
 import { stripDrawings } from './xlsx/drawingPassthrough.js';
+import {
+  EXCEL_DEFAULT_FONT_PX,
+  EXCEL_DEFAULT_ROW_HEIGHT_PT,
+  autoFitRowHeightPx,
+  defaultColWidthPx,
+  encodeRowHeights,
+  estimateWrappedLines,
+  excelColWidthToPx,
+  rowHeightPtToPx,
+  type RowHeightRuns,
+} from './xlsx/sheetGeometry.js';
 
 /** 대형 시트를 훑는 동기 반복문 중간에 이벤트 루프에 제어권을 돌려준다 — 이게 없으면 큰 xlsx를
  * 열 때(파싱이든 동시편집 시딩이든) 그 몇 초~몇십 초 동안 Node가 단일 스레드라 그 문서를 연
@@ -42,7 +53,13 @@ export interface GridSheet {
   readonly name: string;
   readonly rowCount: number;
   readonly colCount: number;
+  /** 열별 화면 폭(px) — 숨긴 열은 0 */
   readonly colWidths: readonly number[];
+  /** colWidths 밖(파일에 너비가 없는 뒤쪽 열)의 폭(px) */
+  readonly defaultColWidth: number;
+  /** 기본 행 높이(px)와, 그와 다른 행(숨긴 행은 0)의 높이 묶음 — sheetGeometry.ts 참고 */
+  readonly defaultRowHeight: number;
+  readonly rowHeights: RowHeightRuns;
   readonly merges: readonly GridMerge[];
   /** 엑셀 "틀 고정" — 위 N행/왼쪽 N열은 스크롤해도 계속 보인다. 없으면 둘 다 0. */
   readonly freezeRows: number;
@@ -102,7 +119,7 @@ export interface GridDocument {
  * (routes/viewer.ts의 loadGridUncached 참고) — 기존 문서를 한꺼번에 마이그레이션하지 않는다(그 자체가
  * 새로운 리스크이므로). 앞으로 계산 로직이 바뀔 때마다(예: 새로운 함수 지원, 다른 계산 버그 수정)
  * 이 값을 올리면 같은 메커니즘이 그대로 재사용된다. */
-export const GRID_CACHE_FORMAT_VERSION = 2;
+export const GRID_CACHE_FORMAT_VERSION = 3;
 
 /** JSONL 헤더(1행): 셀 데이터를 제외한 시트 메타 정보 */
 export interface GridHeader {
@@ -210,8 +227,6 @@ export async function buildGridFromOriginal(
  */
 export const MAX_ROWS = 300_000;
 export const MAX_COLS = 120;
-const DEFAULT_COL_WIDTH_PX = 100;
-const CHAR_TO_PX = 7.2;
 
 function argbToCss(argb?: string): string | undefined {
   if (!argb) return undefined;
@@ -717,6 +732,78 @@ export function extractStyle(
   return palette.register(style);
 }
 
+/** 병합 칸 위치 — 'multi'(여러 행에 걸친 병합의 왼쪽 위)·'single'(한 행 안 가로 병합의 왼쪽)·'covered'(덮인 칸) */
+export type MergeRole = 'multi' | 'single' | 'covered';
+
+export function mergeRolesByRow(merges: readonly GridMerge[]): Map<number, Map<number, { role: MergeRole; cs: number }>> {
+  const byRow = new Map<number, Map<number, { role: MergeRole; cs: number }>>();
+  for (const m of merges) {
+    for (let r = m.r - 1; r < m.r - 1 + m.rs; r += 1) {
+      let row = byRow.get(r);
+      if (!row) byRow.set(r, (row = new Map()));
+      for (let c = m.c - 1; c < m.c - 1 + m.cs; c += 1) {
+        const anchor = r === m.r - 1 && c === m.c - 1;
+        row.set(c, { role: anchor ? (m.rs > 1 ? 'multi' : 'single') : 'covered', cs: m.cs });
+      }
+    }
+  }
+  return byRow;
+}
+
+/**
+ * 높이가 파일에 없는 행의 "자동 맞춤" 높이(px) — 엑셀은 이런 행을 줄 바꿈 칸의 줄 수·큰 글자에 맞춰
+ * 늘려 보여 준다. 병합 칸은 엑셀도 줄 바꿈 자동 맞춤에서 빼므로(한 행 안 가로 병합은 글자 크기만
+ * 반영) 똑같이 한다. 기본보다 높을 때만 값을 돌려준다.
+ */
+export function autoFitRowPx(
+  cells: ReadonlyArray<GridCell | 0>,
+  styles: readonly GridStyle[],
+  colWidthAt: (col: number) => number,
+  mergeRoles: ReadonlyMap<number, { role: MergeRole; cs: number }> | undefined,
+  defaultRowPx: number,
+): number | undefined {
+  let best = defaultRowPx;
+  for (let c = 0; c < cells.length; c += 1) {
+    const cell = cells[c];
+    if (cell === 0 || cell.v === '') continue;
+    const merge = mergeRoles?.get(c);
+    if (merge && merge.role !== 'single') continue;
+    const style = cell.s === undefined ? undefined : styles[cell.s];
+    const fontPx = style?.fs ?? EXCEL_DEFAULT_FONT_PX;
+    const lines = style?.w && !merge ? estimateWrappedLines(cell.v, colWidthAt(c), fontPx) : 1;
+    if (lines < 2 && fontPx <= EXCEL_DEFAULT_FONT_PX + 0.5) continue;
+    best = Math.max(best, autoFitRowHeightPx(lines, fontPx, defaultRowPx));
+  }
+  return best > defaultRowPx ? best : undefined;
+}
+
+/** 파일에 적힌 높이(숨김=0) + 나머지 행의 자동 맞춤 높이 → 묶음 */
+export function computeRowHeights(
+  rows: ReadonlyArray<ReadonlyArray<GridCell | 0>>,
+  styles: readonly GridStyle[],
+  colWidths: readonly number[],
+  merges: readonly GridMerge[],
+  explicitRowPx: ReadonlyMap<number, number>,
+  defaultRowPx: number,
+): RowHeightRuns {
+  const roles = mergeRolesByRow(merges);
+  const colWidthAt = (c: number) => colWidths[c] ?? 0;
+  const entries: Array<[number, number]> = [];
+  let lastRow = rows.length;
+  for (const r of explicitRowPx.keys()) lastRow = Math.max(lastRow, r + 1);
+  for (let r = 0; r < lastRow; r += 1) {
+    const explicit = explicitRowPx.get(r);
+    if (explicit !== undefined) {
+      entries.push([r, explicit]);
+      continue;
+    }
+    const cells = rows[r];
+    const fit = cells ? autoFitRowPx(cells, styles, colWidthAt, roles.get(r), defaultRowPx) : undefined;
+    if (fit !== undefined) entries.push([r, fit]);
+  }
+  return encodeRowHeights(entries, defaultRowPx);
+}
+
 export async function parseXlsxToGrid(xlsxBytes: Buffer): Promise<GridDocument> {
   const workbook = new ExcelJS.Workbook();
   // 차트가 든 그리기 파트를 ExcelJS가 읽다 죽지 않게 떼고 읽는다(그리드 보기에는 쓰지 않는 파트다)
@@ -800,10 +887,20 @@ export async function parseXlsxToGrid(xlsxBytes: Buffer): Promise<GridDocument> 
       while (cells.length < colCount) cells.push(0);
     }
 
+    const sheetFormat = sheet.properties as { defaultRowHeight?: number; defaultColWidth?: number };
+    const defaultColWidth = defaultColWidthPx(sheetFormat.defaultColWidth);
+    const defaultRowHeight = rowHeightPtToPx(sheetFormat.defaultRowHeight || EXCEL_DEFAULT_ROW_HEIGHT_PT);
     const colWidths: number[] = [];
     for (let c = 1; c <= colCount; c += 1) {
-      const width = sheet.getColumn(c).width;
-      colWidths.push(width ? Math.round(width * CHAR_TO_PX) : DEFAULT_COL_WIDTH_PX);
+      const column = sheet.getColumn(c);
+      colWidths.push(column.hidden ? 0 : column.width ? excelColWidthToPx(column.width) : defaultColWidth);
+    }
+    // 파일에 적힌 행 높이·숨김 — 값이 없는 꼬리 행도(서식만 있는 행) 화면 여백 행으로 그려지므로 다 읽는다
+    const explicitRowPx = new Map<number, number>();
+    for (let r = 1; r <= rowCount; r += 1) {
+      const row = sheet.getRow(r);
+      if (row.hidden) explicitRowPx.set(r - 1, 0);
+      else if (row.height) explicitRowPx.set(r - 1, rowHeightPtToPx(row.height));
     }
 
     // 서식만 남은 유령 행(값 없는 꼬리 행)을 잘라내 행 수를 실제 데이터 기준으로 맞춘다
@@ -828,7 +925,20 @@ export async function parseXlsxToGrid(xlsxBytes: Buffer): Promise<GridDocument> 
     const freezeRows = frozenView ? ((frozenView as { ySplit?: number }).ySplit ?? 0) : 0;
     const freezeCols = frozenView ? ((frozenView as { xSplit?: number }).xSplit ?? 0) : 0;
 
-    sheets.push({ name: sheet.name, rowCount: rows.length, colCount, colWidths, merges, freezeRows, freezeCols, rows });
+    const rowHeights = computeRowHeights(rows, palette.toArray(), colWidths, merges, explicitRowPx, defaultRowHeight);
+    sheets.push({
+      name: sheet.name,
+      rowCount: rows.length,
+      colCount,
+      colWidths,
+      defaultColWidth,
+      defaultRowHeight,
+      rowHeights,
+      merges,
+      freezeRows,
+      freezeCols,
+      rows,
+    });
     sheetRows.push(rows);
   }
 
@@ -894,6 +1004,9 @@ export function parseCsvToGrid(text: string): GridDocument {
         rowCount: gridRows.length,
         colCount,
         colWidths: new Array(colCount).fill(120),
+        defaultColWidth: defaultColWidthPx(),
+        defaultRowHeight: rowHeightPtToPx(EXCEL_DEFAULT_ROW_HEIGHT_PT),
+        rowHeights: [],
         merges: [],
         freezeRows: 0,
         freezeCols: 0,

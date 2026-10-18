@@ -25,6 +25,7 @@ import { initOfficeShell } from './officeShell.js';
 import { bindDropdown } from './ribbonMenus.js';
 import { currentRegion, setupGridCharts } from './gridCharts.js';
 import type { CellRangeRef, ChartKind } from '../xlsx/chartModel.js';
+import { RowLayout } from '../xlsx/sheetGeometry.js';
 import { compareCells, filteredRows, GRID_FILTERS_MAP, shiftFormulaRows, sortOrder, type SheetFilter } from './gridSort.js';
 
 interface Permissions {
@@ -79,41 +80,15 @@ const scrollHostEl = document.querySelector('.grid-editor-scroll') as HTMLElemen
 /** 표를 통째로 다시 그린 뒤(시트 전환·구조 변경·확대축소) — 차트 위치를 다시 맞춘다(차트 준비 전엔 아무것도 안 한다). */
 let afterGridRender: () => void = () => undefined;
 
-/** 필터로 숨긴 행(지금 시트, 오름차순) — 가상 스크롤은 '보이는 행 순번'으로 계산하고 실제 행 번호로 바꿔 그린다.
- * 숨긴 행이 없으면 두 번호가 같아 예전과 똑같이 동작한다. */
 /** 지금 구독 중(서버가 채워 둔) 500행 페이지 — 정렬·필터는 이 안의 데이터로만 계산한다 */
 let lastSubscribedPages: ReadonlySet<number> = new Set();
+/** 필터로 숨긴 행(지금 시트, 오름차순) — rowLayout에서 높이 0으로 계산된다 */
 let hiddenRowsSorted: number[] = [];
 let hiddenRowSet: ReadonlySet<number> = new Set();
-function hiddenBefore(row: number): number {
-  let lo = 0;
-  let hi = hiddenRowsSorted.length;
-  while (lo < hi) {
-    const mid = (lo + hi) >> 1;
-    if (hiddenRowsSorted[mid] < row) lo = mid + 1;
-    else hi = mid;
-  }
-  return lo;
-}
-/** 실제 행 → 화면에서 몇 번째 보이는 행인지 */
-function visualRow(row: number): number {
-  return row - hiddenBefore(row);
-}
-/** 보이는 행 순번 → 실제 행(숨긴 행은 건너뛴다) */
-function logicalRow(visual: number): number {
-  const v = Math.max(0, visual);
-  if (hiddenRowsSorted.length === 0) return v;
-  let lo = v;
-  let hi = v + hiddenRowsSorted.length;
-  while (lo < hi) {
-    const mid = (lo + hi) >> 1;
-    if (visualRow(mid) < v) lo = mid + 1;
-    else hi = mid;
-  }
-  let row = lo;
-  while (hiddenRowSet.has(row)) row += 1;
-  return row;
-}
+/** 엑셀 기본 행 높이(15pt) — 시트에 값이 없을 때(구버전 문서) */
+const DEFAULT_ROW_HEIGHT_PX = 20;
+/** 지금 시트의 행 위치 계산 — 파일의 행 높이·숨김 + 필터로 숨긴 행(0px). renderTableVirtualized가 맞춘다 */
+let rowLayout = new RowLayout(DEFAULT_ROW_HEIGHT_PX);
 const sheetTabsEl = document.getElementById('sheet-tabs') as HTMLElement;
 const cellRefBoxEl = document.getElementById('cell-ref-box') as HTMLElement;
 const formulaInputEl = document.getElementById('formula-input') as HTMLInputElement;
@@ -601,13 +576,14 @@ async function main(): Promise<void> {
     span.textContent = text;
     span.style.width = '';
     if (!text.trim() || td.colSpan > 1) return; // 병합 칸은 이미 colspan으로 넓어져 있어 스필이 필요 없다
-    if (!isSpillEligible(styles.get(key), text)) return;
+    // 줄 바꿈 칸은 넘치지 않고 자기 칸 안에서 줄을 바꾼다(엑셀과 같다)
+    if (styles.get(key)?.wrap || !isSpillEligible(styles.get(key), text)) return;
     const parsed = parseGridCellKey(key);
     if (!parsed) return;
     const { sheetIdx, row, col } = parsed;
     const sheet = structure.get(String(sheetIdx));
     if (!sheet) return;
-    const colWidthOf = (c: number) => sheet.colWidths?.[c] ?? DEFAULT_COL_WIDTH_PX;
+    const colWidthOf = (c: number) => sheet.colWidths?.[c] ?? sheet.defaultColWidth ?? DEFAULT_COL_WIDTH_PX;
     // renderCountsFor()는 scrollHostEl.clientWidth/clientHeight를 읽는데, 이 값들은 레이아웃이
     // 최신 상태여야만 정확해서 브라우저가 그 자리에서 강제로 레이아웃을 다시 계산한다(forced
     // synchronous layout). 스크롤 패치(updateScrollWindow)처럼 한 번에 수십~수백 칸을 새로 그리는
@@ -1149,16 +1125,12 @@ async function main(): Promise<void> {
   const GRID_COL_PADDING = 6;
   const GRID_MIN_RENDER_ROWS = 25;
   const GRID_MIN_RENDER_COLS = 12;
-  /** spreadsheet.ts의 DEFAULT_COL_WIDTH_PX와 같은 값 — 클라이언트 번들에 ExcelJS를 끌어오는
-   * spreadsheet.ts를 직접 import할 수 없어(gridShared.ts와 동일한 이유) 값만 맞춰 둔다. */
-  const DEFAULT_COL_WIDTH_PX = 100;
+  /** 시트에 기본 열 폭이 없을 때(구버전 문서) — 엑셀 기본 열 폭(64px) */
+  const DEFAULT_COL_WIDTH_PX = 64;
   /** .g-edit-rownum의 min-width와 맞춘 대략치 — 아래 tableEl.style.width 계산에만 쓰이고, 실제
    * 행번호 열 폭은 여전히 CSS(min-width)가 정한다. 정확히 안 맞아도 상관없다: 테이블에 "auto가
    * 아닌" width를 준다는 사실 자체가 중요하지, 합계가 1px이라도 틀리면 안 되는 게 아니다. */
   const ROWNUM_COL_WIDTH_PX = 28;
-  /** 실제 렌더된 <td>의 border-box 높이(1.7rem + 위아래 패딩 0.18rem*2, 대략 27~28px)와 맞춘
-   * 근사치 — 화면을 채우는 데 필요한 행 수를 계산하는 용도라 1px 오차는 문제 되지 않는다. */
-  const ROW_HEIGHT_PX = 27;
   /** 가상 스크롤(윈도잉 렌더링)이 화면 위아래로 실제 뷰포트보다 더 그려두는 여유 행 수 — 스크롤이
    * 살짝만 움직여도 매 프레임 다시 그릴 필요 없게 완충 역할을 한다(너무 작으면 빠르게 스크롤할 때
    * 빈 줄이 잠깐 보이고, 너무 크면 DOM 노드가 늘어나 다시 느려진다). */
@@ -1175,10 +1147,10 @@ async function main(): Promise<void> {
     let usedWidth = ROWNUM_COL_WIDTH_PX;
     let fillCols = 0;
     while (usedWidth < availWidth && fillCols < 1000) {
-      usedWidth += sheet.colWidths?.[fillCols] ?? DEFAULT_COL_WIDTH_PX;
+      usedWidth += sheet.colWidths?.[fillCols] ?? sheet.defaultColWidth ?? DEFAULT_COL_WIDTH_PX;
       fillCols += 1;
     }
-    const fillRows = Math.max(0, Math.ceil(availHeight / ROW_HEIGHT_PX) - 1);
+    const fillRows = Math.max(0, rowLayout.rowAt(availHeight));
     return {
       rows: Math.max(sheet.rowCount + GRID_ROW_PADDING, GRID_MIN_RENDER_ROWS, fillRows),
       cols: Math.max(sheet.colCount + GRID_COL_PADDING, GRID_MIN_RENDER_COLS, fillCols),
@@ -1244,9 +1216,9 @@ async function main(): Promise<void> {
    * rowCount<=0(그릴 게 없는 구간)이면 아예 만들지 않는다. 리스너가 없는 단순한 <tr>/<td> 한 쌍이라
    * updateScrollWindow()도 재사용하지 않고 매번 새로 만든다(재사용을 위한 위치 계산 비용이 굳이
    * 만드는 비용보다 크다). */
-  function buildSpacerRow(rowCount: number): HTMLTableRowElement | null {
-    if (rowCount <= 0) return null;
-    const heightPx = `${rowCount * ROW_HEIGHT_PX}px`;
+  function buildSpacerRow(height: number): HTMLTableRowElement | null {
+    if (height <= 0) return null;
+    const heightPx = `${height}px`;
     const tr = document.createElement('tr');
     tr.setAttribute('aria-hidden', 'true');
     tr.style.height = heightPx;
@@ -1276,6 +1248,10 @@ async function main(): Promise<void> {
     // 비교되고 행 간 우열은 이 tr의 z-index로만 결정되어 늘 정확하다.
     tr.style.position = 'relative';
     tr.style.zIndex = r < vwFreezeRows ? '2' : '1';
+    // 파일의 행 높이(숨긴 행은 0) — 칸 높이는 CSS가 아니라 이 값이 정한다
+    const rowHeight = rowLayout.height(r);
+    tr.style.height = `${rowHeight}px`;
+    if (rowHeight === 0) tr.classList.add('g-hidden-row');
     const rowHead = document.createElement('th');
     rowHead.className = 'g-edit-rownum';
     rowHead.textContent = String(r + 1);
@@ -1297,6 +1273,8 @@ async function main(): Promise<void> {
         if (span.rs > 1) td.rowSpan = span.rs;
         if (span.cs > 1) td.colSpan = span.cs;
       }
+      // 파일에서 숨긴 열 — 폭 0으로 자리만 지킨다
+      if (!(span && span.cs > 1) && structure.get(String(vwSheetIdx))?.colWidths?.[c] === 0) td.classList.add('g-hidden-col');
       const isLocked = styles.get(key)?.lk === 1;
       const canEditThisCell = !isLocked && canEdit;
       // 클릭만으로는 "선택"만 되고 편집모드로 들어가지 않는다(엑셀과 동일) — 실제 편집모드는
@@ -1490,7 +1468,7 @@ async function main(): Promise<void> {
    * 지금 방식(스페이서 행): 보이는 행(<tr>)은 전부 정상 흐름(position 지정 없음)으로 그려서
    * <colgroup>/table-layout:fixed 열 정렬을 그대로 받는다(틀 고정 행이 이미 하던 방식과 동일).
    * 화면에 없는 위/아래 구간은 실제 <tr>을 만드는 대신, 그 구간 전체 높이(안 그린 행 수 ×
-   * ROW_HEIGHT_PX)를 가진 "스페이서" <tr> 하나씩으로 대신한다(buildSpacerRow). 그러면 표의 자연스러운
+   * 행 높이 합)를 가진 "스페이서" <tr> 하나씩으로 대신한다(buildSpacerRow). 그러면 표의 자연스러운
    * 문서 흐름만으로 전체 스크롤 높이(틀 고정 행 + 위 스페이서 + 보이는 행 + 아래 스페이서 =
    * 전체 시트 높이)가 정확히 나오고, 보이는 행들은 정상 흐름 안에서 실제로 그렸을 때와 똑같은
    * 자리에 놓인다 — 수동으로 top을 계산해 줄 필요가 없다. */
@@ -1514,6 +1492,7 @@ async function main(): Promise<void> {
     const scrollTopSnapshot = scrollHostEl.scrollTop;
     const viewportHeightSnapshot = scrollHostEl.clientHeight;
     const sheet = structure.get(String(activeSheet));
+    rowLayout = new RowLayout(sheet?.defaultRowHeight ?? DEFAULT_ROW_HEIGHT_PX, sheet?.rowHeights ?? [], hiddenRowsSorted);
     // 전체 재빌드가 시작되면 지금까지의 증분 패치 캐시(vw*)는 곧 통째로 버려질 DOM을 가리키게
     // 되므로 즉시 무효화한다 — 이 함수가 아래서 일찍 return하더라도(sheet 없음) updateScrollWindow가
     // 낡은 참조로 패치를 시도하지 않고 안전하게 다시 전체 재빌드로 물러난다.
@@ -1546,7 +1525,7 @@ async function main(): Promise<void> {
     colgroup.appendChild(document.createElement('col'));
     let totalColWidthPx = ROWNUM_COL_WIDTH_PX;
     for (let c = 0; c < renderColCount; c += 1) {
-      const width = sheet.colWidths?.[c] ?? DEFAULT_COL_WIDTH_PX;
+      const width = sheet.colWidths?.[c] ?? sheet.defaultColWidth ?? DEFAULT_COL_WIDTH_PX;
       const col = document.createElement('col');
       col.style.width = `${width}px`;
       colgroup.appendChild(col);
@@ -1590,11 +1569,8 @@ async function main(): Promise<void> {
     // replaceChildren()이 clamp한 값(0)이 나온다.)
     const scrollTop = scrollTopSnapshot;
     const viewportHeight = viewportHeightSnapshot;
-    const firstVisible = Math.max(freezeRows, logicalRow(Math.floor(scrollTop / ROW_HEIGHT_PX) - OVERSCAN_ROWS));
-    const lastVisible = Math.min(
-      renderRowCount - 1,
-      logicalRow(Math.ceil((scrollTop + viewportHeight) / ROW_HEIGHT_PX) + OVERSCAN_ROWS),
-    );
+    const firstVisible = Math.max(freezeRows, rowLayout.rowAt(scrollTop) - OVERSCAN_ROWS);
+    const lastVisible = Math.min(renderRowCount - 1, rowLayout.rowAt(scrollTop + viewportHeight) + OVERSCAN_ROWS);
 
     const tbody = document.createElement('tbody');
 
@@ -1610,7 +1586,7 @@ async function main(): Promise<void> {
       newRowEls.set(r, tr);
       tbody.appendChild(tr);
     }
-    const topSpacer = buildSpacerRow(visualRow(firstVisible) - visualRow(freezeRows));
+    const topSpacer = buildSpacerRow(rowLayout.top(firstVisible) - rowLayout.top(freezeRows));
     if (topSpacer) tbody.appendChild(topSpacer);
     for (let r = firstVisible; r <= lastVisible; r += 1) {
       if (hiddenRowSet.has(r)) continue;
@@ -1618,7 +1594,7 @@ async function main(): Promise<void> {
       newRowEls.set(r, tr);
       tbody.appendChild(tr);
     }
-    const bottomSpacer = buildSpacerRow(visualRow(renderRowCount) - visualRow(lastVisible + 1));
+    const bottomSpacer = buildSpacerRow(rowLayout.top(renderRowCount) - rowLayout.top(lastVisible + 1));
     if (bottomSpacer) tbody.appendChild(bottomSpacer);
     tableEl.appendChild(tbody);
     // 표 내용이 다시 채워져 스크롤 가능한 실제 높이가 복구된 지금(스페이서 행 포함), 함수 맨 위의
@@ -1691,11 +1667,8 @@ async function main(): Promise<void> {
     const freezeRows = vwFreezeRows;
     const scrollTop = scrollHostEl.scrollTop;
     const viewportHeight = scrollHostEl.clientHeight;
-    const firstVisible = Math.max(freezeRows, logicalRow(Math.floor(scrollTop / ROW_HEIGHT_PX) - OVERSCAN_ROWS));
-    const lastVisible = Math.min(
-      renderRowCount - 1,
-      logicalRow(Math.ceil((scrollTop + viewportHeight) / ROW_HEIGHT_PX) + OVERSCAN_ROWS),
-    );
+    const firstVisible = Math.max(freezeRows, rowLayout.rowAt(scrollTop) - OVERSCAN_ROWS);
+    const lastVisible = Math.min(renderRowCount - 1, rowLayout.rowAt(scrollTop + viewportHeight) + OVERSCAN_ROWS);
     if (firstVisible === vwFirstVisible && lastVisible === vwLastVisible) return; // 창이 그대로면 할 일 없음
 
     const tbody = vwTbody;
@@ -1731,13 +1704,13 @@ async function main(): Promise<void> {
       anchor = tr;
     }
 
-    const topSpacer = buildSpacerRow(visualRow(firstVisible) - visualRow(freezeRows));
+    const topSpacer = buildSpacerRow(rowLayout.top(firstVisible) - rowLayout.top(freezeRows));
     if (topSpacer) {
       const firstWindowRow = vwRowEls.get(firstVisible) ?? null;
       if (firstWindowRow) tbody.insertBefore(topSpacer, firstWindowRow);
       else tbody.appendChild(topSpacer); // 방어적 처리 — 이론상 창이 비어 있을 때만 여기로 온다
     }
-    const bottomSpacer = buildSpacerRow(visualRow(renderRowCount) - visualRow(lastVisible + 1));
+    const bottomSpacer = buildSpacerRow(rowLayout.top(renderRowCount) - rowLayout.top(lastVisible + 1));
     if (bottomSpacer) tbody.appendChild(bottomSpacer); // 항상 마지막 자식이 맞다(그 뒤엔 아무것도 없다)
     vwTopSpacer = topSpacer;
     vwBottomSpacer = bottomSpacer;
@@ -2495,7 +2468,7 @@ async function main(): Promise<void> {
     const existing = tdFor(row, col);
     if (existing) return existing;
     const viewportHeight = scrollHostEl.clientHeight;
-    scrollHostEl.scrollTop = Math.max(0, visualRow(row) * ROW_HEIGHT_PX - viewportHeight / 2);
+    scrollHostEl.scrollTop = Math.max(0, rowLayout.top(row) - viewportHeight / 2);
     renderTableVirtualized();
     return tdFor(row, col);
   }
@@ -2962,13 +2935,12 @@ async function main(): Promise<void> {
     const idx = sheetIndexByName(sheetName);
     return idx < 0 ? '' : formatComputedValue(computeCellDisplay(idx, row, col));
   };
-  const measuredRowHeight = (): number => {
-    const tr = tableEl.tBodies[0]?.querySelector<HTMLElement>('tr:not([aria-hidden])');
-    return tr?.offsetHeight || ROW_HEIGHT_PX;
-  };
-  const headerHeight = (): number => tableEl.tHead?.offsetHeight || ROW_HEIGHT_PX;
+  const headerHeight = (): number => tableEl.tHead?.offsetHeight || DEFAULT_ROW_HEIGHT_PX;
   const rownumWidth = (): number => tableEl.querySelector<HTMLElement>('.g-edit-rownum')?.offsetWidth || ROWNUM_COL_WIDTH_PX;
-  const colWidthAt = (col: number): number => structure.get(String(activeSheet))?.colWidths?.[col] ?? DEFAULT_COL_WIDTH_PX;
+  const colWidthAt = (col: number): number => {
+    const sheet = structure.get(String(activeSheet));
+    return sheet?.colWidths?.[col] ?? sheet?.defaultColWidth ?? DEFAULT_COL_WIDTH_PX;
+  };
   const colLeft = (col: number): number => {
     let x = rownumWidth();
     for (let c = 0; c < col; c += 1) x += colWidthAt(c);
@@ -2983,7 +2955,7 @@ async function main(): Promise<void> {
     activeSheetName: () => structure.get(String(activeSheet))?.name ?? '',
     valueText,
     colLeft,
-    rowTop: (row) => headerHeight() + visualRow(row) * measuredRowHeight(),
+    rowTop: (row) => headerHeight() + rowLayout.top(row),
     cellAt: (x, y) => {
       let col = 0;
       let left = rownumWidth();
@@ -2991,7 +2963,7 @@ async function main(): Promise<void> {
         left += colWidthAt(col);
         col += 1;
       }
-      return { row: logicalRow(Math.floor((y - headerHeight()) / measuredRowHeight())), col };
+      return { row: rowLayout.rowAt(y - headerHeight()), col };
     },
     selection: () => {
       const { r0, r1, c0, c1 } = rangeBounds();
@@ -3234,7 +3206,7 @@ async function main(): Promise<void> {
     if (!filter) return;
     filterLayer.style.left = `${tableEl.offsetLeft}px`;
     filterLayer.style.top = `${tableEl.offsetTop}px`;
-    const top = headerHeight() + visualRow(filter.r1) * measuredRowHeight();
+    const top = headerHeight() + rowLayout.top(filter.r1);
     for (let c = filter.c1; c <= filter.c2; c += 1) {
       const button = document.createElement('button');
       button.type = 'button';
@@ -3247,7 +3219,7 @@ async function main(): Promise<void> {
         ? '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 5h16l-6 7.5V19l-4-2v-4.5z"/></svg>'
         : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>';
       button.style.left = `${colLeft(c + 1) - 20}px`;
-      button.style.top = `${top + (measuredRowHeight() - 18) / 2}px`;
+      button.style.top = `${top + (rowLayout.height(filter.r1) - 18) / 2}px`;
       button.addEventListener('click', (event) => {
         event.stopPropagation();
         openFilterMenu(c, button);
@@ -3517,8 +3489,8 @@ async function main(): Promise<void> {
       subscriptionDebounceTimer = null;
       const scrollTop = scrollHostEl.scrollTop;
       const viewportHeight = scrollHostEl.clientHeight;
-      const firstRow = logicalRow(Math.floor(scrollTop / ROW_HEIGHT_PX) - OVERSCAN_ROWS);
-      const lastRow = logicalRow(Math.ceil((scrollTop + viewportHeight) / ROW_HEIGHT_PX) + OVERSCAN_ROWS);
+      const firstRow = Math.max(0, rowLayout.rowAt(scrollTop) - OVERSCAN_ROWS);
+      const lastRow = rowLayout.rowAt(scrollTop + viewportHeight) + OVERSCAN_ROWS;
       const firstPage = Math.floor(firstRow / PAGE_SIZE_ROWS);
       const lastPage = Math.floor(lastRow / PAGE_SIZE_ROWS);
       const pages = new Set<number>();

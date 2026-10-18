@@ -8,6 +8,8 @@ import { setTimeout as timerSleep } from 'node:timers/promises';
 import ExcelJS from 'exceljs';
 import JSZip from 'jszip';
 import {
+  autoFitRowPx,
+  mergeRolesByRow,
   displayValue,
   extractStyle,
   parseMergeRange,
@@ -21,6 +23,14 @@ import {
   type GridStyle,
 } from '../spreadsheet.js';
 import { extractThemeColorsFromLoadedZip } from './themeExtract.js';
+import {
+  EXCEL_DEFAULT_ROW_HEIGHT_PT,
+  defaultColWidthPx,
+  encodeRowHeights,
+  excelColWidthToPx,
+  rowHeightPtToPx,
+  type RowHeightRuns,
+} from './sheetGeometry.js';
 import { gridCellKey, parseGridCellKey } from '../collab/gridShared.js';
 
 export interface LazyGridSheetMeta {
@@ -28,6 +38,10 @@ export interface LazyGridSheetMeta {
   rowCount: number;
   colCount: number;
   colWidths: readonly number[];
+  /** spreadsheet.ts GridSheet의 같은 이름 필드와 같은 뜻 */
+  defaultColWidth: number;
+  defaultRowHeight: number;
+  rowHeights: RowHeightRuns;
   merges: readonly GridMerge[];
   freezeRows: number;
   freezeCols: number;
@@ -167,6 +181,12 @@ async function preSeedWorkbookReaderState(
       // 'cache' 모드에서는 절대 오지 않는 분기 — 안전망으로만 존재.
       void _unused;
     }
+  } else {
+    // 공유 문자열 파트가 아예 없는 파일(openpyxl 등이 글자를 칸 안에 직접 쓴 경우) — 리더는
+    // sharedStrings가 비어 있으면 시트를 모두 임시 파일로 빼 두었다가 나중에 읽는데, 그 경로에서
+    // 두 번째 이후 시트가 통째로 빠지고 임시 파일(문서 내용)이 디스크에 남는다. 빈 목록을 미리 넣어
+    // 시트를 바로 읽게 한다.
+    (rawReader as unknown as { sharedStrings?: unknown[] }).sharedStrings ??= [];
   }
 }
 
@@ -192,6 +212,20 @@ interface RawColSpec {
   min: number;
   max: number;
   width: number | undefined;
+  hidden: boolean;
+}
+
+/** <sheetFormatPr defaultColWidth baseColWidth defaultRowHeight> → 기본 열 폭·행 높이(px) */
+function extractSheetFormatFromSheetXml(xml: string): { defaultColWidth: number; defaultRowHeight: number } {
+  const attrs = xml.match(/<sheetFormatPr\b([^>]*)>/)?.[1] ?? '';
+  const num = (name: string) => {
+    const v = Number(attrs.match(new RegExp(`\\b${name}="([^"]*)"`))?.[1]);
+    return Number.isFinite(v) && v > 0 ? v : undefined;
+  };
+  return {
+    defaultColWidth: defaultColWidthPx(num('defaultColWidth'), num('baseColWidth') ?? 8),
+    defaultRowHeight: rowHeightPtToPx(num('defaultRowHeight') ?? EXCEL_DEFAULT_ROW_HEIGHT_PT),
+  };
 }
 
 /**
@@ -210,7 +244,7 @@ function extractColSpecsFromSheetXml(xml: string): RawColSpec[] {
     const max = Number(attrs.match(/\bmax="([^"]*)"/)?.[1] ?? '0');
     if (!(min > 0) || !(max > 0)) continue;
     const widthStr = attrs.match(/\bwidth="([^"]*)"/)?.[1];
-    specs.push({ min, max, width: widthStr === undefined ? undefined : Number(widthStr) });
+    specs.push({ min, max, width: widthStr === undefined ? undefined : Number(widthStr), hidden: /\bhidden="(1|true)"/.test(attrs) });
   }
   return specs;
 }
@@ -221,7 +255,7 @@ function extractColSpecsFromSheetXml(xml: string): RawColSpec[] {
  * 다만 `count`가 `colCount`를 넘어서면 더 볼 필요가 없으니 그 지점에서 순회를 멈춘다(원본은
  * col.max까지, 예: 16384까지 무조건 순회함).
  */
-function computeColWidthsPx(colSpecs: readonly RawColSpec[], colCount: number): number[] {
+function computeColWidthsPx(colSpecs: readonly RawColSpec[], colCount: number, defaultPx: number): number[] {
   const sorted = [...colSpecs].sort((a, b) => a.min - b.min);
   const widthAt: Array<number | undefined> = new Array(colCount + 1).fill(undefined); // 1-based
   let count = 1;
@@ -229,14 +263,14 @@ function computeColWidthsPx(colSpecs: readonly RawColSpec[], colCount: number): 
     if (count > colCount) break;
     while (count < spec.min && count <= colCount) count += 1;
     while (count <= spec.max && count <= colCount) {
-      widthAt[count] = spec.width;
+      widthAt[count] = spec.hidden ? 0 : spec.width;
       count += 1;
     }
   }
   const colWidths: number[] = [];
   for (let c = 1; c <= colCount; c += 1) {
     const width = widthAt[c];
-    colWidths.push(width ? Math.round(width * 7.2) : 100);
+    colWidths.push(width === 0 ? 0 : width ? excelColWidthToPx(width) : defaultPx);
   }
   return colWidths;
 }
@@ -256,123 +290,169 @@ export async function ingestXlsxLazily(docId: string, xlsxBytes: Buffer): Promis
   let byteOffset = 0;
 
   try {
-    const reader = new ExcelJS.stream.xlsx.WorkbookReader(Readable.from(xlsxBytes), {
+    const readerOptions = {
       worksheets: 'emit',
       sharedStrings: 'cache',
       hyperlinks: 'ignore',
       styles: 'cache',
       entries: 'ignore',
-    });
+    } as const;
     // 아래 preSeedWorkbookReaderState의 큰 주석 참고 — exceljs 4.4.0 스트리밍 리더 자체의 레이스
-    // 컨디션을 우회하기 위해 반드시 순회 시작 전에 호출해야 한다.
-    await preSeedWorkbookReaderState(reader, zip);
-    const rawReader = reader as unknown as RawWorkbookReaderInternals;
+    // 컨디션을 우회하기 위해 워크북·스타일·공유 문자열을 미리 읽어 둔다(한 번만 읽고 시트마다 복사).
+    const seedReader = new ExcelJS.stream.xlsx.WorkbookReader(Readable.from(Buffer.alloc(0)), readerOptions);
+    await preSeedWorkbookReaderState(seedReader, zip);
+    const rawReader = seedReader as unknown as RawWorkbookReaderInternals;
+    // 시트는 하나씩 따로 읽는다 — 한 리더로 zip 전체를 흘려 읽으면, 행 처리(디스크 기록·양보)가 느린
+    // 동안 다음 시트 항목이 소비되지 않고 지나가 버려 두 번째 이후 시트가 통째로 빠졌다(실측 재현).
+    // 시트 XML은 이미 메모리에 있으니 그 시트 하나만 든 작은 zip을 만들어 읽는다.
+    const sheetPaths: string[] = [];
+    zip.forEach((relPath) => {
+      if (/^xl\/worksheets\/sheet\d+\.xml$/.test(relPath)) sheetPaths.push(relPath);
+    });
+    for (const sheetPath of sheetPaths) {
+      const single = new JSZip();
+      single.file(sheetPath, worksheetXmlsByPath.get(sheetPath) ?? '');
+      const singleBytes = await single.generateAsync({ type: 'nodebuffer', compression: 'STORE' });
+      const reader = new ExcelJS.stream.xlsx.WorkbookReader(Readable.from(singleBytes), readerOptions);
+      for (const key of ['workbookRels', 'properties', 'model', 'sharedStrings', 'styles'] as const) {
+        (reader as unknown as Record<string, unknown>)[key] = (seedReader as unknown as Record<string, unknown>)[key];
+      }
+      for await (const worksheetReader of reader) {
+        const thisSheetIndex: Array<LazyRowIndexEntry | undefined> = [];
+        rowIndex.push(thisSheetIndex);
 
-    for await (const worksheetReader of reader) {
-      const thisSheetIndex: Array<LazyRowIndexEntry | undefined> = [];
-      rowIndex.push(thisSheetIndex);
+        // exceljs의 @types 선언(index.d.ts)은 스트리밍 WorksheetReader에 실제로 있는 .name/.id/
+        // .columns를 선언하지 않는다(선언된 columns()는 메서드로 돼 있는데 런타임은 getter 배열이다 —
+        // 타입 선언과 런타임이 어긋나는 부분, worksheet-reader.js 소스로 확인 완료). 그래서 이 시트
+        // 전용으로 한 번만 캐스팅해 재사용한다.
+        const rawWorksheetReader = worksheetReader as unknown as {
+          name: string;
+          id?: number;
+          dataValidations?: { find(address: string): unknown };
+        };
 
-      // exceljs의 @types 선언(index.d.ts)은 스트리밍 WorksheetReader에 실제로 있는 .name/.id/
-      // .columns를 선언하지 않는다(선언된 columns()는 메서드로 돼 있는데 런타임은 getter 배열이다 —
-      // 타입 선언과 런타임이 어긋나는 부분, worksheet-reader.js 소스로 확인 완료). 그래서 이 시트
-      // 전용으로 한 번만 캐스팅해 재사용한다.
-      const rawWorksheetReader = worksheetReader as unknown as {
-        name: string;
-        id?: number;
-        dataValidations?: { find(address: string): unknown };
-      };
+        // 스트리밍 워크시트 리더는 데이터 유효성 검사(xl/worksheets/sheetN.xml의 <dataValidations>)를
+        // 전혀 파싱하지 않는다(worksheet-reader.js에 해당 케이스 자체가 없음) — 그런데 Cell.prototype
+        // .dataValidation 게터(doc/cell.js)는 `this.worksheet.dataValidations.find(...)`를 무조건
+        // 호출해서, 이 프로퍼티가 없으면 (extractStyle이 읽자마자) 곧바로 던진다. sheetProtected와
+        // 같은 이유로 알려진 스코프 제한으로 받아들이고 — 항상 "검사 없음"으로 답하는 최소 구현을
+        // 붙여 크래시만 막는다(nu 스타일 비트가 스트리밍 경로에서는 항상 비어 있게 됨).
+        rawWorksheetReader.dataValidations = { find: () => undefined };
 
-      // 스트리밍 워크시트 리더는 데이터 유효성 검사(xl/worksheets/sheetN.xml의 <dataValidations>)를
-      // 전혀 파싱하지 않는다(worksheet-reader.js에 해당 케이스 자체가 없음) — 그런데 Cell.prototype
-      // .dataValidation 게터(doc/cell.js)는 `this.worksheet.dataValidations.find(...)`를 무조건
-      // 호출해서, 이 프로퍼티가 없으면 (extractStyle이 읽자마자) 곧바로 던진다. sheetProtected와
-      // 같은 이유로 알려진 스코프 제한으로 받아들이고 — 항상 "검사 없음"으로 답하는 최소 구현을
-      // 붙여 크래시만 막는다(nu 스타일 비트가 스트리밍 경로에서는 항상 비어 있게 됨).
-      rawWorksheetReader.dataValidations = { find: () => undefined };
+        // 이 시트의 mergeCell/틀고정 정보가 담긴 원본 XML을 찾는다(위 설명대로 sheetId -> rId -> 물리
+        // 경로 순으로 확정 — 출현 순서를 신뢰하지 않는다).
+        const wsId = rawWorksheetReader.id;
+        const sheetModelEntry = rawReader.model?.sheets?.find((s) => s.id === wsId);
+        const rel = sheetModelEntry
+          ? rawReader.workbookRels?.find((r) => r.Id === sheetModelEntry.rId)
+          : undefined;
+        const sheetXml = rel ? worksheetXmlsByPath.get(`xl/${rel.Target}`) : undefined;
 
-      // 이 시트의 mergeCell/틀고정 정보가 담긴 원본 XML을 찾는다(위 설명대로 sheetId -> rId -> 물리
-      // 경로 순으로 확정 — 출현 순서를 신뢰하지 않는다).
-      const wsId = rawWorksheetReader.id;
-      const sheetModelEntry = rawReader.model?.sheets?.find((s) => s.id === wsId);
-      const rel = sheetModelEntry
-        ? rawReader.workbookRels?.find((r) => r.Id === sheetModelEntry.rId)
-        : undefined;
-      const sheetXml = rel ? worksheetXmlsByPath.get(`xl/${rel.Target}`) : undefined;
+        // 행 높이(파일 값·숨김·자동 맞춤)를 행을 읽으면서 바로 계산하려면 열 폭과 병합을 미리 알아야 한다
+        const sheetFormat = sheetXml ? extractSheetFormatFromSheetXml(sheetXml) : { defaultColWidth: defaultColWidthPx(), defaultRowHeight: rowHeightPtToPx(EXCEL_DEFAULT_ROW_HEIGHT_PT) };
+        const colSpecs = sheetXml ? extractColSpecsFromSheetXml(sheetXml) : [];
+        const maxSpecCol = colSpecs.reduce((m, s) => Math.max(m, Math.min(s.max, MAX_COLS)), 0);
+        const specWidths = computeColWidthsPx(colSpecs, maxSpecCol, sheetFormat.defaultColWidth);
+        const widthForFit = (c: number) => specWidths[c] ?? sheetFormat.defaultColWidth;
+        const mergeRoles = mergeRolesByRow(
+          sheetXml ? extractMergeRefsFromSheetXml(sheetXml).map(parseMergeRange).filter((m): m is GridMerge => m !== null) : [],
+        );
+        const rowHeightEntries: Array<[number, number]> = [];
+        // 스트리밍 리더는 <row hidden="1">을 읽지 않는다(row.hidden이 항상 false) — 원본 XML에서 직접 모은다
+        const hiddenRows = new Set<number>();
+        if (sheetXml) {
+          for (const m of sheetXml.matchAll(/<row\b([^>]*)>/g)) {
+            if (!/\bhidden="(1|true)"/.test(m[1])) continue;
+            const r = Number(m[1].match(/\br="(\d+)"/)?.[1]);
+            if (r > 0) hiddenRows.add(r - 1);
+          }
+        }
+        for (const r of hiddenRows) rowHeightEntries.push([r, 0]);
 
-      let maxRowWithValue = 0;
-      let maxColWithValue = 0;
-      let rowsProcessed = 0;
-      // sheetProtection은 스트리밍 리더에서 신뢰성 있게 얻을 수 있는 API가 없어 false로 둔다
-      // (알려진 스코프 제한 — 시트 보호 잠금 서식(lk)이 스트리밍 경로에서는 반영되지 않음).
-      const sheetProtected = false;
+        let maxRowWithValue = 0;
+        let maxColWithValue = 0;
+        let rowsProcessed = 0;
+        // sheetProtection은 스트리밍 리더에서 신뢰성 있게 얻을 수 있는 API가 없어 false로 둔다
+        // (알려진 스코프 제한 — 시트 보호 잠금 서식(lk)이 스트리밍 경로에서는 반영되지 않음).
+        const sheetProtected = false;
 
-      for await (const row of worksheetReader) {
-        // ExcelJS 스트리밍 리더는 XML에 실제로 등장하는 <row> 엘리먼트만 순서대로 내보낸다 — 값이나
-        // 서식이 전혀 없는 행은 XML 자체에 없을 수 있어(예: 1행과 300행만 있고 그 사이는 완전히
-        // 비어 있는 시트) 내보내지는 행 개수만큼 단순히 0,1,2...로 세면 원본 행 번호와 어긋난다
-        // (칸이 조용히 잘못된 위치에 저장되는 버그). 그래서 반드시 row.number(1-based, 실제 원본
-        // 행 번호)를 그대로 써야 한다.
-        const originalRow = row.number - 1;
-        if (originalRow < 0) continue;
-        if (originalRow >= MAX_ROWS) break;
-        const cells: Array<GridCell | 0> = [];
-        let rowHasValue = false;
-        row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
-          if (colNumber > MAX_COLS) return;
-          const text = displayValue(cell);
-          const styleRef = extractStyle(cell, palette, themeColors, sheetProtected);
-          if (text === '' && styleRef === undefined) return;
-          if (colNumber > maxColWithValue) maxColWithValue = colNumber;
-          while (cells.length < colNumber) cells.push(0);
-          cells[colNumber - 1] = styleRef === undefined ? { v: text } : { v: text, s: styleRef };
-          if (text !== '') rowHasValue = true;
+        for await (const row of worksheetReader) {
+          // ExcelJS 스트리밍 리더는 XML에 실제로 등장하는 <row> 엘리먼트만 순서대로 내보낸다 — 값이나
+          // 서식이 전혀 없는 행은 XML 자체에 없을 수 있어(예: 1행과 300행만 있고 그 사이는 완전히
+          // 비어 있는 시트) 내보내지는 행 개수만큼 단순히 0,1,2...로 세면 원본 행 번호와 어긋난다
+          // (칸이 조용히 잘못된 위치에 저장되는 버그). 그래서 반드시 row.number(1-based, 실제 원본
+          // 행 번호)를 그대로 써야 한다.
+          const originalRow = row.number - 1;
+          if (originalRow < 0) continue;
+          if (originalRow >= MAX_ROWS) break;
+          const cells: Array<GridCell | 0> = [];
+          let rowHasValue = false;
+          row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+            if (colNumber > MAX_COLS) return;
+            const text = displayValue(cell);
+            const styleRef = extractStyle(cell, palette, themeColors, sheetProtected);
+            if (text === '' && styleRef === undefined) return;
+            if (colNumber > maxColWithValue) maxColWithValue = colNumber;
+            while (cells.length < colNumber) cells.push(0);
+            cells[colNumber - 1] = styleRef === undefined ? { v: text } : { v: text, s: styleRef };
+            if (text !== '') rowHasValue = true;
+          });
+          if (rowHasValue) maxRowWithValue = row.number;
+          if (hiddenRows.has(originalRow)) {
+            // 위에서 이미 0으로 넣었다
+          } else if (row.height) rowHeightEntries.push([originalRow, rowHeightPtToPx(row.height)]);
+          else {
+            const fit = autoFitRowPx(cells, palette.toArray(), widthForFit, mergeRoles.get(originalRow), sheetFormat.defaultRowHeight);
+            if (fit !== undefined) rowHeightEntries.push([originalRow, fit]);
+          }
+
+          const json = JSON.stringify(cells);
+          const buf = Buffer.from(json, 'utf8');
+          await writeHandle.write(buf, 0, buf.length, byteOffset);
+          thisSheetIndex[originalRow] = { byteOffset, byteLength: buf.length };
+          byteOffset += buf.length;
+
+          rowsProcessed += 1;
+          if (rowsProcessed % YIELD_EVERY_N_ROWS === 0) await yieldToEventLoop();
+        }
+
+        let rowCount = Math.min(maxRowWithValue, MAX_ROWS);
+        let colCount = Math.min(maxColWithValue, MAX_COLS);
+
+        // 병합된 칸 중 마스터(좌상단)가 아닌 칸은 실제 xlsx XML에 <c> 엘리먼트가 아예 없는 경우가
+        // 흔하다(값은 마스터 칸에만 있고, 병합 자체는 <mergeCells>로만 기록됨) — 그래서 셀 스캔만으로는
+        // 이런 칸이 있는 행/열을 못 본다. 반면 워크북을 통째로 읽는 parseXlsxToGrid는 ExcelJS가 로드
+        // 시점에 병합 범위 전체에 Cell(type=Merge)을 실제로 채워 넣어(worksheet.js의 `model` setter가
+        // 병합마다 mergeCellsWithoutStyle을 호출) actualColumnCount/actualRowCount에 그 칸까지
+        // 잡히게 만든다(직접 실측·확인함 — 병합된 헤더처럼 마스터 칸 하나만 값이 있는 표에서
+        // colCount가 어긋나는 걸 재현). 스트리밍 경로에서도 병합 범위만큼 rowCount/colCount를
+        // 넓혀 이 값을 맞춘다.
+        const rawMerges = sheetXml
+          ? extractMergeRefsFromSheetXml(sheetXml).map(parseMergeRange).filter((m): m is GridMerge => m !== null)
+          : [];
+        for (const m of rawMerges) {
+          rowCount = Math.max(rowCount, Math.min(m.r + m.rs - 1, MAX_ROWS));
+          colCount = Math.max(colCount, Math.min(m.c + m.cs - 1, MAX_COLS));
+        }
+        // parseXlsxToGrid와 동일하게, 병합의 좌상단이 최종 rowCount/colCount 안에 있는 병합만 남긴다.
+        const merges = rawMerges.filter((m) => m.r <= rowCount && m.c <= colCount);
+        const frozen = sheetXml ? extractFrozenSplitFromSheetXml(sheetXml) : undefined;
+
+        const colWidths = computeColWidthsPx(colSpecs, colCount, sheetFormat.defaultColWidth);
+
+        sheetMeta.push({
+          name: rawWorksheetReader.name,
+          rowCount,
+          colCount,
+          colWidths,
+          defaultColWidth: sheetFormat.defaultColWidth,
+          defaultRowHeight: sheetFormat.defaultRowHeight,
+          rowHeights: encodeRowHeights(rowHeightEntries.sort((a, b) => a[0] - b[0]), sheetFormat.defaultRowHeight),
+          merges,
+          freezeRows: frozen?.ySplit ?? 0,
+          freezeCols: frozen?.xSplit ?? 0,
         });
-        if (rowHasValue) maxRowWithValue = row.number;
-
-        const json = JSON.stringify(cells);
-        const buf = Buffer.from(json, 'utf8');
-        await writeHandle.write(buf, 0, buf.length, byteOffset);
-        thisSheetIndex[originalRow] = { byteOffset, byteLength: buf.length };
-        byteOffset += buf.length;
-
-        rowsProcessed += 1;
-        if (rowsProcessed % YIELD_EVERY_N_ROWS === 0) await yieldToEventLoop();
       }
-
-      let rowCount = Math.min(maxRowWithValue, MAX_ROWS);
-      let colCount = Math.min(maxColWithValue, MAX_COLS);
-
-      // 병합된 칸 중 마스터(좌상단)가 아닌 칸은 실제 xlsx XML에 <c> 엘리먼트가 아예 없는 경우가
-      // 흔하다(값은 마스터 칸에만 있고, 병합 자체는 <mergeCells>로만 기록됨) — 그래서 셀 스캔만으로는
-      // 이런 칸이 있는 행/열을 못 본다. 반면 워크북을 통째로 읽는 parseXlsxToGrid는 ExcelJS가 로드
-      // 시점에 병합 범위 전체에 Cell(type=Merge)을 실제로 채워 넣어(worksheet.js의 `model` setter가
-      // 병합마다 mergeCellsWithoutStyle을 호출) actualColumnCount/actualRowCount에 그 칸까지
-      // 잡히게 만든다(직접 실측·확인함 — 병합된 헤더처럼 마스터 칸 하나만 값이 있는 표에서
-      // colCount가 어긋나는 걸 재현). 스트리밍 경로에서도 병합 범위만큼 rowCount/colCount를
-      // 넓혀 이 값을 맞춘다.
-      const rawMerges = sheetXml
-        ? extractMergeRefsFromSheetXml(sheetXml).map(parseMergeRange).filter((m): m is GridMerge => m !== null)
-        : [];
-      for (const m of rawMerges) {
-        rowCount = Math.max(rowCount, Math.min(m.r + m.rs - 1, MAX_ROWS));
-        colCount = Math.max(colCount, Math.min(m.c + m.cs - 1, MAX_COLS));
-      }
-      // parseXlsxToGrid와 동일하게, 병합의 좌상단이 최종 rowCount/colCount 안에 있는 병합만 남긴다.
-      const merges = rawMerges.filter((m) => m.r <= rowCount && m.c <= colCount);
-      const frozen = sheetXml ? extractFrozenSplitFromSheetXml(sheetXml) : undefined;
-
-      const colSpecs = sheetXml ? extractColSpecsFromSheetXml(sheetXml) : [];
-      const colWidths = computeColWidthsPx(colSpecs, colCount);
-
-      sheetMeta.push({
-        name: rawWorksheetReader.name,
-        rowCount,
-        colCount,
-        colWidths,
-        merges,
-        freezeRows: frozen?.ySplit ?? 0,
-        freezeCols: frozen?.xSplit ?? 0,
-      });
     }
   } finally {
     await writeHandle.close();

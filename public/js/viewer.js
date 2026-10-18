@@ -982,7 +982,7 @@ function gotoGridHit(hit) {
   if (gridState.active !== hit.sheet) activateSheet(hit.sheet);
   gridCurrentHit = `${hit.sheet}:${hit.r}:${hit.c}`;
   const scroll = document.getElementById('grid-scroll');
-  scroll.scrollTop = Math.max(0, (hit.r - 1) * GRID_ROW_H - scroll.clientHeight / 2);
+  scroll.scrollTop = Math.max(0, gridState.layout.top(hit.r - 1) - scroll.clientHeight / 2);
   renderGridViewport();
 }
 
@@ -1002,7 +1002,8 @@ function setupSearchBar() {
 
 /* ==================== 그리드 뷰 (스프레드시트) ==================== */
 
-const GRID_ROW_H = 28;
+/** 파일에 기본 행 높이가 없을 때(구버전 캐시 등) 쓰는 값 — 엑셀 기본 15pt */
+const GRID_DEFAULT_ROW_H = 20;
 const GRID_CHUNK = 200;
 const GRID_OVERSCAN = 12;
 // 세로 병합 앵커를 렌더 창 뒤로 당겨오는(renderGridViewport 참고) 범위의 상한. src/spreadsheet.ts의
@@ -1019,7 +1020,70 @@ const GRID_ROW_PADDING = 30;
 const GRID_COL_PADDING = 8;
 const GRID_MIN_DISPLAY_ROWS = 40;
 const GRID_MIN_DISPLAY_COLS = 14;
-const GRID_DEFAULT_COL_WIDTH = 100;
+const GRID_DEFAULT_COL_WIDTH = 64;
+
+/**
+ * 행마다 높이가 다른(숨긴 행은 0) 시트의 세로 위치 계산 — src/xlsx/sheetGeometry.ts의 RowLayout과
+ * 같은 알고리즘(이 파일은 번들되지 않는 순수 JS라 옮겨 둔다). 행 번호는 0부터.
+ */
+class GridRowLayout {
+  constructor(defaultPx, runs) {
+    this.defaultPx = defaultPx;
+    this.starts = [];
+    this.ends = [];
+    this.heights = [];
+    this.tops = [];
+    let delta = 0;
+    for (const [start, len, px] of runs) {
+      this.starts.push(start);
+      this.ends.push(start + len);
+      this.heights.push(px);
+      this.tops.push(start * defaultPx + delta);
+      delta += len * (px - defaultPx);
+    }
+  }
+  segBefore(row) {
+    let lo = 0;
+    let hi = this.starts.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (this.starts[mid] <= row) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo - 1;
+  }
+  height(row) {
+    const i = this.segBefore(row);
+    return i >= 0 && row < this.ends[i] ? this.heights[i] : this.defaultPx;
+  }
+  top(row) {
+    const i = this.segBefore(row);
+    if (i < 0) return row * this.defaultPx;
+    const s = this.starts[i];
+    const e = this.ends[i];
+    const h = this.heights[i];
+    if (row < e) return this.tops[i] + (row - s) * h;
+    return this.tops[i] + (e - s) * h + (row - e) * this.defaultPx;
+  }
+  rowAt(y) {
+    if (y <= 0) return 0;
+    let lo = 0;
+    let hi = this.tops.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (this.tops[mid] <= y) lo = mid + 1;
+      else hi = mid;
+    }
+    const i = lo - 1;
+    if (i < 0) return Math.floor(y / this.defaultPx);
+    const s = this.starts[i];
+    const e = this.ends[i];
+    const h = this.heights[i];
+    const segEndY = this.tops[i] + (e - s) * h;
+    if (h > 0 && y < segEndY) return s + Math.floor((y - this.tops[i]) / h);
+    return e + Math.floor((y - segEndY) / this.defaultPx);
+  }
+}
 
 function displayRowCount(sheet) {
   return Math.max(sheet.rowCount + GRID_ROW_PADDING, GRID_MIN_DISPLAY_ROWS);
@@ -1028,13 +1092,15 @@ function displayColCount(sheet) {
   return Math.max(sheet.colCount + GRID_COL_PADDING, GRID_MIN_DISPLAY_COLS);
 }
 function colWidthAt(sheet, c) {
-  return sheet.colWidths[c - 1] ?? GRID_DEFAULT_COL_WIDTH;
+  return sheet.colWidths[c - 1] ?? sheet.defaultColWidth ?? GRID_DEFAULT_COL_WIDTH;
 }
 
 const gridState = {
   sheets: [],
   styles: [],
   active: 0,
+  /** 지금 시트의 행 높이 계산(GridRowLayout) — activateSheet가 만든다 */
+  layout: new GridRowLayout(GRID_DEFAULT_ROW_H, []),
   chunks: new Map(), // `${sheet}:${chunkIdx}` -> rows | 'loading'
   mergeStarts: new Map(),
   mergeCovered: new Map(), // `${r}:${c}` -> 그 칸을 덮는 병합(m). 같은 key로 .has()만 쓰면 예전 Set과 동일하게 동작한다.
@@ -1076,7 +1142,12 @@ function injectGridStyles(styles) {
     // extractStyle(spreadsheet.ts)이 이제 실제 파일의 명시적 왼쪽 정렬을 'l'로 읽어 들이므로
     // 의도를 명시적으로 남겨 둔다.
     if (style.a === 'l') parts.push('text-align:left');
-    if (style.w) parts.push('white-space:normal');
+    // 줄 바꿈·세로 맞춤은 .grid-table td의 기본값(nowrap·bottom)과 겹치므로 아래 테두리처럼
+    // `.grid-table td.gsN` 특이도로 낸다(지정 없으면 엑셀처럼 아래 맞춤)
+    const cellParts = [];
+    if (style.w) cellParts.push('white-space:normal;word-break:break-all');
+    if (style.va === 't') cellParts.push('vertical-align:top');
+    if (style.va === 'm') cellParts.push('vertical-align:middle');
     // 엑셀 테두리 굵기(1=가는 선, 2=굵은 선)를 그리드 동시편집기(src/client/grid-editor.ts의
     // borderCss/applyStyleToTd)와 똑같은 규칙으로 CSS화한다: 지정된 변만 개별 border-* longhand로
     // 얹는다. 지정 없는 변은 그대로 둬서 .grid-table td의 기본 점선 격자가 그 변에서 계속 보이게
@@ -1095,7 +1166,7 @@ function injectGridStyles(styles) {
     // 올려야 기본 격자 shorthand의 해당 변을 확실히 덮어쓴다. 폰트/색/정렬 등 다른 선언은 애초에
     // `.grid-table td`와 겹치는 규칙이 없어 특이도 경합이 없으므로 그대로 `.gs{N}`만으로 둔다.
     const cssForStyle = [`.gs${i}{${parts.join(';')}}`];
-    if (borderParts.length > 0) cssForStyle.push(`.grid-table td.gs${i}{${borderParts.join(';')}}`);
+    if (borderParts.length > 0 || cellParts.length > 0) cssForStyle.push(`.grid-table td.gs${i}{${[...borderParts, ...cellParts].join(';')}}`);
     return cssForStyle.join('\n');
   });
   const styleEl = document.createElement('style');
@@ -1263,9 +1334,9 @@ function renderGridViewport() {
   const sheet = gridState.sheets[gridState.active];
   if (!sheet) return;
   const scroll = document.getElementById('grid-scroll');
-  const firstVisible = Math.max(1, Math.floor(scroll.scrollTop / GRID_ROW_H) + 1 - GRID_OVERSCAN);
-  const visibleCount = Math.ceil(scroll.clientHeight / GRID_ROW_H) + GRID_OVERSCAN * 2;
-  const lastVisible = Math.min(displayRowCount(sheet), firstVisible + visibleCount);
+  const layout = gridState.layout;
+  const firstVisible = Math.max(1, layout.rowAt(scroll.scrollTop) + 1 - GRID_OVERSCAN);
+  const lastVisible = Math.min(displayRowCount(sheet), layout.rowAt(scroll.scrollTop + scroll.clientHeight) + 1 + GRID_OVERSCAN);
   const colCount = displayColCount(sheet);
 
   // 세로 병합(rowspan)의 앵커 행(rowspan 속성을 실제로 지닌 <td>가 그려지는, 병합의 맨 위 행)이
@@ -1334,7 +1405,8 @@ function renderGridViewport() {
 
   const rowsHtml = [];
   for (let r = renderFirst; r <= lastVisible; r += 1) {
-    const cells = [`<td class="g-rownum">${r}</td>`];
+    const rowH = layout.height(r - 1);
+    const cells = [`<td class="g-rownum">${rowH > 0 ? r : ''}</td>`];
     for (let c = 1; c <= colCount; c += 1) {
       // 이 칸을 덮는 병합이 있어도, 그 병합이 degradedMerges에 있으면(위 상한 때문에 앵커를 당겨오지
       // 못한 병합) 이 칸을 "덮인 칸"으로 건너뛰지 않고 아래에서 보통 셀처럼 그린다 — mergeStarts에
@@ -1360,13 +1432,13 @@ function renderGridViewport() {
         classes.push(shown === 'TRUE' || shown === 'FALSE' ? 'g-bool' : 'g-num');
       }
       const value = isEmpty ? '' : isHit ? markMatches(shown, searchState.lastQuery) : escapeHtml(shown);
-      const cls = classes.length > 0 ? ` class="${classes.join(' ')}"` : '';
       const span = merge ? ` colspan="${merge.cs}"${merge.rs > 1 ? ` rowspan="${merge.rs}"` : ''}` : '';
       // 실제 엑셀처럼 — 오른쪽으로 빈 칸이 이어지는 만큼 이 칸의 내용이 넘쳐 보이게 허용한다
       // (병합 칸이나 값 있는 칸을 만나면 거기서 멈춘다). 단, 기본이 왼쪽 정렬인 칸만 — 가운데/
       // 오른쪽 정렬 칸은 실제 엑셀에서도 넘치지 않는다(isSpillEligible 문서 주석 참고).
       let spillStyle = '';
-      if (!isEmpty && !merge && isSpillEligible(cell.s === undefined ? undefined : gridState.styles[cell.s], cell.v)) {
+      // 줄 바꿈 칸은 넘치지 않고 자기 칸 안에서 줄을 바꾼다(엑셀과 같다)
+      if (!isEmpty && !merge && !(cellStyleObj && cellStyleObj.w) && isSpillEligible(cellStyleObj, cell.v)) {
         let spillWidth = colWidthAt(sheet, c);
         for (let cc = c + 1; cc <= colCount; cc += 1) {
           if (gridState.mergeCovered.has(`${r}:${cc}`) || gridState.mergeStarts.has(`${r}:${cc}`)) break;
@@ -1376,16 +1448,24 @@ function renderGridViewport() {
         }
         if (spillWidth > colWidthAt(sheet, c)) spillStyle = ` style="width:${spillWidth}px"`;
       }
-      const content = value ? `<span class="g-cell-spill"${spillStyle}>${value}</span>` : '';
-      cells.push(`<td data-r="${r}" data-c="${c}"${cls}${span}>${content}</td>`);
+      // 내용이 행 높이를 넘어도 행이 늘어나지 않게(엑셀처럼 잘린다) — 병합이면 걸친 행 높이의 합
+      const cellH = merge && merge.rs > 1 ? layout.top(r - 1 + merge.rs) - layout.top(r - 1) : rowH;
+      const hiddenCol = colWidthAt(sheet, c) === 0 && !(merge && merge.cs > 1);
+      if (hiddenCol) classes.push('g-hidden-col');
+      const boxStyle = `max-height:${Math.max(0, cellH - 1)}px`;
+      const content = value && !hiddenCol && cellH > 0
+        ? `<span class="g-cell-spill" style="${boxStyle}${spillStyle ? ';' + spillStyle.slice(8, -1) : ''}">${value}</span>`
+        : '';
+      const clsFinal = classes.length > 0 ? ` class="${classes.join(' ')}"` : '';
+      cells.push(`<td data-r="${r}" data-c="${c}"${clsFinal}${span}>${content}</td>`);
     }
-    rowsHtml.push(`<tr style="height:${GRID_ROW_H}px">${cells.join('')}</tr>`);
+    rowsHtml.push(`<tr${rowH === 0 ? ' class="g-hidden-row"' : ''} style="height:${rowH}px">${cells.join('')}</tr>`);
   }
 
   const table = document.getElementById('grid-table');
   table.innerHTML = cols + rowsHtml.join('');
   table.style.width = `${totalColWidthPx}px`;
-  table.style.transform = `translateY(${(renderFirst - 1) * GRID_ROW_H}px)`;
+  table.style.transform = `translateY(${layout.top(renderFirst - 1)}px)`;
 }
 
 function renderGridHead() {
@@ -1481,8 +1561,9 @@ function activateSheet(index) {
   gridState.active = index;
   const sheet = gridState.sheets[index];
   buildMergeIndex(sheet);
+  gridState.layout = new GridRowLayout(sheet.defaultRowHeight || GRID_DEFAULT_ROW_H, sheet.rowHeights || []);
   const inner = document.getElementById('grid-inner');
-  inner.style.height = `${displayRowCount(sheet) * GRID_ROW_H}px`;
+  inner.style.height = `${gridState.layout.top(displayRowCount(sheet))}px`;
   let totalWidth = 0;
   for (let c = 1; c <= displayColCount(sheet); c += 1) totalWidth += colWidthAt(sheet, c);
   inner.style.width = `${GRID_ROWNUM_W + totalWidth}px`;
@@ -1531,8 +1612,8 @@ function scrollSelectedIntoView() {
   if (!sheet || !gridState.selected) return;
   const scroll = document.getElementById('grid-scroll');
   const { row, col } = gridState.selected;
-  const rowTop = (row - 1) * GRID_ROW_H;
-  const rowBottom = rowTop + GRID_ROW_H;
+  const rowTop = gridState.layout.top(row - 1);
+  const rowBottom = gridState.layout.top(row);
   if (rowTop < scroll.scrollTop) scroll.scrollTop = rowTop;
   else if (rowBottom > scroll.scrollTop + scroll.clientHeight) scroll.scrollTop = rowBottom - scroll.clientHeight;
 
