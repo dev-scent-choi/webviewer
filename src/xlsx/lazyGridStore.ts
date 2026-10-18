@@ -133,6 +133,18 @@ async function preSeedWorkbookReaderState(
 ): Promise<void> {
   const rawReader = reader as unknown as RawWorkbookReaderInternals;
 
+  // openpyxl 등은 관계 대상을 절대 경로(/xl/worksheets/sheet1.xml)로 쓴다 — ExcelJS 스트리밍 리더는
+  // 'worksheets/sheetN.xml' 꼴만 시트와 짝지어, 그대로 두면 시트 이름이 'Sheet1'로 바뀌고(저장하면
+  // 원래 이름이 사라진다) 병합·틀 고정 정보도 못 찾는다. 리더가 순회 중 관계 파일을 다시 읽어도
+  // 매번 워크북 기준 상대 경로로 맞추도록 파싱 메서드를 감싼다.
+  const parseRels = rawReader._parseRels.bind(rawReader);
+  rawReader._parseRels = async (stream) => {
+    await parseRels(stream);
+    for (const rel of rawReader.workbookRels ?? []) {
+      if (typeof rel.Target === 'string' && rel.Target.startsWith('/xl/')) rel.Target = rel.Target.slice('/xl/'.length);
+    }
+  };
+
   const relsEntry = zip.file('xl/_rels/workbook.xml.rels');
   if (relsEntry) {
     await rawReader._parseRels(Readable.from(await relsEntry.async('nodebuffer')));

@@ -8,6 +8,7 @@ import type { GridCell } from '../spreadsheet.js';
 import { yieldToEventLoop, YIELD_EVERY_N_ROWS } from '../spreadsheet.js';
 import { cellStyle, cellText, toCellStyleAttrs, writeExportCellValue, type XlsxExportOptions } from './collab.js';
 import type { LazyGridStore } from './lazyGridStore.js';
+import { restoreDrawings, stripDrawings } from './drawingPassthrough.js';
 
 /**
  * `exportXlsxFromGrid`(collab.ts)의 **오직 대용량 파일 전용 폴백**이다 — 정상 경로가 아니다.
@@ -57,7 +58,8 @@ export async function exportXlsxFromGridStreaming(
   const removedSheets = options.removedSheetIndices ?? new Set<number>();
 
   const src = new ExcelJS.Workbook();
-  await src.xlsx.load(originalXlsxBytes as unknown as ArrayBuffer);
+  const { bytes: loadable, stash: drawings } = stripDrawings(originalXlsxBytes);
+  await src.xlsx.load(loadable as unknown as ArrayBuffer);
   const srcSheets = src.worksheets.filter((sheet) => !sheet.state || sheet.state === 'visible');
   const originalSheetCount = srcSheets.length;
 
@@ -148,7 +150,7 @@ export async function exportXlsxFromGridStreaming(
     }
 
     await out.commit();
-    return new Uint8Array(await fs.readFile(tempPath));
+    return restoreDrawings(new Uint8Array(await fs.readFile(tempPath)), drawings);
   } finally {
     await fs.rm(tempPath, { force: true, maxRetries: 5, retryDelay: 100 }).catch(() => {
       /* 임시 파일 정리 실패는 치명적이지 않다 — OS 임시 폴더 청소에 맡긴다 */

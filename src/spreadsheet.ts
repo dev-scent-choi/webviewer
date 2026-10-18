@@ -3,6 +3,7 @@ import type { DocumentStore } from './storage.js';
 import type { DocumentMeta } from './types.js';
 import { buildSheetNameIndex, computeGridCellDisplay } from './xlsx/formulas.js';
 import { isDateNumFmt, serialToDateText } from './collab/cellValueShared.js';
+import { stripDrawings } from './xlsx/drawingPassthrough.js';
 
 /** 대형 시트를 훑는 동기 반복문 중간에 이벤트 루프에 제어권을 돌려준다 — 이게 없으면 큰 xlsx를
  * 열 때(파싱이든 동시편집 시딩이든) 그 몇 초~몇십 초 동안 Node가 단일 스레드라 그 문서를 연
@@ -718,7 +719,8 @@ export function extractStyle(
 
 export async function parseXlsxToGrid(xlsxBytes: Buffer): Promise<GridDocument> {
   const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(xlsxBytes as unknown as ArrayBuffer);
+  // 차트가 든 그리기 파트를 ExcelJS가 읽다 죽지 않게 떼고 읽는다(그리드 보기에는 쓰지 않는 파트다)
+  await workbook.xlsx.load(stripDrawings(new Uint8Array(xlsxBytes)).bytes as unknown as ArrayBuffer);
   const palette = new StylePalette();
   // exceljs 타입 선언(string[])과 달리 런타임은 { theme1: xml문자열 } 형태다
   const themes = (workbook.model as unknown as { themes?: Record<string, string> }).themes;

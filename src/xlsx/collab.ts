@@ -1,3 +1,4 @@
+import { restoreDrawings, stripDrawings } from './drawingPassthrough.js';
 import ExcelJS from 'exceljs';
 import * as Y from 'yjs';
 import {
@@ -634,7 +635,9 @@ export async function exportXlsxFromGrid(
 ): Promise<Uint8Array> {
   const removedSheets = options.removedSheetIndices ?? EMPTY_REMOVED_SHEETS;
   const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(originalXlsxBytes as unknown as ArrayBuffer);
+  // 차트·그림(그리기 파트)은 ExcelJS를 거치지 않고 원본 그대로 되붙인다 — drawingPassthrough.ts 참고
+  const { bytes: loadable, stash: drawings } = stripDrawings(originalXlsxBytes);
+  await workbook.xlsx.load(loadable as unknown as ArrayBuffer);
   const visibleSheets = workbook.worksheets.filter((sheet) => !sheet.state || sheet.state === 'visible');
   const originalSheetCount = visibleSheets.length;
 
@@ -784,7 +787,7 @@ export async function exportXlsxFromGrid(
   applySheetDisplayOrder(workbook, visibleSheets, store, removedSheets, options.sheetDisplayOrder);
 
   const buffer = await workbook.xlsx.writeBuffer();
-  return new Uint8Array(buffer as ArrayBuffer);
+  return restoreDrawings(new Uint8Array(buffer as ArrayBuffer), drawings);
 }
 
 /**
