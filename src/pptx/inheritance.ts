@@ -1,4 +1,5 @@
 import { XMLParser } from 'fast-xml-parser';
+import { loadThemeColors } from './theme.js';
 
 /**
  * 슬라이드 도형의 "보이는 모양" 중 슬라이드 XML이 아니라 레이아웃·마스터에서 물려받는 값을 푼다 —
@@ -27,6 +28,8 @@ export interface LevelLook {
   /** 글머리 문자. null = 글머리 없음. */
   readonly bullet: string | null;
   readonly sizePt: number;
+  /** 기본 글자 색('#RRGGBB', 테마 색 해석 결과). 없으면 검정. */
+  readonly color: string | null;
 }
 
 export interface InheritedShapeLook {
@@ -102,6 +105,10 @@ interface ShapeLook {
   readonly sizePt: number | undefined;
   readonly align: Align | undefined;
   readonly levels: readonly PartialLevel[];
+  /** 도형 스타일 <p:style><a:fontRef>의 색 노드 — 기본 도형의 글자 색(대개 흰색 lt1)이 여기서 온다 */
+  readonly fontRefColor?: XmlNode;
+  /** 개체 틀도 글상자(txBox="1")도 아닌 "그린 도형"인지 — 정렬이 아무 데도 없으면 글자를 가운데에 둔다 */
+  readonly drawnShape: boolean;
 }
 
 const ANCHORS = new Set(['t', 'ctr', 'b']);
@@ -120,6 +127,8 @@ interface PartialLevel {
   readonly indentPt?: number;
   /** 글머리: 문자열 = 그 문자, null = <a:buNone/>, undefined = 언급 없음 */
   readonly bullet?: string | null;
+  /** <a:defRPr><a:solidFill>…</a:solidFill> 원본 노드 — 테마를 알아야 풀리므로 노드째 들고 간다 */
+  readonly colorFill?: Record<string, unknown>;
 }
 
 const EMU_PER_PT = 12700;
@@ -128,6 +137,7 @@ const EMU_PER_PT = 12700;
 export function partialLevelFrom(node: XmlNode | undefined): PartialLevel {
   if (!node || typeof node !== 'object') return {};
   const sz = num((node['a:defRPr'] as XmlNode | undefined)?.['@_sz']);
+  const defRPrFill = (node['a:defRPr'] as XmlNode | undefined)?.['a:solidFill'];
   const algn = node['@_algn'] as string | undefined;
   const marL = num(node['@_marL']);
   const indent = num(node['@_indent']);
@@ -140,6 +150,7 @@ export function partialLevelFrom(node: XmlNode | undefined): PartialLevel {
     ...(marL !== null ? { marLPt: marL / EMU_PER_PT } : {}),
     ...(indent !== null ? { indentPt: indent / EMU_PER_PT } : {}),
     ...(bullet !== undefined ? { bullet } : {}),
+    ...(typeof defRPrFill === 'object' && defRPrFill ? { colorFill: defRPrFill as XmlNode } : {}),
   };
 }
 
@@ -175,6 +186,11 @@ function shapeLooks(root: XmlNode | null, rootTag: string): ShapeLook[] {
     const { sizePt, align } = levels[0];
     return {
       levels,
+      fontRefColor: (sp['p:style'] as XmlNode | undefined)?.['a:fontRef'] as XmlNode | undefined,
+      drawnShape:
+        ph === null &&
+        ((nvSpPr?.['p:cNvSpPr'] as XmlNode | undefined)?.['@_txBox'] ?? '0') !== '1' &&
+        String((nvSpPr?.['p:cNvSpPr'] as XmlNode | undefined)?.['@_txBox'] ?? '') !== 'true',
       ph,
       id: String((nvSpPr?.['p:cNvPr'] as XmlNode | undefined)?.['@_id'] ?? ''),
       x: num(off?.['@_x']),
@@ -243,6 +259,7 @@ export function resolveSlideShapeLooks(
   );
   const defaultText = defaultLevels[0];
 
+  const theme = loadThemeColors(zip, sourceSlidePart);
   const result = new Map<string, InheritedShapeLook>();
   for (const shape of slideShapes) {
     const layout = shape.ph ? matchLayout(shape.ph, layoutShapes) : undefined;
@@ -260,7 +277,16 @@ export function resolveSlideShapeLooks(
       anchor: (pick('anchor') as Anchor | undefined) ?? 't',
       defaultSizePt:
         (pick('sizePt') as number | undefined) ?? classStyle[cls].sizePt ?? defaultText.sizePt ?? 18,
-      defaultAlign: (pick('align') as Align | undefined) ?? classStyle[cls].align ?? defaultText.align ?? 'l',
+      // 그린 도형(사각형·화살표 등, 글상자 아님)은 도형·개체 틀 어디에도 정렬이 없으면 가운데 —
+      // 마스터 otherStyle의 algn="l"보다 우선한다(PowerPoint·LibreOffice 모두 도형 글자를 가운데에
+      // 그린다. 실제 Office 템플릿 파일로 확인: 왼쪽 정렬로 그리면 별 모양 안 흰 글자가 별 바깥의
+      // 흰 바탕에 놓여 아예 안 보였다).
+      defaultAlign:
+        (pick('align') as Align | undefined) ??
+        (shape.drawnShape ? 'ctr' : undefined) ??
+        classStyle[cls].align ??
+        defaultText.align ??
+        'l',
       levels: Array.from({ length: 9 }, (_, i): LevelLook => {
         const sources = [shape.levels[i], layout?.levels[i], master?.levels[i], classLevels[cls][i], defaultLevels[i]];
         const first = <K extends keyof PartialLevel>(k: K) => sources.find((s) => s && s[k] !== undefined)?.[k];
@@ -269,6 +295,17 @@ export function resolveSlideShapeLooks(
           indentPt: (first('indentPt') as number | undefined) ?? 0,
           bullet: (first('bullet') as string | null | undefined) ?? null,
           sizePt: (first('sizePt') as number | undefined) ?? 18,
+          // 색 우선순위(PowerPoint와 같음): 도형·레이아웃·마스터 개체 틀의 목록 스타일 → 도형 스타일의
+          // 글꼴 색(fontRef, 기본 도형의 흰 글자가 여기서 온다) → 마스터 txStyles/기본 텍스트 스타일.
+          // fontRef를 txStyles보다 늦게 보면 마스터 otherStyle의 tx1(검정)이 이겨 파란 도형 위 글자가
+          // 검정으로 보였다(실제 Office 템플릿 파일로 확인).
+          color:
+            theme.resolve(
+              [shape.levels[i], layout?.levels[i], master?.levels[i]].find((s) => s?.colorFill)?.colorFill,
+            ) ??
+            theme.resolve(shape.fontRefColor) ??
+            theme.resolve([classLevels[cls][i], defaultLevels[i]].find((s) => s?.colorFill)?.colorFill) ??
+            null,
         };
       }),
     });

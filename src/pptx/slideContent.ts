@@ -1,5 +1,6 @@
 import { XMLBuilder, XMLParser } from 'fast-xml-parser';
 import { partialLevelFrom } from './inheritance.js';
+import { loadThemeColors, relTargetOf, type ThemeColors } from './theme.js';
 import type { Node as PMNode } from 'prosemirror-model';
 import { pptxTextSchema as schema } from './textSchema.js';
 import { SLIDE_WIDTH_EMU, SLIDE_HEIGHT_EMU, type SlideVisual } from '../collab/pptxShared.js';
@@ -38,13 +39,16 @@ const parser = new XMLParser({
 
 type XmlNode = Record<string, unknown>;
 
+/** 원본 색 노드(<a:solidFill>의 내용)를 XML 문자열로 되돌린다 — 테마 색을 저장에서 그대로 유지하기 위함 */
+const colorBuilder = new XMLBuilder({ ignoreAttributes: false, attributeNamePrefix: '@_', suppressEmptyNode: true });
+
 function asArray<T>(value: T | T[] | undefined): T[] {
   if (value === undefined) return [];
   return Array.isArray(value) ? value : [value];
 }
 
 /** <a:rPr>에서 마크(굵게/기울임/밑줄/색/크기)를 뽑아 그 런의 텍스트에 적용한다. */
-function marksFromRPr(rPr: XmlNode | undefined): ReturnType<typeof schema.marks.strong.create>[] {
+function marksFromRPr(rPr: XmlNode | undefined, theme?: ThemeColors): ReturnType<typeof schema.marks.strong.create>[] {
   if (!rPr) return [];
   const marks = [];
   if (rPr['@_b'] === '1') marks.push(schema.marks.strong.create());
@@ -53,7 +57,14 @@ function marksFromRPr(rPr: XmlNode | undefined): ReturnType<typeof schema.marks.
   const solidFill = rPr['a:solidFill'] as XmlNode | undefined;
   const srgbClr = solidFill?.['a:srgbClr'] as XmlNode | undefined;
   const colorVal = srgbClr?.['@_val'] as string | undefined;
-  if (colorVal) marks.push(schema.marks.textColor.create({ color: `#${colorVal}` }));
+  if (colorVal && Object.keys(srgbClr ?? {}).every((k) => k === '@_val')) {
+    marks.push(schema.marks.textColor.create({ color: `#${colorVal}` }));
+  } else if (solidFill && typeof solidFill === 'object' && Object.keys(solidFill).length > 0) {
+    // 테마 색(schemeClr)·밝기 조정이 붙은 색 등 — 원본 XML을 그대로 보관하고(저장 때 되돌림) 화면엔
+    // 테마로 풀어 낸 색을 쓴다. 테마를 모르면(저장 기준선 비교 등) 표시 색 없이 원본만 보관.
+    const raw = colorBuilder.build(solidFill) as string;
+    marks.push(schema.marks.textColor.create({ color: theme?.resolve(solidFill) ?? '', raw }));
+  }
   const sz = rPr['@_sz'] as string | undefined;
   if (sz) marks.push(schema.marks.fontSize.create({ size: Number(sz) / 100 }));
   // 한글 문서는 <a:ea>(동아시아 글꼴)가 실제 보이는 글꼴이라 그쪽을 우선한다. 테마 참조("+mn-lt"
@@ -67,14 +78,14 @@ function marksFromRPr(rPr: XmlNode | undefined): ReturnType<typeof schema.marks.
 
 const ALIGN_VALUES = new Set(['l', 'ctr', 'r', 'just']);
 
-function paragraphFromXml(pNode: XmlNode): PMNode {
+function paragraphFromXml(pNode: XmlNode, theme?: ThemeColors): PMNode {
   const runs = asArray<XmlNode>(pNode['a:r'] as XmlNode | XmlNode[] | undefined);
   const inline = runs
     .map((run) => {
       const text = (run['a:t'] as string | number | undefined) ?? '';
       const textStr = String(text);
       if (textStr === '') return null;
-      return schema.text(textStr, marksFromRPr(run['a:rPr'] as XmlNode | undefined));
+      return schema.text(textStr, marksFromRPr(run['a:rPr'] as XmlNode | undefined, theme));
     })
     .filter((n): n is NonNullable<typeof n> => n !== null);
   const pPrNode = pNode['a:pPr'] as XmlNode | string | undefined;
@@ -180,7 +191,12 @@ function applyGroupTransforms(
   return { x: Math.round(px), y: Math.round(py), w: Math.round(pw), h: Math.round(ph) };
 }
 
-function collectShapesRecursive(node: XmlNode, transforms: readonly GroupTransform[], shapes: ParsedShape[]): void {
+function collectShapesRecursive(
+  node: XmlNode,
+  transforms: readonly GroupTransform[],
+  shapes: ParsedShape[],
+  theme?: ThemeColors,
+): void {
   for (const sp of asArray<XmlNode>(node['p:sp'] as XmlNode | XmlNode[] | undefined)) {
     const txBody = sp['p:txBody'] as XmlNode | undefined;
     if (!txBody) continue; // <p:txBody> 없는 도형(그림 등)은 편집 대상이 아니다 — 건너뛴다.
@@ -193,7 +209,7 @@ function collectShapesRecursive(node: XmlNode, transforms: readonly GroupTransfo
     const ext = xfrm?.['a:ext'] as XmlNode | undefined;
     const pos = applyGroupTransforms(transforms, emuAttr(off, '@_x'), emuAttr(off, '@_y'), emuAttr(ext, '@_cx'), emuAttr(ext, '@_cy'));
 
-    const paragraphs = asArray<XmlNode>(txBody['a:p'] as XmlNode | XmlNode[] | undefined).map(paragraphFromXml);
+    const paragraphs = asArray<XmlNode>(txBody['a:p'] as XmlNode | XmlNode[] | undefined).map((p) => paragraphFromXml(p, theme));
     const doc = schema.node(
       'doc',
       null,
@@ -206,7 +222,7 @@ function collectShapesRecursive(node: XmlNode, transforms: readonly GroupTransfo
   for (const grp of asArray<XmlNode>(node['p:grpSp'] as XmlNode | XmlNode[] | undefined)) {
     const groupTransform = groupTransformFromGrpSpPr(grp['p:grpSpPr'] as XmlNode | undefined);
     const nextTransforms = groupTransform ? [...transforms, groupTransform] : transforms;
-    collectShapesRecursive(grp, nextTransforms, shapes);
+    collectShapesRecursive(grp, nextTransforms, shapes, theme);
   }
 }
 
@@ -216,12 +232,12 @@ function collectShapesRecursive(node: XmlNode, transforms: readonly GroupTransfo
  * 재질서(저장 시 position은 쓰지 않으므로, hasShape/spliceShapeTxBody/removeShape의 원본 XML
  * 텍스트 기반 매칭은 이 중첩 여부와 무관하게 이미 그대로 동작한다, 이 함수만 읽기 전용으로 몰랐을
  * 뿐이다). */
-export function parseSlideShapes(slideXml: string): ParsedShape[] {
+export function parseSlideShapes(slideXml: string, theme?: ThemeColors): ParsedShape[] {
   const parsed = parser.parse(slideXml) as XmlNode;
   const sld = parsed['p:sld'] as XmlNode;
   const spTree = (sld['p:cSld'] as XmlNode)['p:spTree'] as XmlNode;
   const shapes: ParsedShape[] = [];
-  collectShapesRecursive(spTree, [], shapes);
+  collectShapesRecursive(spTree, [], shapes, theme);
   return shapes;
 }
 
@@ -241,9 +257,14 @@ function rPrXmlFor(node: PMNode): string {
   const familyMark = node.marks.find((m) => m.type.name === 'fontFamily');
   const attrs = `${b}${i}${u}${sz}`;
   // CT_TextCharacterProperties의 자식 순서: ... solidFill ... latin, ea, cs ... (스키마상 고정)
-  const fill = colorMark
-    ? `<a:solidFill><a:srgbClr val="${(colorMark.attrs.color as string).replace('#', '').toUpperCase()}"/></a:solidFill>`
-    : '';
+  // 원본 테마 색(raw)이 있으면 그대로 되돌리고, 리본으로 새로 고른 색이면 RGB로 쓴다.
+  const fill = !colorMark
+    ? ''
+    : colorMark.attrs.raw
+      ? `<a:solidFill>${colorMark.attrs.raw as string}</a:solidFill>`
+      : /^#[0-9A-Fa-f]{6}$/.test(colorMark.attrs.color as string)
+        ? `<a:solidFill><a:srgbClr val="${(colorMark.attrs.color as string).replace('#', '').toUpperCase()}"/></a:solidFill>`
+        : '';
   const face = familyMark
     ? (() => {
         const name = escapeXmlAttr(familyMark.attrs.family as string);
@@ -516,18 +537,34 @@ export function readSlideSizeEmu(zipEntries: Record<string, Uint8Array>): { cx: 
   return cx > 0 && cy > 0 ? { cx, cy } : { cx: SLIDE_WIDTH_EMU, cy: SLIDE_HEIGHT_EMU };
 }
 
-function roundGeomFromSpPr(spPr: XmlNode | undefined): 'ellipse' | 'roundRect' | undefined {
+function presetGeomFromSpPr(spPr: XmlNode | undefined): string | undefined {
   const prst = (spPr?.['a:prstGeom'] as XmlNode | undefined)?.['@_prst'];
-  return prst === 'ellipse' || prst === 'roundRect' ? prst : undefined;
+  return typeof prst === 'string' && prst !== 'rect' && /^[A-Za-z0-9]+$/.test(prst) ? prst : undefined;
 }
 
-function fillColorFromSpPr(spPr: XmlNode | undefined): string | undefined {
-  const solidFill = spPr?.['a:solidFill'] as XmlNode | undefined;
-  const srgbClr = solidFill?.['a:srgbClr'] as XmlNode | undefined;
-  const val = srgbClr?.['@_val'] as string | undefined;
-  // a:schemeClr(테마 참조 색, 예: "accent1")는 테마 XML까지 읽어야 풀리므로 이번 범위에서는
-  // 생략한다 — 채우기 없이 위치만 정확한 도형으로 표시된다(완전히 안 보이는 것보다는 낫다).
-  return val ? `#${val}` : undefined;
+/**
+ * 도형의 보이는 채우기 색. 우선순위는 PowerPoint와 같다: 명시적 <a:noFill/> → 없음, <a:solidFill> →
+ * 그 색, <a:gradFill> → 첫 색 지점(그라데이션은 근사), 그 밖엔 도형 스타일 <p:style><a:fillRef idx>의
+ * 테마 색(기본 도형은 대부분 이 경로로 accent1 같은 색을 갖는다 — 예전엔 이걸 몰라 기본 도형이
+ * 투명하게 그려졌다). 테마를 모르면 직접 지정 RGB만 푼다.
+ */
+function fillColorFromSpPr(spPr: XmlNode | undefined, theme?: ThemeColors, style?: XmlNode): string | undefined {
+  if (spPr?.['a:noFill'] !== undefined) return undefined;
+  const solid = spPr?.['a:solidFill'] as XmlNode | undefined;
+  if (solid !== undefined) {
+    if (theme) return theme.resolve(solid);
+    const val = (solid['a:srgbClr'] as XmlNode | undefined)?.['@_val'] as string | undefined;
+    return val ? `#${val}` : undefined;
+  }
+  const grad = spPr?.['a:gradFill'] as XmlNode | undefined;
+  if (grad && theme) {
+    const stops = asArray<XmlNode>((grad['a:gsLst'] as XmlNode | undefined)?.['a:gs'] as XmlNode | XmlNode[] | undefined);
+    if (stops[0]) return theme.resolve(stops[0]);
+  }
+  if (spPr?.['a:blipFill'] !== undefined || spPr?.['a:pattFill'] !== undefined) return undefined;
+  const fillRef = style?.['a:fillRef'] as XmlNode | undefined;
+  if (fillRef && theme && Number(fillRef['@_idx'] ?? 0) > 0) return theme.resolve(fillRef);
+  return undefined;
 }
 
 function graphicFrameXfrm(gf: XmlNode) {
@@ -554,49 +591,79 @@ function tableCellText(tc: XmlNode): string {
 const TABLE_GRAPHIC_URI = 'http://schemas.openxmlformats.org/drawingml/2006/table';
 const CHART_GRAPHIC_URI = 'http://schemas.openxmlformats.org/drawingml/2006/chart';
 
+/** 파트(슬라이드/레이아웃/마스터) 하나를 표시용으로 읽어 둔 것 — 미디어 경로는 그 파트의 rels 기준. */
+interface VisualPart {
+  readonly part: string;
+  readonly cSld: XmlNode;
+  readonly root: XmlNode;
+  readonly rels: Map<string, string>;
+}
+
+function loadVisualPart(zipEntries: Record<string, Uint8Array>, part: string | null, rootTag: string): VisualPart | null {
+  if (!part || !zipEntries[part]) return null;
+  try {
+    const parsed = parser.parse(Buffer.from(zipEntries[part]).toString('utf-8')) as XmlNode;
+    const root = parsed[rootTag] as XmlNode | undefined;
+    const cSld = root?.['p:cSld'] as XmlNode | undefined;
+    if (!root || !cSld) return null;
+    const slash = part.lastIndexOf('/');
+    const relsBytes = zipEntries[`${part.slice(0, slash)}/_rels/${part.slice(slash + 1)}.rels`];
+    const rels = relsBytes ? relsMap(Buffer.from(relsBytes).toString('utf-8')) : new Map<string, string>();
+    return { part, cSld, root, rels };
+  } catch {
+    return null;
+  }
+}
+
 /** 슬라이드 XML 안의 이미지(p:pic)·글자 없는 단순 도형(p:sp)·표/차트/스마트아트
  * (p:graphicFrame)를 화면 표시용으로 뽑는다. 표는 셀 텍스트까지 그리고, 차트·스마트아트는
- * (렌더링 엔진 없이는 실제로 그릴 수 없어) 위치만 맞는 자리표시자로 남긴다. */
+ * (렌더링 엔진 없이는 실제로 그릴 수 없어) 위치만 맞는 자리표시자로 남긴다.
+ *
+ * 그리는 순서(아래부터): 배경(슬라이드 → 레이아웃 → 마스터 중 먼저 정의된 것) → 마스터의 그림·도형 →
+ * 레이아웃의 그림·도형 → 슬라이드의 그림·도형. 레이아웃/마스터의 개체 틀(p:ph)은 "틀"일 뿐 실제로
+ * 보이지 않으므로 건너뛰고, PowerPoint의 "배경 그래픽 숨기기"(showMasterSp="0")를 따른다 — 예전엔
+ * 슬라이드만 읽어서 회사 로고·색 띠처럼 마스터에 있는 요소와 마스터 배경이 편집 화면에서 빠졌다. */
 export function parseSlideVisuals(zipEntries: Record<string, Uint8Array>, sourceSlidePart: string): SlideVisual[] {
-  const slideXmlBytes = zipEntries[`ppt/slides/${sourceSlidePart}`];
-  if (!slideXmlBytes) return [];
-  const slideXml = Buffer.from(slideXmlBytes).toString('utf-8');
-  const relsBytes = zipEntries[`ppt/slides/_rels/${sourceSlidePart}.rels`];
-  const rels = relsBytes ? relsMap(Buffer.from(relsBytes).toString('utf-8')) : new Map<string, string>();
+  const slidePartPath = `ppt/slides/${sourceSlidePart}`;
+  const slide = loadVisualPart(zipEntries, slidePartPath, 'p:sld');
+  if (!slide) return [];
+  let theme: ThemeColors | undefined;
+  try {
+    theme = loadThemeColors(zipEntries, sourceSlidePart);
+  } catch {
+    theme = undefined;
+  }
+  const layoutPath = relTargetOf(zipEntries, slidePartPath, 'slideLayout');
+  const layout = loadVisualPart(zipEntries, layoutPath, 'p:sldLayout');
+  const master = loadVisualPart(zipEntries, layoutPath ? relTargetOf(zipEntries, layoutPath, 'slideMaster') : null, 'p:sldMaster');
+  const visuals: SlideVisual[] = [];
 
-  function resolveImageMediaPath(rId: string | undefined): string | undefined {
+  function resolveImageMediaPath(owner: VisualPart, rId: string | undefined): string | undefined {
     if (!rId) return undefined;
-    const target = rels.get(rId);
+    const target = owner.rels.get(rId);
     if (!target) return undefined;
-    const normalized = resolveRelativePath(`ppt/slides/${sourceSlidePart}`, target);
+    const normalized = resolveRelativePath(owner.part, target);
     if (!zipEntries[normalized]) return undefined; // 관계는 있는데 실제 미디어 파트가 없음(손상)
     const ext = normalized.split('.').pop()?.toLowerCase() ?? '';
     if (!IMAGE_MIME_BY_EXT[ext]) return undefined; // 브라우저가 못 그리는 포맷(emf/wmf 등)
     return normalized;
   }
 
-  const parsed = parser.parse(slideXml) as XmlNode;
-  const sld = parsed['p:sld'] as XmlNode;
-  const cSld = sld['p:cSld'] as XmlNode;
-  const spTree = cSld['p:spTree'] as XmlNode;
-  const visuals: SlideVisual[] = [];
-
-  // 슬라이드 배경(<p:bg>)은 <p:spTree> 형제 노드라 위 p:pic/p:sp/p:graphicFrame 루프가 전혀
-  // 보지 못한다 — 그래서 지금까지 배경 그림/단색이 있는 슬라이드는 편집 화면에서 통째로
-  // 비어 보였다(실사용 파일로 재현 확인: 표지 슬라이드가 썸네일엔 배경이 보이는데 편집
-  // 캔버스엔 안 보임). 다른 모든 요소보다 먼저 push해 배열 순서상 맨 뒤에 깔리게 한다
-  // (renderCanvasForSlide가 visuals를 순서대로 append하므로 나중 요소가 위에 쌓인다).
-  // 테마 참조 배경(<p:bgRef>, 테마 XML까지 더 읽어야 풀린다)은 이번 범위에서 생략한다 —
-  // fillColorFromSpPr가 스킴 컬러를 생략하는 것과 같은 이유(완전히 안 보이는 것보다는 낫다).
-  const bgPr = ((cSld['p:bg'] as XmlNode | undefined)?.['p:bgPr']) as XmlNode | undefined;
-  if (bgPr) {
+  // 배경 — <p:bg>는 <p:spTree> 형제라 도형 루프가 보지 못한다. 슬라이드에 없으면 레이아웃,
+  // 그다음 마스터의 배경이 보인다(PowerPoint와 같음). bgPr(직접 지정)과 bgRef(테마 배경 스타일의
+  // 색) 둘 다 처리한다. 다른 모든 요소보다 먼저 push해 맨 아래에 깐다.
+  const bgOwner = [slide, layout, master].find((p) => p && p.cSld['p:bg'] !== undefined) ?? null;
+  if (bgOwner) {
     const { cx, cy } = readSlideSizeEmu(zipEntries);
-    const blip = (bgPr['a:blipFill'] as XmlNode | undefined)?.['a:blip'] as XmlNode | undefined;
-    const mediaPath = resolveImageMediaPath(blip?.['@_r:embed'] as string | undefined);
+    const bg = bgOwner.cSld['p:bg'] as XmlNode;
+    const bgPr = bg['p:bgPr'] as XmlNode | undefined;
+    const bgRef = bg['p:bgRef'] as XmlNode | undefined;
+    const blip = (bgPr?.['a:blipFill'] as XmlNode | undefined)?.['a:blip'] as XmlNode | undefined;
+    const mediaPath = resolveImageMediaPath(bgOwner, blip?.['@_r:embed'] as string | undefined);
     if (mediaPath) {
       visuals.push({ kind: 'image', x: 0, y: 0, w: cx, h: cy, mediaPath });
     } else {
-      const fill = fillColorFromSpPr(bgPr);
+      const fill = bgPr ? fillColorFromSpPr(bgPr, theme) : bgRef && theme ? theme.resolve(bgRef) : undefined;
       if (fill) visuals.push({ kind: 'shape', x: 0, y: 0, w: cx, h: cy, fill });
     }
   }
@@ -604,35 +671,42 @@ export function parseSlideVisuals(zipEntries: Record<string, Uint8Array>, source
   // <p:grpSp>(그룹 도형) 안에 중첩된 이미지·단순 도형·표/차트도 재귀로 찾아 그룹의 좌표 변환을
   // 적용한 절대 좌표로 push한다(parseSlideShapes의 collectShapesRecursive와 같은 이유 —
   // GroupTransform 설명 참고).
-  function collectVisualsRecursive(node: XmlNode, transforms: readonly GroupTransform[]): void {
+  function collectVisualsRecursive(owner: VisualPart, node: XmlNode, transforms: readonly GroupTransform[], template: boolean): void {
+    const isPlaceholder = (el: XmlNode, nvTag: string) =>
+      ((el[nvTag] as XmlNode | undefined)?.['p:nvPr'] as XmlNode | undefined)?.['p:ph'] !== undefined;
+
     for (const pic of asArray<XmlNode>(node['p:pic'] as XmlNode | XmlNode[] | undefined)) {
+      if (template && isPlaceholder(pic, 'p:nvPicPr')) continue;
       const spPr = pic['p:spPr'] as XmlNode | undefined;
       const xfrm = spPr?.['a:xfrm'] as XmlNode | undefined;
       const off = xfrm?.['a:off'] as XmlNode | undefined;
       const ext = xfrm?.['a:ext'] as XmlNode | undefined;
       const blip = (pic['p:blipFill'] as XmlNode | undefined)?.['a:blip'] as XmlNode | undefined;
-      const mediaPath = resolveImageMediaPath(blip?.['@_r:embed'] as string | undefined);
+      const mediaPath = resolveImageMediaPath(owner, blip?.['@_r:embed'] as string | undefined);
       if (!mediaPath) continue; // 관계 유실 또는 브라우저가 못 그리는 포맷 — 자리표시자 없이 생략
       const pos = applyGroupTransforms(transforms, emuAttr(off, '@_x'), emuAttr(off, '@_y'), emuAttr(ext, '@_cx'), emuAttr(ext, '@_cy'));
       visuals.push({ kind: 'image', ...pos, mediaPath });
     }
 
     for (const sp of asArray<XmlNode>(node['p:sp'] as XmlNode | XmlNode[] | undefined)) {
+      if (template && isPlaceholder(sp, 'p:nvSpPr')) continue; // 레이아웃·마스터의 개체 틀은 보이지 않는 "틀"
       const spPr = sp['p:spPr'] as XmlNode | undefined;
-      const fill = fillColorFromSpPr(spPr);
+      const fill = fillColorFromSpPr(spPr, theme, sp['p:style'] as XmlNode | undefined);
       // 글자가 든 도형의 "글자"는 parseSlideShapes가 편집 대상으로 다룬다 — 하지만 그 도형에 채우기
       // 색이 있으면(색 칠한 사각형 위의 제목 등, 실사용 문서에 매우 흔함) 예전엔 배경색이 통째로
       // 빠져 글자만 허공에 떠 보였다. 채우기가 있을 때만 그 색 판을 텍스트 상자 아래에 깔아 준다.
+      // (레이아웃·마스터의 글자 도형은 편집 대상이 아니므로 채우기만 그린다.)
       if (sp['p:txBody'] && !fill) continue;
       const xfrm = spPr?.['a:xfrm'] as XmlNode | undefined;
       const off = xfrm?.['a:off'] as XmlNode | undefined;
       const ext = xfrm?.['a:ext'] as XmlNode | undefined;
       const pos = applyGroupTransforms(transforms, emuAttr(off, '@_x'), emuAttr(off, '@_y'), emuAttr(ext, '@_cx'), emuAttr(ext, '@_cy'));
-      const geom = roundGeomFromSpPr(spPr);
+      const geom = presetGeomFromSpPr(spPr);
       visuals.push({ kind: 'shape', ...pos, fill, ...(geom ? { geom } : {}) });
     }
 
     for (const gf of asArray<XmlNode>(node['p:graphicFrame'] as XmlNode | XmlNode[] | undefined)) {
+      if (template && isPlaceholder(gf, 'p:nvGraphicFramePr')) continue;
       const raw = graphicFrameXfrm(gf);
       const { x, y, w, h } = applyGroupTransforms(transforms, raw.x, raw.y, raw.w, raw.h);
       const graphicData = (gf['a:graphic'] as XmlNode | undefined)?.['a:graphicData'] as XmlNode | undefined;
@@ -652,11 +726,24 @@ export function parseSlideVisuals(zipEntries: Record<string, Uint8Array>, source
     for (const grp of asArray<XmlNode>(node['p:grpSp'] as XmlNode | XmlNode[] | undefined)) {
       const groupTransform = groupTransformFromGrpSpPr(grp['p:grpSpPr'] as XmlNode | undefined);
       const nextTransforms = groupTransform ? [...transforms, groupTransform] : transforms;
-      collectVisualsRecursive(grp, nextTransforms);
+      collectVisualsRecursive(owner, grp, nextTransforms, template);
     }
   }
 
-  collectVisualsRecursive(spTree, []);
+  const hides = (p: VisualPart | null) => p?.root['@_showMasterSp'] === '0' || p?.root['@_showMasterSp'] === 'false';
+  const spTreeOf = (p: VisualPart) => p.cSld['p:spTree'] as XmlNode | undefined;
+  if (!hides(slide)) {
+    if (master && !hides(layout)) {
+      const tree = spTreeOf(master);
+      if (tree) collectVisualsRecursive(master, tree, [], true);
+    }
+    if (layout) {
+      const tree = spTreeOf(layout);
+      if (tree) collectVisualsRecursive(layout, tree, [], true);
+    }
+  }
+  const slideTree = spTreeOf(slide);
+  if (slideTree) collectVisualsRecursive(slide, slideTree, [], false);
 
   return visuals;
 }

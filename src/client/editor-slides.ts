@@ -258,6 +258,40 @@ function showSlideUnavailablePlaceholder(): void {
   canvasEl.append(placeholder);
 }
 
+/** PowerPoint 기본 도형(prstGeom) 중 자주 쓰이는 다각형 모양 — CSS clip-path로 그 모양만 남긴다.
+ * 조정 핸들(avLst)은 기본값 비율로 근사한다. 여기 없는 모양은 사각형으로 표시된다. */
+const PRESET_CLIP: Record<string, string> = {
+  triangle: 'polygon(50% 0, 100% 100%, 0 100%)',
+  rtTriangle: 'polygon(0 0, 100% 100%, 0 100%)',
+  diamond: 'polygon(50% 0, 100% 50%, 50% 100%, 0 50%)',
+  flowChartDecision: 'polygon(50% 0, 100% 50%, 50% 100%, 0 50%)',
+  parallelogram: 'polygon(25% 0, 100% 0, 75% 100%, 0 100%)',
+  flowChartInputOutput: 'polygon(20% 0, 100% 0, 80% 100%, 0 100%)',
+  trapezoid: 'polygon(25% 0, 75% 0, 100% 100%, 0 100%)',
+  pentagon: 'polygon(50% 0, 100% 38%, 82% 100%, 18% 100%, 0 38%)',
+  hexagon: 'polygon(25% 0, 75% 0, 100% 50%, 75% 100%, 25% 100%, 0 50%)',
+  octagon: 'polygon(29% 0, 71% 0, 100% 29%, 100% 71%, 71% 100%, 29% 100%, 0 71%, 0 29%)',
+  homePlate: 'polygon(0 0, 80% 0, 100% 50%, 80% 100%, 0 100%)',
+  chevron: 'polygon(0 0, 80% 0, 100% 50%, 80% 100%, 0 100%, 20% 50%)',
+  rightArrow: 'polygon(0 25%, 60% 25%, 60% 0, 100% 50%, 60% 100%, 60% 75%, 0 75%)',
+  leftArrow: 'polygon(100% 25%, 40% 25%, 40% 0, 0 50%, 40% 100%, 40% 75%, 100% 75%)',
+  upArrow: 'polygon(25% 100%, 25% 40%, 0 40%, 50% 0, 100% 40%, 75% 40%, 75% 100%)',
+  downArrow: 'polygon(25% 0, 75% 0, 75% 60%, 100% 60%, 50% 100%, 0 60%, 25% 60%)',
+  leftRightArrow: 'polygon(0 50%, 20% 0, 20% 25%, 80% 25%, 80% 0, 100% 50%, 80% 100%, 80% 75%, 20% 75%, 20% 100%)',
+  star5: 'polygon(50% 0, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%)',
+  plus: 'polygon(33% 0, 67% 0, 67% 33%, 100% 33%, 100% 67%, 67% 67%, 67% 100%, 33% 100%, 33% 67%, 0 67%, 0 33%, 33% 33%)',
+  mathPlus: 'polygon(40% 0, 60% 0, 60% 40%, 100% 40%, 100% 60%, 60% 60%, 60% 100%, 40% 100%, 40% 60%, 0 60%, 0 40%, 40% 40%)',
+  snip1Rect: 'polygon(0 0, 85% 0, 100% 15%, 100% 100%, 0 100%)',
+  snip2SameRect: 'polygon(15% 0, 85% 0, 100% 15%, 100% 100%, 0 100%, 0 15%)',
+};
+/** 둥근 계열 별칭 — CSS 클래스(slide-shape-ellipse/roundRect/stadium)로 그린다. */
+const ROUNDED_ALIAS: Record<string, string> = {
+  flowChartConnector: 'ellipse',
+  flowChartAlternateProcess: 'roundRect',
+  round2SameRect: 'roundRect',
+  flowChartTerminator: 'stadium',
+};
+
 /** 이미지/단순 도형/표/차트·스마트아트 자리표시자 하나를 표시 전용 엘리먼트로 그린다 —
  * 텍스트박스(.slide-textbox)와 달리 클릭해도 편집기가 뜨지 않는다(pointer-events는 CSS에서
  * .slide-visual에 none으로 꺼둔다). */
@@ -276,7 +310,11 @@ function renderSlideVisual(visual: SlideVisual): HTMLElement {
     el.append(img);
   } else if (visual.kind === 'shape') {
     if (visual.fill) el.style.background = visual.fill;
-    if (visual.geom) el.classList.add(`slide-shape-${visual.geom}`);
+    if (visual.geom) {
+      const clip = PRESET_CLIP[visual.geom];
+      if (clip) el.style.clipPath = clip;
+      else el.classList.add(`slide-shape-${ROUNDED_ALIAS[visual.geom] ?? visual.geom}`);
+    }
   } else if (visual.kind === 'table' && visual.rows) {
     for (const row of visual.rows) {
       const tr = document.createElement('tr');
@@ -446,6 +484,7 @@ function renderCanvasForSlide(entryId: string): void {
       view.dom.style.setProperty(`--l${i}-ind`, String(level.indentPt));
       view.dom.style.setProperty(`--l${i}-bu`, level.bullet === null ? 'none' : JSON.stringify(level.bullet));
       view.dom.style.setProperty(`--l${i}-sz`, `calc(${level.sizePt} * var(--slide-pt, 1pt))`);
+      if (level.color && /^#[0-9A-Fa-f]{6}$/.test(level.color)) view.dom.style.setProperty(`--l${i}-color`, level.color);
     });
     viewDefaults.set(view, { sizePt: meta.defaultSizePt ?? DEFAULT_TEXT_PT, align: meta.defaultAlign ?? 'l' });
     mountedViews.set(shapeId, view);

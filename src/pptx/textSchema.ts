@@ -59,9 +59,14 @@ const marks: Record<string, MarkSpec> = {
     toDOM: () => ['u', 0],
   },
   textColor: {
-    attrs: { color: {} },
+    /** raw: 원본 <a:solidFill>의 내용 XML(테마 색 <a:schemeClr …><a:lumMod/></a:schemeClr> 등) —
+     * 있으면 저장 때 그대로 되돌려 테마 연결을 유지한다(색을 고정 RGB로 바꿔 쓰지 않는다). color는
+     * 화면 표시용으로 테마를 풀어 낸 '#RRGGBB'(풀 수 없으면 ''). 리본으로 색을 새로 고르면 raw 없이
+     * 만들어져 일반 RGB 색으로 저장된다. */
+    attrs: { color: {}, raw: { default: null } },
     parseDOM: [{ style: 'color', getAttrs: (value) => ({ color: value as string }) }],
-    toDOM: (mark) => ['span', { style: `color: ${mark.attrs.color as string}` }, 0],
+    toDOM: (mark) =>
+      mark.attrs.color ? ['span', { style: `color: ${mark.attrs.color as string}` }, 0] : ['span', 0],
   },
   fontSize: {
     /** 포인트(pt) 단위 — pptx의 <a:rPr sz="..">(100분의 1 포인트)와는 import/export 시 변환한다. */

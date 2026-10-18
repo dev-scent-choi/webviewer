@@ -1431,15 +1431,15 @@ body.home-hidden .doclist-link { display: none !important; }
 /* 목록 수준별 글머리·들여쓰기·크기 — 값은 JS가 텍스트 상자마다 --lN-* 변수로 넣는다(레이아웃·
    마스터 상속 결과). marL/indent는 pt 단위 숫자라 슬라이드 축척(--slide-pt)을 곱한다. 첫 줄은
    indent(대개 음수)만큼 내어 써서 그 자리에 글머리 기호가 오고, 글자는 marL에서 시작한다. */
-.slide-textbox .ProseMirror p[data-lvl="0"] { --marl: var(--l0-marl, 0); --ind: var(--l0-ind, 0); --bu: var(--l0-bu, none); }
-.slide-textbox .ProseMirror p[data-lvl="1"] { --marl: var(--l1-marl, 0); --ind: var(--l1-ind, 0); --bu: var(--l1-bu, none); font-size: var(--l1-sz, inherit); }
-.slide-textbox .ProseMirror p[data-lvl="2"] { --marl: var(--l2-marl, 0); --ind: var(--l2-ind, 0); --bu: var(--l2-bu, none); font-size: var(--l2-sz, inherit); }
-.slide-textbox .ProseMirror p[data-lvl="3"] { --marl: var(--l3-marl, 0); --ind: var(--l3-ind, 0); --bu: var(--l3-bu, none); font-size: var(--l3-sz, inherit); }
-.slide-textbox .ProseMirror p[data-lvl="4"] { --marl: var(--l4-marl, 0); --ind: var(--l4-ind, 0); --bu: var(--l4-bu, none); font-size: var(--l4-sz, inherit); }
-.slide-textbox .ProseMirror p[data-lvl="5"] { --marl: var(--l5-marl, 0); --ind: var(--l5-ind, 0); --bu: var(--l5-bu, none); font-size: var(--l5-sz, inherit); }
-.slide-textbox .ProseMirror p[data-lvl="6"] { --marl: var(--l6-marl, 0); --ind: var(--l6-ind, 0); --bu: var(--l6-bu, none); font-size: var(--l6-sz, inherit); }
-.slide-textbox .ProseMirror p[data-lvl="7"] { --marl: var(--l7-marl, 0); --ind: var(--l7-ind, 0); --bu: var(--l7-bu, none); font-size: var(--l7-sz, inherit); }
-.slide-textbox .ProseMirror p[data-lvl="8"] { --marl: var(--l8-marl, 0); --ind: var(--l8-ind, 0); --bu: var(--l8-bu, none); font-size: var(--l8-sz, inherit); }
+.slide-textbox .ProseMirror p[data-lvl="0"] { --marl: var(--l0-marl, 0); --ind: var(--l0-ind, 0); --bu: var(--l0-bu, none); color: var(--l0-color, inherit); }
+.slide-textbox .ProseMirror p[data-lvl="1"] { --marl: var(--l1-marl, 0); --ind: var(--l1-ind, 0); --bu: var(--l1-bu, none); font-size: var(--l1-sz, inherit); color: var(--l1-color, inherit); }
+.slide-textbox .ProseMirror p[data-lvl="2"] { --marl: var(--l2-marl, 0); --ind: var(--l2-ind, 0); --bu: var(--l2-bu, none); font-size: var(--l2-sz, inherit); color: var(--l2-color, inherit); }
+.slide-textbox .ProseMirror p[data-lvl="3"] { --marl: var(--l3-marl, 0); --ind: var(--l3-ind, 0); --bu: var(--l3-bu, none); font-size: var(--l3-sz, inherit); color: var(--l3-color, inherit); }
+.slide-textbox .ProseMirror p[data-lvl="4"] { --marl: var(--l4-marl, 0); --ind: var(--l4-ind, 0); --bu: var(--l4-bu, none); font-size: var(--l4-sz, inherit); color: var(--l4-color, inherit); }
+.slide-textbox .ProseMirror p[data-lvl="5"] { --marl: var(--l5-marl, 0); --ind: var(--l5-ind, 0); --bu: var(--l5-bu, none); font-size: var(--l5-sz, inherit); color: var(--l5-color, inherit); }
+.slide-textbox .ProseMirror p[data-lvl="6"] { --marl: var(--l6-marl, 0); --ind: var(--l6-ind, 0); --bu: var(--l6-bu, none); font-size: var(--l6-sz, inherit); color: var(--l6-color, inherit); }
+.slide-textbox .ProseMirror p[data-lvl="7"] { --marl: var(--l7-marl, 0); --ind: var(--l7-ind, 0); --bu: var(--l7-bu, none); font-size: var(--l7-sz, inherit); color: var(--l7-color, inherit); }
+.slide-textbox .ProseMirror p[data-lvl="8"] { --marl: var(--l8-marl, 0); --ind: var(--l8-ind, 0); --bu: var(--l8-bu, none); font-size: var(--l8-sz, inherit); color: var(--l8-color, inherit); }
 .slide-textbox .ProseMirror p {
   padding-left: calc(var(--marl, 0) * var(--slide-pt, 1pt));
   text-indent: calc(var(--ind, 0) * var(--slide-pt, 1pt));
@@ -1478,6 +1478,7 @@ body.home-hidden .doclist-link { display: none !important; }
 .slide-shape-ellipse > .ProseMirror { width: 70%; margin: 0 auto; }
 .slide-shape-roundRect { border-radius: 16%/26%; }
 .slide-shape-ellipse { border-radius: 50%; }
+.slide-shape-stadium { border-radius: 9999px; }
 
 /* 리본 글꼴 칸 — docx 리본처럼 너비 전체를 쓰지 않고 오피스 크기 정도로 고정한다. */
 .slides-font-family { width: 9.5em; max-width: none; }

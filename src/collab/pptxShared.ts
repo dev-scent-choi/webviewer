@@ -62,6 +62,8 @@ export interface SlideShapeMeta {
     readonly indentPt: number;
     readonly bullet: string | null;
     readonly sizePt: number;
+    /** 기본 글자 색(테마 색 해석 결과). 예전 시딩 데이터엔 없을 수 있다. */
+    readonly color?: string | null;
   }>;
 }
 
@@ -94,9 +96,9 @@ export interface SlideVisual {
   readonly mediaPath?: string;
   /** kind:'shape' — 단색 채우기(#RRGGBB), 없으면 채우기 없는 도형 */
   readonly fill?: string;
-  /** kind:'shape' — 원본 <a:prstGeom prst>가 둥근 모양일 때만('ellipse'|'roundRect') 기록한다.
-   * 나머지(사각형 및 아직 그리지 못하는 복잡한 모양)는 생략 = 사각형으로 표시. */
-  readonly geom?: 'ellipse' | 'roundRect';
+  /** kind:'shape' — 원본 <a:prstGeom prst> 이름(사각형 'rect'는 생략). 클라이언트가 아는 모양은 그
+   * 모양으로(editor-slides.ts PRESET_CLIP), 모르는 복잡한 모양은 사각형으로 표시한다. */
+  readonly geom?: string;
   /** kind:'table' — 행 단위 셀 텍스트(행렬, 서식 없이 텍스트만) */
   readonly rows?: readonly (readonly string[])[];
   /** kind:'placeholder' — 표시할 라벨(예: "차트", "스마트아트") */

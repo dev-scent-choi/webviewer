@@ -17,6 +17,7 @@ import { pptxTextSchema } from './textSchema.js';
 import type { NewShapeGeom, SlideEntry, SlideShapeMeta } from '../collab/pptxShared.js';
 import { NEW_SHAPE_GEOMS } from '../collab/pptxShared.js';
 import { resolveSlideShapeLooks, type InheritedShapeLook } from './inheritance.js';
+import { loadThemeColors, type ThemeColors } from './theme.js';
 
 const SLIDE_TARGET = /Target="(?:[^"]*\/)?(slide\d+\.xml)"/;
 
@@ -224,7 +225,15 @@ export function seedSlideContentFromXml(
 ): void {
   if (slideContents.has(slideEntryId)) return;
   const slideXml = strFromU8(zipEntries[`ppt/slides/${sourceSlidePart}`]);
-  const shapes = parseSlideShapes(slideXml);
+  // 테마는 글자에 직접 걸린 테마 색(schemeClr)을 화면에 풀어 보여주기 위해서만 쓴다(원본 색 XML은
+  // 마크에 그대로 보관돼 저장에 영향 없음). 테마를 못 읽어도 시딩은 테마 없이 그대로 진행한다.
+  let theme: ThemeColors | undefined;
+  try {
+    theme = loadThemeColors(zipEntries, sourceSlidePart);
+  } catch {
+    theme = undefined;
+  }
+  const shapes = parseSlideShapes(slideXml, theme);
   // 레이아웃·마스터 상속(표시 전용) — 어떤 이유로든 실패해도 시딩 자체는 예전처럼 진행한다.
   let looks = new Map<string, InheritedShapeLook>();
   try {

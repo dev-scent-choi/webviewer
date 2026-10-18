@@ -90,7 +90,25 @@ describe('resolveSlideShapeLooks: 목록 수준(글머리·들여쓰기)', () =>
     const looks = resolveSlideShapeLooks(zip, 'slide1.xml');
     // 부제목(idx=1)은 레이아웃 lstStyle이 lvl1을 다시 정의하지만 글머리는 언급 안 함 → 마스터 bodyStyle의 •
     const sub = looks.get('3')!;
-    expect(sub.levels[0]).toEqual({ marLPt: 27, indentPt: -27, bullet: '•', sizePt: 24 });
-    expect(sub.levels[1]).toEqual({ marLPt: 58.5, indentPt: -22.5, bullet: '–', sizePt: 28 });
+    expect(sub.levels[0]).toMatchObject({ marLPt: 27, indentPt: -27, bullet: '•', sizePt: 24 });
+    expect(sub.levels[1]).toMatchObject({ marLPt: 58.5, indentPt: -22.5, bullet: '–', sizePt: 28 });
+  });
+});
+
+describe('resolveSlideShapeLooks: 그린 도형의 글자는 기본 가운데', () => {
+  test('개체 틀·글상자가 아닌 도형은 정렬이 없으면 가운데, 글상자(txBox=1)는 마스터 기본(왼쪽)', () => {
+    const zip = deck();
+    const slide = new TextDecoder()
+      .decode(zip['ppt/slides/slide1.xml'])
+      .replace(
+        '</p:spTree>',
+        '<p:sp><p:nvSpPr><p:cNvPr id="7" name="arrow"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:p/></p:txBody></p:sp>' +
+          '<p:sp><p:nvSpPr><p:cNvPr id="8" name="tb"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:p/></p:txBody></p:sp>' +
+          '</p:spTree>',
+      );
+    zip['ppt/slides/slide1.xml'] = new TextEncoder().encode(slide);
+    const looks = resolveSlideShapeLooks(zip, 'slide1.xml');
+    expect(looks.get('7')?.defaultAlign).toBe('ctr');
+    expect(looks.get('8')?.defaultAlign).toBe('l');
   });
 });
