@@ -16,6 +16,7 @@ import type { ParsedShape } from './slideContent.js';
 import { pptxTextSchema } from './textSchema.js';
 import type { NewShapeGeom, SlideEntry, SlideShapeMeta } from '../collab/pptxShared.js';
 import { NEW_SHAPE_GEOMS } from '../collab/pptxShared.js';
+import { resolveSlideShapeLooks, type InheritedShapeLook } from './inheritance.js';
 
 const SLIDE_TARGET = /Target="(?:[^"]*\/)?(slide\d+\.xml)"/;
 
@@ -224,6 +225,13 @@ export function seedSlideContentFromXml(
   if (slideContents.has(slideEntryId)) return;
   const slideXml = strFromU8(zipEntries[`ppt/slides/${sourceSlidePart}`]);
   const shapes = parseSlideShapes(slideXml);
+  // 레이아웃·마스터 상속(표시 전용) — 어떤 이유로든 실패해도 시딩 자체는 예전처럼 진행한다.
+  let looks = new Map<string, InheritedShapeLook>();
+  try {
+    looks = resolveSlideShapeLooks(zipEntries, sourceSlidePart);
+  } catch {
+    /* 상속 정보 없이 기존 동작 */
+  }
 
   // slideContents는 항상 ydoc.getMap(PPTX_SLIDE_CONTENTS_MAP)로 얻은, 이미 Y.Doc에 연결된 최상위
   // 공유 타입이다(AbstractType은 attach되는 즉시 .doc가 채워진다) — 그래서 .doc!는 항상 안전하다.
@@ -234,7 +242,20 @@ export function seedSlideContentFromXml(
       for (const shape of shapes) {
         const shapeMap: ShapeContentMap = new Y.Map();
         perSlide.set(shape.shapeId, shapeMap); // 먼저 attach
-        const meta: SlideShapeMeta = { shapeId: shape.shapeId, x: shape.x, y: shape.y, w: shape.w, h: shape.h };
+        const look = looks.get(shape.shapeId);
+        // 위치는 슬라이드에 직접 적힌 값이 있으면 그대로(그룹 좌표 변환까지 반영된 parseSlideShapes 값),
+        // 없을 때만(개체 틀) 레이아웃·마스터에서 물려받은 값을 쓴다.
+        const ownPos = shape.x !== null && shape.y !== null && shape.w !== null && shape.h !== null;
+        const meta: SlideShapeMeta = {
+          shapeId: shape.shapeId,
+          x: ownPos ? shape.x : look?.x ?? null,
+          y: ownPos ? shape.y : look?.y ?? null,
+          w: ownPos ? shape.w : look?.w ?? null,
+          h: ownPos ? shape.h : look?.h ?? null,
+          ...(look
+            ? { anchor: look.anchor, defaultSizePt: look.defaultSizePt, defaultAlign: look.defaultAlign, levels: look.levels }
+            : {}),
+        };
         shapeMap.set('meta', meta);
         const fragment = new Y.XmlFragment();
         shapeMap.set('content', fragment); // 먼저 attach

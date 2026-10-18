@@ -51,6 +51,18 @@ export interface SlideShapeMeta {
   readonly geom?: NewShapeGeom;
   /** 새 도형의 채우기 색, '#RRGGBB'. geom이 있을 때만 의미가 있다. */
   readonly fill?: string;
+  /** 원본 도형의 "보이는 모양" 중 레이아웃·마스터에서 물려받는 값(src/pptx/inheritance.ts) —
+   * 편집 캔버스 표시 전용, 저장 경로는 쓰지 않는다. 시딩 때만 채워지고 없으면 기본(위쪽/18pt/왼쪽). */
+  readonly anchor?: 't' | 'ctr' | 'b';
+  readonly defaultSizePt?: number;
+  readonly defaultAlign?: 'l' | 'ctr' | 'r' | 'just';
+  /** 목록 수준 0~8의 글머리·들여쓰기(pt)·크기(pt) — inheritance.ts LevelLook과 같은 모양. */
+  readonly levels?: ReadonlyArray<{
+    readonly marLPt: number;
+    readonly indentPt: number;
+    readonly bullet: string | null;
+    readonly sizePt: number;
+  }>;
 }
 
 export type NewShapeGeom = 'rect' | 'roundRect' | 'ellipse';

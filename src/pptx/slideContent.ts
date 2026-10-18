@@ -1,4 +1,5 @@
-import { XMLParser } from 'fast-xml-parser';
+import { XMLBuilder, XMLParser } from 'fast-xml-parser';
+import { partialLevelFrom } from './inheritance.js';
 import type { Node as PMNode } from 'prosemirror-model';
 import { pptxTextSchema as schema } from './textSchema.js';
 import { SLIDE_WIDTH_EMU, SLIDE_HEIGHT_EMU, type SlideVisual } from '../collab/pptxShared.js';
@@ -76,8 +77,39 @@ function paragraphFromXml(pNode: XmlNode): PMNode {
       return schema.text(textStr, marksFromRPr(run['a:rPr'] as XmlNode | undefined));
     })
     .filter((n): n is NonNullable<typeof n> => n !== null);
-  const algn = (pNode['a:pPr'] as XmlNode | undefined)?.['@_algn'] as string | undefined;
-  return schema.node('paragraph', { align: algn && ALIGN_VALUES.has(algn) ? algn : null }, inline);
+  const pPrNode = pNode['a:pPr'] as XmlNode | string | undefined;
+  const pPr = typeof pPrNode === 'object' ? pPrNode : undefined; // <a:pPr/>(속성 없음)는 파서가 ''를 준다
+  const algn = pPr?.['@_algn'] as string | undefined;
+  const lvl = Number(pPr?.['@_lvl'] ?? 0);
+  const bullet = partialLevelFrom(pPr).bullet;
+  return schema.node(
+    'paragraph',
+    {
+      align: algn && ALIGN_VALUES.has(algn) ? algn : null,
+      pPr: pPr ? pPrXmlWithoutAlgn(pPr) : null,
+      lvl: Number.isInteger(lvl) && lvl >= 0 && lvl <= 8 ? lvl : 0,
+      bu: bullet === null ? 'none' : (bullet ?? null),
+    },
+    inline,
+  );
+}
+
+const pPrBuilder = new XMLBuilder({ ignoreAttributes: false, attributeNamePrefix: '@_', suppressEmptyNode: true });
+
+/** 파싱된 <a:pPr>를 algn만 뺀 원래 XML로 되돌린다(정렬은 align 속성이 따로 맡는다). 자식 요소
+ * 순서는 파서가 문서 순서대로 담아 두므로 스키마 순서(lnSpc, spcBef, …, buChar, defRPr)가 유지된다. */
+function pPrXmlWithoutAlgn(pPr: XmlNode): string {
+  const { '@_algn': _algn, ...rest } = pPr;
+  return pPrBuilder.build({ 'a:pPr': rest }) as string;
+}
+
+/** 저장할 <a:pPr>: 보관해 둔 원본(algn 제외)에 현재 정렬만 다시 얹는다. */
+function pPrXmlFor(paragraph: PMNode): string {
+  const align = paragraph.attrs.align as string | null;
+  const raw = paragraph.attrs.pPr as string | null;
+  const algnAttr = align ? ` algn="${align}"` : '';
+  if (raw && raw.startsWith('<a:pPr')) return raw.replace(/^<a:pPr/, `<a:pPr${algnAttr}`);
+  return align ? `<a:pPr${algnAttr}/>` : '';
 }
 
 function emuAttr(xfrmChild: XmlNode | undefined, attr: '@_x' | '@_y' | '@_cx' | '@_cy'): number | null {
@@ -236,9 +268,7 @@ export function serializeTxBodyXml(doc: PMNode): string {
       const rPr = rPrXmlFor(textNode);
       runsXml.push(`<a:r>${rPr}<a:t>${escapeXmlText(textNode.text)}</a:t></a:r>`);
     });
-    const align = paragraph.attrs.align as string | null;
-    const pPr = align ? `<a:pPr algn="${align}"/>` : '';
-    paragraphsXml.push(`<a:p>${pPr}${runsXml.join('')}</a:p>`);
+    paragraphsXml.push(`<a:p>${pPrXmlFor(paragraph)}${runsXml.join('')}</a:p>`);
   });
   // CT_TextBody(OOXML 스키마)는 <a:p>가 최소 1개 있어야 한다(minOccurs="1") — 문단이 하나도 없는
   // <p:txBody>는 PowerPoint가 열 수 없는 손상된 파일이다(FINAL REVIEW C2). pptxTextSchema는

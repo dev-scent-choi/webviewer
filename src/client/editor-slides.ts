@@ -3,7 +3,7 @@ import { WebsocketProvider } from 'y-websocket';
 import * as encoding from 'lib0/encoding';
 import { EditorState, type Command } from 'prosemirror-state';
 import { EditorView } from 'prosemirror-view';
-import { baseKeymap, toggleMark } from 'prosemirror-commands';
+import { baseKeymap, splitBlockAs, toggleMark } from 'prosemirror-commands';
 import { keymap } from 'prosemirror-keymap';
 import type { Mark, MarkType, Node as PMNode } from 'prosemirror-model';
 import { ySyncPlugin, yCursorPlugin, yUndoPlugin, ySyncPluginKey, undo, redo } from 'y-prosemirror';
@@ -231,6 +231,10 @@ function buildSlideKeymap(): Record<string, Command> {
     'Mod-Shift-.': viewCommand((v) => stepFontSize(v, 1)),
     'Mod-<': viewCommand((v) => stepFontSize(v, -1)),
     'Mod-Shift-,': viewCommand((v) => stepFontSize(v, -1)),
+    // PowerPoint처럼 Enter로 만든 새 문단은 지금 문단의 수준·글머리·정렬(pPr)을 이어받는다 — 기본
+    // splitBlock은 문단 끝에서 Enter를 치면 속성 없는 새 문단을 만들어, 하위 글머리 목록에서 다음
+    // 항목이 최상위 수준으로 튀어나왔다.
+    Enter: splitBlockAs((node) => ({ type: node.type, attrs: node.attrs })),
   };
 }
 
@@ -430,6 +434,20 @@ function renderCanvasForSlide(entryId: string): void {
         },
       },
     });
+    // 레이아웃·마스터에서 물려받은 "보이는 모양"(src/pptx/inheritance.ts) — 서식이 없는 글자의 기본
+    // 크기·정렬과 상자 안 세로 맞춤. 도형(geom)은 클래스가 이미 세로 가운데를 맡는다.
+    if (meta.anchor && !meta.geom) box.classList.add(`slide-anchor-${meta.anchor}`);
+    if (meta.defaultSizePt) view.dom.style.fontSize = `calc(${meta.defaultSizePt} * var(--slide-pt, 1pt))`;
+    const alignCss = { ctr: 'center', r: 'right', just: 'justify', l: '' }[meta.defaultAlign ?? 'l'];
+    if (alignCss) view.dom.style.textAlign = alignCss;
+    // 목록 수준별 글머리·들여쓰기·크기 — CSS(.slide-textbox p[data-lvl])가 이 변수들을 읽는다.
+    meta.levels?.forEach((level, i) => {
+      view.dom.style.setProperty(`--l${i}-marl`, String(level.marLPt));
+      view.dom.style.setProperty(`--l${i}-ind`, String(level.indentPt));
+      view.dom.style.setProperty(`--l${i}-bu`, level.bullet === null ? 'none' : JSON.stringify(level.bullet));
+      view.dom.style.setProperty(`--l${i}-sz`, `calc(${level.sizePt} * var(--slide-pt, 1pt))`);
+    });
+    viewDefaults.set(view, { sizePt: meta.defaultSizePt ?? DEFAULT_TEXT_PT, align: meta.defaultAlign ?? 'l' });
     mountedViews.set(shapeId, view);
   }
 }
@@ -729,6 +747,9 @@ function bindFormatButton(id: string, markName: 'strong' | 'em' | 'underline'): 
 const FONT_SIZE_STEPS = [8, 9, 10, 10.5, 11, 12, 14, 16, 18, 20, 24, 28, 32, 36, 40, 44, 48, 54, 60, 66, 72, 80, 88, 96];
 /** 글자 크기 마크가 없는 텍스트의 기준 크기 — 새 텍스트 상자 본문 기본값(18pt)과 같다. */
 const DEFAULT_TEXT_PT = 18;
+/** 텍스트 상자별로 레이아웃·마스터에서 물려받은 기본 크기·정렬 — 리본이 "서식 없는 글자"의 실제
+ * 보이는 값을 보여주고(가운데 맞춤 부제목이면 가운데 버튼이 눌림), 크게/작게도 거기서 출발한다. */
+const viewDefaults = new WeakMap<EditorView, { sizePt: number; align: 'l' | 'ctr' | 'r' | 'just' }>();
 
 /** 커서/선택 위치의 마크 목록 — 선택 영역이 없으면 "다음 입력에 붙을" stored mark를 우선한다
  * (예: 빈 줄에서 굵게를 누른 직후의 눌림 상태도 정확히 보이도록). */
@@ -795,7 +816,9 @@ function applyAlign(view: EditorView, align: 'l' | 'ctr' | 'r' | 'just'): void {
 }
 
 function stepFontSize(view: EditorView, direction: 1 | -1): void {
-  const current = Number(markAttrAtSelection(view.state, 'fontSize', 'size') ?? DEFAULT_TEXT_PT);
+  const current = Number(
+    markAttrAtSelection(view.state, 'fontSize', 'size') ?? viewDefaults.get(view)?.sizePt ?? DEFAULT_TEXT_PT,
+  );
   const next =
     direction > 0
       ? FONT_SIZE_STEPS.find((s) => s > current) ?? current
@@ -834,7 +857,7 @@ function refreshRibbonState(view: EditorView): void {
   document.getElementById('btn-underline')?.setAttribute('aria-pressed', String(has('underline')));
 
   // 정렬 속성이 없는 문단은 왼쪽 맞춤으로 보인다(실제 렌더링과 같은 기본값)
-  const align = (firstParagraphInSelection(state)?.attrs.align as string | null) ?? 'l';
+  const align = (firstParagraphInSelection(state)?.attrs.align as string | null) ?? viewDefaults.get(view)?.align ?? 'l';
   for (const [id, value] of ALIGN_BUTTONS) {
     document.getElementById(id)?.setAttribute('aria-pressed', String(align === value));
   }
@@ -843,7 +866,8 @@ function refreshRibbonState(view: EditorView): void {
     document.getElementById('font-family') as HTMLSelectElement | null,
     String(markAttrAtSelection(state, 'fontFamily', 'family') ?? ''),
   );
-  const size = markAttrAtSelection(state, 'fontSize', 'size');
+  // 크기 서식이 없으면 레이아웃·마스터에서 물려받은 실제 보이는 크기를 보여준다(오피스와 같음).
+  const size = markAttrAtSelection(state, 'fontSize', 'size') ?? viewDefaults.get(view)?.sizePt;
   showSelectValue(document.getElementById('font-size') as HTMLSelectElement | null, size === undefined ? '' : String(size));
 }
 

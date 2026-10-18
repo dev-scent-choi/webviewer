@@ -12,7 +12,13 @@ const nodes: Record<string, NodeSpec> = {
     /** align: pptx <a:pPr algn="..">의 값 그대로('l'|'ctr'|'r'|'just'), 없으면 null —
      * 원본에 algn이 아예 없던 문단을 저장할 때도 없는 그대로 내보내기 위해 기본값을 'l'로
      * 정규화하지 않는다(import/export 왕복 보존 원칙). */
-    attrs: { align: { default: null } },
+    /**
+     * pPr: 원본 <a:pPr …>…</a:pPr>를 algn 속성만 뺀 채 문자열 그대로 보관 — 저장 때 그대로 되돌린다
+     * (수준 lvl, 글머리 없음/문자, 들여쓰기, 줄·문단 간격 등 이 편집기가 모델링하지 않는 문단 속성이
+     * 예전엔 글자를 한 자만 고쳐도 저장에서 전부 사라졌다). lvl·bu는 화면 표시용으로 pPr에서 뽑아 둔
+     * 값(목록 수준 0~8, 글머리 재정의: 문자 / 'none' / null=상속).
+     */
+    attrs: { align: { default: null }, pPr: { default: null }, lvl: { default: 0 }, bu: { default: null } },
     content: 'inline*',
     group: 'block',
     parseDOM: [
@@ -30,7 +36,10 @@ const nodes: Record<string, NodeSpec> = {
       const align = node.attrs.align as string | null;
       const css =
         align === 'ctr' ? 'center' : align === 'r' ? 'right' : align === 'just' ? 'justify' : null;
-      return css ? ['p', { style: `text-align: ${css}` }, 0] : ['p', 0];
+      const attrs: Record<string, string> = { 'data-lvl': String(node.attrs.lvl ?? 0) };
+      if (css) attrs.style = `text-align: ${css}`;
+      if (node.attrs.bu !== null && node.attrs.bu !== undefined) attrs['data-bu'] = String(node.attrs.bu);
+      return ['p', attrs, 0];
     },
   },
   text: { group: 'inline' },

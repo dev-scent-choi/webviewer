@@ -1428,6 +1428,42 @@ body.home-hidden .doclist-link { display: none !important; }
    여백을 없애 저장 파일(PowerPoint 렌더링)과 줄 간격을 맞춘다. */
 .slide-textbox .ProseMirror p { margin: 0; }
 
+/* 목록 수준별 글머리·들여쓰기·크기 — 값은 JS가 텍스트 상자마다 --lN-* 변수로 넣는다(레이아웃·
+   마스터 상속 결과). marL/indent는 pt 단위 숫자라 슬라이드 축척(--slide-pt)을 곱한다. 첫 줄은
+   indent(대개 음수)만큼 내어 써서 그 자리에 글머리 기호가 오고, 글자는 marL에서 시작한다. */
+.slide-textbox .ProseMirror p[data-lvl="0"] { --marl: var(--l0-marl, 0); --ind: var(--l0-ind, 0); --bu: var(--l0-bu, none); }
+.slide-textbox .ProseMirror p[data-lvl="1"] { --marl: var(--l1-marl, 0); --ind: var(--l1-ind, 0); --bu: var(--l1-bu, none); font-size: var(--l1-sz, inherit); }
+.slide-textbox .ProseMirror p[data-lvl="2"] { --marl: var(--l2-marl, 0); --ind: var(--l2-ind, 0); --bu: var(--l2-bu, none); font-size: var(--l2-sz, inherit); }
+.slide-textbox .ProseMirror p[data-lvl="3"] { --marl: var(--l3-marl, 0); --ind: var(--l3-ind, 0); --bu: var(--l3-bu, none); font-size: var(--l3-sz, inherit); }
+.slide-textbox .ProseMirror p[data-lvl="4"] { --marl: var(--l4-marl, 0); --ind: var(--l4-ind, 0); --bu: var(--l4-bu, none); font-size: var(--l4-sz, inherit); }
+.slide-textbox .ProseMirror p[data-lvl="5"] { --marl: var(--l5-marl, 0); --ind: var(--l5-ind, 0); --bu: var(--l5-bu, none); font-size: var(--l5-sz, inherit); }
+.slide-textbox .ProseMirror p[data-lvl="6"] { --marl: var(--l6-marl, 0); --ind: var(--l6-ind, 0); --bu: var(--l6-bu, none); font-size: var(--l6-sz, inherit); }
+.slide-textbox .ProseMirror p[data-lvl="7"] { --marl: var(--l7-marl, 0); --ind: var(--l7-ind, 0); --bu: var(--l7-bu, none); font-size: var(--l7-sz, inherit); }
+.slide-textbox .ProseMirror p[data-lvl="8"] { --marl: var(--l8-marl, 0); --ind: var(--l8-ind, 0); --bu: var(--l8-bu, none); font-size: var(--l8-sz, inherit); }
+.slide-textbox .ProseMirror p {
+  padding-left: calc(var(--marl, 0) * var(--slide-pt, 1pt));
+  text-indent: calc(var(--ind, 0) * var(--slide-pt, 1pt));
+}
+.slide-textbox .ProseMirror p::before {
+  content: var(--bu, none);
+  display: inline-block;
+  min-width: calc(-1 * var(--ind, 0) * var(--slide-pt, 1pt));
+  text-indent: 0;
+}
+/* 문단에 직접 적힌 글머리(buChar)·글머리 없음(buNone)이 상속보다 우선 */
+.slide-textbox .ProseMirror p[data-bu]::before { content: attr(data-bu); }
+.slide-textbox .ProseMirror p[data-bu="none"]::before { content: none; }
+/* 빈 문단에는 PowerPoint처럼 글머리를 그리지 않는다 */
+.slide-textbox .ProseMirror p:has(> br.ProseMirror-trailingBreak:only-child)::before { content: none; }
+
+/* 원본 글상자의 세로 맞춤(bodyPr anchor, 레이아웃·마스터 상속 포함) — 기본은 위쪽 */
+.slide-textbox.slide-anchor-ctr,
+.slide-textbox.slide-anchor-b { display: flex; flex-direction: column; }
+.slide-textbox.slide-anchor-ctr { justify-content: center; }
+.slide-textbox.slide-anchor-b { justify-content: flex-end; }
+.slide-textbox.slide-anchor-ctr > .ProseMirror,
+.slide-textbox.slide-anchor-b > .ProseMirror { width: 100%; }
+
 /* 리본 "도형"으로 넣은 도형 — 배경색은 JS가 meta.fill로 인라인 지정. 저장되는 prstGeom
    (rect/roundRect/ellipse)과 같은 모양을 보여준다. */
 .slide-shape {
