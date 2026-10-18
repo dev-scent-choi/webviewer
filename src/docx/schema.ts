@@ -9,10 +9,99 @@ import { tableNodes } from 'prosemirror-tables';
  * word/numbering.xml 연동 없이 내보낼 때 "• "/"1. " 접두사가 붙은 일반 문단으로 평탄화된다).
  * 미지원(가져오기 시 유실): 이미지, 머리글/바닥글, 각주, 하이퍼링크, 사용자 지정 스타일.
  */
-/** paragraph/heading의 공통 정렬 속성 — DOM에는 인라인 text-align으로, docx로는 w:jc로 나간다 */
-function alignToDOMStyle(align: unknown): Record<string, string> {
-  return align ? { style: `text-align: ${align as string}` } : {};
+/** docx의 w:ind — 단위는 전부 dxa(twip, 1/20pt). firstLine과 hanging은 둘 중 하나만 0이 아니다. */
+export interface ParagraphIndent {
+  readonly left: number;
+  readonly firstLine: number;
+  readonly hanging: number;
 }
+
+/** docx의 w:spacing — before/after는 dxa, line은 lineRule이 auto면 240분의 1줄 단위, 아니면 dxa. */
+export interface ParagraphSpacing {
+  readonly line: number | null;
+  readonly lineRule: 'auto' | 'exact' | 'atLeast' | null;
+  readonly before: number | null;
+  readonly after: number | null;
+}
+
+/** 편집기가 스타일 갤러리로 붙이는 문단 스타일 — 저장 시 원본 styles.xml의 같은 이름 스타일로
+ * 연결하거나, 없으면 정의를 추가한다(export.ts의 resolveGalleryStyles). */
+export const GALLERY_PARAGRAPH_STYLES = ['NoSpacing', 'Title', 'Subtitle', 'Quote', 'IntenseQuote'] as const;
+export type GalleryStyleId = (typeof GALLERY_PARAGRAPH_STYLES)[number];
+/** 갤러리 스타일의 Word 내장 이름(styles.xml w:name, 소문자) — 한국어 Word는 id가 달라도 이름은 같다. */
+export const GALLERY_STYLE_NAMES: Readonly<Record<GalleryStyleId, string>> = {
+  NoSpacing: 'no spacing',
+  Title: 'title',
+  Subtitle: 'subtitle',
+  Quote: 'quote',
+  IntenseQuote: 'intense quote',
+};
+
+const TWIPS_PER_PX = 15;
+/** Word의 "한 줄"(240) 간격이 화면 글꼴에서 차지하는 높이 비율 — 맑은 고딕 기준 근삿값. */
+const WORD_SINGLE_LINE_HEIGHT = 1.2;
+
+function parseJsonAttr<T>(dom: HTMLElement, name: string): T | null {
+  const raw = dom.getAttribute(name);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
+/** paragraph/heading의 공통 문단 속성 — DOM에는 인라인 스타일로 보이게 하고, 붙여넣기·복원용으로
+ * data-* 속성에 원래 값을 남긴다. docx로는 w:pPr(shd·spacing·ind·jc)로 나간다. */
+function paragraphDOMAttrs(attrs: Record<string, unknown>): Record<string, string> {
+  const styles: string[] = [];
+  const out: Record<string, string> = {};
+  if (attrs.align) styles.push(`text-align: ${attrs.align as string}`);
+  const indent = attrs.indent as ParagraphIndent | null;
+  if (indent) {
+    if (indent.left) styles.push(`margin-left: ${indent.left / TWIPS_PER_PX}px`);
+    const textIndent = indent.firstLine ? indent.firstLine : indent.hanging ? -indent.hanging : 0;
+    if (textIndent) styles.push(`text-indent: ${textIndent / TWIPS_PER_PX}px`);
+    out['data-indent'] = JSON.stringify(indent);
+  }
+  const spacing = attrs.spacing as ParagraphSpacing | null;
+  if (spacing) {
+    if (spacing.before !== null) styles.push(`margin-top: ${spacing.before / TWIPS_PER_PX}px`);
+    if (spacing.after !== null) styles.push(`margin-bottom: ${spacing.after / TWIPS_PER_PX}px`);
+    if (spacing.line) {
+      styles.push(
+        spacing.lineRule === 'exact' || spacing.lineRule === 'atLeast'
+          ? `line-height: ${spacing.line / TWIPS_PER_PX}px`
+          : `line-height: ${Number(((spacing.line / 240) * WORD_SINGLE_LINE_HEIGHT).toFixed(3))}`,
+      );
+    }
+    out['data-spacing'] = JSON.stringify(spacing);
+  }
+  if (attrs.shading) {
+    styles.push(`background-color: ${attrs.shading as string}`);
+    out['data-shading'] = attrs.shading as string;
+  }
+  if (attrs.styleId) out['data-style'] = attrs.styleId as string;
+  if (styles.length > 0) out.style = styles.join('; ');
+  return out;
+}
+
+function paragraphAttrsFromDOM(dom: HTMLElement): Record<string, unknown> {
+  const shading = dom.getAttribute('data-shading');
+  return {
+    align: dom.style.textAlign || null,
+    indent: parseJsonAttr<ParagraphIndent>(dom, 'data-indent'),
+    spacing: parseJsonAttr<ParagraphSpacing>(dom, 'data-spacing'),
+    shading: shading && /^#[0-9a-fA-F]{6}$/.test(shading) ? shading : null,
+  };
+}
+
+const PARAGRAPH_FORMAT_ATTRS = {
+  align: { default: null },
+  indent: { default: null },
+  spacing: { default: null },
+  shading: { default: null },
+};
 
 const baseNodes: Record<string, NodeSpec> = {
   doc: { content: 'block+' },
@@ -20,26 +109,30 @@ const baseNodes: Record<string, NodeSpec> = {
   paragraph: {
     content: 'inline*',
     group: 'block',
-    attrs: { align: { default: null } },
+    /** styleId: 원본의 w:pStyle(제목 외 — 저장 시 그대로 되돌려 원본 스타일을 지킨다) 또는 갤러리 스타일 */
+    attrs: { ...PARAGRAPH_FORMAT_ATTRS, styleId: { default: null } },
     parseDOM: [
       {
         tag: 'p',
-        getAttrs: (dom) => ({ align: (dom as HTMLElement).style.textAlign || null }),
+        getAttrs: (dom) => ({
+          ...paragraphAttrsFromDOM(dom as HTMLElement),
+          styleId: (dom as HTMLElement).getAttribute('data-style') || null,
+        }),
       },
     ],
-    toDOM: (node) => ['p', alignToDOMStyle(node.attrs.align), 0],
+    toDOM: (node) => ['p', paragraphDOMAttrs(node.attrs), 0],
   },
 
   heading: {
-    attrs: { level: { default: 1 }, align: { default: null } },
+    attrs: { level: { default: 1 }, ...PARAGRAPH_FORMAT_ATTRS },
     content: 'inline*',
     group: 'block',
     defining: true,
     parseDOM: [1, 2, 3, 4, 5, 6].map((level) => ({
       tag: `h${level}`,
-      getAttrs: (dom) => ({ level, align: (dom as HTMLElement).style.textAlign || null }),
+      getAttrs: (dom) => ({ level, ...paragraphAttrsFromDOM(dom as HTMLElement) }),
     })),
-    toDOM: (node) => [`h${node.attrs.level as number}`, alignToDOMStyle(node.attrs.align), 0],
+    toDOM: (node) => [`h${node.attrs.level as number}`, paragraphDOMAttrs(node.attrs), 0],
   },
 
   text: { group: 'inline' },
@@ -53,6 +146,31 @@ const baseNodes: Record<string, NodeSpec> = {
     toDOM: () => ['br'],
   },
 };
+
+/** Word 텍스트 강조색(w:highlight)의 정해진 색 이름 → '#rrggbb'. 이 밖의 색은 w:shd로 저장한다. */
+export const HIGHLIGHT_COLORS: Readonly<Record<string, string>> = {
+  yellow: '#ffff00',
+  green: '#00ff00',
+  cyan: '#00ffff',
+  magenta: '#ff00ff',
+  blue: '#0000ff',
+  red: '#ff0000',
+  darkBlue: '#000080',
+  darkCyan: '#008080',
+  darkGreen: '#008000',
+  darkMagenta: '#800080',
+  darkRed: '#800000',
+  darkYellow: '#808000',
+  darkGray: '#808080',
+  lightGray: '#c0c0c0',
+  black: '#000000',
+  white: '#ffffff',
+};
+
+/** 글꼴 이름을 CSS 문자열 안에 넣어도 안전하게 — 따옴표·세미콜론·꺾쇠·역슬래시는 글꼴 이름에 쓰이지 않는다. */
+export function safeFontName(value: unknown): string {
+  return String(value ?? '').replace(/["';<>\\]/g, '').trim();
+}
 
 const marks: Record<string, MarkSpec> = {
   strong: {
@@ -80,6 +198,51 @@ const marks: Record<string, MarkSpec> = {
       },
     ],
     toDOM: (mark) => ['span', { style: `color: ${mark.attrs.color as string}` }, 0],
+  },
+  /** w:rFonts — 한글(eastAsia)과 영문·숫자(ascii) 글꼴을 따로 갖는다(Word와 같다). 리본 글꼴 상자로
+   * 고르면 둘 다 같은 이름이 된다. 화면에는 한글 글꼴을 먼저 쓴다. */
+  fontFamily: {
+    attrs: { ascii: { default: null }, eastAsia: { default: null } },
+    parseDOM: [
+      {
+        tag: 'span[data-font-ascii], span[data-font-east-asia]',
+        getAttrs: (dom) => ({
+          ascii: (dom as HTMLElement).getAttribute('data-font-ascii') || null,
+          eastAsia: (dom as HTMLElement).getAttribute('data-font-east-asia') || null,
+        }),
+      },
+    ],
+    toDOM: (mark) => {
+      const ascii = mark.attrs.ascii ? safeFontName(mark.attrs.ascii) : '';
+      const eastAsia = mark.attrs.eastAsia ? safeFontName(mark.attrs.eastAsia) : '';
+      const names = [eastAsia, ascii].filter(Boolean).map((name) => `"${name}"`);
+      const attrs: Record<string, string> = { style: `font-family: ${[...names, 'var(--doc-font-family, sans-serif)'].join(', ')}` };
+      if (ascii) attrs['data-font-ascii'] = ascii;
+      if (eastAsia) attrs['data-font-east-asia'] = eastAsia;
+      return ['span', attrs, 0];
+    },
+  },
+  subscript: {
+    excludes: 'superscript',
+    parseDOM: [{ tag: 'sub' }],
+    toDOM: () => ['sub', 0],
+  },
+  superscript: {
+    excludes: 'subscript',
+    parseDOM: [{ tag: 'sup' }],
+    toDOM: () => ['sup', 0],
+  },
+  /** 텍스트 강조색 — docx의 w:highlight(정해진 색 이름) 또는 w:shd(임의 색). '#rrggbb'로 저장한다. */
+  highlight: {
+    attrs: { color: {} },
+    parseDOM: [
+      { tag: 'mark[data-highlight]', getAttrs: (dom) => ({ color: (dom as HTMLElement).getAttribute('data-highlight') }) },
+    ],
+    toDOM: (mark) => [
+      'mark',
+      { 'data-highlight': mark.attrs.color as string, style: `background-color: ${mark.attrs.color as string}; color: inherit` },
+      0,
+    ],
   },
   fontSize: {
     /** 포인트(pt) 단위로 저장 — docx의 w:sz(하프포인트)와는 export/import 시 ×2/÷2 변환한다 */

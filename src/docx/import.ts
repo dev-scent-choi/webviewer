@@ -8,7 +8,11 @@ import {
   type CellBorders,
   type CellPadding,
   type PageSetup,
+  type ParagraphIndent,
+  type ParagraphSpacing,
   type RowHeight,
+  GALLERY_STYLE_NAMES,
+  HIGHLIGHT_COLORS,
 } from './schema.js';
 
 /**
@@ -129,6 +133,16 @@ interface RunMarks {
   readonly strike: boolean;
   readonly color: string | null;
   readonly fontSizePt: number | null;
+  readonly font: { readonly ascii: string | null; readonly eastAsia: string | null } | null;
+  readonly vertAlign: 'subscript' | 'superscript' | null;
+  readonly highlight: string | null;
+}
+
+/** w:shd@w:fill — 6자리 hex만 색으로 본다("auto"·무늬 채움 등은 음영 없음). */
+function shadingFillOf(children: readonly XmlNode[]): string | null {
+  const shd = findFirst(children, 'w:shd');
+  const fill = shd ? attrsOf(shd)['@_w:fill'] : undefined;
+  return fill && /^[0-9A-Fa-f]{6}$/.test(fill) ? `#${fill.toLowerCase()}` : null;
 }
 
 function runMarksOf(runChildren: readonly XmlNode[], forceBold: boolean): RunMarks {
@@ -140,6 +154,15 @@ function runMarksOf(runChildren: readonly XmlNode[], forceBold: boolean): RunMar
   const sz = findFirst(rPrChildren, 'w:sz');
   const colorVal = color ? attrsOf(color)['@_w:val'] : undefined;
   const szVal = sz ? attrsOf(sz)['@_w:val'] : undefined;
+  // 테마 글꼴(w:asciiTheme 등)만 있으면 글꼴 마크를 만들지 않는다 — 문서 기본 글꼴을 그대로 물려받는다.
+  const rFonts = findFirst(rPrChildren, 'w:rFonts');
+  const fontAttrs = rFonts ? attrsOf(rFonts) : {};
+  const ascii = fontAttrs['@_w:ascii'] ?? fontAttrs['@_w:hAnsi'] ?? null;
+  const eastAsia = fontAttrs['@_w:eastAsia'] ?? null;
+  const vertAlignEl = findFirst(rPrChildren, 'w:vertAlign');
+  const vertAlignVal = vertAlignEl ? attrsOf(vertAlignEl)['@_w:val'] : undefined;
+  const highlightEl = findFirst(rPrChildren, 'w:highlight');
+  const highlightName = highlightEl ? attrsOf(highlightEl)['@_w:val'] : undefined;
   return {
     strong: has('w:b') || forceBold,
     em: has('w:i'),
@@ -147,6 +170,9 @@ function runMarksOf(runChildren: readonly XmlNode[], forceBold: boolean): RunMar
     strike: has('w:strike'),
     color: colorVal && /^[0-9A-Fa-f]{6}$/.test(colorVal) ? `#${colorVal.toLowerCase()}` : null,
     fontSizePt: szVal && !Number.isNaN(Number(szVal)) ? Number(szVal) / 2 : null,
+    font: ascii || eastAsia ? { ascii, eastAsia } : null,
+    vertAlign: vertAlignVal === 'subscript' || vertAlignVal === 'superscript' ? vertAlignVal : null,
+    highlight: (highlightName && HIGHLIGHT_COLORS[highlightName]) || shadingFillOf(rPrChildren),
   };
 }
 
@@ -160,6 +186,9 @@ function textNodeWithMarks(text: string, marks: RunMarks): PMNode | null {
     marks.strike ? docxSchema.marks.strike.create() : null,
     marks.color ? docxSchema.marks.textColor.create({ color: marks.color }) : null,
     marks.fontSizePt ? docxSchema.marks.fontSize.create({ size: marks.fontSizePt }) : null,
+    marks.font ? docxSchema.marks.fontFamily.create(marks.font) : null,
+    marks.vertAlign ? docxSchema.marks[marks.vertAlign].create() : null,
+    marks.highlight ? docxSchema.marks.highlight.create({ color: marks.highlight }) : null,
   ].filter((mark): mark is NonNullable<typeof mark> => mark !== null);
   return docxSchema.text(text, markList);
 }
@@ -216,11 +245,57 @@ function paragraphFrom(
   const align = alignOf(pPrChildren) ?? namedStyle?.align ?? (level === null && !pStyleId ? defaultAlign : null);
   const isListItem = findFirst(pPrChildren, 'w:numPr') !== undefined;
   const inline = inlineContentOf(pChildren, namedStyle?.bold ?? false);
+  const format = { align, indent: indentOf(pPrChildren), spacing: spacingOf(pPrChildren), shading: shadingFillOf(pPrChildren) };
   const node =
     level !== null
-      ? docxSchema.nodes.heading.create({ level, align }, inline)
-      : docxSchema.nodes.paragraph.create({ align }, inline);
+      ? docxSchema.nodes.heading.create({ level, ...format }, inline)
+      : docxSchema.nodes.paragraph.create({ ...format, styleId: pStyleId ? galleryStyleIdOf(pStyleId, stylesChildren) : null }, inline);
   return { node, isListItem };
+}
+
+/** 이름(w:name)이 갤러리 스타일과 같으면 그 표준 id로(한국어 Word의 "a5" → "Title"), 아니면 원래 id 그대로. */
+function galleryStyleIdOf(styleId: string, stylesChildren: readonly XmlNode[]): string {
+  const style = paragraphStyleMapOf(stylesChildren).get(styleId);
+  const nameEl = style ? findFirst(childrenOf(style), 'w:name') : undefined;
+  const name = nameEl ? (attrsOf(nameEl)['@_w:val'] ?? '').toLowerCase() : '';
+  const match = (Object.entries(GALLERY_STYLE_NAMES) as Array<[string, string]>).find(([, galleryName]) => galleryName === name);
+  return match ? match[0] : styleId;
+}
+
+function intAttr(attrs: Record<string, string>, ...names: string[]): number | null {
+  for (const name of names) {
+    const value = Number(attrs[`@_w:${name}`]);
+    if (attrs[`@_w:${name}`] !== undefined && Number.isFinite(value)) return Math.round(value);
+  }
+  return null;
+}
+
+/** w:ind — 왼쪽 들여쓰기(w:left, 새 문서는 w:start)와 첫 줄/내어쓰기. 전부 0이면 속성 없음. */
+function indentOf(pPrChildren: readonly XmlNode[]): ParagraphIndent | null {
+  const ind = findFirst(pPrChildren, 'w:ind');
+  if (!ind) return null;
+  const attrs = attrsOf(ind);
+  const indent = {
+    left: intAttr(attrs, 'left', 'start') ?? 0,
+    firstLine: intAttr(attrs, 'firstLine') ?? 0,
+    hanging: intAttr(attrs, 'hanging') ?? 0,
+  };
+  return indent.left || indent.firstLine || indent.hanging ? indent : null;
+}
+
+/** w:spacing — 줄 간격과 단락 앞/뒤 간격. 하나도 없으면 속성 없음. */
+function spacingOf(pPrChildren: readonly XmlNode[]): ParagraphSpacing | null {
+  const el = findFirst(pPrChildren, 'w:spacing');
+  if (!el) return null;
+  const attrs = attrsOf(el);
+  const rule = attrs['@_w:lineRule'];
+  const spacing: ParagraphSpacing = {
+    line: intAttr(attrs, 'line'),
+    lineRule: rule === 'auto' || rule === 'exact' || rule === 'atLeast' ? rule : null,
+    before: intAttr(attrs, 'before'),
+    after: intAttr(attrs, 'after'),
+  };
+  return spacing.line !== null || spacing.before !== null || spacing.after !== null ? spacing : null;
 }
 
 /** CSS px 기준 dxa(=twip, 1/20pt) 환산 — 96px = 1440dxa(1인치) */

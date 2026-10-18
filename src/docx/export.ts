@@ -2,39 +2,99 @@ import { strFromU8, strToU8, zipSync } from 'fflate';
 import { guardedUnzipSync } from '../zipGuard.js';
 import type { Mark, Node as PMNode } from 'prosemirror-model';
 import { extractSectPrXml } from './import.js';
-import type { CellBorderSide, CellBorders, CellPadding, RowHeight } from './schema.js';
+import {
+  GALLERY_PARAGRAPH_STYLES,
+  GALLERY_STYLE_NAMES,
+  type GalleryStyleId,
+  HIGHLIGHT_COLORS,
+  type CellBorderSide,
+  type CellBorders,
+  type CellPadding,
+  type ParagraphIndent,
+  type ParagraphSpacing,
+  type RowHeight,
+} from './schema.js';
 
 function escapeXml(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+function escapeAttr(text: string): string {
+  return escapeXml(text).replace(/"/g, '&quot;');
+}
+
+function hexOf(color: unknown): string | null {
+  const hex = String(color ?? '').replace('#', '').toUpperCase();
+  return /^[0-9A-F]{6}$/.test(hex) ? hex : null;
+}
+
+const HIGHLIGHT_NAME_BY_HEX = new Map(Object.entries(HIGHLIGHT_COLORS).map(([name, hex]) => [hex.slice(1).toUpperCase(), name]));
+
+/** w:rPr 자식은 스키마가 정한 순서를 지켜야 한다(rFonts, b, i, strike, color, sz, highlight, u, shd, vertAlign). */
 function renderRun(text: string, marks: readonly Mark[]): string {
-  const names = new Set(marks.map((mark) => mark.type.name));
+  const markOf = (name: string) => marks.find((mark) => mark.type.name === name);
   const rPrParts: string[] = [];
-  if (names.has('strong')) rPrParts.push('<w:b/>');
-  if (names.has('em')) rPrParts.push('<w:i/>');
-  if (names.has('underline')) rPrParts.push('<w:u w:val="single"/>');
-  if (names.has('strike')) rPrParts.push('<w:strike/>');
-  const colorMark = marks.find((mark) => mark.type.name === 'textColor');
-  if (colorMark) {
-    const hex = String(colorMark.attrs.color).replace('#', '').toUpperCase();
-    rPrParts.push(`<w:color w:val="${hex}"/>`);
+  const font = markOf('fontFamily');
+  if (font) {
+    const ascii = font.attrs.ascii as string | null;
+    const eastAsia = font.attrs.eastAsia as string | null;
+    const fontAttrs = [
+      ascii ? `w:ascii="${escapeAttr(ascii)}" w:hAnsi="${escapeAttr(ascii)}" w:cs="${escapeAttr(ascii)}"` : '',
+      eastAsia ? `w:eastAsia="${escapeAttr(eastAsia)}"` : '',
+    ].filter(Boolean);
+    if (fontAttrs.length > 0) rPrParts.push(`<w:rFonts ${fontAttrs.join(' ')}/>`);
   }
-  const sizeMark = marks.find((mark) => mark.type.name === 'fontSize');
+  if (markOf('strong')) rPrParts.push('<w:b/>');
+  if (markOf('em')) rPrParts.push('<w:i/>');
+  if (markOf('strike')) rPrParts.push('<w:strike/>');
+  const colorHex = hexOf(markOf('textColor')?.attrs.color);
+  if (colorHex) rPrParts.push(`<w:color w:val="${colorHex}"/>`);
+  const sizeMark = markOf('fontSize');
   if (sizeMark) {
     const halfPoints = Math.round(Number(sizeMark.attrs.size) * 2);
     rPrParts.push(`<w:sz w:val="${halfPoints}"/><w:szCs w:val="${halfPoints}"/>`);
   }
+  const highlightHex = hexOf(markOf('highlight')?.attrs.color);
+  const highlightName = highlightHex ? HIGHLIGHT_NAME_BY_HEX.get(highlightHex) : undefined;
+  if (highlightName) rPrParts.push(`<w:highlight w:val="${highlightName}"/>`);
+  if (markOf('underline')) rPrParts.push('<w:u w:val="single"/>');
+  if (highlightHex && !highlightName) rPrParts.push(`<w:shd w:val="clear" w:color="auto" w:fill="${highlightHex}"/>`);
+  if (markOf('subscript')) rPrParts.push('<w:vertAlign w:val="subscript"/>');
+  else if (markOf('superscript')) rPrParts.push('<w:vertAlign w:val="superscript"/>');
   const rPr = rPrParts.length > 0 ? `<w:rPr>${rPrParts.join('')}</w:rPr>` : '';
   return `<w:r>${rPr}<w:t xml:space="preserve">${escapeXml(text)}</w:t></w:r>`;
 }
 
 const ALIGN_TO_JC: Record<string, string> = { center: 'center', right: 'right', justify: 'both' };
 
-function pPrXml(extra: string, align: unknown): string {
-  const jc = typeof align === 'string' ? ALIGN_TO_JC[align] : undefined;
-  const parts = [extra, jc ? `<w:jc w:val="${jc}"/>` : ''].filter(Boolean).join('');
-  return parts ? `<w:pPr>${parts}</w:pPr>` : '';
+/** w:pPr 자식 순서: pStyle, shd, spacing, ind, jc (CT_PPr 스키마 순서). */
+function pPrXml(styleXml: string, attrs: Record<string, unknown>): string {
+  const parts: string[] = [styleXml];
+  const shading = hexOf(attrs.shading);
+  if (shading) parts.push(`<w:shd w:val="clear" w:color="auto" w:fill="${shading}"/>`);
+  const spacing = attrs.spacing as ParagraphSpacing | null | undefined;
+  if (spacing) {
+    const spacingAttrs = [
+      spacing.before !== null ? `w:before="${spacing.before}"` : '',
+      spacing.after !== null ? `w:after="${spacing.after}"` : '',
+      spacing.line !== null ? `w:line="${spacing.line}"` : '',
+      spacing.line !== null && spacing.lineRule ? `w:lineRule="${spacing.lineRule}"` : '',
+    ].filter(Boolean);
+    if (spacingAttrs.length > 0) parts.push(`<w:spacing ${spacingAttrs.join(' ')}/>`);
+  }
+  const indent = attrs.indent as ParagraphIndent | null | undefined;
+  if (indent) {
+    const indentAttrs = [
+      indent.left ? `w:left="${indent.left}"` : '',
+      indent.firstLine ? `w:firstLine="${indent.firstLine}"` : '',
+      indent.hanging ? `w:hanging="${indent.hanging}"` : '',
+    ].filter(Boolean);
+    if (indentAttrs.length > 0) parts.push(`<w:ind ${indentAttrs.join(' ')}/>`);
+  }
+  const jc = typeof attrs.align === 'string' ? ALIGN_TO_JC[attrs.align] : undefined;
+  if (jc) parts.push(`<w:jc w:val="${jc}"/>`);
+  const inner = parts.filter(Boolean).join('');
+  return inner ? `<w:pPr>${inner}</w:pPr>` : '';
 }
 
 function renderInline(node: PMNode): string {
@@ -49,15 +109,89 @@ function renderInline(node: PMNode): string {
   return xml;
 }
 
-function renderParagraph(node: PMNode, prefix = ''): string {
+/** 갤러리 스타일 id → 이 문서에서 실제로 쓸 w:styleId (exportDocx가 styles.xml을 보고 정한다). */
+type StyleIdMap = ReadonlyMap<string, string>;
+
+let activeStyleIds: StyleIdMap = new Map();
+
+/** 갤러리 스타일이 문서에 없을 때 styles.xml에 추가할 정의(Word 기본 서식과 같은 값). */
+const GALLERY_STYLE_DEFS: Readonly<Record<GalleryStyleId, { readonly body: string }>> = {
+  NoSpacing: {
+    body: '<w:name w:val="No Spacing"/><w:uiPriority w:val="1"/><w:qFormat/><w:pPr><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr>',
+  },
+  Title: {
+    body:
+      '<w:name w:val="Title"/><w:next w:val="Normal"/><w:uiPriority w:val="10"/><w:qFormat/>' +
+      '<w:pPr><w:spacing w:after="0" w:line="240" w:lineRule="auto"/><w:contextualSpacing/></w:pPr>' +
+      '<w:rPr><w:rFonts w:asciiTheme="majorHAnsi" w:eastAsiaTheme="majorEastAsia" w:hAnsiTheme="majorHAnsi" w:cstheme="majorBidi"/>' +
+      '<w:spacing w:val="-10"/><w:kern w:val="28"/><w:sz w:val="56"/><w:szCs w:val="56"/></w:rPr>',
+  },
+  Subtitle: {
+    body:
+      '<w:name w:val="Subtitle"/><w:next w:val="Normal"/><w:uiPriority w:val="11"/><w:qFormat/>' +
+      '<w:pPr><w:spacing w:after="160"/></w:pPr>' +
+      '<w:rPr><w:color w:val="5A5A5A"/><w:spacing w:val="15"/><w:sz w:val="22"/><w:szCs w:val="22"/></w:rPr>',
+  },
+  Quote: {
+    body:
+      '<w:name w:val="Quote"/><w:next w:val="Normal"/><w:uiPriority w:val="29"/><w:qFormat/>' +
+      '<w:pPr><w:spacing w:before="200" w:after="160"/><w:ind w:left="864" w:right="864"/><w:jc w:val="center"/></w:pPr>' +
+      '<w:rPr><w:i/><w:iCs/><w:color w:val="404040"/></w:rPr>',
+  },
+  IntenseQuote: {
+    body:
+      '<w:name w:val="Intense Quote"/><w:next w:val="Normal"/><w:uiPriority w:val="30"/><w:qFormat/>' +
+      '<w:pPr><w:pBdr><w:top w:val="single" w:sz="4" w:space="10" w:color="4472C4"/>' +
+      '<w:bottom w:val="single" w:sz="4" w:space="10" w:color="4472C4"/></w:pBdr>' +
+      '<w:spacing w:before="360" w:after="360"/><w:ind w:left="864" w:right="864"/><w:jc w:val="center"/></w:pPr>' +
+      '<w:rPr><w:i/><w:iCs/><w:color w:val="4472C4"/></w:rPr>',
+  },
+};
+
+/**
+ * 문서가 쓰는 갤러리 스타일마다 실제 w:styleId를 정한다 — 같은 이름(w:name)의 스타일이 이미 있으면
+ * 그 id를 쓰고(한국어 Word는 내장 스타일 id가 "a5" 같은 값이다), 없으면 styles.xml에 정의를 추가한다.
+ */
+function resolveGalleryStyles(doc: PMNode, stylesXml: string | null): { ids: StyleIdMap; stylesXml: string | null } {
+  const used = new Set<GalleryStyleId>();
+  doc.descendants((node) => {
+    const id = node.attrs.styleId as string | null | undefined;
+    if (id && (GALLERY_PARAGRAPH_STYLES as readonly string[]).includes(id)) used.add(id as GalleryStyleId);
+  });
+  const ids = new Map<string, string>();
+  if (used.size === 0 || stylesXml === null) return { ids, stylesXml };
+  const idByName = new Map<string, string>();
+  const existingIds = new Set<string>();
+  for (const match of stylesXml.matchAll(/<w:style\b[^>]*w:styleId="([^"]+)"[^>]*>([\s\S]*?)<\/w:style>/g)) {
+    existingIds.add(match[1]);
+    const name = /<w:name\s+w:val="([^"]+)"/.exec(match[2])?.[1]?.toLowerCase();
+    if (name && !idByName.has(name)) idByName.set(name, match[1]);
+  }
+  let added = '';
+  for (const id of used) {
+    const def = GALLERY_STYLE_DEFS[id];
+    const existing = idByName.get(GALLERY_STYLE_NAMES[id]) ?? (existingIds.has(id) ? id : undefined);
+    if (existing) {
+      ids.set(id, existing);
+    } else {
+      ids.set(id, id);
+      added += `<w:style w:type="paragraph" w:styleId="${id}">${def.body}</w:style>`;
+    }
+  }
+  return { ids, stylesXml: added ? stylesXml.replace(/<\/w:styles>\s*$/, `${added}</w:styles>`) : stylesXml };
+}
+
+function renderParagraph(node: PMNode, prefix = '', styleIds: StyleIdMap = activeStyleIds): string {
   const prefixRun = prefix ? renderRun(prefix, []) : '';
-  const pPr = pPrXml('', node.attrs.align);
+  const styleId = node.attrs.styleId as string | null;
+  const resolved = styleId ? (styleIds.get(styleId) ?? styleId) : null;
+  const pPr = pPrXml(resolved ? `<w:pStyle w:val="${escapeAttr(resolved)}"/>` : '', node.attrs);
   return `<w:p>${pPr}${prefixRun}${renderInline(node)}</w:p>`;
 }
 
 function renderHeading(node: PMNode): string {
   const level = node.attrs.level as number;
-  const pPr = pPrXml(`<w:pStyle w:val="Heading${level}"/>`, node.attrs.align);
+  const pPr = pPrXml(`<w:pStyle w:val="Heading${level}"/>`, node.attrs);
   return `<w:p>${pPr}${renderInline(node)}</w:p>`;
 }
 
@@ -285,11 +419,16 @@ const NS_W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
  * sectPrXml을 생략하면(주로 테스트에서) 빈 <w:sectPr/>을 쓴다 — 실제 저장 경로(exportDocx)는
  * 항상 원본 문서에서 뽑아낸 실제 sectPrXml을 넘겨 페이지 크기·여백 등을 보존한다.
  */
-export function renderDocumentXml(doc: PMNode, sectPrXml: string = '<w:sectPr/>'): string {
+export function renderDocumentXml(doc: PMNode, sectPrXml: string = '<w:sectPr/>', styleIds: StyleIdMap = new Map()): string {
   let body = '';
-  doc.forEach((node) => {
-    body += renderBlock(node);
-  });
+  activeStyleIds = styleIds;
+  try {
+    doc.forEach((node) => {
+      body += renderBlock(node);
+    });
+  } finally {
+    activeStyleIds = new Map();
+  }
   return (
     `${DOCUMENT_XML_HEADER}<w:document xmlns:w="${NS_W}"><w:body>${body}${sectPrXml}</w:body></w:document>`
   );
@@ -305,10 +444,45 @@ export function renderDocumentXml(doc: PMNode, sectPrXml: string = '<w:sectPr/>'
  * 원본 word/document.xml에서 그대로 뽑아 재사용한다 — 그래야 편집·재저장을 거쳐도 페이지
  * 설정이 유지된다(과거엔 항상 빈 <w:sectPr/>로 덮어써서 편집 후 페이지 크기가 사라졌었다).
  */
+/** styles.xml을 새로 만들었을 때 — Word가 그 파트를 찾도록 콘텐츠 형식과 문서 관계에 등록한다. */
+function registerStylesPart(entries: Record<string, Uint8Array>): void {
+  const types = entries['[Content_Types].xml'];
+  if (types) {
+    const xml = strFromU8(types);
+    if (!xml.includes('/word/styles.xml')) {
+      entries['[Content_Types].xml'] = strToU8(
+        xml.replace(
+          '</Types>',
+          '<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/></Types>',
+        ),
+      );
+    }
+  }
+  const rels = entries['word/_rels/document.xml.rels'];
+  if (rels) {
+    const xml = strFromU8(rels);
+    if (!xml.includes('relationships/styles"')) {
+      entries['word/_rels/document.xml.rels'] = strToU8(
+        xml.replace(
+          '</Relationships>',
+          '<Relationship Id="rIdDocviewStyles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>',
+        ),
+      );
+    }
+  }
+}
+
 export function exportDocx(originalDocxBytes: Uint8Array, doc: PMNode): Uint8Array {
   const entries = guardedUnzipSync(originalDocxBytes, 'exportDocx');
   const originalDocumentXml = entries['word/document.xml'];
   const sectPrXml = (originalDocumentXml && extractSectPrXml(strFromU8(originalDocumentXml))) ?? '<w:sectPr/>';
-  entries['word/document.xml'] = strToU8(renderDocumentXml(doc, sectPrXml));
+  const stylesEntry = entries['word/styles.xml'];
+  const baseStyles = stylesEntry ? strFromU8(stylesEntry) : `${DOCUMENT_XML_HEADER}<w:styles xmlns:w="${NS_W}"></w:styles>`;
+  const styles = resolveGalleryStyles(doc, baseStyles);
+  if (styles.stylesXml !== null && (stylesEntry || styles.ids.size > 0)) {
+    entries['word/styles.xml'] = strToU8(styles.stylesXml);
+    if (!stylesEntry) registerStylesPart(entries);
+  }
+  entries['word/document.xml'] = strToU8(renderDocumentXml(doc, sectPrXml, styles.ids));
   return zipSync(entries);
 }
