@@ -24,7 +24,7 @@ import { prosemirrorToYXmlFragment, yXmlFragmentToProseMirrorRootNode } from 'y-
 import { recordAudit } from '../audit.js';
 import { persistChangeLog } from './changeLogPersistence.js';
 import { findConverter } from '../converters/index.js';
-import { docxSchema, DOCX_PAGE_MAP, DOCX_PAGE_SETUP_KEY, type DocxPageSetup } from '../docx/schema.js';
+import { docxSchema, DOCX_COMMENTS_MAP, DOCX_PAGE_MAP, DOCX_PAGE_SETUP_KEY, type DocxComment, type DocxPageSetup } from '../docx/schema.js';
 import { DocxChangeTracker, type ParagraphChangeSummary } from './docxChangeLog.js';
 import { PptxChangeTracker, type PptxChangeSummary } from './pptxChangeLog.js';
 import { exportDocx } from '../docx/export.js';
@@ -1385,9 +1385,11 @@ async function seedRoom(room: Room): Promise<void> {
         (origin) => room.viewerByConn.get(origin as WebSocket) ?? null,
       );
     } else {
-      const { doc } = importDocx(original);
+      const { doc, comments } = importDocx(original);
       const fragment = ydoc.getXmlFragment(XML_FRAGMENT_NAME);
       prosemirrorToYXmlFragment(doc, fragment);
+      const commentsMap = ydoc.getMap<DocxComment>(DOCX_COMMENTS_MAP);
+      for (const comment of comments) if (!commentsMap.has(comment.id)) commentsMap.set(comment.id, comment);
       // 시딩 자체는 사용자 편집이 아니므로 이 다음에 추적기를 만든다 — 기준선이 곧 "룸이 열린
       // 시점의 원본"이 된다.
       room.docxChangeTracker = new DocxChangeTracker(
@@ -1558,7 +1560,7 @@ async function flushToStore(room: Room): Promise<void> {
     const fragment = ydoc.getXmlFragment(XML_FRAGMENT_NAME);
     const pmDoc = yXmlFragmentToProseMirrorRootNode(fragment, docxSchema);
     const original = await store.readOriginal(docId, meta.ext);
-    const newDocxBytes = exportDocx(original, pmDoc, docxPageSetupOf(room.ydoc));
+    const newDocxBytes = exportDocx(original, pmDoc, docxPageSetupOf(room.ydoc), docxCommentsOf(room.ydoc));
     await store.saveOriginal(docId, meta.ext, Buffer.from(newDocxBytes));
 
     const converter = findConverter(meta.ext);
@@ -1662,7 +1664,12 @@ export async function getCurrentBytes(docId: string): Promise<Uint8Array | null>
   }
   const fragment = room.ydoc.getXmlFragment(XML_FRAGMENT_NAME);
   const pmDoc = yXmlFragmentToProseMirrorRootNode(fragment, docxSchema);
-  return exportDocx(original, pmDoc, docxPageSetupOf(room.ydoc));
+  return exportDocx(original, pmDoc, docxPageSetupOf(room.ydoc), docxCommentsOf(room.ydoc));
+}
+
+/** 메모 내용(검토 탭) — 본문 범위 표시는 문서의 comment 마크에 있다. */
+function docxCommentsOf(ydoc: Y.Doc): DocxComment[] {
+  return [...ydoc.getMap<DocxComment>(DOCX_COMMENTS_MAP).values()];
 }
 
 /** 레이아웃 탭이 바꾼 용지 설정 — 없으면 null(원본 w:sectPr 그대로). */

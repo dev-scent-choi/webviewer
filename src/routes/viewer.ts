@@ -31,7 +31,7 @@ import {
 } from '../docx/import.js';
 import { MarkupValidationError, addMarkup, deleteMarkup, listMarkup, updateMarkup } from '../markup.js';
 import { touchPresence } from '../presence.js';
-import { flushNow, getCurrentBytes } from '../collab/room.js';
+import { flushNow, getCurrentBytes, getChangeLog } from '../collab/room.js';
 import {
   buildGridFromOriginal,
   computeLineOffsets,
@@ -609,6 +609,18 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
 
   // Ctrl+S — 8초 유휴 자동저장을 기다리지 않고 지금 바로 저장한다(Office 365의 수동 저장과 동일한
   // 역할이지만, 이 앱은 이미 계속 자동저장하므로 사실상 "저장 큐를 지금 비워라"에 가깝다).
+  // 검토 탭 "변경 내용" — 이 세션(룸)이 열린 뒤 누가 어느 문단·칸·슬라이드를 바꿨는지. 열람 토큰만 있으면
+  // 볼 수 있다(문서 내용을 이미 보고 있는 사람에게 같은 내용의 변경 이력을 보여주는 것이다).
+  app.get<{ Querystring: TokenQuery }>(
+    '/api/view/changes',
+    { schema: { querystring: tokenQuerySchema } },
+    async (request, reply) => {
+      const view = await resolveView(request.query.token, reply);
+      if (!view) return reply;
+      return { success: true, data: { changes: getChangeLog(view.meta.id) } };
+    },
+  );
+
   app.post<{ Querystring: TokenQuery }>(
     '/api/view/save',
     { schema: { querystring: tokenQuerySchema } },

@@ -64,6 +64,7 @@
       <button class="ribbon-tab" role="tab" data-tab="home" data-edit-only>홈</button>
       <button class="ribbon-tab" role="tab" data-tab="insert" data-edit-only>삽입</button>
       <button class="ribbon-tab" role="tab" data-tab="layout" data-edit-only>레이아웃</button>
+      <button class="ribbon-tab" role="tab" data-tab="review">검토</button>
       <button class="ribbon-tab" role="tab" data-tab="view">보기</button>
       <button class="ribbon-tab ribbon-tab-contextual" role="tab" data-tab="table" data-edit-only hidden>표 레이아웃</button>
       <span class="ribbon-tabs-spacer"></span>
@@ -426,6 +427,63 @@
       </div>
     </div>
 
+    <!-- ===== 검토 ===== -->
+    <div class="toolbar-group toolbar-format ribbon-panel" data-panel="review" role="tabpanel" hidden>
+      <div class="ribbon-group">
+        <div class="ribbon-group-buttons">
+          <button id="btn-spellcheck" class="icon-btn icon-btn-big" title="맞춤법 검사 표시(브라우저 맞춤법 검사기)" aria-pressed="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14 7.5 5l3.5 9M5.3 11h4.4"/><path d="m13 15 3 3 6-7"/><path d="M3 20c1-.8 2-.8 3 0s2 .8 3 0 2-.8 3 0"/></svg>
+            <span>맞춤법 검사</span>
+          </button>
+          <button id="btn-word-count" class="icon-btn icon-btn-big" title="단어 개수">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="1.5"/><path d="M7 9h4M7 13h6M7 17h3"/><text x="17.5" y="12.5" font-size="6" text-anchor="middle" fill="currentColor" stroke="none" font-family="sans-serif">123</text></svg>
+            <span>단어 개수</span>
+          </button>
+        </div>
+        <span class="ribbon-group-label">언어 교정</span>
+      </div>
+      <div class="ribbon-group">
+        <div class="ribbon-group-buttons">
+          <button id="btn-new-comment" class="icon-btn icon-btn-big" title="새 메모 (Ctrl+Alt+M)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H9l-5 4z"/><path d="M12 8v5M9.5 10.5h5"/></svg>
+            <span>새 메모</span>
+          </button>
+          <div class="ribbon-group-buttons-wrap">
+            <div class="ribbon-row">
+              <button id="btn-delete-comment" class="icon-btn ribbon-btn-labeled" title="메모 삭제">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H9l-5 4z"/><path d="m10 8 4 4M14 8l-4 4"/></svg>
+                <span class="ribbon-btn-label">삭제</span>
+              </button>
+              <button id="btn-show-comments" class="icon-btn ribbon-btn-labeled" title="메모 표시" aria-pressed="false">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H9l-5 4z"/><path d="M8 9h8M8 12h5"/></svg>
+                <span class="ribbon-btn-label">메모 표시</span>
+              </button>
+            </div>
+            <div class="ribbon-row">
+              <button id="btn-prev-comment" class="icon-btn ribbon-btn-labeled" title="이전 메모">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H9l-5 4z"/><path d="m13 8-3 2.5 3 2.5"/></svg>
+                <span class="ribbon-btn-label">이전</span>
+              </button>
+              <button id="btn-next-comment" class="icon-btn ribbon-btn-labeled" title="다음 메모">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H9l-5 4z"/><path d="m11 8 3 2.5-3 2.5"/></svg>
+                <span class="ribbon-btn-label">다음</span>
+              </button>
+            </div>
+          </div>
+        </div>
+        <span class="ribbon-group-label">메모</span>
+      </div>
+      <div class="ribbon-group">
+        <div class="ribbon-group-buttons">
+          <button id="btn-show-changes" class="icon-btn icon-btn-big" title="이 편집 세션에서 누가 어느 문단을 바꿨는지" aria-pressed="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="13" height="17" rx="1.2"/><path d="M7 8h7M7 12h4"/><path d="m13 17 2 2 5-5"/></svg>
+            <span>변경 내용</span>
+          </button>
+        </div>
+        <span class="ribbon-group-label">추적</span>
+      </div>
+    </div>
+
     <!-- ===== 보기 ===== -->
     <div class="toolbar-group toolbar-format ribbon-panel" data-panel="view" role="tabpanel" hidden>
       <div class="ribbon-group">
@@ -555,6 +613,28 @@
 
   <div id="editor-zoom-host">
     <main id="editor" class="editor-surface"></main>
+  </div>
+
+  <aside id="review-pane" class="review-pane" hidden aria-labelledby="review-pane-title">
+    <header class="review-pane-head">
+      <h2 id="review-pane-title">메모</h2>
+      <button id="review-pane-refresh" class="icon-btn" title="새로 고침" hidden>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg>
+      </button>
+      <button id="review-pane-close" class="icon-btn" title="닫기" aria-label="닫기">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+      </button>
+    </header>
+    <div id="review-pane-body" class="review-pane-body"></div>
+  </aside>
+
+  <div id="word-count-dialog" class="office-dialog" hidden role="dialog" aria-labelledby="word-count-title">
+    <div class="office-dialog-card">
+      <h2 id="word-count-title">단어 개수</h2>
+      <p id="word-count-scope" class="office-dialog-sub"></p>
+      <dl id="word-count-stats" class="office-dialog-stats"></dl>
+      <div class="office-dialog-actions"><button id="word-count-close" class="btn-mini">닫기</button></div>
+    </div>
   </div>
 
   <footer class="office-statusbar" id="statusbar">

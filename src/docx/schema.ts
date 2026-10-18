@@ -41,6 +41,17 @@ export interface DocxPageSetup {
   readonly right: number;
 }
 export const DOCX_PAGE_MAP = 'docxPage';
+
+/** 메모 하나 — Y.Map(DOCX_COMMENTS_MAP)의 값. id는 편집기 안에서만 쓰는 값이고, 저장할 때 문서 순서대로
+ * 0부터 w:id를 다시 매긴다. */
+export interface DocxComment {
+  readonly id: string;
+  readonly author: string;
+  readonly initials: string;
+  readonly date: string;
+  readonly text: string;
+}
+export const DOCX_COMMENTS_MAP = 'docxComments';
 export const DOCX_PAGE_SETUP_KEY = 'setup';
 
 export type GalleryStyleId = (typeof GALLERY_PARAGRAPH_STYLES)[number];
@@ -269,6 +280,14 @@ const marks: Record<string, MarkSpec> = {
       { 'data-highlight': mark.attrs.color as string, style: `background-color: ${mark.attrs.color as string}; color: inherit` },
       0,
     ],
+  },
+  /** 메모가 달린 글자 범위 — 메모 내용은 Y.Map(DOCX_COMMENTS_MAP)의 같은 id 항목에 있다. 메모끼리 겹칠 수 있다. */
+  comment: {
+    attrs: { id: {} },
+    inclusive: false,
+    excludes: '',
+    parseDOM: [{ tag: 'span[data-comment-id]', getAttrs: (dom) => ({ id: (dom as HTMLElement).getAttribute('data-comment-id') }) }],
+    toDOM: (mark) => ['span', { class: 'comment-mark', 'data-comment-id': mark.attrs.id as string }, 0],
   },
   fontSize: {
     /** 포인트(pt) 단위로 저장 — docx의 w:sz(하프포인트)와는 export/import 시 ×2/÷2 변환한다 */

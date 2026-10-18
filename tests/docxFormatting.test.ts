@@ -152,3 +152,58 @@ describe('레이아웃: 페이지 나누기·오른쪽 들여쓰기·용지 설�
     expect(out).toContain('<w:pgSz w:w="16838" w:h="11906" w:orient="landscape"/>');
   });
 });
+
+describe('검토: 메모 왕복', () => {
+  const commentsXml =
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:comments xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">' +
+    '<w:comment w:id="7" w:author="김경호" w:date="2026-07-24T09:00:00Z" w:initials="김"><w:p><w:r><w:annotationRef/></w:r><w:r><w:t>확인 필요</w:t></w:r></w:p><w:p><w:r><w:t>둘째 줄</w:t></w:r></w:p></w:comment>' +
+    '</w:comments>';
+  function withComments(body: string): Buffer {
+    const entries = unzipSync(docxWith(body));
+    entries['word/comments.xml'] = strToU8(commentsXml);
+    return Buffer.from(zipSync(entries));
+  }
+  const body =
+    '<w:p><w:r><w:t>앞 </w:t></w:r><w:commentRangeStart w:id="7"/><w:r><w:t>메모 대상</w:t></w:r>' +
+    '<w:hyperlink r:id="rId9"><w:r><w:t> 링크 글자</w:t></w:r></w:hyperlink><w:commentRangeEnd w:id="7"/>' +
+    '<w:r><w:commentReference w:id="7"/></w:r><w:r><w:t> 뒤</w:t></w:r></w:p>';
+
+  test('메모 범위 글자에 comment 마크, 메모 내용(여러 줄)·작성자를 읽고, 하이퍼링크 안 글자도 살린다', () => {
+    const { doc, comments } = importDocx(withComments(body));
+    expect(doc.textContent).toBe('앞 메모 대상 링크 글자 뒤');
+    const marked: string[] = [];
+    doc.descendants((node) => {
+      if (node.isText && node.marks.some((m) => m.type.name === 'comment' && m.attrs.id === '7')) marked.push(node.text ?? '');
+    });
+    expect(marked.join('')).toBe('메모 대상 링크 글자');
+    expect(comments).toEqual([{ id: '7', author: '김경호', initials: '김', date: '2026-07-24T09:00:00Z', text: '확인 필요\n둘째 줄' }]);
+  });
+
+  test('저장하면 범위 표시·참조·comments.xml을 0번부터 다시 매겨 쓰고, 관계·콘텐츠 형식에 등록한다', () => {
+    const bytes = withComments(body);
+    const { doc, comments } = importDocx(bytes);
+    const out = unzipSync(exportDocx(new Uint8Array(bytes), doc, null, comments));
+    const xml = strFromU8(out['word/document.xml']);
+    expect(xml).toContain('xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"');
+    expect(xml).toMatch(/<w:commentRangeStart w:id="0"\/><w:r><w:t xml:space="preserve">메모 대상 링크 글자<\/w:t><\/w:r><w:commentRangeEnd w:id="0"\/><w:r><w:commentReference w:id="0"\/><\/w:r><w:r><w:t xml:space="preserve"> 뒤/);
+    const cxml = strFromU8(out['word/comments.xml']);
+    expect(cxml).toContain('<w:comment w:id="0" w:author="김경호" w:date="2026-07-24T09:00:00Z" w:initials="김">');
+    expect(cxml).toContain('둘째 줄');
+    expect(strFromU8(out['word/_rels/document.xml.rels'])).toContain('Target="comments.xml"');
+    expect(strFromU8(out['[Content_Types].xml'])).toContain('/word/comments.xml');
+  });
+
+  test('여러 문단에 걸친 메모, 문서 끝까지 열린 메모도 올바르게 닫힌다', () => {
+    const { nodes, marks } = docxSchema;
+    const c = marks.comment.create({ id: 'abc' });
+    const doc = nodes.doc.create(null, [
+      nodes.paragraph.create(null, [docxSchema.text('하나', [c])]),
+      nodes.paragraph.create(null, [docxSchema.text('둘', [c])]),
+    ]);
+    const out = unzipSync(exportDocx(new Uint8Array(makeSampleDocx(['x'])), doc, null, [{ id: 'abc', author: 'a', initials: 'a', date: '', text: 't' }]));
+    const xml = strFromU8(out['word/document.xml']);
+    expect(xml.match(/commentRangeStart/g)).toHaveLength(1);
+    expect(xml.match(/commentRangeEnd/g)).toHaveLength(1);
+    expect(xml.indexOf('commentRangeEnd')).toBeGreaterThan(xml.indexOf('둘'));
+  });
+});

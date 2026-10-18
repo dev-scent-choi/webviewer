@@ -10,6 +10,7 @@ import {
   type PageSetup,
   type ParagraphIndent,
   type ParagraphSpacing,
+  type DocxComment,
   type RowHeight,
   GALLERY_STYLE_NAMES,
   HIGHLIGHT_COLORS,
@@ -136,6 +137,7 @@ interface RunMarks {
   readonly font: { readonly ascii: string | null; readonly eastAsia: string | null } | null;
   readonly vertAlign: 'subscript' | 'superscript' | null;
   readonly highlight: string | null;
+  readonly comments?: readonly string[];
 }
 
 /** w:shd@w:fill — 6자리 hex만 색으로 본다("auto"·무늬 채움 등은 음영 없음). */
@@ -189,6 +191,7 @@ function textNodeWithMarks(text: string, marks: RunMarks): PMNode | null {
     marks.font ? docxSchema.marks.fontFamily.create(marks.font) : null,
     marks.vertAlign ? docxSchema.marks[marks.vertAlign].create() : null,
     marks.highlight ? docxSchema.marks.highlight.create({ color: marks.highlight }) : null,
+    ...(marks.comments ?? []).map((id) => docxSchema.marks.comment.create({ id })),
   ].filter((mark): mark is NonNullable<typeof mark> => mark !== null);
   return docxSchema.text(text, markList);
 }
@@ -217,11 +220,31 @@ function runInlineNodesOf(runChildren: readonly XmlNode[], marks: RunMarks): PMN
 }
 
 /** w:p의 자식을 순회하며 인라인(텍스트·줄바꿈) 콘텐츠를 뽑아낸다. 이미지(w:drawing)는 건너뛴다(v1 미지원). */
+/** 지금 열려 있는(w:commentRangeStart는 지났고 End는 아직인) 메모 id — 범위가 문단을 넘어갈 수 있어
+ * importDocx 한 번 동안 문서 순서대로 이어서 쓴다. */
+let openCommentIds = new Set<string>();
+
+/**
+ * 문단 자식을 문서 순서대로 훑는다 — 실행문(w:r)뿐 아니라 하이퍼링크(w:hyperlink)·변경 내용
+ * 삽입(w:ins) 안의 실행문도 글자로 읽고(예전엔 이 안의 글자가 통째로 빠졌다), 메모 범위 표시
+ * (w:commentRangeStart/End)로 그 사이 글자에 메모 마크를 단다.
+ */
 function inlineContentOf(pChildren: readonly XmlNode[], forceBold: boolean): PMNode[] {
   const nodes: PMNode[] = [];
-  for (const run of findAll(pChildren, 'w:r')) {
-    const runChildren = childrenOf(run);
-    nodes.push(...runInlineNodesOf(runChildren, runMarksOf(runChildren, forceBold)));
+  for (const child of pChildren) {
+    const tag = tagOf(child);
+    if (tag === 'w:r') {
+      const runChildren = childrenOf(child);
+      const marks = runMarksOf(runChildren, forceBold);
+      nodes.push(...runInlineNodesOf(runChildren, { ...marks, comments: [...openCommentIds] }));
+    } else if (tag === 'w:hyperlink' || tag === 'w:ins' || tag === 'w:smartTag') {
+      nodes.push(...inlineContentOf(childrenOf(child), forceBold));
+    } else if (tag === 'w:commentRangeStart') {
+      const id = attrsOf(child)['@_w:id'];
+      if (id !== undefined) openCommentIds.add(String(id));
+    } else if (tag === 'w:commentRangeEnd') {
+      openCommentIds.delete(String(attrsOf(child)['@_w:id']));
+    }
   }
   return nodes;
 }
@@ -697,12 +720,45 @@ function groupListItems(blocks: ReadonlyArray<{ node: PMNode; isListItem: boolea
   return result;
 }
 
+/** word/comments.xml의 w:comment들 — 메모 본문은 문단마다 줄을 바꿔 글자만 모은다. */
+function commentsOf(xml: string): DocxComment[] {
+  const root = findFirst(parser.parse(xml) as XmlNode[], 'w:comments');
+  if (!root) return [];
+  return findAll(childrenOf(root), 'w:comment').map((comment) => {
+    const attrs = attrsOf(comment);
+    const text = findAll(childrenOf(comment), 'w:p')
+      .map((para) => {
+        const parts: string[] = [];
+        const walk = (list: readonly XmlNode[]) => {
+          for (const node of list) {
+            const tag = tagOf(node);
+            if (tag === 'w:t') parts.push(textOf(childrenOf(node)));
+            else if (tag === 'w:br') parts.push('\n');
+            else if (tag) walk(childrenOf(node));
+          }
+        };
+        walk(childrenOf(para));
+        return parts.join('');
+      })
+      .join('\n');
+    return {
+      id: String(attrs['@_w:id'] ?? ''),
+      author: attrs['@_w:author'] ?? '',
+      initials: attrs['@_w:initials'] ?? '',
+      date: attrs['@_w:date'] ?? '',
+      text,
+    };
+  });
+}
+
 export interface DocxImportResult {
   readonly doc: PMNode;
   /** 이미지 등 v1 미지원 요소가 포함되어 편집·재저장 시 유실될 수 있는지 */
   readonly hasUnsupportedContent: boolean;
   /** 페이지 크기·여백(w:sectPr/w:pgSz·w:pgMar) — 화면에 실제 Word 페이지 비율로 그리기 위함. 없으면 null. */
   readonly pageSetup: PageSetup | null;
+  /** 원본 word/comments.xml의 메모 — 본문에 범위가 남아 있는 것만. */
+  readonly comments: readonly DocxComment[];
 }
 
 /**
@@ -947,6 +1003,7 @@ export function importDocx(docxBytes: Uint8Array): DocxImportResult {
   const defaultAlign = stylesXmlBytes ? defaultParagraphStyleInfoOf(stylesChildren).align : null;
   const styleTableCellMargin = stylesXmlBytes ? defaultTableStyleCellMarginOf(stylesChildren) : null;
 
+  openCommentIds = new Set();
   const blocks: PMNode[] = [];
   const paragraphRun: Array<{ node: PMNode; isListItem: boolean }> = [];
   const flushParagraphRun = () => {
@@ -967,5 +1024,11 @@ export function importDocx(docxBytes: Uint8Array): DocxImportResult {
 
   const content = blocks.length > 0 ? blocks : [docxSchema.nodes.paragraph.create()];
   const doc = (docxSchema.nodes.doc as NodeType).create(null, content);
-  return { doc, hasUnsupportedContent, pageSetup };
+  const commentsXml = entries['word/comments.xml'];
+  const used = new Set<string>();
+  doc.descendants((node) => {
+    for (const mark of node.marks) if (mark.type === docxSchema.marks.comment) used.add(mark.attrs.id as string);
+  });
+  const comments = commentsXml ? commentsOf(strFromU8(commentsXml)).filter((c) => used.has(c.id)) : [];
+  return { doc, hasUnsupportedContent, pageSetup, comments };
 }

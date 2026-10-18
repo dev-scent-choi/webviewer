@@ -10,6 +10,7 @@ import {
   type CellBorderSide,
   type CellBorders,
   type CellPadding,
+  type DocxComment,
   type DocxPageSetup,
   type ParagraphIndent,
   type ParagraphSpacing,
@@ -99,10 +100,103 @@ function pPrXml(styleXml: string, attrs: Record<string, unknown>): string {
   return inner ? `<w:pPr>${inner}</w:pPr>` : '';
 }
 
+/**
+ * 메모 범위 표시를 문서 순서대로 낸다 — 글자마다 붙은 메모 마크를 보고, 앞 글자에는 있었는데 이
+ * 글자에 없는 메모는 닫고(commentRangeEnd + 참조 실행문), 새로 생긴 메모는 연다(commentRangeStart).
+ * 범위는 문단을 넘어갈 수 있으므로 문서 하나를 그리는 동안 상태를 이어서 쓴다. w:id는 처음 나온
+ * 순서대로 0부터 다시 매긴다(편집기 안의 id는 uuid 등 아무 문자열이다).
+ */
+interface CommentRenderState {
+  readonly numbers: Map<string, number>;
+  readonly open: Set<string>;
+}
+let commentState: CommentRenderState | null = null;
+
+function commentNumber(state: CommentRenderState, id: string): number {
+  let n = state.numbers.get(id);
+  if (n === undefined) {
+    n = state.numbers.size;
+    state.numbers.set(id, n);
+  }
+  return n;
+}
+
+function closeCommentXml(state: CommentRenderState, id: string): string {
+  const n = commentNumber(state, id);
+  state.open.delete(id);
+  return `<w:commentRangeEnd w:id="${n}"/><w:r><w:commentReference w:id="${n}"/></w:r>`;
+}
+
+function commentTransitionXml(marks: readonly Mark[]): string {
+  const state = commentState;
+  if (!state) return '';
+  const ids = new Set(marks.filter((mark) => mark.type.name === 'comment').map((mark) => String(mark.attrs.id)));
+  let xml = '';
+  for (const id of [...state.open]) if (!ids.has(id)) xml += closeCommentXml(state, id);
+  for (const id of ids) {
+    if (!state.open.has(id)) {
+      state.open.add(id);
+      xml += `<w:commentRangeStart w:id="${commentNumber(state, id)}"/>`;
+    }
+  }
+  return xml;
+}
+
+/** word/comments.xml — 본문에 실제로 범위가 있는 메모만, 매긴 번호 순서대로. */
+function renderCommentsXml(numbers: ReadonlyMap<string, number>, comments: ReadonlyMap<string, DocxComment>): string {
+  const items = [...numbers.entries()]
+    .sort((a, b) => a[1] - b[1])
+    .map(([id, n]) => {
+      const comment = comments.get(id);
+      const paragraphs = (comment?.text ?? '').split('\n').map(
+        (line, index) =>
+          `<w:p>${index === 0 ? '<w:r><w:annotationRef/></w:r>' : ''}<w:r><w:t xml:space="preserve">${escapeXml(line)}</w:t></w:r></w:p>`,
+      );
+      const date = comment?.date ? ` w:date="${escapeAttr(comment.date)}"` : '';
+      return (
+        `<w:comment w:id="${n}" w:author="${escapeAttr(comment?.author ?? '')}"${date} w:initials="${escapeAttr(comment?.initials ?? '')}">` +
+        `${paragraphs.join('')}</w:comment>`
+      );
+    });
+  return `${DOCUMENT_XML_HEADER}<w:comments xmlns:w="${NS_W}">${items.join('')}</w:comments>`;
+}
+
+/** 메모 파트를 새로 쓸 때 — 원본의 확장 메모 파트(답글·해결 상태 등, 메모 문단 id를 참조)는 새 메모와
+ * 맞지 않으므로 지우고, comments.xml은 콘텐츠 형식·관계에 등록한다. */
+const COMMENT_EXTENSION_PARTS = ['commentsExtended.xml', 'commentsIds.xml', 'commentsExtensible.xml'];
+function registerCommentsPart(entries: Record<string, Uint8Array>): void {
+  for (const part of COMMENT_EXTENSION_PARTS) delete entries[`word/${part}`];
+  const types = entries['[Content_Types].xml'];
+  if (types) {
+    let xml = strFromU8(types);
+    for (const part of COMMENT_EXTENSION_PARTS) xml = xml.replace(new RegExp(`<Override PartName="/word/${part}"[^>]*/>`), '');
+    if (!xml.includes('/word/comments.xml')) {
+      xml = xml.replace(
+        '</Types>',
+        '<Override PartName="/word/comments.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml"/></Types>',
+      );
+    }
+    entries['[Content_Types].xml'] = strToU8(xml);
+  }
+  const rels = entries['word/_rels/document.xml.rels'];
+  if (rels) {
+    let xml = strFromU8(rels);
+    for (const part of COMMENT_EXTENSION_PARTS) xml = xml.replace(new RegExp(`<Relationship [^>]*Target="${part}"[^>]*/>`), '');
+    if (!/Target="comments\.xml"/.test(xml)) {
+      xml = xml.replace(
+        '</Relationships>',
+        '<Relationship Id="rIdDocviewComments" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="comments.xml"/></Relationships>',
+      );
+    }
+    entries['word/_rels/document.xml.rels'] = strToU8(xml);
+  }
+}
+
 function renderInline(node: PMNode): string {
   let xml = '';
   node.forEach((child) => {
     if (child.isText) {
+      xml += commentTransitionXml(child.marks);
       xml += renderRun(child.text ?? '', child.marks);
     } else if (child.type.name === 'hard_break') {
       xml += '<w:r><w:br/></w:r>';
@@ -418,23 +512,35 @@ function renderBlock(node: PMNode): string {
 
 const DOCUMENT_XML_HEADER = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n';
 const NS_W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+const NS_R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
 
 /**
  * sectPrXml을 생략하면(주로 테스트에서) 빈 <w:sectPr/>을 쓴다 — 실제 저장 경로(exportDocx)는
  * 항상 원본 문서에서 뽑아낸 실제 sectPrXml을 넘겨 페이지 크기·여백 등을 보존한다.
  */
-export function renderDocumentXml(doc: PMNode, sectPrXml: string = '<w:sectPr/>', styleIds: StyleIdMap = new Map()): string {
+export function renderDocumentXml(
+  doc: PMNode,
+  sectPrXml: string = '<w:sectPr/>',
+  styleIds: StyleIdMap = new Map(),
+  commentNumbers: Map<string, number> = new Map(),
+): string {
   let body = '';
   activeStyleIds = styleIds;
+  commentState = { numbers: commentNumbers, open: new Set() };
   try {
     doc.forEach((node) => {
       body += renderBlock(node);
     });
+    // 문서 끝까지 열린 채인 메모 범위는 마지막에 빈 문단 하나로 닫는다(참조 실행문은 문단 안에 있어야 한다)
+    const state = commentState;
+    if (state.open.size > 0) body += `<w:p>${[...state.open].map((id) => closeCommentXml(state, id)).join('')}</w:p>`;
   } finally {
     activeStyleIds = new Map();
+    commentState = null;
   }
+  // 원본 sectPr를 그대로 쓰므로 그 안의 머리글/바닥글 참조(r:id)를 위해 r 네임스페이스도 선언한다
   return (
-    `${DOCUMENT_XML_HEADER}<w:document xmlns:w="${NS_W}"><w:body>${body}${sectPrXml}</w:body></w:document>`
+    `${DOCUMENT_XML_HEADER}<w:document xmlns:w="${NS_W}" xmlns:r="${NS_R}"><w:body>${body}${sectPrXml}</w:body></w:document>`
   );
 }
 
@@ -514,7 +620,12 @@ export function applyPageSetupToSectPr(sectPrXml: string, page: DocxPageSetup): 
   return leading + pgSz + newPgMar + xml.slice(leading.length);
 }
 
-export function exportDocx(originalDocxBytes: Uint8Array, doc: PMNode, page: DocxPageSetup | null = null): Uint8Array {
+export function exportDocx(
+  originalDocxBytes: Uint8Array,
+  doc: PMNode,
+  page: DocxPageSetup | null = null,
+  comments: readonly DocxComment[] = [],
+): Uint8Array {
   const entries = guardedUnzipSync(originalDocxBytes, 'exportDocx');
   const originalDocumentXml = entries['word/document.xml'];
   const originalSectPr = (originalDocumentXml && extractSectPrXml(strFromU8(originalDocumentXml))) ?? '<w:sectPr/>';
@@ -526,6 +637,12 @@ export function exportDocx(originalDocxBytes: Uint8Array, doc: PMNode, page: Doc
     entries['word/styles.xml'] = strToU8(styles.stylesXml);
     if (!stylesEntry) registerStylesPart(entries);
   }
-  entries['word/document.xml'] = strToU8(renderDocumentXml(doc, sectPrXml, styles.ids));
+  const commentNumbers = new Map<string, number>();
+  entries['word/document.xml'] = strToU8(renderDocumentXml(doc, sectPrXml, styles.ids, commentNumbers));
+  // 메모가 있거나, 원본에 있던 메모를 모두 지운 경우에만 comments.xml을 새로 쓴다
+  if (commentNumbers.size > 0 || entries['word/comments.xml']) {
+    entries['word/comments.xml'] = strToU8(renderCommentsXml(commentNumbers, new Map(comments.map((c) => [c.id, c]))));
+    registerCommentsPart(entries);
+  }
   return zipSync(entries);
 }

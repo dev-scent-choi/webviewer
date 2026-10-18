@@ -23,7 +23,16 @@ import type { Node as PMNode } from 'prosemirror-model';
 import * as Y from 'yjs';
 import { WebsocketProvider } from 'y-websocket';
 import { redo, undo, ySyncPlugin, yCursorPlugin, yUndoPlugin, yUndoPluginKey } from 'y-prosemirror';
-import { DOCX_PAGE_MAP, DOCX_PAGE_SETUP_KEY, docxSchema, type DocxPageSetup, type PageSetup } from '../docx/schema.js';
+import {
+  DOCX_COMMENTS_MAP,
+  DOCX_PAGE_MAP,
+  DOCX_PAGE_SETUP_KEY,
+  docxSchema,
+  type DocxComment,
+  type DocxPageSetup,
+  type PageSetup,
+} from '../docx/schema.js';
+import { setupWordReview } from './wordReview.js';
 import { pickPresenceColorForName, renderPresenceAvatars } from './presence.js';
 import { DOC_META_MAP, DOC_META_SAVED_AT_KEY, DOC_META_SAVE_ERROR_AT_KEY } from '../collab/gridShared.js';
 import { initOfficeShell } from './officeShell.js';
@@ -634,6 +643,7 @@ async function main(): Promise<void> {
   // 위에서 이미 숨겨 그 우회로를 원천 차단했다.
   const view = new EditorView(editorHost, { state, editable: () => canEdit });
   let syncLayoutFields: (state: EditorState) => void = () => undefined;
+  let syncReview: (state: EditorState) => void = () => undefined;
   const shell = initOfficeShell({
     token,
     docName: info.name,
@@ -666,6 +676,7 @@ async function main(): Promise<void> {
       syncToolbarState(newState, defaultSizePt, defaultFontName);
       shell.setContextualTab('table', canEdit && isInTable(newState));
       syncLayoutFields(newState);
+      syncReview(newState);
       if (tr.docChanged || tr.selectionSet) scheduleStatusUpdate();
     },
   });
@@ -931,6 +942,16 @@ async function main(): Promise<void> {
     }
   };
   syncLayoutFields(view.state);
+
+  // ---------- 검토: 맞춤법·단어 개수·메모·변경 내용 ----------
+  syncReview = setupWordReview({
+    view,
+    comments: ydoc.getMap<DocxComment>(DOCX_COMMENTS_MAP),
+    token,
+    viewer: info.viewer,
+    canEdit,
+    run,
+  });
 
   // ---------- 상태 표시줄: 단어 수(선택하면 "선택/전체") ----------
   const statusWords = document.getElementById('status-words');
