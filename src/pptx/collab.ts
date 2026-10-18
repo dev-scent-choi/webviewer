@@ -44,6 +44,10 @@ function sldIdListOrder(presentationXml: string): string[] {
   return rIds;
 }
 
+/** 원본을 Y.Doc에 옮겨 담는(시딩) 트랜잭션의 origin — 사용자 편집이 아니므로 자동저장을 예약하지 않는다
+ * (room.ts의 ydoc 'update' 핸들러). 객체가 아니라서 변경 추적기도 클라이언트 편집으로 보지 않는다. */
+export const PPTX_SEED_ORIGIN = 'pptx-seed';
+
 /** 원본 pptx를 열어 슬라이드 순서 배열을 초기 상태로 채운다 (room.ts의 seedRoom에서 호출). */
 export function seedSlidesFromPptx(pptxBytes: Uint8Array, slidesArray: Y.Array<SlideEntry>): void {
   const zipEntries = guardedUnzipSync(pptxBytes, 'seedSlidesFromPptx');
@@ -262,7 +266,7 @@ export function seedSlideContentFromXml(
           w: ownPos ? shape.w : look?.w ?? null,
           h: ownPos ? shape.h : look?.h ?? null,
           ...(look
-            ? { anchor: look.anchor, defaultSizePt: look.defaultSizePt, defaultAlign: look.defaultAlign, levels: look.levels }
+            ? { anchor: look.anchor, ...(look.wrapNone ? { wrapNone: true } : {}), defaultSizePt: look.defaultSizePt, defaultAlign: look.defaultAlign, levels: look.levels }
             : {}),
         };
         shapeMap.set('meta', meta);

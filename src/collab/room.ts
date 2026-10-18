@@ -75,6 +75,7 @@ import {
 import {
   duplicateSlideContent,
   exportPptxFromSlides,
+  PPTX_SEED_ORIGIN,
   seedSlideContentFromXml,
   seedSlidesFromPptx,
   type PerSlideContentsMap,
@@ -213,6 +214,9 @@ interface Room {
    * 좁게 두른다.
    */
   suppressAutosaveReschedule: boolean;
+  /** 마지막 저장 이후 사용자 편집이 있었는지 — pptx는 이게 false면 마지막 참여자가 나갈 때 저장하지
+   * 않는다(슬라이드를 열어 보기만 한 대용량 파일을 통째로 다시 내보내고 PDF 재변환하지 않도록). */
+  editedSinceSave: boolean;
   /**
    * xlsx 룸에서만 쓰인다 — 룸이 사는 동안 진짜로 상주하는 지연(lazy) 그리드 저장소(Task 3-7).
    * 값·서식 편집은 전부 `dirtyOverlay`에만 반영되고, 편집되지 않은 원본 셀은 필요할 때만
@@ -1371,7 +1375,7 @@ async function seedRoom(room: Room): Promise<void> {
       // reconcilePageSubscriptions가 셀 데이터와 함께 채운다.
     } else if (kind === 'pptx') {
       const slidesArray = ydoc.getArray<SlideEntry>(PPTX_SLIDES_ARRAY);
-      seedSlidesFromPptx(original, slidesArray);
+      ydoc.transact(() => seedSlidesFromPptx(original, slidesArray), PPTX_SEED_ORIGIN);
       // 슬라이드 목록이 채워진 직후에 만든다 — 그 시점의 슬라이드 id·순서가 "룸이 열린 시점"이다.
       // 도형 내용은 슬라이드를 처음 열 때 지연 시딩되므로 그 슬라이드의 기준선은 doSeedSlideContent가
       // 시딩 직후 captureBaseline으로 남긴다.
@@ -1432,6 +1436,9 @@ async function flushToStore(room: Room): Promise<void> {
       }
     }
   } else if (kind === 'pptx') {
+    // 이 시점 이후에 도착하는 편집은 다시 true로 만든다(update 핸들러) — 저장이 실패하면 아래 catch 없이
+    // 위로 던져지므로 queueFlush가 되돌린다.
+    room.editedSinceSave = false;
     const original = await store.readOriginal(docId, meta.ext);
     const slidesArray = ydoc.getArray<SlideEntry>(PPTX_SLIDES_ARRAY);
     const slideContents = ydoc.getMap<PerSlideContentsMap>(PPTX_SLIDE_CONTENTS_MAP);
@@ -1591,6 +1598,7 @@ async function flushToStore(room: Room): Promise<void> {
 function queueFlush(room: Room): Promise<void> {
   return runSerialized(room.docId, () =>
     flushToStore(room).catch((error: unknown) => {
+      room.editedSinceSave = true;
       room.suppressAutosaveReschedule = true;
       try {
         room.ydoc.getMap<number>(DOC_META_MAP).set(DOC_META_SAVE_ERROR_AT_KEY, Date.now());
@@ -1695,6 +1703,7 @@ function getOrCreateRoom(docId: string, ext: string): Room {
     autosaveTimer: null,
     ready: Promise.resolve(), // 아래에서 즉시 덮어씀 — seedRoom(room)이 room 자신을 참조해야 해서
     suppressAutosaveReschedule: false,
+    editedSinceSave: false,
     lazyGrid: null,
     baselineSheetExtents: null,
     structuralOps: [],
@@ -1734,8 +1743,11 @@ function getOrCreateRoom(docId: string, ext: string): Room {
     // 열기만 해도(구독 → 그 페이지 재계산 → computed 쓰기) 자동저장이 걸려, 아무도 편집하지 않은
     // 문서를 읽는 동안 전체 export + 재파싱이 반복된다. 진짜 편집은 GRID_CELLS_MAP 쓰기로
     // 도착하고 그건 이 표식이 없으므로 그대로 자동저장을 예약한다.
-    if (isAutosaveExemptOrigin(origin)) return;
-    if (!room.suppressAutosaveReschedule) scheduleAutosave(room);
+    if (isAutosaveExemptOrigin(origin) || origin === PPTX_SEED_ORIGIN) return;
+    if (!room.suppressAutosaveReschedule) {
+      room.editedSinceSave = true;
+      scheduleAutosave(room);
+    }
   });
 
   awareness.on(
@@ -1792,7 +1804,7 @@ function closeConn(room: Room, conn: WebSocket): void {
       void persistChangeLog(room.docId, room.kind, changeLogOf(room));
       if (room.lazyGrid) void closeLazyGridStore(room.lazyGrid);
       void room.ready
-        .then(() => queueFlush(room))
+        .then(() => (room.kind === 'pptx' && !room.editedSinceSave ? undefined : queueFlush(room)))
         .catch((error) => console.error(`동시편집 종료 저장 실패 (문서 ${room.docId}):`, error))
         .finally(() => room.ydoc.destroy());
     } else if (subscription !== undefined && before !== null) {
@@ -1955,11 +1967,14 @@ async function doSeedSlideContent(room: Room, slideEntryId: string, duplicateOfI
   }
   if (entry.kind === 'blank') {
     // 빈 슬라이드는 기준선이 없다 — 안에 생기는 텍스트박스는 전부 새로 추가된 것으로 보고된다.
-    slideContents.set(slideEntryId, new Y.Map<ShapeContentMap>());
-    if (!slideVisuals.has(slideEntryId)) slideVisuals.set(slideEntryId, []);
+    room.ydoc.transact(() => {
+      slideContents.set(slideEntryId, new Y.Map<ShapeContentMap>());
+      if (!slideVisuals.has(slideEntryId)) slideVisuals.set(slideEntryId, []);
+    }, PPTX_SEED_ORIGIN);
     return;
   }
   if (!entry.sourceSlidePart) return;
+  const sourceSlidePart = entry.sourceSlidePart;
   // xlsx 룸은 원본 바이트를 room.lazyGrid/room.originalXlsxBytes에 들고 있지만, pptx 룸에는 그런
   // 캐시 필드가 없다 — 매번 store에서 다시 읽는다(flushToStore의 pptx 분기도 매 저장마다 같은
   // 방식으로 읽는다).
@@ -1969,15 +1984,19 @@ async function doSeedSlideContent(room: Room, slideEntryId: string, duplicateOfI
   // 무거운 작업을 두 번 하게 되어(FINAL REVIEW: 실사용 21MB/49슬라이드 파일에서 콘텐츠 영역
   // 표시가 눈에 띄게 느렸던 원인 중 하나) 체감 지연이 커진다.
   const zipEntries = guardedUnzipSync(bytes, 'doSeedSlideContent');
-  seedSlideContentFromXml(slideContents, slideEntryId, zipEntries, entry.sourceSlidePart);
+  room.ydoc.transact(
+    () => seedSlideContentFromXml(slideContents, slideEntryId, zipEntries, sourceSlidePart),
+    PPTX_SEED_ORIGIN,
+  );
   room.pptxChangeTracker?.captureBaseline(slideEntryId);
   if (!slideVisuals.has(slideEntryId)) {
+    let visuals: SlideVisual[] = [];
     try {
-      slideVisuals.set(slideEntryId, parseSlideVisuals(zipEntries, entry.sourceSlidePart));
+      visuals = parseSlideVisuals(zipEntries, entry.sourceSlidePart);
     } catch (error) {
       console.warn(`슬라이드 표시용 이미지/도형/표 파싱 실패(slideEntryId=${slideEntryId}):`, error);
-      slideVisuals.set(slideEntryId, []);
     }
+    room.ydoc.transact(() => slideVisuals.set(slideEntryId, visuals), PPTX_SEED_ORIGIN);
   }
 }
 
