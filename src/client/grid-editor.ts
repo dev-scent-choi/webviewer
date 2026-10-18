@@ -21,6 +21,8 @@ import {
 } from '../collab/gridShared.js';
 import { dedupeByName, pickPresenceColorForName, renderPresenceAvatars, type AwarenessUserState } from './presence.js';
 import { parseTypedNumber, serialToDateText } from '../collab/cellValueShared.js';
+import { initOfficeShell } from './officeShell.js';
+import { bindDropdown } from './ribbonMenus.js';
 
 interface Permissions {
   readonly canPrint: boolean;
@@ -46,6 +48,8 @@ const PX_TO_PT = 72 / 96;
 
 const params = new URLSearchParams(location.search);
 const token = params.get('token') ?? '';
+
+type AutoFunction = 'SUM' | 'AVERAGE' | 'COUNT' | 'MAX' | 'MIN';
 
 /** false면 이 문서 전체가 읽기 전용이다(예: 과거 연도 접속현황) — 잠금 여부(lk)와 무관하게 모든
  * 칸이 편집 불가여야 한다. main()에서 서버가 내려준 토큰 권한으로 설정된다. */
@@ -234,10 +238,7 @@ async function main(): Promise<void> {
   // 고칠 수 있다고 착각하지 않게 한다 — 뒤로가기/제목/검색/참여자 같은 상단 줄은 도구가 아니라
   // 계속 보여야 하므로 toolbar 전체가 아니라 .toolbar-format만 숨긴다.
   canEdit = info.permissions.canEdit;
-  if (!canEdit) {
-    toolbar.querySelector('.toolbar-format')?.setAttribute('hidden', '');
-    formulaInputEl.readOnly = true;
-  }
+  if (!canEdit) formulaInputEl.readOnly = true;
 
   titleEl.textContent = info.name;
   document.title = `${info.name} — DocView 편집`;
@@ -382,6 +383,15 @@ async function main(): Promise<void> {
   postPresenceToParent();
 
   const undoManager = new Y.UndoManager([cells, structure, styles]);
+  initOfficeShell({
+    token,
+    docName: info.name,
+    canEdit,
+    canDownload: info.permissions.canDownload,
+    canPrint: info.permissions.canPrint,
+    onUndo: () => undoManager.undo(),
+    onRedo: () => undoManager.redo(),
+  });
 
   /**
    * 시트 자리 번호 → 마지막으로 관찰한 행/열 수. structure.observe가 "행/열 삽입·삭제가 실제로
@@ -2591,7 +2601,8 @@ async function main(): Promise<void> {
   });
 
   // ---------- 자동 합계 — 엑셀처럼 위쪽(없으면 왼쪽)으로 연속된 숫자 칸을 찾아 SUM 수식을 채운다 ----------
-  document.getElementById('btn-autosum')?.addEventListener('click', () => {
+  /** 자동 합계(Σ) 계열 — 위쪽(없으면 왼쪽)으로 연속된 숫자 칸 범위에 함수를 넣는다(Excel과 같은 범위 추정). */
+  function insertAutoFunction(fn: AutoFunction): void {
     if (!activeCellKey || !canEdit) return;
     const parsed = parseGridCellKey(activeCellKey);
     if (!parsed) return;
@@ -2604,17 +2615,30 @@ async function main(): Promise<void> {
     let r = row - 1;
     while (r >= 0 && isNumericCell(r, col)) r -= 1;
     if (r < row - 1) {
-      formula = `=SUM(${cellRefLabel(r + 1, col)}:${cellRefLabel(row - 1, col)})`;
+      formula = `=${fn}(${cellRefLabel(r + 1, col)}:${cellRefLabel(row - 1, col)})`;
     } else {
       let c = col - 1;
       while (c >= 0 && isNumericCell(row, c)) c -= 1;
-      if (c < col - 1) formula = `=SUM(${cellRefLabel(row, c + 1)}:${cellRefLabel(row, col - 1)})`;
+      if (c < col - 1) formula = `=${fn}(${cellRefLabel(row, c + 1)}:${cellRefLabel(row, col - 1)})`;
     }
     if (!formula) return;
     const td = tdFor(row, col);
     if (!td || !td.classList.contains('g-editable')) return;
     enterEditMode(td, activeCellKey, formula);
     commitAndMove(td, activeCellKey, row, col, 0, 0);
+  }
+  for (const button of document.querySelectorAll<HTMLElement>('.autosum-apply')) {
+    button.addEventListener('click', () => insertAutoFunction((button.dataset.fn as AutoFunction | undefined) ?? 'SUM'));
+  }
+  for (const dropdown of document.querySelectorAll<HTMLElement>('.autosum-dropdown')) {
+    bindDropdown(dropdown, (value) => insertAutoFunction(value as AutoFunction));
+  }
+  // Excel의 자동 합계 단축키
+  window.addEventListener('keydown', (event) => {
+    if (event.altKey && !event.ctrlKey && (event.key === '=' || event.code === 'Equal')) {
+      event.preventDefault();
+      insertAutoFunction('SUM');
+    }
   });
 
   // ---------- 틀 고정 — 선택한 칸의 위쪽 행 전체 + 왼쪽 열 전체를 고정한다(다시 누르면 해제) ----------
@@ -2873,24 +2897,7 @@ async function main(): Promise<void> {
       }
     });
   }
-  const borderDropdown = document.getElementById('border-dropdown') as HTMLElement | null;
-  const borderMenu = document.getElementById('border-menu') as HTMLElement | null;
-  function closeBorderMenu(): void {
-    if (borderMenu) borderMenu.hidden = true;
-  }
-  borderDropdown?.querySelector('.dropdown-caret')?.addEventListener('click', (event) => {
-    event.stopPropagation();
-    if (borderMenu) borderMenu.hidden = !borderMenu.hidden;
-  });
-  borderMenu?.addEventListener('click', (event) => {
-    const target = (event.target as HTMLElement).closest('button[data-border]') as HTMLButtonElement | null;
-    if (!target) return;
-    applyBorderPreset(target.dataset.border as BorderPreset);
-    closeBorderMenu();
-  });
-  document.addEventListener('click', (event) => {
-    if (borderDropdown && !borderDropdown.contains(event.target as Node)) closeBorderMenu();
-  });
+  bindDropdown(document.getElementById('border-dropdown'), (value) => applyBorderPreset(value as BorderPreset));
   document.getElementById('btn-border')?.addEventListener('click', () => applyBorderPreset('all'));
 
   // ---------- 확대/축소 (엑셀처럼 드래그 슬라이더 포함) ----------
@@ -2929,6 +2936,13 @@ async function main(): Promise<void> {
     zoom = Math.round((ZOOM_MIN + clamped * (ZOOM_MAX - ZOOM_MIN)) * 20) / 20; // 5%p 단위로 스냅
     applyZoom();
   }
+  // 보기 탭의 확대/축소 — 상태 표시줄 컨트롤과 같은 값을 움직인다.
+  document.getElementById('btn-zoom-100')?.addEventListener('click', () => {
+    zoom = 1;
+    applyZoom();
+  });
+  document.getElementById('btn-zoom-in-ribbon')?.addEventListener('click', () => document.getElementById('zoom-in')?.click());
+  document.getElementById('btn-zoom-out-ribbon')?.addEventListener('click', () => document.getElementById('zoom-out')?.click());
   document.getElementById('zoom-in')?.addEventListener('click', () => {
     zoom = Math.min(ZOOM_MAX, Math.round((zoom + 0.1) * 10) / 10);
     applyZoom();

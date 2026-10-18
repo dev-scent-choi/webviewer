@@ -3005,3 +3005,313 @@ body.home-hidden .doclist-link { display: none !important; }
   .apidoc-nav-label { display: none; }
   .apidoc-nav a { border: 1px solid var(--color-line); }
 }
+
+/* ==========================================================================
+   오피스식 편집기 틀(src/client/officeShell.ts) — 앱 색 제목 표시줄 + 리본 탭 + 흰 리본 판 +
+   "파일" 화면 + 상태 표시줄. 앱 색은 Word·Excel·PowerPoint와 비슷한 계열이되 각 회사 로고·
+   이름·아이콘은 쓰지 않는다.
+   ========================================================================== */
+[data-app="word"] { --app-accent: #1e5aa8; --app-accent-dark: #174a8c; }
+[data-app="excel"] { --app-accent: #1d6f42; --app-accent-dark: #165a35; }
+[data-app="powerpoint"] { --app-accent: #c0462a; --app-accent-dark: #a13a22; }
+body[data-app] { --v-accent: var(--app-accent); --v-accent-ink: #ffffff; }
+
+.editor-toolbar.office-shell {
+  background: #f3f2f1;
+  border-bottom: 1px solid #d6d4d1;
+  box-shadow: none;
+}
+.office-titlebar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  height: 40px;
+  padding: 0 0.6rem;
+  background: var(--app-accent);
+  color: #ffffff;
+}
+.titlebar-left,
+.titlebar-right { flex: 1 1 0; min-width: 0; display: flex; align-items: center; gap: 0.35rem; }
+.titlebar-right { justify-content: flex-end; gap: 0.5rem; }
+.titlebar-center { flex: 0 1 auto; min-width: 0; display: flex; align-items: center; gap: 0.6rem; }
+.office-titlebar .icon-btn,
+.qa-btn {
+  color: #ffffff;
+  background: transparent;
+  border: none;
+}
+.office-titlebar .icon-btn:hover,
+.qa-btn:hover { background: rgba(255, 255, 255, 0.16); color: #ffffff; }
+.office-titlebar .doc-title {
+  color: #ffffff;
+  font-size: 0.85rem;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.office-titlebar .save-status { color: rgba(255, 255, 255, 0.88); background: transparent; }
+.office-titlebar .conn-status { background: rgba(255, 255, 255, 0.18); color: #ffffff; }
+.office-titlebar .readonly-badge { background: rgba(255, 255, 255, 0.92); color: var(--app-accent-dark); }
+.office-titlebar .presence-list { --v-presence-border: var(--app-accent); }
+.quick-access {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  margin-left: 0.2rem;
+  padding-left: 0.4rem;
+  border-left: 1px solid rgba(255, 255, 255, 0.28);
+}
+.qa-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.qa-btn svg { width: 17px; height: 17px; }
+.qa-btn[hidden] { display: none; }
+.qa-btn:focus-visible { outline: 2px solid #ffffff; outline-offset: -2px; }
+
+.ribbon-tabs {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.1rem;
+  height: 36px;
+  padding: 0 0.6rem;
+}
+.ribbon-tab {
+  position: relative;
+  padding: 0.4rem 0.75rem 0.55rem;
+  border: none;
+  border-radius: 4px 4px 0 0;
+  background: transparent;
+  color: #323130;
+  font: 500 0.82rem var(--font-sans);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ribbon-tab:hover { background: #e1dfdd; }
+.ribbon-tab[hidden] { display: none; }
+.ribbon-tab[aria-selected="true"] { color: var(--app-accent); font-weight: 600; }
+.ribbon-tab[aria-selected="true"]::after {
+  content: "";
+  position: absolute;
+  left: 0.75rem;
+  right: 0.75rem;
+  bottom: 4px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--app-accent);
+}
+/* 상황별 탭(표 레이아웃 등) — 오피스처럼 앱 색 글자로 구분한다 */
+.ribbon-tab-contextual { color: var(--app-accent); }
+.ribbon-tabs-spacer { flex: 1; }
+.ribbon-collapse {
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: #605e5c;
+  cursor: pointer;
+}
+.ribbon-collapse:hover { background: #e1dfdd; color: #323130; }
+.ribbon-collapse svg { width: 14px; height: 14px; transition: transform 0.2s ease; }
+.ribbon-collapse[aria-pressed="true"] svg { transform: rotate(180deg); }
+
+.office-shell .toolbar-format.ribbon-panel {
+  min-height: 94px;
+  margin: 0 0.5rem 0.45rem;
+  padding: 0.3rem 0.6rem 0.15rem;
+  border-radius: 6px;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12), 0 0 0 1px rgba(0, 0, 0, 0.04);
+}
+.office-shell .ribbon-panel[hidden],
+.office-shell.ribbon-collapsed .ribbon-panel { display: none; }
+.office-shell.ribbon-peeking .ribbon-panel:not([hidden]) {
+  position: absolute;
+  top: 76px;
+  left: 0;
+  right: 0;
+  z-index: 25;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.2);
+}
+.office-shell.ribbon-collapsed,
+.office-shell.ribbon-peeking,
+.office-shell.ribbon-empty { padding-bottom: 0.3rem; }
+.office-shell .ribbon-group { border-right-color: #e1dfdd; }
+.office-shell .ribbon-group-label { color: #605e5c; }
+.office-shell .icon-btn:hover { background: #f3f2f1; }
+
+/* ---------- "파일" 화면 ---------- */
+.backstage {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  background: #ffffff;
+  color: #323130;
+  font-family: var(--font-sans);
+}
+.backstage[hidden] { display: none; }
+.backstage-nav {
+  display: flex;
+  flex-direction: column;
+  width: 220px;
+  flex: none;
+  padding: 0.75rem 0;
+  background: var(--app-accent);
+  color: #ffffff;
+}
+.backstage-back {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  margin: 0 0 1rem 0.75rem;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: #ffffff;
+  cursor: pointer;
+}
+.backstage-back svg { width: 30px; height: 30px; }
+.backstage-back:hover { background: rgba(255, 255, 255, 0.16); }
+.backstage-item {
+  padding: 0.75rem 1.5rem;
+  border: none;
+  background: transparent;
+  color: #ffffff;
+  font: 500 0.95rem var(--font-sans);
+  text-align: left;
+  cursor: pointer;
+}
+.backstage-item:hover { background: rgba(255, 255, 255, 0.14); }
+.backstage-item[aria-current="true"] { background: rgba(255, 255, 255, 0.24); }
+.backstage-item:focus-visible,
+.backstage-back:focus-visible { outline: 2px solid #ffffff; outline-offset: -3px; }
+.backstage-nav-spacer { flex: 1; }
+.backstage-content { flex: 1; overflow: auto; padding: 2.4rem 3rem; }
+.backstage-content h2 { margin: 0 0 1.6rem; font-size: 1.9rem; font-weight: 300; }
+.backstage-content p { max-width: 36rem; margin: 0 0 1.2rem; color: #484644; line-height: 1.6; }
+.backstage-facts {
+  display: grid;
+  grid-template-columns: 5rem 1fr;
+  gap: 0.7rem 1.2rem;
+  max-width: 40rem;
+  margin: 0;
+  font-size: 0.92rem;
+}
+.backstage-facts dt { color: #605e5c; }
+.backstage-facts dd { margin: 0; word-break: break-all; }
+.backstage-action {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.7rem 1.4rem;
+  border: none;
+  border-radius: 4px;
+  background: var(--app-accent);
+  color: #ffffff;
+  font: 600 0.9rem var(--font-sans);
+  text-decoration: none;
+  cursor: pointer;
+}
+.backstage-action:hover { background: var(--app-accent-dark); }
+.backstage-action:disabled { opacity: 0.7; cursor: progress; }
+.backstage-denied { color: #a4262c; }
+
+/* ---------- 리본 드롭다운 · 색 견본 · 표 격자 ---------- */
+.dropdown-menu.dropdown-menu-floating { position: fixed; margin-top: 0; z-index: 70; border-radius: 4px; }
+.dropdown-caret-labeled {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  width: auto;
+  padding: 0 4px;
+  font-size: 0.8rem;
+}
+.dropdown-caret-labeled svg:last-child { width: 10px; height: 10px; }
+.dropdown-palette { padding: 0.5rem; }
+.palette-grid { display: grid; grid-template-columns: repeat(5, 22px); gap: 4px; }
+.dropdown-menu .palette-swatch {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid rgba(0, 0, 0, 0.22);
+  border-radius: 0;
+  cursor: pointer;
+}
+.dropdown-menu .palette-swatch:hover { outline: 2px solid var(--app-accent, var(--v-accent)); outline-offset: 1px; }
+.dropdown-menu .palette-none { margin-top: 0.45rem; text-align: center; border: 1px solid var(--v-glass-line); }
+.table-grid-menu { padding: 0.55rem; }
+.table-grid-caption { padding-bottom: 0.45rem; font-size: 0.78rem; color: var(--v-text-dim); }
+.table-grid { display: grid; grid-template-columns: repeat(10, 17px); gap: 3px; }
+.dropdown-menu .table-grid-cell {
+  width: 17px;
+  height: 17px;
+  padding: 0;
+  border: 1px solid #c8c6c4;
+  border-radius: 0;
+  background: #ffffff;
+}
+.dropdown-menu .table-grid-cell.is-hot {
+  border-color: var(--app-accent, var(--v-accent));
+  background: color-mix(in srgb, var(--app-accent, var(--v-accent)) 22%, white);
+}
+
+/* ---------- 상태 표시줄(Word·PowerPoint — Excel은 시트 탭이 있는 .grid-status-bar) ---------- */
+.office-statusbar {
+  position: sticky;
+  bottom: 0;
+  z-index: 9;
+  display: flex;
+  align-items: center;
+  gap: 1.1rem;
+  height: 26px;
+  padding: 0 0.9rem;
+  background: #f3f2f1;
+  border-top: 1px solid #d6d4d1;
+  color: #605e5c;
+  font-size: 0.72rem;
+}
+.statusbar-spacer { flex: 1; }
+.office-statusbar .zoom-group { margin: 0; padding: 0; border: none; gap: 0.35rem; }
+.office-statusbar .zoom-level { cursor: pointer; min-width: 2.6rem; text-align: right; }
+.editor-body .office-shell ~ .search-bar { top: 11.5rem; width: 27rem; }
+
+/* ---------- Word: 스타일 갤러리 눌림 + 문서 안 갤러리 스타일 모양(Word 기본값 근사) ---------- */
+.office-shell .style-gallery { max-width: min(600px, 34vw); }
+.style-gallery-item[aria-pressed="true"] {
+  border-color: var(--app-accent, var(--v-accent));
+  background: color-mix(in srgb, var(--app-accent, var(--v-accent)) 10%, white);
+}
+.editor-surface .ProseMirror p[data-style="NoSpacing"] { margin-top: 0; margin-bottom: 0; line-height: 1.2; }
+.editor-surface .ProseMirror p[data-style="Title"] { font-size: 28pt; line-height: 1.15; letter-spacing: -0.02em; margin: 0; }
+.editor-surface .ProseMirror p[data-style="Subtitle"] { font-size: 11pt; color: #5a5a5a; letter-spacing: 0.06em; }
+.editor-surface .ProseMirror p[data-style="Quote"] {
+  margin-left: 43pt;
+  margin-right: 43pt;
+  font-style: italic;
+  color: #404040;
+  text-align: center;
+}
+.editor-surface .ProseMirror p[data-style="IntenseQuote"] {
+  margin: 18pt 43pt;
+  padding: 10pt 0;
+  border-top: 1px solid #4472c4;
+  border-bottom: 1px solid #4472c4;
+  font-style: italic;
+  color: #4472c4;
+  text-align: center;
+}
+.editor-surface .ProseMirror mark { color: inherit; }
+.format-painting .ProseMirror { cursor: copy; }

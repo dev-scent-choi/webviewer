@@ -1,26 +1,83 @@
-import { baseKeymap, chainCommands, setBlockType, toggleMark } from 'prosemirror-commands';
+import { baseKeymap, chainCommands, selectAll, toggleMark } from 'prosemirror-commands';
 import { keymap } from 'prosemirror-keymap';
-import { EditorState, Plugin, PluginKey, TextSelection, type Command } from 'prosemirror-state';
+import { EditorState, Plugin, PluginKey, Selection, TextSelection, type Command } from 'prosemirror-state';
 import { Decoration, DecorationSet, EditorView } from 'prosemirror-view';
 import { liftListItem, sinkListItem, splitListItem, wrapInList } from 'prosemirror-schema-list';
 import {
   addColumnAfter,
+  addColumnBefore,
   addRowAfter,
+  addRowBefore,
   columnResizing,
   deleteColumn,
   deleteRow,
   deleteTable,
   goToNextCell,
+  isInTable,
+  mergeCells,
+  splitCell,
   TableView,
   tableEditing,
 } from 'prosemirror-tables';
 import type { Node as PMNode } from 'prosemirror-model';
 import * as Y from 'yjs';
 import { WebsocketProvider } from 'y-websocket';
-import { redo, undo, ySyncPlugin, yCursorPlugin, yUndoPlugin } from 'y-prosemirror';
+import { redo, undo, ySyncPlugin, yCursorPlugin, yUndoPlugin, yUndoPluginKey } from 'y-prosemirror';
 import { docxSchema, type PageSetup } from '../docx/schema.js';
 import { pickPresenceColorForName, renderPresenceAvatars } from './presence.js';
 import { DOC_META_MAP, DOC_META_SAVED_AT_KEY, DOC_META_SAVE_ERROR_AT_KEY } from '../collab/gridShared.js';
+import { initOfficeShell } from './officeShell.js';
+import { bindDropdown, fillColorPalette, type PaletteColor } from './ribbonMenus.js';
+import {
+  applyMark,
+  changeCase,
+  changeIndent,
+  clearFormatting,
+  clearMark,
+  copyFormat,
+  currentFontName,
+  currentFontSize,
+  currentParagraphStyle,
+  multilevelList,
+  pasteFormat,
+  replaceAll,
+  replaceRange,
+  setAlign,
+  setHeading,
+  setLineSpacing,
+  setParagraphStyle,
+  setShading,
+  stepFontSize,
+  type CaseMode,
+  type CopiedFormat,
+} from './wordCommands.js';
+
+/** Word 텍스트 강조 색 15가지(이름 있는 강조색 — 저장 시 w:highlight) */
+const HIGHLIGHT_PALETTE: readonly PaletteColor[] = [
+  { hex: '#ffff00', label: '노랑' }, { hex: '#00ff00', label: '밝은 녹색' }, { hex: '#00ffff', label: '청록' },
+  { hex: '#ff00ff', label: '분홍' }, { hex: '#0000ff', label: '파랑' }, { hex: '#ff0000', label: '빨강' },
+  { hex: '#000080', label: '진한 파랑' }, { hex: '#008080', label: '진한 청록' }, { hex: '#008000', label: '녹색' },
+  { hex: '#800080', label: '보라' }, { hex: '#800000', label: '진한 빨강' }, { hex: '#808000', label: '진한 노랑' },
+  { hex: '#808080', label: '회색 50%' }, { hex: '#c0c0c0', label: '회색 25%' }, { hex: '#000000', label: '검정' },
+];
+/** 글꼴 색 — 테마 색 한 줄 + 표준 색 한 줄 */
+const FONT_COLOR_PALETTE: readonly PaletteColor[] = [
+  { hex: '#000000', label: '검정' }, { hex: '#404040', label: '진한 회색' }, { hex: '#7f7f7f', label: '회색' },
+  { hex: '#a6a6a6', label: '연한 회색' }, { hex: '#ffffff', label: '흰색' }, { hex: '#44546a', label: '파랑 회색' },
+  { hex: '#4472c4', label: '파랑, 강조 1' }, { hex: '#ed7d31', label: '주황, 강조 2' }, { hex: '#70ad47', label: '녹색, 강조 6' },
+  { hex: '#5b9bd5', label: '파랑, 강조 5' },
+  { hex: '#c00000', label: '진한 빨강' }, { hex: '#ff0000', label: '빨강' }, { hex: '#ffc000', label: '주황' },
+  { hex: '#ffff00', label: '노랑' }, { hex: '#92d050', label: '연한 녹색' }, { hex: '#00b050', label: '녹색' },
+  { hex: '#00b0f0', label: '연한 파랑' }, { hex: '#0070c0', label: '파랑' }, { hex: '#002060', label: '진한 파랑' },
+  { hex: '#7030a0', label: '자주' },
+];
+/** 문단 음영 — 회색 단계와 연한 테마 색 */
+const SHADING_PALETTE: readonly PaletteColor[] = [
+  { hex: '#f2f2f2', label: '흰색, 5% 더 어둡게' }, { hex: '#d9d9d9', label: '흰색, 15% 더 어둡게' }, { hex: '#bfbfbf', label: '흰색, 25% 더 어둡게' },
+  { hex: '#a6a6a6', label: '흰색, 35% 더 어둡게' }, { hex: '#808080', label: '흰색, 50% 더 어둡게' },
+  { hex: '#dae3f3', label: '파랑, 80% 더 밝게' }, { hex: '#fbe5d6', label: '주황, 80% 더 밝게' }, { hex: '#e2f0d9', label: '녹색, 80% 더 밝게' },
+  { hex: '#fff2cc', label: '금색, 80% 더 밝게' }, { hex: '#deebf7', label: '연한 파랑, 80% 더 밝게' },
+];
 
 interface Permissions {
   readonly canPrint: boolean;
@@ -216,7 +273,8 @@ async function fetchViewInfo(): Promise<ViewInfo> {
   return json.data;
 }
 
-function buildKeymap(): Record<string, Command> {
+/** Word와 같은 단축키 — 글꼴 크기 단계는 문서 기본 크기를 기준으로 센다. */
+function buildKeymap(defaultSizePt: number): Record<string, Command> {
   const nodes = docxSchema.nodes;
   const marks = docxSchema.marks;
   return {
@@ -227,61 +285,34 @@ function buildKeymap(): Record<string, Command> {
     'Mod-b': toggleMark(marks.strong),
     'Mod-i': toggleMark(marks.em),
     'Mod-u': toggleMark(marks.underline),
-    'Mod-Alt-1': setBlockType(nodes.heading, { level: 1 }),
-    'Mod-Alt-2': setBlockType(nodes.heading, { level: 2 }),
-    'Mod-Alt-3': setBlockType(nodes.heading, { level: 3 }),
-    'Mod-Alt-0': setBlockType(nodes.paragraph),
+    'Mod-=': toggleMark(marks.subscript),
+    'Mod-Shift-=': toggleMark(marks.superscript),
+    'Mod-+': toggleMark(marks.superscript),
+    'Mod-]': stepFontSize(1, defaultSizePt),
+    'Mod-[': stepFontSize(-1, defaultSizePt),
+    'Mod-Shift->': stepFontSize(1, defaultSizePt),
+    'Mod-Shift-<': stepFontSize(-1, defaultSizePt),
+    'Mod-l': setAlign('left'),
+    'Mod-e': setAlign('center'),
+    'Mod-r': setAlign('right'),
+    'Mod-j': setAlign('justify'),
+    // 브라우저 기본 Ctrl+End/Home은 표가 있으면 문서 끝/처음까지 가지 못하는 경우가 있다 — Word처럼 확실히 보낸다.
+    'Mod-End': (state, dispatch) => {
+      dispatch?.(state.tr.setSelection(Selection.atEnd(state.doc)).scrollIntoView());
+      return true;
+    },
+    'Mod-Home': (state, dispatch) => {
+      dispatch?.(state.tr.setSelection(Selection.atStart(state.doc)).scrollIntoView());
+      return true;
+    },
+    'Mod-Alt-1': setHeading(1),
+    'Mod-Alt-2': setHeading(2),
+    'Mod-Alt-3': setHeading(3),
+    'Mod-Alt-0': setParagraphStyle(null),
+    'Mod-Shift-n': setParagraphStyle(null),
     Tab: chainCommands(sinkListItem(nodes.list_item), goToNextCell(1)),
     'Shift-Tab': chainCommands(liftListItem(nodes.list_item), goToNextCell(-1)),
     Enter: chainCommands(splitListItem(nodes.list_item), baseKeymap.Enter),
-  };
-}
-
-/** toggleMark과 달리 항상 "덮어쓰기"만 한다 — 색/크기처럼 값이 여러 개인 마크는 토글하면
- * 다른 값으로 바꾸려 할 때 그냥 지워져 버리므로 별도 커맨드가 필요하다. */
-function setMark(markType: (typeof docxSchema.marks)[keyof typeof docxSchema.marks], attrs: Record<string, unknown>): Command {
-  return (state, dispatch) => {
-    const { from, to, empty } = state.selection;
-    if (empty) return false;
-    if (dispatch) dispatch(state.tr.addMark(from, to, markType.create(attrs)));
-    return true;
-  };
-}
-
-function removeMark(markType: (typeof docxSchema.marks)[keyof typeof docxSchema.marks]): Command {
-  return (state, dispatch) => {
-    const { from, to, empty } = state.selection;
-    if (empty) return false;
-    if (dispatch) dispatch(state.tr.removeMark(from, to, markType));
-    return true;
-  };
-}
-
-const ALIGNABLE_NODE_NAMES = new Set(['paragraph', 'heading']);
-
-function setAlign(align: 'left' | 'center' | 'right'): Command {
-  return (state, dispatch) => {
-    const { from, to } = state.selection;
-    let applicable = false;
-    state.doc.nodesBetween(from, to, (node) => {
-      if (ALIGNABLE_NODE_NAMES.has(node.type.name)) applicable = true;
-    });
-    if (!applicable) return false;
-    if (dispatch) {
-      const tr = state.tr;
-      state.doc.nodesBetween(from, to, (node, pos) => {
-        if (ALIGNABLE_NODE_NAMES.has(node.type.name)) {
-          tr.setNodeMarkup(pos, undefined, { ...node.attrs, align: align === 'left' ? null : align });
-        }
-      });
-      // "전체 선택"(Ctrl+A)의 to는 doc.content.size인데, 그 위치는 문단 "밖"(depth 0=doc)에서
-      // 끝난다 — TextSelection.create(tr.doc, from, to)는 그 경계에서 그대로 예외를 던진다.
-      // TextSelection.between은 같은 상황에서 예외 대신 가장 가까운 유효한 텍스트 위치로
-      // 스냅해 주므로, "전체 선택 후 서식 적용" 흐름에서 안전하게 선택을 복원할 수 있다.
-      tr.setSelection(TextSelection.between(tr.doc.resolve(from), tr.doc.resolve(Math.min(to, tr.doc.content.size))));
-      dispatch(tr);
-    }
-    return true;
   };
 }
 
@@ -368,28 +399,58 @@ function setPressed(id: string, pressed: boolean): void {
   document.getElementById(id)?.setAttribute('aria-pressed', String(pressed));
 }
 
-function syncToolbarState(state: EditorState): void {
-  setPressed('btn-bold', markActive(state, docxSchema.marks.strong));
-  setPressed('btn-italic', markActive(state, docxSchema.marks.em));
-  setPressed('btn-underline', markActive(state, docxSchema.marks.underline));
-  setPressed('btn-strike', markActive(state, docxSchema.marks.strike));
+/** 글꼴·크기 상자에 지금 위치의 값을 보여준다(목록에 없는 값이면 그 값을 항목으로 더한다). */
+function showSelectValue(select: HTMLSelectElement | null, value: string): void {
+  if (!select || select.value === value) return;
+  if (![...select.options].some((option) => option.value === value)) {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = value;
+    option.dataset.dynamic = '';
+    select.append(option);
+  }
+  select.value = value;
+}
+
+function syncToolbarState(state: EditorState, defaultSizePt: number, defaultFontName: string): void {
+  const { marks } = docxSchema;
+  setPressed('btn-bold', markActive(state, marks.strong));
+  setPressed('btn-italic', markActive(state, marks.em));
+  setPressed('btn-underline', markActive(state, marks.underline));
+  setPressed('btn-strike', markActive(state, marks.strike));
+  setPressed('btn-subscript', markActive(state, marks.subscript));
+  setPressed('btn-superscript', markActive(state, marks.superscript));
   const align = currentAlign(state);
   setPressed('btn-align-left', !align || align === 'left');
   setPressed('btn-align-center', align === 'center');
   setPressed('btn-align-right', align === 'right');
-  setPressed('btn-paragraph', isBlockActive(state, docxSchema.nodes.paragraph));
-  setPressed('btn-h1', isBlockActive(state, docxSchema.nodes.heading, { level: 1 }));
-  setPressed('btn-h2', isBlockActive(state, docxSchema.nodes.heading, { level: 2 }));
-  setPressed('btn-h3', isBlockActive(state, docxSchema.nodes.heading, { level: 3 }));
+  setPressed('btn-align-justify', align === 'justify');
+  setPressed('btn-bullet-list', isBlockActive(state, docxSchema.nodes.paragraph) && inList(state, docxSchema.nodes.bullet_list));
+  setPressed('btn-ordered-list', isBlockActive(state, docxSchema.nodes.paragraph) && inList(state, docxSchema.nodes.ordered_list));
+  const style = currentParagraphStyle(state) ?? 'Normal';
+  for (const item of document.querySelectorAll<HTMLElement>('.style-gallery-item[data-style]')) {
+    item.setAttribute('aria-pressed', String(item.dataset.style === style));
+  }
+  showSelectValue(document.getElementById('font-family') as HTMLSelectElement | null, currentFontName(state) ?? defaultFontName);
+  showSelectValue(document.getElementById('font-size') as HTMLSelectElement | null, String(currentFontSize(state, defaultSizePt)));
 }
 
-function insertTable(view: EditorView): void {
+function inList(state: EditorState, listType: typeof docxSchema.nodes.bullet_list): boolean {
+  const { $from } = state.selection;
+  for (let depth = $from.depth; depth > 0; depth -= 1) {
+    if ($from.node(depth).type === listType) return true;
+  }
+  return false;
+}
+
+function insertTable(view: EditorView, rows: number, cols: number): void {
   const { table, table_row: row, table_cell: cell, paragraph } = docxSchema.nodes;
-  const makeCell = () => cell.create(null, paragraph.create());
-  const makeRow = () => row.create(null, [makeCell(), makeCell()]);
-  const node = table.create(null, [makeRow(), makeRow()]);
-  const tr = view.state.tr.replaceSelectionWith(node);
-  view.dispatch(tr);
+  const makeRow = () => row.create(null, Array.from({ length: cols }, () => cell.create(null, paragraph.create())));
+  const node = table.create(null, Array.from({ length: rows }, makeRow));
+  // Word처럼 선택한 글자를 지우지 않는다 — 선택 끝에 표를 넣는다.
+  const { state } = view;
+  const tr = state.tr.setSelection(TextSelection.create(state.doc, state.selection.to)).replaceSelectionWith(node);
+  view.dispatch(tr.scrollIntoView());
   view.focus();
 }
 
@@ -476,10 +537,7 @@ async function main(): Promise<void> {
   // 검색/참여자 같은 상단 줄은 도구가 아니라 계속 보여야 하므로 toolbar 전체가 아니라
   // .toolbar-format만 숨긴다.
   canEdit = info.permissions.canEdit;
-  if (!canEdit) {
-    toolbar.querySelector('.toolbar-format')?.setAttribute('hidden', '');
-    readonlyBadgeEl.hidden = false;
-  }
+  if (!canEdit) readonlyBadgeEl.hidden = false;
 
   titleEl.textContent = info.name;
   document.title = `${info.name} — DocView 편집`;
@@ -524,13 +582,16 @@ async function main(): Promise<void> {
   renderPresenceAvatars(presenceEl, provider.awareness);
   setupSaveStatus(ydoc, token);
 
+  // Word 리본 글꼴·크기 상자가 서식 없는 글자에 보여줄 값 — 문서 기본값(styles.xml), 없으면 Word 기본.
+  const defaultSizePt = info.defaultFontSizePt ?? 10;
+  const defaultFontName = info.defaultFontFamily?.eastAsia ?? info.defaultFontFamily?.ascii ?? '';
   const state = EditorState.create({
     schema: docxSchema,
     plugins: [
       ySyncPlugin(fragment),
       yCursorPlugin(provider.awareness),
       yUndoPlugin(),
-      keymap(buildKeymap()),
+      keymap(buildKeymap(defaultSizePt)),
       columnResizing({ View: AlignedTableView }),
       tableEditing(),
       buildSearchPlugin(),
@@ -549,65 +610,254 @@ async function main(): Promise<void> {
   // 클릭 핸들러)는 우회한다 — 그래서 이 옵션만으로는 부족하고, 툴바(.toolbar-format) 자체를
   // 위에서 이미 숨겨 그 우회로를 원천 차단했다.
   const view = new EditorView(editorHost, { state, editable: () => canEdit });
+  const shell = initOfficeShell({
+    token,
+    docName: info.name,
+    canEdit,
+    canDownload: info.permissions.canDownload,
+    canPrint: info.permissions.canPrint,
+    onUndo: () => {
+      undo(view.state);
+      view.focus();
+    },
+    onRedo: () => {
+      redo(view.state);
+      view.focus();
+    },
+  });
+
+  // 서식 복사: 한 번 누르면 다음 선택 한 번에, 두 번 누르면 Esc를 누를 때까지 계속 칠한다(Word와 같다).
+  let painter: { format: CopiedFormat; sticky: boolean } | null = null;
+  const painterBtn = document.getElementById('btn-format-painter');
+  function setPainter(next: typeof painter): void {
+    painter = next;
+    painterBtn?.setAttribute('aria-pressed', String(next !== null));
+    editorHost.classList.toggle('format-painting', next !== null);
+  }
+
   view.setProps({
     dispatchTransaction(tr) {
       const newState = view.state.apply(tr);
       view.updateState(newState);
-      syncToolbarState(newState);
+      syncToolbarState(newState, defaultSizePt, defaultFontName);
+      shell.setContextualTab('table', canEdit && isInTable(newState));
+      if (tr.docChanged || tr.selectionSet) scheduleStatusUpdate();
     },
   });
-  syncToolbarState(view.state);
+  syncToolbarState(view.state, defaultSizePt, defaultFontName);
 
-  bindToolbarButton(view, 'btn-bold', toggleMark(docxSchema.marks.strong));
-  bindToolbarButton(view, 'btn-italic', toggleMark(docxSchema.marks.em));
-  bindToolbarButton(view, 'btn-underline', toggleMark(docxSchema.marks.underline));
-  bindToolbarButton(view, 'btn-strike', toggleMark(docxSchema.marks.strike));
-  bindToolbarButton(view, 'btn-h1', setBlockType(docxSchema.nodes.heading, { level: 1 }));
-  bindToolbarButton(view, 'btn-h2', setBlockType(docxSchema.nodes.heading, { level: 2 }));
-  bindToolbarButton(view, 'btn-h3', setBlockType(docxSchema.nodes.heading, { level: 3 }));
-  bindToolbarButton(view, 'btn-paragraph', setBlockType(docxSchema.nodes.paragraph));
-  bindToolbarButton(view, 'btn-bullet-list', wrapInList(docxSchema.nodes.bullet_list));
-  bindToolbarButton(view, 'btn-ordered-list', wrapInList(docxSchema.nodes.ordered_list));
-  bindToolbarButton(view, 'btn-add-row', addRowAfter);
-  bindToolbarButton(view, 'btn-add-col', addColumnAfter);
-  bindToolbarButton(view, 'btn-del-row', deleteRow);
-  bindToolbarButton(view, 'btn-del-col', deleteColumn);
-  bindToolbarButton(view, 'btn-del-table', deleteTable);
-  document.getElementById('btn-table')?.addEventListener('click', () => insertTable(view));
-  document.getElementById('btn-undo')?.addEventListener('click', () => {
-    undo(view.state);
+  // 리본 명령 하나가 실행 취소 한 단계다(Word와 같다) — y-prosemirror는 0.5초 안의 변경을 한 단계로
+  // 묶으므로, 명령마다 묶음을 끊는다.
+  const run = (command: Command) => {
+    command(view.state, view.dispatch, view);
+    yUndoPluginKey.getState(view.state)?.undoManager.stopCapturing();
+    view.focus();
+  };
+  const on = (id: string, handler: () => void) => document.getElementById(id)?.addEventListener('click', handler);
+  const bind = (id: string, command: Command) => on(id, () => run(command));
+  const { marks: m, nodes: n } = docxSchema;
+
+  // ---------- 홈: 클립보드 ----------
+  // 브라우저는 스크립트의 클립보드 읽기를 권한으로 막을 수 있다 — 그때는 Ctrl+V를 안내한다.
+  on('btn-paste', async () => {
+    view.focus();
+    try {
+      const text = await navigator.clipboard.readText();
+      if (text) view.pasteText(text);
+    } catch {
+      window.alert('브라우저가 클립보드 읽기를 허용하지 않았습니다. Ctrl+V로 붙여넣으세요.');
+    }
+  });
+  on('btn-copy', () => {
+    view.focus();
+    document.execCommand('copy');
+  });
+  on('btn-cut', () => {
+    view.focus();
+    document.execCommand('cut');
+  });
+  painterBtn?.addEventListener('click', () => {
+    if (painter) setPainter(null);
+    else setPainter({ format: copyFormat(view.state), sticky: false });
     view.focus();
   });
-  document.getElementById('btn-redo')?.addEventListener('click', () => {
-    redo(view.state);
+  painterBtn?.addEventListener('dblclick', () => {
+    setPainter({ format: copyFormat(view.state), sticky: true });
     view.focus();
   });
-
-  const fontColorInput = document.getElementById('font-color') as HTMLInputElement | null;
-  const fontColorBtn = document.getElementById('font-color-btn') as HTMLElement | null;
-  fontColorBtn?.style.setProperty('--btn-color', fontColorInput?.value ?? '#1b1a17');
-  fontColorInput?.addEventListener('input', () => {
-    fontColorBtn?.style.setProperty('--btn-color', fontColorInput.value);
-    setMark(docxSchema.marks.textColor, { color: fontColorInput.value })(view.state, view.dispatch);
-    view.focus();
+  editorHost.addEventListener('mouseup', () => {
+    if (!painter) return;
+    // 드래그 선택이 끝난 뒤의 선택 영역에 칠한다 — mouseup 직후엔 아직 선택이 반영 전이라 한 틱 미룬다.
+    setTimeout(() => {
+      if (!painter || view.state.selection.empty) return;
+      pasteFormat(painter.format)(view.state, view.dispatch);
+      if (!painter.sticky) setPainter(null);
+    }, 0);
   });
-  bindToolbarButton(view, 'btn-clear-color', removeMark(docxSchema.marks.textColor));
+  window.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && painter) setPainter(null);
+  });
 
+  // ---------- 홈: 글꼴 ----------
+  const fontFamilySelect = document.getElementById('font-family') as HTMLSelectElement | null;
+  fontFamilySelect?.addEventListener('change', () => {
+    const name = fontFamilySelect.value;
+    run(name ? applyMark(m.fontFamily, { ascii: name, eastAsia: name }) : clearMark(m.fontFamily));
+  });
   const fontSizeSelect = document.getElementById('font-size') as HTMLSelectElement | null;
   fontSizeSelect?.addEventListener('change', () => {
     const size = Number(fontSizeSelect.value);
-    if (size > 0) setMark(docxSchema.marks.fontSize, { size })(view.state, view.dispatch);
-    fontSizeSelect.value = '';
-    view.focus();
+    if (size > 0) run(applyMark(m.fontSize, { size }));
+  });
+  bind('btn-font-grow', stepFontSize(1, defaultSizePt));
+  bind('btn-font-shrink', stepFontSize(-1, defaultSizePt));
+  bindDropdown(document.getElementById('change-case-dropdown'), (mode) => run(changeCase(mode as CaseMode)));
+  bind('btn-clear-format', clearFormatting);
+  bind('btn-bold', toggleMark(m.strong));
+  bind('btn-italic', toggleMark(m.em));
+  bind('btn-underline', toggleMark(m.underline));
+  bind('btn-strike', toggleMark(m.strike));
+  bind('btn-subscript', toggleMark(m.subscript));
+  bind('btn-superscript', toggleMark(m.superscript));
+
+  /** 색 버튼(왼쪽: 마지막 색 바로 적용, ▾: 견본 고르기) — Word 리본과 같은 두 부분 버튼. */
+  function bindColorButton(
+    rootId: string,
+    applyId: string,
+    barId: string,
+    colors: readonly PaletteColor[],
+    noneLabel: string,
+    initial: string,
+    apply: (color: string | null) => Command,
+  ): void {
+    const root = document.getElementById(rootId);
+    const menu = root?.querySelector<HTMLElement>('.dropdown-menu');
+    const bar = document.getElementById(barId);
+    let last = initial;
+    if (menu) fillColorPalette(menu, colors, noneLabel);
+    on(applyId, () => run(apply(last)));
+    bindDropdown(root, (value) => {
+      if (value === 'none') {
+        run(apply(null));
+        return;
+      }
+      last = value;
+      if (bar) bar.style.background = value;
+      run(apply(value));
+    });
+  }
+  bindColorButton('highlight-dropdown', 'btn-highlight-apply', 'highlight-bar', HIGHLIGHT_PALETTE, '색 없음', '#ffff00', (color) =>
+    color ? applyMark(m.highlight, { color }) : clearMark(m.highlight),
+  );
+  bindColorButton('font-color-dropdown', 'btn-font-color-apply', 'font-color-bar', FONT_COLOR_PALETTE, '자동', '#c00000', (color) =>
+    color ? applyMark(m.textColor, { color }) : clearMark(m.textColor),
+  );
+
+  // ---------- 홈: 단락 ----------
+  bind('btn-bullet-list', wrapInList(n.bullet_list));
+  bind('btn-ordered-list', wrapInList(n.ordered_list));
+  bind('btn-multilevel-list', multilevelList);
+  bind('btn-indent', changeIndent(1));
+  bind('btn-outdent', changeIndent(-1));
+  bind('btn-align-left', setAlign('left'));
+  bind('btn-align-center', setAlign('center'));
+  bind('btn-align-right', setAlign('right'));
+  bind('btn-align-justify', setAlign('justify'));
+  bindDropdown(document.getElementById('line-spacing-dropdown'), (value) => run(setLineSpacing(Number(value))));
+  bindColorButton('shading-dropdown', 'btn-shading-apply', 'shading-bar', SHADING_PALETTE, '색 없음', '#d9d9d9', setShading);
+
+  // ---------- 홈: 스타일 갤러리 ----------
+  for (const item of document.querySelectorAll<HTMLElement>('.style-gallery-item')) {
+    item.addEventListener('click', () => {
+      const style = item.dataset.style;
+      const charStyle = item.dataset.charStyle;
+      if (style === 'Normal') run(setParagraphStyle(null));
+      else if (style === 'Heading1') run(setHeading(1));
+      else if (style === 'Heading2') run(setHeading(2));
+      else if (style) run(setParagraphStyle(style));
+      else if (charStyle === 'strong') run(applyMark(m.strong));
+      else if (charStyle === 'emphasis') run(applyMark(m.em));
+      else if (charStyle === 'subtle') {
+        applyMark(m.em)(view.state, view.dispatch);
+        run(applyMark(m.textColor, { color: '#404040' }));
+      }
+    });
+  }
+
+  // ---------- 삽입 ----------
+  const tableGrid = document.getElementById('table-grid');
+  const TABLE_GRID_ROWS = 8;
+  const TABLE_GRID_COLS = 10;
+  if (tableGrid) {
+    const caption = tableGrid.parentElement?.querySelector('.table-grid-caption');
+    for (let r = 1; r <= TABLE_GRID_ROWS; r += 1) {
+      for (let c = 1; c <= TABLE_GRID_COLS; c += 1) {
+        const cell = document.createElement('button');
+        cell.type = 'button';
+        cell.className = 'table-grid-cell';
+        cell.dataset.value = `${r}x${c}`;
+        cell.setAttribute('aria-label', `${c}×${r} 표`);
+        cell.addEventListener('mouseenter', () => {
+          for (const other of tableGrid.querySelectorAll<HTMLElement>('.table-grid-cell')) {
+            const [rr, cc] = (other.dataset.value ?? '0x0').split('x').map(Number);
+            other.classList.toggle('is-hot', rr <= r && cc <= c);
+          }
+          if (caption) caption.textContent = `${c}×${r} 표`;
+        });
+        tableGrid.append(cell);
+      }
+    }
+  }
+  bindDropdown(document.getElementById('table-insert-dropdown'), (value) => {
+    const [rows, cols] = value.split('x').map(Number);
+    if (rows > 0 && cols > 0) insertTable(view, rows, cols);
+  });
+  bind('btn-insert-break', (state, dispatch) => {
+    if (dispatch) dispatch(state.tr.replaceSelectionWith(n.hard_break.create()).scrollIntoView());
+    return true;
   });
 
-  bindToolbarButton(view, 'btn-align-left', setAlign('left'));
-  bindToolbarButton(view, 'btn-align-center', setAlign('center'));
-  bindToolbarButton(view, 'btn-align-right', setAlign('right'));
+  // ---------- 표 레이아웃(상황별 탭) ----------
+  bind('btn-add-row', addRowAfter);
+  bind('btn-add-row-before', addRowBefore);
+  bind('btn-add-col', addColumnAfter);
+  bind('btn-add-col-before', addColumnBefore);
+  bind('btn-del-row', deleteRow);
+  bind('btn-del-col', deleteColumn);
+  bind('btn-del-table', deleteTable);
+  bind('btn-merge-cells', mergeCells);
+  bind('btn-split-cell', splitCell);
 
-  // ---------- 확대/축소 ----------
+  // ---------- 상태 표시줄: 단어 수(선택하면 "선택/전체") ----------
+  const statusWords = document.getElementById('status-words');
+  const statusChars = document.getElementById('status-chars');
+  let statusTimer: ReturnType<typeof setTimeout> | undefined;
+  const countWords = (text: string) => (text.trim() ? text.trim().split(/\s+/).length : 0);
+  function updateStatus(): void {
+    const { doc, selection } = view.state;
+    const all = doc.textBetween(0, doc.content.size, '\n', ' ');
+    const words = countWords(all);
+    const chars = all.replace(/\n/g, '').length;
+    if (!selection.empty) {
+      const selected = doc.textBetween(selection.from, selection.to, '\n', ' ');
+      if (statusWords) statusWords.textContent = `단어 ${countWords(selected).toLocaleString()}/${words.toLocaleString()}개`;
+    } else if (statusWords) {
+      statusWords.textContent = `단어 ${words.toLocaleString()}개`;
+    }
+    if (statusChars) statusChars.textContent = `문자 ${chars.toLocaleString()}개(공백 포함)`;
+  }
+  function scheduleStatusUpdate(): void {
+    clearTimeout(statusTimer);
+    statusTimer = setTimeout(updateStatus, 200);
+  }
+  updateStatus();
+
+  // ---------- 확대/축소(상태 표시줄 슬라이더 + 보기 탭) ----------
   const zoomHost = document.getElementById('editor-zoom-host') as HTMLElement;
   const zoomLevelEl = document.getElementById('zoom-level') as HTMLElement;
+  const zoomTrack = document.getElementById('zoom-slider-track');
+  const zoomFill = document.getElementById('zoom-slider-fill');
+  const zoomHandle = document.getElementById('zoom-slider-handle');
   const ZOOM_MIN = 0.6;
   const ZOOM_MAX = 2;
   // 뷰어("바로 보기")는 페이지를 실제 96dpi 크기가 아니라 .pages-container(최대 1120px,
@@ -616,29 +866,54 @@ async function main(): Promise<void> {
   // 차이가 났다. 뷰어와 같은 컨테이너 폭 기준으로 초기 줌을 계산해 화면에 보이는 크기를 맞춘다.
   const VIEWER_PAGE_CONTAINER_MAX_PX = 1120;
   const VIEWER_PAGE_CONTAINER_PADDING_PX = 32; // 뷰어 .pages-container의 좌우 1rem(16px)×2
-  function computeInitialZoom(pageWidthPx: number): number {
-    const availableWidthPx = Math.min(VIEWER_PAGE_CONTAINER_MAX_PX, window.innerWidth) - VIEWER_PAGE_CONTAINER_PADDING_PX;
-    const fitZoom = availableWidthPx / pageWidthPx;
-    return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(fitZoom * 10) / 10));
+  const clampZoom = (value: number) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(value * 100) / 100));
+  function fitZoom(maxWidthPx: number): number {
+    if (!info.pageSetup) return 1;
+    const availableWidthPx = Math.min(maxWidthPx, window.innerWidth) - VIEWER_PAGE_CONTAINER_PADDING_PX;
+    return clampZoom(Math.round((availableWidthPx / info.pageSetup.widthPx) * 10) / 10);
   }
-  let zoom = info.pageSetup ? computeInitialZoom(info.pageSetup.widthPx) : 1;
+  let zoom = fitZoom(VIEWER_PAGE_CONTAINER_MAX_PX);
   function applyZoom(): void {
     zoomHost.style.zoom = String(zoom);
     zoomLevelEl.textContent = `${Math.round(zoom * 100)}%`;
+    const ratio = (zoom - ZOOM_MIN) / (ZOOM_MAX - ZOOM_MIN);
+    if (zoomFill) zoomFill.style.width = `${ratio * 100}%`;
+    if (zoomHandle) zoomHandle.style.left = `${ratio * 100}%`;
   }
+  const setZoom = (value: number) => {
+    zoom = clampZoom(value);
+    applyZoom();
+  };
   applyZoom();
-  document.getElementById('zoom-in')?.addEventListener('click', () => {
-    zoom = Math.min(ZOOM_MAX, Math.round((zoom + 0.1) * 10) / 10);
-    applyZoom();
-  });
-  document.getElementById('zoom-out')?.addEventListener('click', () => {
-    zoom = Math.max(ZOOM_MIN, Math.round((zoom - 0.1) * 10) / 10);
-    applyZoom();
-  });
+  on('zoom-in', () => setZoom(Math.round((zoom + 0.1) * 10) / 10));
+  on('zoom-out', () => setZoom(Math.round((zoom - 0.1) * 10) / 10));
+  on('btn-zoom-in-ribbon', () => setZoom(Math.round((zoom + 0.1) * 10) / 10));
+  on('btn-zoom-out-ribbon', () => setZoom(Math.round((zoom - 0.1) * 10) / 10));
+  on('btn-zoom-100', () => setZoom(1));
+  on('btn-zoom-page-width', () => setZoom(fitZoom(window.innerWidth)));
+  zoomLevelEl.addEventListener('click', () => setZoom(1));
+  if (zoomTrack) {
+    const fromPointer = (event: PointerEvent) => {
+      const rect = zoomTrack.getBoundingClientRect();
+      const ratio = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
+      setZoom(ZOOM_MIN + ratio * (ZOOM_MAX - ZOOM_MIN));
+    };
+    zoomTrack.addEventListener('pointerdown', (event) => {
+      zoomTrack.setPointerCapture(event.pointerId);
+      fromPointer(event);
+    });
+    zoomTrack.addEventListener('pointermove', (event) => {
+      if (zoomTrack.hasPointerCapture(event.pointerId)) fromPointer(event);
+    });
+  }
 
-  // ---------- 문서 내 검색 ----------
+  // ---------- 찾기 및 바꾸기 ----------
   const searchBar = document.getElementById('search-bar') as HTMLElement;
   const searchInput = document.getElementById('search-input') as HTMLInputElement;
+  const replaceRow = document.getElementById('search-replace-row') as HTMLElement;
+  const replaceInput = document.getElementById('search-replace-input') as HTMLInputElement;
+  const replaceOneBtn = document.getElementById('search-replace-one') as HTMLButtonElement;
+  const replaceAllBtn = document.getElementById('search-replace-all') as HTMLButtonElement;
   const searchCount = document.getElementById('search-count') as HTMLElement;
   const searchPrevBtn = document.getElementById('search-prev') as HTMLButtonElement;
   const searchNextBtn = document.getElementById('search-next') as HTMLButtonElement;
@@ -651,28 +926,47 @@ async function main(): Promise<void> {
     let tr = view.state.tr.setMeta(searchPluginKey, { matches: searchMatches, current: searchCurrent });
     if (searchCurrent >= 0) {
       const match = searchMatches[searchCurrent];
-      tr = tr.setSelection(TextSelection.near(tr.doc.resolve(match.from))).scrollIntoView();
+      tr = tr.setSelection(TextSelection.create(tr.doc, match.from, match.to)).scrollIntoView();
     }
     view.dispatch(tr);
     searchCount.textContent = searchMatches.length > 0 ? `${searchCurrent + 1}/${searchMatches.length}` : searchInput.value ? '0/0' : '';
     searchPrevBtn.disabled = searchMatches.length === 0;
     searchNextBtn.disabled = searchMatches.length === 0;
   }
-  function openSearch(): void {
+  function openSearch(withReplace: boolean): void {
     searchBar.hidden = false;
+    const showReplace = withReplace && canEdit;
+    replaceRow.hidden = !showReplace;
+    replaceOneBtn.hidden = !showReplace;
+    replaceAllBtn.hidden = !showReplace;
+    const selected = view.state.selection.empty ? '' : view.state.doc.textBetween(view.state.selection.from, view.state.selection.to, ' ');
+    if (selected && !selected.includes('\n') && selected.length < 100) searchInput.value = selected;
     searchInput.focus();
     searchInput.select();
+    if (searchInput.value) applySearch(0);
   }
   function closeSearch(): void {
     searchBar.hidden = true;
     searchInput.value = '';
     applySearch(0);
+    view.focus();
   }
-  document.getElementById('search-btn')?.addEventListener('click', () => {
-    if (searchBar.hidden) openSearch();
-    else closeSearch();
+  on('search-btn', () => (searchBar.hidden ? openSearch(false) : closeSearch()));
+  on('btn-ribbon-find', () => openSearch(false));
+  on('btn-ribbon-replace', () => openSearch(true));
+  on('btn-ribbon-select', () => run(selectAll));
+  on('search-close', closeSearch);
+  replaceOneBtn.addEventListener('click', () => {
+    const match = searchMatches[searchCurrent];
+    if (!match) return;
+    replaceRange(match.from, match.to, replaceInput.value)(view.state, view.dispatch);
+    applySearch(searchCurrent);
   });
-  document.getElementById('search-close')?.addEventListener('click', closeSearch);
+  replaceAllBtn.addEventListener('click', () => {
+    const count = replaceAll(view.state, view.dispatch, searchInput.value, replaceInput.value);
+    applySearch(0);
+    searchCount.textContent = `${count}개 바꿈`;
+  });
   // applySearch가 매번 findMatches로 문서 전체를 다시 훑으므로(문서가 크면 체감되는 비용), 입력
   // 중에는 짧게 모아서(디바운스) 실행한다 — Enter/이전·다음 버튼 등 명시적 액션은 즉시 반응해야
   // 하므로 이 디바운스를 적용하지 않는다.
@@ -685,12 +979,20 @@ async function main(): Promise<void> {
     if (event.key === 'Enter') applySearch(searchCurrent + (event.shiftKey ? -1 : 1));
     if (event.key === 'Escape') closeSearch();
   });
+  replaceInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') closeSearch();
+  });
   searchPrevBtn.addEventListener('click', () => applySearch(searchCurrent - 1));
   searchNextBtn.addEventListener('click', () => applySearch(searchCurrent + 1));
   window.addEventListener('keydown', (event) => {
-    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') {
+    if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+    const key = event.key.toLowerCase();
+    if (key === 'f') {
       event.preventDefault();
-      openSearch();
+      openSearch(false);
+    } else if (key === 'h') {
+      event.preventDefault();
+      openSearch(true);
     }
   });
 

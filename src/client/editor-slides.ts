@@ -7,6 +7,7 @@ import { baseKeymap, splitBlockAs, toggleMark } from 'prosemirror-commands';
 import { keymap } from 'prosemirror-keymap';
 import type { Mark, MarkType, Node as PMNode } from 'prosemirror-model';
 import { ySyncPlugin, yCursorPlugin, yUndoPlugin, ySyncPluginKey, undo, redo } from 'y-prosemirror';
+import { initOfficeShell } from './officeShell.js';
 import {
   PPTX_SLIDES_ARRAY,
   PPTX_SLIDE_CONTENTS_MAP,
@@ -585,6 +586,7 @@ function cardFor(entry: SlideEntry, index: number): HTMLElement {
 }
 
 function renderSlides(): void {
+  queueMicrotask(updateSlideStatus);
   const entries = slidesArray.toArray();
   railEl.replaceChildren(...entries.map((entry, index) => cardFor(entry, index)));
   // 아직 선택된 슬라이드가 없거나(최초 로드), 선택돼 있던 슬라이드가 방금 삭제됐다면 첫 번째
@@ -614,6 +616,16 @@ function selectSlide(entryId: string): void {
     card.classList.toggle('active', (card as HTMLElement).dataset.id === entryId);
   }
   onActiveSlideChange?.(entryId);
+  updateSlideStatus();
+}
+
+/** 상태 표시줄 "슬라이드 3/49" */
+function updateSlideStatus(): void {
+  const el = document.getElementById('status-slide');
+  if (!el) return;
+  const entries = slidesArray.toArray();
+  const index = entries.findIndex((entry) => entry.id === activeSlideId);
+  el.textContent = entries.length > 0 ? `슬라이드 ${index + 1}/${entries.length}` : '슬라이드 없음';
 }
 
 function setupDragAndDrop(): void {
@@ -1047,6 +1059,20 @@ async function main(): Promise<void> {
   titleEl.textContent = info.name;
   document.title = `${info.name} — DocView 편집`;
   canEdit = info.permissions.canEdit;
+  // 리본 편집 탭은 읽기 전용이면 셸이 숨긴다(파일 탭만 남는다).
+  initOfficeShell({
+    token: token ?? '',
+    docName: info.name,
+    canEdit,
+    canDownload: info.permissions.canDownload,
+    canPrint: info.permissions.canPrint,
+    onUndo: () => {
+      if (focusedView) undo(focusedView.state);
+    },
+    onRedo: () => {
+      if (focusedView) redo(focusedView.state);
+    },
+  });
   if (info.slideSize && info.slideSize.cx > 0 && info.slideSize.cy > 0) {
     SLIDE_W_EMU = info.slideSize.cx;
     SLIDE_H_EMU = info.slideSize.cy;
@@ -1055,8 +1081,6 @@ async function main(): Promise<void> {
   // 패턴(canEdit:false로 fatal error를 띄우면 "바로보기"가 동시편집 화면을 못 씀). 실제 쓰기
   // 차단은 room.ts의 readOnlyConns(서버 쪽)가 이미 하고 있고, 여기서는 UI만 맞춘다.
   if (!canEdit) {
-    // 리본 전체가 편집 도구라 읽기 전용에선 통째로 숨긴다(빈 그룹 테두리만 남는 일이 없도록).
-    document.getElementById('slides-ribbon')?.setAttribute('hidden', '');
     connStatusEl.insertAdjacentHTML('afterend', '<span class="conn-status" data-status="readonly">읽기 전용</span>');
   }
 

@@ -24,14 +24,26 @@
       document.body.classList.add('home-hidden');
     }
   </script>
-  <header class="editor-toolbar" id="toolbar">
-    <div class="toolbar-top-row">
-      <div class="toolbar-group toolbar-left">
+  <header class="editor-toolbar office-shell" id="toolbar" data-app="powerpoint">
+    <div class="office-titlebar">
+      <div class="titlebar-left">
         <a href="/" class="icon-btn doclist-link" title="문서 목록으로" aria-label="문서 목록으로 돌아가기">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="m12 19-7-7 7-7"/></svg>
         </a>
+        <div class="quick-access" role="toolbar" aria-label="빠른 실행 도구 모음">
+          <button id="qa-save" class="qa-btn" title="저장 (Ctrl+S)" aria-label="저장">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h11l3 3v12a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Z"/><path d="M8 4v5h7V4M8 20v-6h8v6"/></svg>
+          </button>
+          <button id="qa-undo" class="qa-btn" title="실행 취소 (Ctrl+Z)" aria-label="실행 취소">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-3"/></svg>
+          </button>
+          <button id="qa-redo" class="qa-btn" title="다시 실행 (Ctrl+Y)" aria-label="다시 실행">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m15 14 5-5-5-5"/><path d="M20 9H9a5 5 0 0 0 0 10h3"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="titlebar-center">
         <span id="doc-title" class="doc-title">문서 불러오는 중…</span>
-        <span id="conn-status" class="conn-status" data-status="connecting">연결 중…</span>
         <span id="save-status" class="save-status" data-status="idle" hidden>
           <svg class="save-status-icon-saving" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/></svg>
           <svg class="save-status-icon-saved" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
@@ -39,13 +51,24 @@
           <span class="save-status-text"></span>
         </span>
       </div>
-      <div class="toolbar-group toolbar-right">
+      <div class="titlebar-right">
+        <span id="conn-status" class="conn-status" data-status="connecting">연결 중…</span>
         <div id="presence-list" class="presence-list" aria-label="현재 접속 중인 참여자"></div>
       </div>
     </div>
+
+    <div class="ribbon-tabs" role="tablist" aria-label="리본">
+      <button class="ribbon-tab ribbon-tab-file" role="tab" data-tab="file">파일</button>
+      <button class="ribbon-tab" role="tab" data-tab="home" data-edit-only>홈</button>
+      <button class="ribbon-tab" role="tab" data-tab="insert" data-edit-only>삽입</button>
+      <span class="ribbon-tabs-spacer"></span>
+      <button id="ribbon-collapse" class="ribbon-collapse" title="리본 축소 (Ctrl+F1)" aria-label="리본 축소">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 15 6-6 6 6"/></svg>
+      </button>
+    </div>
     <!-- 프레젠테이션 프로그램 "홈" 탭과 같은 사용 흐름의 리본 — 아이콘·라벨은 전부 자체 제작
          (상용 제품의 아이콘/이미지 자산은 쓰지 않는다). 그룹: 슬라이드 · 글꼴 · 단락 · 그리기. -->
-    <div class="toolbar-group toolbar-format" id="slides-ribbon">
+    <div class="toolbar-group toolbar-format ribbon-panel" id="slides-ribbon" data-panel="home" role="tabpanel">
       <div class="ribbon-group" id="ribbon-slides">
         <div class="ribbon-group-buttons">
           <button id="btn-add-blank" class="icon-btn icon-btn-big" title="새 슬라이드 (Ctrl+M)">
@@ -165,6 +188,44 @@
         <span class="ribbon-group-label">그리기</span>
       </div>
     </div>
+    <!-- ===== 삽입 — 같은 명령을 홈 탭의 버튼으로 넘긴다(data-proxy) ===== -->
+    <div class="toolbar-group toolbar-format ribbon-panel" data-panel="insert" role="tabpanel" hidden>
+      <div class="ribbon-group">
+        <div class="ribbon-group-buttons">
+          <button class="icon-btn icon-btn-big" data-proxy="btn-add-blank" title="새 슬라이드 (Ctrl+M)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="15" height="11" rx="1.2"/><path d="M19 15v6M16 18h6"/></svg>
+            <span>새 슬라이드</span>
+          </button>
+        </div>
+        <span class="ribbon-group-label">슬라이드</span>
+      </div>
+      <div class="ribbon-group">
+        <div class="ribbon-group-buttons">
+          <button class="icon-btn icon-btn-big" data-proxy="btn-add-textbox" title="텍스트 상자 삽입">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="1.2" stroke-dasharray="3 2"/><path d="M8 9h8M12 9v8"/></svg>
+            <span>텍스트 상자</span>
+          </button>
+        </div>
+        <span class="ribbon-group-label">텍스트</span>
+      </div>
+      <div class="ribbon-group">
+        <div class="ribbon-group-buttons">
+          <button class="icon-btn icon-btn-big" data-proxy="btn-shape-rect" title="사각형 삽입">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="4" y="6" width="16" height="12"/></svg>
+            <span>사각형</span>
+          </button>
+          <button class="icon-btn icon-btn-big" data-proxy="btn-shape-roundrect" title="둥근 사각형 삽입">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="4" y="6" width="16" height="12" rx="4"/></svg>
+            <span>둥근 사각형</span>
+          </button>
+          <button class="icon-btn icon-btn-big" data-proxy="btn-shape-ellipse" title="타원 삽입">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><ellipse cx="12" cy="12" rx="8" ry="6"/></svg>
+            <span>타원</span>
+          </button>
+        </div>
+        <span class="ribbon-group-label">도형</span>
+      </div>
+    </div>
   </header>
 
   <div class="slides-editor-body">
@@ -173,6 +234,11 @@
       <div id="slide-canvas" class="slide-canvas" aria-label="선택한 슬라이드 콘텐츠"></div>
     </main>
   </div>
+
+  <footer class="office-statusbar" id="statusbar">
+    <span id="status-slide" class="statusbar-item">슬라이드</span>
+    <span class="statusbar-spacer"></span>
+  </footer>
 
   <template id="slide-card-template">
     <div class="slide-card" draggable="true">

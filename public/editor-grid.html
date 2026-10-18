@@ -26,14 +26,26 @@
       document.body.classList.add('home-hidden');
     }
   </script>
-  <header class="editor-toolbar" id="toolbar">
-    <div class="toolbar-top-row">
-      <div class="toolbar-group toolbar-left">
+  <header class="editor-toolbar office-shell" id="toolbar" data-app="excel">
+    <div class="office-titlebar">
+      <div class="titlebar-left">
         <a href="/" class="icon-btn doclist-link" title="문서 목록으로" aria-label="문서 목록으로 돌아가기">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="m12 19-7-7 7-7"/></svg>
         </a>
+        <div class="quick-access" role="toolbar" aria-label="빠른 실행 도구 모음">
+          <button id="qa-save" class="qa-btn" title="저장 (Ctrl+S)" aria-label="저장">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h11l3 3v12a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Z"/><path d="M8 4v5h7V4M8 20v-6h8v6"/></svg>
+          </button>
+          <button id="qa-undo" class="qa-btn" title="실행 취소 (Ctrl+Z)" aria-label="실행 취소">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-3"/></svg>
+          </button>
+          <button id="qa-redo" class="qa-btn" title="다시 실행 (Ctrl+Y)" aria-label="다시 실행">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m15 14 5-5-5-5"/><path d="M20 9H9a5 5 0 0 0 0 10h3"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="titlebar-center">
         <span id="doc-title" class="doc-title">문서 불러오는 중…</span>
-        <span id="conn-status" class="conn-status" data-status="connecting">연결 중…</span>
         <span id="save-status" class="save-status" data-status="idle" hidden>
           <svg class="save-status-icon-saving" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/></svg>
           <svg class="save-status-icon-saved" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
@@ -41,14 +53,26 @@
           <span class="save-status-text"></span>
         </span>
       </div>
-      <div class="toolbar-group toolbar-right">
-        <button id="search-btn" class="icon-btn" title="시트 내 검색 (Ctrl+F)" aria-label="시트 내 검색">
+      <div class="titlebar-right">
+        <span id="conn-status" class="conn-status" data-status="connecting">연결 중…</span>
+        <button id="search-btn" class="icon-btn" title="찾기 (Ctrl+F)" aria-label="찾기">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
         </button>
         <div id="presence-list" class="presence-list" aria-label="현재 접속 중인 참여자"></div>
       </div>
     </div>
-    <div class="toolbar-group toolbar-format">
+
+    <div class="ribbon-tabs" role="tablist" aria-label="리본">
+      <button class="ribbon-tab ribbon-tab-file" role="tab" data-tab="file">파일</button>
+      <button class="ribbon-tab" role="tab" data-tab="home" data-edit-only>홈</button>
+      <button class="ribbon-tab" role="tab" data-tab="formulas" data-edit-only>수식</button>
+      <button class="ribbon-tab" role="tab" data-tab="view">보기</button>
+      <span class="ribbon-tabs-spacer"></span>
+      <button id="ribbon-collapse" class="ribbon-collapse" title="리본 축소 (Ctrl+F1)" aria-label="리본 축소">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 15 6-6 6 6"/></svg>
+      </button>
+    </div>
+    <div class="toolbar-group toolbar-format ribbon-panel" data-panel="home" role="tabpanel">
       <div class="ribbon-group">
         <div class="ribbon-group-buttons ribbon-group-buttons-wrap">
           <div class="ribbon-row">
@@ -83,14 +107,14 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
               </button>
               <div class="dropdown-menu" id="border-menu" hidden>
-                <button data-border="all">모든 테두리</button>
-                <button data-border="outside">바깥쪽 테두리</button>
-                <button data-border="outside-thick">굵은 바깥쪽 테두리</button>
-                <button data-border="top">위쪽 테두리</button>
-                <button data-border="bottom">아래쪽 테두리</button>
-                <button data-border="left">왼쪽 테두리</button>
-                <button data-border="right">오른쪽 테두리</button>
-                <button data-border="none">테두리 없음</button>
+                <button data-value="all">모든 테두리</button>
+                <button data-value="outside">바깥쪽 테두리</button>
+                <button data-value="outside-thick">굵은 바깥쪽 테두리</button>
+                <button data-value="top">위쪽 테두리</button>
+                <button data-value="bottom">아래쪽 테두리</button>
+                <button data-value="left">왼쪽 테두리</button>
+                <button data-value="right">오른쪽 테두리</button>
+                <button data-value="none">테두리 없음</button>
               </div>
             </span>
             <span class="dropdown-btn color-dropdown-btn" id="cell-bg-color-btn">
@@ -207,15 +231,106 @@
 
       <div class="ribbon-group">
         <div class="ribbon-group-buttons">
-          <button id="btn-autosum" class="icon-btn icon-btn-glyph" title="자동 합계 — 위쪽(없으면 왼쪽)으로 연속된 숫자 칸을 더한다"><strong>Σ</strong></button>
-          <button id="btn-freeze-panes" class="icon-btn" title="틀 고정 — 선택한 칸의 위쪽 행과 왼쪽 열을 고정한다" aria-pressed="false">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="17" height="17" stroke-width="1.4"/><path d="M3.5 9h17M9 3.5v17" stroke-width="2.6"/></svg>
-          </button>
+          <span class="dropdown-btn autosum-dropdown" id="autosum-dropdown-home">
+            <button id="btn-autosum" class="icon-btn icon-btn-glyph autosum-apply" data-fn="SUM" title="자동 합계 (Alt+=) — 위쪽(없으면 왼쪽)으로 연속된 숫자 칸"><strong>Σ</strong></button>
+            <button class="dropdown-caret" aria-label="자동 합계 함수 선택">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+            </button>
+            <div class="dropdown-menu" hidden>
+              <button data-value="SUM">합계(S)</button>
+              <button data-value="AVERAGE">평균(A)</button>
+              <button data-value="COUNT">숫자 개수(C)</button>
+              <button data-value="MAX">최대값(M)</button>
+              <button data-value="MIN">최소값(I)</button>
+            </div>
+          </span>
           <button id="btn-find-replace" class="icon-btn" title="찾기 및 바꾸기 (Ctrl+H)">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
           </button>
         </div>
         <span class="ribbon-group-label">편집</span>
+      </div>
+    </div>
+    <!-- ===== 수식 ===== -->
+    <div class="toolbar-group toolbar-format ribbon-panel" data-panel="formulas" role="tabpanel" hidden>
+      <div class="ribbon-group">
+        <div class="ribbon-group-buttons">
+          <span class="dropdown-btn autosum-dropdown" id="autosum-dropdown-formulas">
+            <button class="icon-btn icon-btn-big autosum-apply" data-fn="SUM" title="자동 합계 (Alt+=)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 5H6l6 7-6 7h12"/></svg>
+              <span>자동 합계</span>
+            </button>
+            <button class="dropdown-caret" aria-label="자동 합계 함수 선택">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+            </button>
+            <div class="dropdown-menu" hidden>
+              <button data-value="SUM">합계(S)</button>
+              <button data-value="AVERAGE">평균(A)</button>
+              <button data-value="COUNT">숫자 개수(C)</button>
+              <button data-value="MAX">최대값(M)</button>
+              <button data-value="MIN">최소값(I)</button>
+            </div>
+          </span>
+          <div class="ribbon-group-buttons-wrap">
+            <div class="ribbon-row">
+              <button class="icon-btn ribbon-btn-labeled autosum-apply" data-fn="AVERAGE" title="평균">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 20V12M10 20V7M15 20v-9M20 20V9"/><path d="M3 10.5h18" stroke-dasharray="2 2"/></svg>
+                <span class="ribbon-btn-label">평균</span>
+              </button>
+              <button class="icon-btn ribbon-btn-labeled autosum-apply" data-fn="MAX" title="최대값">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 20v-6M10 20v-9M15 20V5M20 20v-8"/><path d="m12.5 5 2.5-3 2.5 3"/></svg>
+                <span class="ribbon-btn-label">최대값</span>
+              </button>
+            </div>
+            <div class="ribbon-row">
+              <button class="icon-btn ribbon-btn-labeled autosum-apply" data-fn="COUNT" title="숫자 개수">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4 7 20M17 4l-2 16M4 9h16M3.5 15h16"/></svg>
+                <span class="ribbon-btn-label">숫자 개수</span>
+              </button>
+              <button class="icon-btn ribbon-btn-labeled autosum-apply" data-fn="MIN" title="최소값">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 20V8M10 20V5M15 20v-3M20 20V9"/><path d="m12.5 11 2.5 3 2.5-3"/></svg>
+                <span class="ribbon-btn-label">최소값</span>
+              </button>
+            </div>
+          </div>
+        </div>
+        <span class="ribbon-group-label">함수 라이브러리</span>
+      </div>
+    </div>
+
+    <!-- ===== 보기 ===== -->
+    <div class="toolbar-group toolbar-format ribbon-panel" data-panel="view" role="tabpanel" hidden>
+      <div class="ribbon-group">
+        <div class="ribbon-group-buttons">
+          <button id="btn-freeze-panes" class="icon-btn icon-btn-big" title="틀 고정 — 선택한 칸의 위쪽 행과 왼쪽 열을 고정한다(다시 누르면 해제)" aria-pressed="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="17" height="17" stroke-width="1.4"/><path d="M3.5 9h17M9 3.5v17" stroke-width="2.6"/></svg>
+            <span>틀 고정</span>
+          </button>
+        </div>
+        <span class="ribbon-group-label">창</span>
+      </div>
+      <div class="ribbon-group">
+        <div class="ribbon-group-buttons">
+          <button id="btn-zoom-100" class="icon-btn icon-btn-big" title="100%로 보기">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/><text x="11" y="13.4" font-size="6" text-anchor="middle" fill="currentColor" stroke="none" font-family="sans-serif">100</text></svg>
+            <span>100%</span>
+          </button>
+          <div class="ribbon-group-buttons-wrap">
+            <div class="ribbon-row">
+              <button id="btn-zoom-in-ribbon" class="icon-btn ribbon-btn-labeled" title="확대">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3M8 11h6M11 8v6"/></svg>
+                <span class="ribbon-btn-label">확대</span>
+              </button>
+            </div>
+            <div class="ribbon-row">
+              <button id="btn-zoom-out-ribbon" class="icon-btn ribbon-btn-labeled" title="축소">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3M8 11h6"/></svg>
+                <span class="ribbon-btn-label">축소</span>
+              </button>
+            </div>
+          </div>
+        </div>
+        <span class="ribbon-group-label">확대/축소</span>
       </div>
     </div>
   </header>
