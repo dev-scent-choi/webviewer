@@ -1,4 +1,5 @@
 import { addNewCharts, restoreDrawings, stripDrawings, type ChartCache } from './drawingPassthrough.js';
+import { restoreDefaultFont } from './defaultFont.js';
 import { cellsOf, type GridChart } from './chartModel.js';
 import { writeFilterCriteria } from './autoFilter.js';
 import { filteredRows, type SheetFilter } from './filterModel.js';
@@ -862,7 +863,8 @@ export async function exportXlsxFromGrid(
 
   const chartJobs = (options.newCharts ?? []).map((chart) => ({ chart, cache: chartCacheFrom(workbook, chart) }));
   const buffer = await workbook.xlsx.writeBuffer();
-  return writeFilterCriteria(addNewCharts(restoreDrawings(new Uint8Array(buffer as ArrayBuffer), drawings), chartJobs), filtersByName);
+  const written = writeFilterCriteria(addNewCharts(restoreDrawings(new Uint8Array(buffer as ArrayBuffer), drawings), chartJobs), filtersByName);
+  return restoreDefaultFont(written, originalXlsxBytes);
 }
 
 /**

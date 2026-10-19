@@ -141,3 +141,33 @@ describe('메모가 있는 파일을 한 번 저장한 뒤에도 다시 읽힌�
     expect(grid.sheets[0].rows[0][0]).toMatchObject({ v: '결함' });
   });
 });
+
+describe('편집기로 저장해도 통합 문서 표준 글꼴(열 너비 단위)이 바뀌지 않는다', () => {
+  test('ExcelJS가 Calibri로 바꾼 표준 글꼴을 원본(돋움)으로 되돌린다', async () => {
+    const { restoreDefaultFont } = await import('../src/xlsx/defaultFont.js');
+    const { normalFontOfStylesXml } = await import('../src/xlsx/sheetGeometry.js');
+    const { unzipSync, zipSync, strFromU8, strToU8 } = await import('fflate');
+    const wb = new ExcelJS.Workbook();
+    wb.addWorksheet('표지').getCell('A1').value = 'x';
+    const output = new Uint8Array(await wb.xlsx.writeBuffer());
+    const stylesOf = (bytes: Uint8Array) => strFromU8(unzipSync(bytes)['xl/styles.xml']);
+    expect(normalFontOfStylesXml(stylesOf(output)).name).toBe('Calibri');
+    // 원본: 표준 글꼴이 돋움인 같은 파일
+    const originalEntries = unzipSync(output);
+    originalEntries['xl/styles.xml'] = strToU8(stylesOf(output).replace(/<font>[\s\S]*?<\/font>/, '<font><sz val="11"/><name val="돋움"/><family val="3"/><charset val="129"/></font>'));
+    const original = zipSync(originalEntries);
+    const restored = restoreDefaultFont(output, original);
+    expect(normalFontOfStylesXml(stylesOf(restored))).toMatchObject({ name: '돋움', size: 11 });
+    // 다시 읽어도 열 너비 단위가 돋움 기준
+    const grid = await parseXlsxToGrid(Buffer.from(restored));
+    expect(grid.sheets[0].defaultColWidth).toBe(80);
+  });
+
+  test('표준 스타일이 첫 글꼴이 아닌 글꼴을 가리켜도 그 글꼴을 쓴다', async () => {
+    const { normalFontOfStylesXml } = await import('../src/xlsx/sheetGeometry.js');
+    const xml =
+      '<styleSheet><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><sz val="10"/><name val="맑은 고딕"/></font></fonts>' +
+      '<cellStyleXfs count="2"><xf fontId="0"/><xf fontId="1"/></cellStyleXfs><cellStyles count="2"><cellStyle name="a" xfId="0"/><cellStyle name="표준" xfId="1" builtinId="0"/></cellStyles></styleSheet>';
+    expect(normalFontOfStylesXml(xml)).toMatchObject({ name: '맑은 고딕', size: 10, index: 1 });
+  });
+});

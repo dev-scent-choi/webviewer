@@ -58,12 +58,40 @@ export function maxDigitWidthPx(fontName: string | undefined, sizePt: number | u
 }
 
 /** styles.xml에서 기본 글꼴(첫 <font>)의 이름·크기 */
+/** <tag>…</tag> 또는 <tag/> 자식 요소 목록(원문 그대로) */
+function childElements(containerXml: string, tag: string): string[] {
+  const out: string[] = [];
+  const re = new RegExp(`<(?:\\w+:)?${tag}\\b[^>]*?(?:/>|>[\\s\\S]*?</(?:\\w+:)?${tag}>)`, 'g');
+  for (const m of containerXml.matchAll(re)) out.push(m[0]);
+  return out;
+}
+
+/**
+ * 통합 문서의 "표준" 스타일 글꼴 — 엑셀이 열 너비 단위와 서식 없는 칸의 글꼴로 쓰는 것. 표준 스타일
+ * (<cellStyle builtinId="0">)이 가리키는 cellStyleXfs의 fontId 글꼴이다(대개 첫 글꼴이지만 아닐 때도 있다).
+ * index는 <fonts> 안 위치, xml은 그 <font> 원문.
+ */
+export function normalFontOfStylesXml(stylesXml: string | undefined): { name?: string; size?: number; index?: number; xml?: string } {
+  if (!stylesXml) return {};
+  const fontsXml = /<(?:\w+:)?fonts\b[^>]*>([\s\S]*?)<\/(?:\w+:)?fonts>/.exec(stylesXml)?.[1];
+  if (!fontsXml) return {};
+  const fonts = childElements(fontsXml, 'font');
+  const normalStyle = /<(?:\w+:)?cellStyle\b[^>]*\bbuiltinId="0"[^>]*>/.exec(stylesXml)?.[0];
+  const xfId = Number(normalStyle ? /\bxfId="(\d+)"/.exec(normalStyle)?.[1] ?? 0 : 0);
+  const styleXfsXml = /<(?:\w+:)?cellStyleXfs\b[^>]*>([\s\S]*?)<\/(?:\w+:)?cellStyleXfs>/.exec(stylesXml)?.[1] ?? '';
+  const styleXf = childElements(styleXfsXml, 'xf')[xfId] ?? '';
+  const index = Number(/\bfontId="(\d+)"/.exec(styleXf)?.[1] ?? 0);
+  const xml = fonts[index] ?? fonts[0];
+  if (!xml) return {};
+  const size = Number(/<(?:\w+:)?sz\b[^>]*\bval="([^"]+)"/.exec(xml)?.[1]);
+  const name = /<(?:\w+:)?name\b[^>]*\bval="([^"]+)"/.exec(xml)?.[1];
+  return { name, size: Number.isFinite(size) && size > 0 ? size : undefined, index: fonts[index] ? index : 0, xml };
+}
+
+/** styles.xml에서 기본(표준 스타일) 글꼴의 이름·크기 */
 export function defaultFontOfStylesXml(stylesXml: string | undefined): { name?: string; size?: number } {
-  const first = stylesXml && /<(?:\w+:)?fonts\b[^>]*>\s*<(?:\w+:)?font\b[^>]*>([\s\S]*?)<\/(?:\w+:)?font>/.exec(stylesXml)?.[1];
-  if (!first) return {};
-  const size = Number(/<(?:\w+:)?sz\b[^>]*\bval="([^"]+)"/.exec(first)?.[1]);
-  const name = /<(?:\w+:)?name\b[^>]*\bval="([^"]+)"/.exec(first)?.[1];
-  return { name, size: Number.isFinite(size) && size > 0 ? size : undefined };
+  const { name, size } = normalFontOfStylesXml(stylesXml);
+  return { name, size };
 }
 
 export function rowHeightPtToPx(pt: number): number {
