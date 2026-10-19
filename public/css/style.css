@@ -1203,23 +1203,37 @@ h2 {
   left: 0;
   border-collapse: collapse;
   table-layout: fixed;
-  font-size: 0.8rem;
-  line-height: 1.3;
+  /* 엑셀 기본 글꼴·크기(11pt)·줄 높이 — 행 높이(기본 15pt=20px)에 한 줄이 꼭 들어가야 행이 늘지 않는다.
+     글꼴이 다르면 글자 폭이 달라 줄 바꿈·잘림이 엑셀과 달라진다. */
+  font-family: '맑은 고딕', 'Malgun Gothic', Calibri, sans-serif;
+  font-size: 11pt;
+  line-height: 1.25;
   will-change: transform;
 }
 
 .grid-table td {
   border: 1px dotted #9aa0ab;
-  padding: 2px 6px;
+  padding: 0 3px;
   /* 실제 엑셀은 오른쪽 이웃 칸이 비어 있으면 내용을 그 위로 넘쳐 보이게 하고, 값이 있는 칸을
      만나야만 거기서 자른다 — td 자체를 무조건 ellipsis로 잘라버리면 그 "넘침" 표현이 아예
      불가능해진다. 실제 자르기/넘침은 안의 .g-cell-spill(renderGridViewport가 값이 있을 때만
      만든다)이 각 칸마다 필요한 폭을 계산해서 처리한다. */
   overflow: visible;
   white-space: nowrap;
-  vertical-align: middle;
+  /* 엑셀 기본 세로 맞춤은 아래 — 위/가운데는 칸 서식(.gsN)이 덮는다 */
+  vertical-align: bottom;
   background-clip: padding-box;
 }
+/* 숨긴 행·열 — 높이/폭 0으로 자리만 지킨다(병합 rowspan/colspan 계산이 어긋나지 않게) */
+.grid-table tr.g-hidden-row { visibility: collapse; }
+/* 시트 보기에서 격자선을 끈 시트 — 칸 서식 테두리(.grid-table td.gsN, 나중에 붙는 규칙)는 그대로 보인다 */
+.grid-table.g-no-gridlines td { border-color: transparent; }
+.grid-table.g-no-gridlines td.g-rownum { border-color: #d7dae0; }
+/* 파일에 있던 그림 — 칸 위에 얹되 클릭은 칸으로 지나간다 */
+.grid-image-layer { position: absolute; inset: 0; pointer-events: none; z-index: 3; }
+.grid-image { position: absolute; display: block; max-width: none; user-select: none; pointer-events: none; }
+.grid-table tr.g-hidden-row td { padding: 0; border-top: 0; border-bottom: 0; line-height: 0; }
+.grid-table td.g-hidden-col { padding: 0; border-left: 0; border-right: 0; }
 /* 엑셀 기본 정렬(명시 정렬이 없는 칸만 — renderGridViewport가 판단해 붙인다): 숫자·날짜 오른쪽,
    논리값 가운데. 명시 정렬(.gsN 규칙)은 이 클래스가 애초에 붙지 않으므로 충돌하지 않는다. */
 .grid-table td.g-num { text-align: right; }
@@ -1234,7 +1248,8 @@ h2 {
   display: block;
   overflow: hidden;
   text-overflow: clip;
-  white-space: nowrap;
+  /* td의 줄 바꿈 설정(기본 nowrap, 줄 바꿈 서식 칸은 normal)을 그대로 따른다 */
+  white-space: inherit;
   position: relative;
   z-index: 1;
   /* 이 span은 "오른쪽 빈 칸들 위로 넘쳐 보이게" 하려고 그 칸들을 실제로 덮을 만큼 넓어진다
@@ -1252,6 +1267,7 @@ h2 {
 .grid-table .g-rownum {
   position: sticky;
   left: 0;
+  vertical-align: middle;
   background: #f3f4f7;
   color: #8a8f99;
   font-size: 0.7rem;
@@ -1460,6 +1476,18 @@ body.home-hidden .doclist-link { display: none !important; }
 /* 원본 글상자의 세로 맞춤(bodyPr anchor, 레이아웃·마스터 상속 포함) — 기본은 위쪽 */
 .slide-textbox.slide-anchor-ctr,
 .slide-textbox.slide-anchor-b { display: flex; flex-direction: column; }
+/* 번호 원·배지(아주 작은 글자 도형) — 여백 없이 가운데 한 줄. 문단 줄 높이를 글자 자신의 크기로
+   잡아(기본 18pt 줄 높이가 작은 글자를 아래로 밀어내지 않게) 도형 정가운데에 놓는다. */
+.slide-textbox.slide-textbox-tiny {
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+}
+.slide-textbox.slide-textbox-tiny > .ProseMirror { width: auto !important; white-space: nowrap; min-height: 0; }
+.slide-textbox.slide-textbox-tiny > .ProseMirror p { line-height: 0; margin: 0; }
+.slide-textbox.slide-textbox-tiny > .ProseMirror p * { line-height: 1.2; }
 .slide-textbox.slide-anchor-ctr { justify-content: center; }
 .slide-textbox.slide-anchor-b { justify-content: flex-end; }
 .slide-textbox.slide-anchor-ctr > .ProseMirror,
@@ -1729,7 +1757,10 @@ body.home-hidden .doclist-link { display: none !important; }
   border-collapse: separate;
   border-spacing: 0;
   table-layout: fixed;
-  font-size: 0.82rem;
+  /* 엑셀 기본 글꼴·크기(11pt) — 행 높이는 파일 값을 <tr>에 그대로 준다 */
+  font-family: '맑은 고딕', 'Malgun Gothic', Calibri, sans-serif;
+  font-size: 11pt;
+  line-height: 1.25;
 }
 
 .grid-edit-table th,
@@ -1743,6 +1774,23 @@ body.home-hidden .doclist-link { display: none !important; }
   box-sizing: border-box;
   height: 1.7rem;
 }
+
+/* 본문 칸 높이는 <tr>에 준 파일 행 높이가 정한다(기본 15pt=20px에 한 줄이 들어가게 위아래 여백 없음).
+   세로 맞춤 기본은 엑셀처럼 아래 — 칸 서식이 위/가운데를 주면 인라인 스타일이 덮는다. */
+.grid-edit-table tbody td,
+.grid-edit-table tbody th {
+  height: auto;
+  padding: 0 0.2rem;
+  vertical-align: bottom;
+}
+.grid-edit-table tbody .g-edit-rownum { vertical-align: middle; }
+/* 숨긴 행·열 — 높이/폭 0으로 자리만 지킨다(병합 계산이 어긋나지 않게) */
+.grid-edit-table tr.g-hidden-row > td,
+.grid-edit-table tr.g-hidden-row > th { padding: 0; border-bottom: 0; line-height: 0; font-size: 0; overflow: hidden; }
+.grid-edit-table td.g-hidden-col { padding: 0; border-right: 0; font-size: 0; overflow: hidden; }
+/* 격자선을 끈 시트 — 칸 서식 테두리는 인라인 스타일이라 그대로 남는다 */
+.grid-edit-table.g-no-gridlines tbody td { border-right-color: transparent; border-bottom-color: transparent; }
+.grid-edit-table.g-no-gridlines tbody tr:first-child td { border-top-color: transparent; }
 
 .grid-edit-table tr:first-child th,
 .grid-edit-table tr:first-child td {

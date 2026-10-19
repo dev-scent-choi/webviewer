@@ -1,4 +1,5 @@
 import { addNewCharts, restoreDrawings, stripDrawings, type ChartCache } from './drawingPassthrough.js';
+import { restoreDefaultFont } from './defaultFont.js';
 import { cellsOf, type GridChart } from './chartModel.js';
 import { writeFilterCriteria } from './autoFilter.js';
 import { filteredRows, type SheetFilter } from './filterModel.js';
@@ -160,6 +161,10 @@ export async function seedGridFromXlsx(ydoc: Y.Doc, grid: GridDocument): Promise
         freezeRows: sheet.freezeRows,
         freezeCols: sheet.freezeCols,
         colWidths: sheet.colWidths,
+        defaultColWidth: sheet.defaultColWidth,
+        defaultRowHeight: sheet.defaultRowHeight,
+        rowHeights: sheet.rowHeights,
+        showGridLines: sheet.showGridLines,
       });
       if (sheet.merges.length > 0) merges.set(String(sheetIdx), sheet.merges);
     });
@@ -450,6 +455,10 @@ export async function seedGridStructureOnly(ydoc: Y.Doc, sheets: readonly LazyGr
         freezeRows: sheet.freezeRows,
         freezeCols: sheet.freezeCols,
         colWidths: sheet.colWidths,
+        defaultColWidth: sheet.defaultColWidth,
+        defaultRowHeight: sheet.defaultRowHeight,
+        rowHeights: sheet.rowHeights,
+        showGridLines: sheet.showGridLines,
       });
       if (sheet.merges.length > 0) merges.set(String(sheetIdx), sheet.merges);
     }, GRID_WINDOW_SEED_ORIGIN);
@@ -854,7 +863,8 @@ export async function exportXlsxFromGrid(
 
   const chartJobs = (options.newCharts ?? []).map((chart) => ({ chart, cache: chartCacheFrom(workbook, chart) }));
   const buffer = await workbook.xlsx.writeBuffer();
-  return writeFilterCriteria(addNewCharts(restoreDrawings(new Uint8Array(buffer as ArrayBuffer), drawings), chartJobs), filtersByName);
+  const written = writeFilterCriteria(addNewCharts(restoreDrawings(new Uint8Array(buffer as ArrayBuffer), drawings), chartJobs), filtersByName);
+  return restoreDefaultFont(written, originalXlsxBytes);
 }
 
 /**

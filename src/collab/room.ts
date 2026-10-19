@@ -46,7 +46,7 @@ import {
 } from '../spreadsheet.js';
 import { exportXlsxFromGridStreaming } from '../xlsx/exportStreaming.js';
 import { GRID_CHARTS_MAP, type GridChart } from '../xlsx/chartModel.js';
-import { readSheetCharts } from '../xlsx/drawingPassthrough.js';
+import { readSheetCharts, readSheetImages, type GridImage } from '../xlsx/drawingPassthrough.js';
 import { readAutoFilters } from '../xlsx/autoFilter.js';
 import { PPTX_SLIDE_DESIGN_MAP, PPTX_SLIDE_DESIGN_ORIGINAL_MAP, readSlideDesign, type SlideDesign } from '../pptx/slideDesign.js';
 import { GRID_FILTERS_MAP, type SheetFilter } from '../xlsx/filterModel.js';
@@ -65,6 +65,12 @@ import {
   GRID_WINDOW_SEED_ORIGIN,
 } from '../xlsx/collab.js';
 import { shiftMerges } from '../xlsx/gridShift.js';
+import {
+  EXCEL_DEFAULT_ROW_HEIGHT_PT,
+  defaultColWidthPx,
+  rowHeightPtToPx,
+  shiftRowHeightRuns,
+} from '../xlsx/sheetGeometry.js';
 import {
   applyColShift,
   applyRowShift,
@@ -756,7 +762,19 @@ async function applyStylesChangeToCanonical(
 
 /** 새로 추가된 시트 자리를 채우는 최소한의 빈 시트 메타. */
 function makeEmptyLazySheetMeta(name: string): LazyGridSheetMeta {
-  return { name, rowCount: 1, colCount: 1, colWidths: [], merges: [], freezeRows: 0, freezeCols: 0 };
+  return {
+    name,
+    rowCount: 1,
+    colCount: 1,
+    colWidths: [],
+    defaultColWidth: defaultColWidthPx(),
+    defaultRowHeight: rowHeightPtToPx(EXCEL_DEFAULT_ROW_HEIGHT_PT),
+    rowHeights: [],
+    showGridLines: true,
+    merges: [],
+    freezeRows: 0,
+    freezeCols: 0,
+  };
 }
 
 /**
@@ -891,6 +909,14 @@ export async function getFileCharts(docId: string): Promise<GridChart[]> {
   if (room) await room.ready;
   const bytes = room?.originalXlsxBytes ?? (await store.readOriginal(docId, 'xlsx'));
   return readSheetCharts(bytes);
+}
+
+/** 파일에 있는 그림(로고 등) — 보기·편집 화면이 칸 위치에 맞춰 얹는다. 열린 룸이 있으면 그 원본 기준. */
+export async function getFileImages(docId: string): Promise<GridImage[]> {
+  const room = rooms.get(docId);
+  if (room) await room.ready;
+  const bytes = room?.originalXlsxBytes ?? (await store.readOriginal(docId, 'xlsx'));
+  return readSheetImages(bytes);
 }
 
 /**
@@ -1252,6 +1278,7 @@ async function applyGridStructureOp(room: Room, op: GridStructureOp): Promise<vo
     applyColShift(store, op.sheet, op.at, op.count, insert);
   }
   meta.merges = shiftMerges(meta.merges, onRows ? 'row' : 'col', op.at, op.count, insert);
+  if (onRows) meta.rowHeights = shiftRowHeightRuns(meta.rowHeights, op.at, op.count, insert);
   if (!onRows) {
     // 열 너비도 gridShift.ts의 옛 insertCanonicalCols/deleteCanonicalCols와 같은 규칙으로 직접
     // 보정한다 — 새로 끼워지는 열은 밀려나는 그 열의 너비를 그대로 물려받는다(엑셀과 같은 동작).
@@ -1298,6 +1325,7 @@ async function applyGridStructureOp(room: Room, op: GridStructureOp): Promise<vo
     rowCount: meta.rowCount,
     colCount: meta.colCount,
     colWidths: meta.colWidths,
+    rowHeights: meta.rowHeights,
   };
   room.ydoc.transact(() => {
     structure.set(mergesKey, next);

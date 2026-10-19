@@ -315,3 +315,49 @@ describe('편집 캔버스 충실도: 실제 슬라이드 크기 / 글자 있는
     expect(visuals[0]).toMatchObject({ kind: 'shape', x: 10, y: 20, w: 300, h: 400, fill: '#FFC000', geom: 'ellipse' });
   });
 });
+
+describe('parseSlideVisuals: 테두리·겹침 순서·회전된 선 (매뉴얼 PPT에서 빠지던 강조 표시)', () => {
+  const rels =
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+    '<Relationship Id="rId2" Type=".../image" Target="../media/image1.png"/></Relationships>';
+  const pic = (id: string, ln = '') =>
+    `<p:pic><p:nvPicPr><p:cNvPr id="${id}" name="스크린샷"/></p:nvPicPr><p:blipFill><a:blip r:embed="rId2"/></p:blipFill>` +
+    `<p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="9000" cy="9000"/></a:xfrm>${ln}</p:spPr></p:pic>`;
+  const redDotRect = (id: string) =>
+    `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="강조"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="100" y="200"/><a:ext cx="300" cy="400"/></a:xfrm>` +
+    '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/><a:ln w="25400"><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill><a:prstDash val="sysDot"/></a:ln></p:spPr></p:sp>';
+  const entriesFor = (body: string) =>
+    zip({ 'ppt/slides/slide1.xml': XML_HEAD + body + XML_TAIL, 'ppt/slides/_rels/slide1.xml.rels': rels, 'ppt/media/image1.png': new Uint8Array([137, 80, 78, 71]) });
+
+  test('채우기 없이 빨간 점선 테두리만 있는 사각형은 테두리로 그리고, 스크린샷보다 위에 놓인다', () => {
+    const visuals = parseSlideVisuals(entriesFor(pic('2') + redDotRect('3')), 'slide1.xml');
+    expect(visuals.map((v) => v.kind)).toEqual(['image', 'shape']);
+    expect(visuals[1]).toMatchObject({ kind: 'shape', x: 100, y: 200, stroke: { color: '#FF0000', width: 25400, dash: 'dotted' } });
+    expect(visuals[1].fill).toBeUndefined();
+  });
+
+  test('겹침 순서는 원본 순서 — 테두리 상자가 그림보다 앞(아래)에 있으면 아래에 둔다', () => {
+    const visuals = parseSlideVisuals(entriesFor(redDotRect('3') + pic('2')), 'slide1.xml');
+    expect(visuals.map((v) => v.kind)).toEqual(['shape', 'image']);
+  });
+
+  test('그림에 직접 준 테두리도 읽는다', () => {
+    const visuals = parseSlideVisuals(entriesFor(pic('2', '<a:ln><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></a:ln>')), 'slide1.xml');
+    expect(visuals[0]).toMatchObject({ kind: 'image', stroke: { color: '#FF0000', dash: 'solid' } });
+  });
+
+  test('90° 돌린 가로 연결선(= 실제로는 세로선)은 돌린 뒤 영역을 넉넉히 잘라 온다', () => {
+    const cxn =
+      '<p:cxnSp><p:nvCxnSpPr><p:cNvPr id="5" name="연결선"/><p:cNvCxnSpPr/><p:nvPr/></p:nvCxnSpPr><p:spPr>' +
+      '<a:xfrm rot="5400000"><a:off x="0" y="1000000"/><a:ext cx="2000000" cy="0"/></a:xfrm><a:prstGeom prst="bentConnector3"><a:avLst/></a:prstGeom>' +
+      '<a:ln w="12700"><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></a:ln></p:spPr></p:cxnSp>';
+    const [line] = parseSlideVisuals(entriesFor(cxn), 'slide1.xml');
+    // 중심 (1000000, 1000000) 기준 세로 2000000 — 사방으로 약 6px(57150 EMU) 넓힌다
+    expect(line).toMatchObject({ kind: 'snapshot', snapshot: true });
+    expect(line.x).toBeCloseTo(1000000 - 57150);
+    expect(line.y).toBeCloseTo(0 - 57150);
+    expect(line.w).toBeCloseTo(57150 * 2);
+    expect(line.h).toBeCloseTo(2000000 + 57150 * 2);
+  });
+});

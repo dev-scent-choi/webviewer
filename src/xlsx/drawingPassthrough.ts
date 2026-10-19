@@ -8,7 +8,15 @@
  * 알려진 한계: 행/열 삽입·삭제로 칸이 밀려도 그리기 위치(앵커)와 차트 참조 범위는 옮기지 않는다.
  */
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
-import { buildChartAnchorXml, buildChartXml, chartAnchorsOf, parseChartXml, type GridChart } from './chartModel.js';
+import {
+  buildChartAnchorXml,
+  buildChartXml,
+  chartAnchorsOf,
+  parseChartXml,
+  pictureAnchorsOf,
+  type ChartAnchorPoint,
+  type GridChart,
+} from './chartModel.js';
 
 export interface StashedSheetDrawing {
   /** 시트 이름 — ExcelJS가 저장하며 시트 파일 이름을 다시 매기므로 이름으로 다시 찾는다. */
@@ -146,9 +154,11 @@ export function stripDrawings(xlsx: Uint8Array): { bytes: Uint8Array; stash: Dra
     sheets.push({ sheetName, drawingPath });
     for (const part of closureOf(entries, drawingPath)) stripped.add(part);
   }
-  // 어느 시트도 참조하지 않는 그리기 파트도 ExcelJS가 읽다가 죽을 수 있다 — 함께 떼어 둔다(되붙이지는 않는다)
+  // 어느 시트도 참조하지 않는 그리기 파트도 ExcelJS가 읽다가 죽을 수 있다 — 함께 떼어 둔다(되붙이지는 않는다).
+  // 단 메모·머리글 그림용 VML(vmlDrawingN.vml과 그 관계)은 남긴다 — 시트 관계가 그대로 가리키고 있어서,
+  // 떼면 ExcelJS가 메모를 읽다 "reading 'comments'"로 죽는다(편집기로 한 번 저장한 파일에서 재현).
   for (const name of Object.keys(entries)) {
-    if (/^xl\/(drawings|charts)\//.test(name) && !stripped.has(name)) stripped.add(name);
+    if (/^xl\/(drawings|charts)\//.test(name) && !/vmlDrawing[^/]*$/.test(name) && !stripped.has(name)) stripped.add(name);
   }
   for (const part of stripped) {
     parts[part] = entries[part];
@@ -298,6 +308,69 @@ export function readSheetCharts(xlsx: Uint8Array): GridChart[] {
     }
   }
   return charts;
+}
+
+/** 시트 위에 놓인 그림(로고·사진) — 보기·편집 화면이 칸 위치에 맞춰 그대로 얹는다(읽기 전용). */
+export interface GridImage {
+  readonly id: string;
+  readonly sheetName: string;
+  readonly name: string;
+  readonly from: ChartAnchorPoint;
+  readonly to: ChartAnchorPoint | null;
+  readonly size: { readonly width: number; readonly height: number } | null;
+  /** data: URL */
+  readonly src: string;
+}
+
+const IMAGE_MIME: Readonly<Record<string, string>> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  bmp: 'image/bmp',
+  webp: 'image/webp',
+  svg: 'image/svg+xml',
+};
+/** 그림을 응답에 data URL로 싣는 총량 상한 — 사진이 많은 큰 파일이 응답을 키우지 않게 */
+const MAX_IMAGE_BYTES_TOTAL = 12 * 1024 * 1024;
+
+/** 파일에 있는 그림들(시트 이름·위치·내용). 브라우저가 못 그리는 형식(EMF/WMF 등)은 뺀다. */
+export function readSheetImages(xlsx: Uint8Array): GridImage[] {
+  const entries: Record<string, Uint8Array> = unzipSync(xlsx);
+  const images: GridImage[] = [];
+  let total = 0;
+  for (const [sheetName, sheetPath] of sheetPathsByName(entries)) {
+    const sheetBytes = entries[sheetPath];
+    const sheetRels = entries[relsPathOf(sheetPath)];
+    if (!sheetBytes || !sheetRels) continue;
+    const rid = /<drawing\b[^>]*r:id="([^"]+)"/.exec(strFromU8(sheetBytes))?.[1];
+    const rel = relationshipsOf(strFromU8(sheetRels)).find((r) => r.id === rid);
+    if (!rel) continue;
+    const drawingPath = resolvePartPath(sheetPath, rel.target);
+    const drawing = entries[drawingPath];
+    const drawingRels = entries[relsPathOf(drawingPath)];
+    if (!drawing || !drawingRels) continue;
+    const relById = new Map(relationshipsOf(strFromU8(drawingRels)).map((r) => [r.id, r]));
+    for (const anchor of pictureAnchorsOf(strFromU8(drawing))) {
+      const imageRel = relById.get(anchor.rid);
+      if (!imageRel) continue;
+      const imagePath = resolvePartPath(drawingPath, imageRel.target);
+      const bytes = entries[imagePath];
+      const mime = IMAGE_MIME[imagePath.split('.').pop()?.toLowerCase() ?? ''];
+      if (!bytes || !mime || total + bytes.length > MAX_IMAGE_BYTES_TOTAL) continue;
+      total += bytes.length;
+      images.push({
+        id: `img:${drawingPath}:${anchor.rid}:${images.length}`,
+        sheetName,
+        name: anchor.name,
+        from: anchor.from,
+        to: anchor.to,
+        size: anchor.size,
+        src: `data:${mime};base64,${Buffer.from(bytes).toString('base64')}`,
+      });
+    }
+  }
+  return images;
 }
 
 /** 새 앵커는 xdr:·a:·r: 접두사로 쓰므로 그리기 루트에 세 네임스페이스가 모두 선언돼 있게 한다. */

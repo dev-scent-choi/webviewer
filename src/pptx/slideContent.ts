@@ -580,6 +580,70 @@ function gradientCss(grad: XmlNode, theme: ThemeColors): string | undefined {
   return `linear-gradient(${round((deg + 90) % 360)}deg, ${list})`;
 }
 
+/** 색이 완전히 투명(<a:alpha val="0"/>)한지 — 그런 선은 PowerPoint에서도 안 보인다 */
+function isFullyTransparent(container: XmlNode | undefined): boolean {
+  if (!container || typeof container !== 'object') return false;
+  for (const key of ['a:srgbClr', 'a:schemeClr', 'a:sysClr', 'a:prstClr']) {
+    const node = container[key] as XmlNode | undefined;
+    const alpha = node && typeof node === 'object' ? (node['a:alpha'] as XmlNode | undefined)?.['@_val'] : undefined;
+    if (alpha !== undefined) return Number(alpha) <= 0;
+  }
+  return false;
+}
+
+/**
+ * 도형의 테두리(선) — <a:ln>의 <a:noFill/>이면 없음, <a:solidFill>이면 그 색, 둘 다 없으면 도형 스타일
+ * <p:style><a:lnRef idx>의 테마 색(기본 도형의 테두리). 두께는 EMU(기본 0.75pt), 점선 종류는 CSS
+ * border-style 셋으로 줄인다. 예전엔 테두리를 전혀 읽지 않아 "채우기 없음 + 빨간 점선" 강조 상자가
+ * 편집 화면에서 통째로 사라졌다.
+ */
+function strokeFromSpPr(spPr: XmlNode | undefined, theme?: ThemeColors, style?: XmlNode): SlideVisual['stroke'] {
+  const ln = spPr?.['a:ln'] as XmlNode | undefined;
+  if (ln?.['a:noFill'] !== undefined) return undefined;
+  if (ln?.['a:gradFill'] !== undefined || ln?.['a:pattFill'] !== undefined) return undefined;
+  const solid = ln?.['a:solidFill'] as XmlNode | undefined;
+  let color: string | undefined;
+  if (solid !== undefined) {
+    if (isFullyTransparent(solid)) return undefined;
+    color = theme ? theme.resolve(solid) : undefined;
+    if (!color) {
+      const rgb = (solid['a:srgbClr'] as XmlNode | undefined)?.['@_val'];
+      color = typeof rgb === 'string' && /^[0-9A-Fa-f]{6}$/.test(rgb) ? `#${rgb.toUpperCase()}` : undefined;
+    }
+  } else {
+    const lnRef = style?.['a:lnRef'] as XmlNode | undefined;
+    if (lnRef && theme && Number(lnRef['@_idx'] ?? 0) > 0 && !isFullyTransparent(lnRef)) color = theme.resolve(lnRef);
+  }
+  if (!color) return undefined;
+  const width = Number(ln?.['@_w'] ?? 9525) || 9525;
+  const prstDash = String((ln?.['a:prstDash'] as XmlNode | undefined)?.['@_val'] ?? 'solid');
+  const dash = prstDash === 'solid' ? 'solid' : /dot/i.test(prstDash) && !/dash/i.test(prstDash) ? 'dotted' : 'dashed';
+  return { color, width, dash };
+}
+
+/** 회전(<a:xfrm rot>, 1/60000도)이 걸린 개체가 실제로 차지하는 영역 — 원본 렌더링에서 잘라 올 때 쓴다.
+ * 회전 전 상자를 그대로 쓰면(예: 90° 돌린 가로 연결선 = 실제로는 세로선) 엉뚱한 곳을 잘라 와 선이 사라졌다. */
+function rotatedBounds(
+  pos: { x: number | null; y: number | null; w: number | null; h: number | null },
+  rot: number,
+): { x: number | null; y: number | null; w: number | null; h: number | null } {
+  if (!rot || pos.x === null || pos.y === null || pos.w === null || pos.h === null) return pos;
+  const rad = ((rot / 60000) * Math.PI) / 180;
+  const cos = Math.abs(Math.cos(rad));
+  const sin = Math.abs(Math.sin(rad));
+  const w = pos.w * cos + pos.h * sin;
+  const h = pos.w * sin + pos.h * cos;
+  const cx = pos.x + pos.w / 2;
+  const cy = pos.y + pos.h / 2;
+  return { x: cx - w / 2, y: cy - h / 2, w, h };
+}
+
+/** 선·연결선을 원본 렌더링에서 잘라 올 때 사방으로 넓히는 여유(약 6px) — 화살촉과 두께가 들어오게 */
+const LINE_SNAPSHOT_PAD_EMU = 6 * 9525;
+
+/** 편집 화면이 CSS 테두리로 그대로 그릴 수 있는 모양(사각형·둥근 사각형·타원 계열) */
+const STROKABLE_GEOMS = new Set([undefined, 'roundRect', 'ellipse', 'flowChartConnector', 'flowChartAlternateProcess', 'round2SameRect', 'flowChartTerminator', 'flowChartProcess']);
+
 /** 글자 도형에 실제로 보이는 글자(공백 아닌 a:t, 또는 쪽 번호 같은 필드)가 있는지. */
 function hasVisibleText(txBody: XmlNode | undefined): boolean {
   for (const para of asArray<XmlNode>(txBody?.['a:p'] as XmlNode | XmlNode[] | undefined)) {
@@ -621,19 +685,24 @@ interface VisualPart {
   readonly cSld: XmlNode;
   readonly root: XmlNode;
   readonly rels: Map<string, string>;
+  /** 도형 id → 원문에 나오는 순서(= 겹침 순서, 앞이 아래) */
+  readonly order: Map<string, number>;
 }
 
 function loadVisualPart(zipEntries: Record<string, Uint8Array>, part: string | null, rootTag: string): VisualPart | null {
   if (!part || !zipEntries[part]) return null;
   try {
-    const parsed = parser.parse(Buffer.from(zipEntries[part]).toString('utf-8')) as XmlNode;
+    const xml = Buffer.from(zipEntries[part]).toString('utf-8');
+    const parsed = parser.parse(xml) as XmlNode;
     const root = parsed[rootTag] as XmlNode | undefined;
     const cSld = root?.['p:cSld'] as XmlNode | undefined;
     if (!root || !cSld) return null;
     const slash = part.lastIndexOf('/');
     const relsBytes = zipEntries[`${part.slice(0, slash)}/_rels/${part.slice(slash + 1)}.rels`];
     const rels = relsBytes ? relsMap(Buffer.from(relsBytes).toString('utf-8')) : new Map<string, string>();
-    return { part, cSld, root, rels };
+    const order = new Map<string, number>();
+    for (const m of xml.matchAll(/<p:cNvPr\b[^>]*?\bid="(\d+)"/g)) if (!order.has(m[1])) order.set(m[1], order.size);
+    return { part, cSld, root, rels, order };
   } catch {
     return null;
   }
@@ -695,9 +764,17 @@ export function parseSlideVisuals(zipEntries: Record<string, Uint8Array>, source
   // <p:grpSp>(그룹 도형) 안에 중첩된 이미지·단순 도형·표/차트도 재귀로 찾아 그룹의 좌표 변환을
   // 적용한 절대 좌표로 push한다(parseSlideShapes의 collectShapesRecursive와 같은 이유 —
   // GroupTransform 설명 참고).
+  // 그림·도형·표·선을 종류별로 모으므로, 원본의 겹침 순서(파트 원문 순서)를 따로 기록해 마지막에 정렬한다
+  const sortKey = new Map<SlideVisual, number>();
+  let partRank = 0;
   function collectVisualsRecursive(owner: VisualPart, node: XmlNode, transforms: readonly GroupTransform[], template: boolean): void {
     const isPlaceholder = (el: XmlNode, nvTag: string) =>
       ((el[nvTag] as XmlNode | undefined)?.['p:nvPr'] as XmlNode | undefined)?.['p:ph'] !== undefined;
+    const push = (el: XmlNode, nvTag: string, visual: SlideVisual) => {
+      const id = String(((el[nvTag] as XmlNode | undefined)?.['p:cNvPr'] as XmlNode | undefined)?.['@_id'] ?? '');
+      visuals.push(visual);
+      sortKey.set(visual, partRank * 1_000_000 + (owner.order.get(id) ?? 999_999));
+    };
 
     for (const pic of asArray<XmlNode>(node['p:pic'] as XmlNode | XmlNode[] | undefined)) {
       if (template && isPlaceholder(pic, 'p:nvPicPr')) continue;
@@ -710,10 +787,12 @@ export function parseSlideVisuals(zipEntries: Record<string, Uint8Array>, source
       const pos = applyGroupTransforms(transforms, emuAttr(off, '@_x'), emuAttr(off, '@_y'), emuAttr(ext, '@_cx'), emuAttr(ext, '@_cy'));
       // 브라우저가 못 그리는 포맷(EMF/WMF — 한글에서 붙여넣은 도식에 흔함)이면 원본 렌더링에서 잘라 쓴다
       if (!mediaPath) {
-        visuals.push({ kind: 'snapshot', ...pos, snapshot: true });
+        push(pic, 'p:nvPicPr', { kind: 'snapshot', ...pos, snapshot: true });
         continue;
       }
-      visuals.push({ kind: 'image', ...pos, mediaPath });
+      // 그림에 직접 준 테두리(스크린샷 강조용 빨간 테두리 등)
+      const picStroke = strokeFromSpPr(spPr, theme, pic['p:style'] as XmlNode | undefined);
+      push(pic, 'p:nvPicPr', { kind: 'image', ...pos, mediaPath, ...(picStroke ? { stroke: picStroke } : {}) });
     }
 
     for (const sp of asArray<XmlNode>(node['p:sp'] as XmlNode | XmlNode[] | undefined)) {
@@ -727,15 +806,43 @@ export function parseSlideVisuals(zipEntries: Record<string, Uint8Array>, source
       // 레이아웃·마스터의 글자 도형(꼬리말 문구, 쪽 번호 등)은 편집 대상이 아니다 — 글자(쪽 번호는
       // 슬라이드마다 다르다)까지 원본 렌더링에서 잘라 그대로 보여준다.
       if (template && hasVisibleText(sp['p:txBody'] as XmlNode | undefined) && pos.x !== null && pos.y !== null) {
-        visuals.push({ kind: 'snapshot', ...pos, snapshot: true });
+        push(sp, 'p:nvSpPr', { kind: 'snapshot', ...pos, snapshot: true });
         continue;
       }
       // 글자가 든 도형의 "글자"는 parseSlideShapes가 편집 대상으로 다룬다 — 하지만 그 도형에 채우기
       // 색이 있으면(색 칠한 사각형 위의 제목 등, 실사용 문서에 매우 흔함) 예전엔 배경색이 통째로
       // 빠져 글자만 허공에 떠 보였다. 채우기가 있을 때만 그 색 판을 텍스트 상자 아래에 깔아 준다.
-      if (sp['p:txBody'] && !fill) continue;
+      const stroke = strokeFromSpPr(spPr, theme, sp['p:style'] as XmlNode | undefined);
+      if (sp['p:txBody'] && !fill && !stroke) continue;
       const geom = presetGeomFromSpPr(spPr);
-      visuals.push({ kind: 'shape', ...pos, fill, ...(geom ? { geom } : {}) });
+      const custom = spPr?.['a:custGeom'] !== undefined;
+      // 채우기 없이 선만 있는 화살표·곡선·자유형처럼 CSS 테두리로 흉내 낼 수 없는 모양은 원본 렌더링에서
+      // 잘라 쓴다(자유형은 채우기만 있어도 사각형으로 그리면 모양이 틀리므로 마찬가지). 채우기가 있는
+      // 프리셋 모양(화살표 등)은 지금처럼 모양대로 칠하기만 한다. 글자 도형은 글자가 편집 대상이라 잘라
+      // 쓰지 않고(글자가 겹쳐 보인다) 채우기만 깐다.
+      const needsSnapshot = custom ? Boolean(fill || stroke) : Boolean(stroke && !fill && !STROKABLE_GEOMS.has(geom));
+      if (!sp['p:txBody'] && pos.x !== null && pos.y !== null && needsSnapshot) {
+        // 선만 있는 모양(직선·곡선 화살표 등)은 선 두께·화살촉이 상자 밖으로 나간다 — 연결선처럼 넓혀 자른다
+        const pad = stroke && !fill ? Math.max(LINE_SNAPSHOT_PAD_EMU, stroke.width * 3) : 0;
+        const area = rotatedBounds(pos, Number(xfrm?.['@_rot'] ?? 0));
+        push(sp, 'p:nvSpPr', {
+          kind: 'snapshot',
+          x: (area.x ?? 0) - pad,
+          y: (area.y ?? 0) - pad,
+          w: (area.w ?? 0) + pad * 2,
+          h: (area.h ?? 0) + pad * 2,
+          snapshot: true,
+        });
+        continue;
+      }
+      if (!fill && !(stroke && STROKABLE_GEOMS.has(geom) && !custom)) continue;
+      push(sp, 'p:nvSpPr', {
+        kind: 'shape',
+        ...pos,
+        fill,
+        ...(geom ? { geom } : {}),
+        ...(stroke && STROKABLE_GEOMS.has(geom) && !custom ? { stroke } : {}),
+      });
     }
 
     for (const gf of asArray<XmlNode>(node['p:graphicFrame'] as XmlNode | XmlNode[] | undefined)) {
@@ -749,10 +856,10 @@ export function parseSlideVisuals(zipEntries: Record<string, Uint8Array>, source
         const rows = asArray<XmlNode>(tbl?.['a:tr'] as XmlNode | XmlNode[] | undefined).map((tr) =>
           asArray<XmlNode>(tr['a:tc'] as XmlNode | XmlNode[] | undefined).map(tableCellText),
         );
-        visuals.push({ kind: 'table', x, y, w, h, rows, snapshot: true });
+        push(gf, 'p:nvGraphicFramePr', { kind: 'table', x, y, w, h, rows, snapshot: true });
       } else {
         const label = uri === CHART_GRAPHIC_URI ? '차트' : uri?.includes('/diagram') ? '스마트아트' : '콘텐츠';
-        visuals.push({ kind: 'placeholder', x, y, w, h, label, snapshot: true });
+        push(gf, 'p:nvGraphicFramePr', { kind: 'placeholder', x, y, w, h, label, snapshot: true });
       }
     }
 
@@ -762,9 +869,23 @@ export function parseSlideVisuals(zipEntries: Record<string, Uint8Array>, source
       const xfrm = (cxn['p:spPr'] as XmlNode | undefined)?.['a:xfrm'] as XmlNode | undefined;
       const off = xfrm?.['a:off'] as XmlNode | undefined;
       const ext = xfrm?.['a:ext'] as XmlNode | undefined;
-      const pos = applyGroupTransforms(transforms, emuAttr(off, '@_x'), emuAttr(off, '@_y'), emuAttr(ext, '@_cx'), emuAttr(ext, '@_cy'));
+      const pos = rotatedBounds(
+        applyGroupTransforms(transforms, emuAttr(off, '@_x'), emuAttr(off, '@_y'), emuAttr(ext, '@_cx'), emuAttr(ext, '@_cy')),
+        Number(xfrm?.['@_rot'] ?? 0),
+      );
       if (pos.x === null || pos.y === null) continue;
-      visuals.push({ kind: 'snapshot', ...pos, snapshot: true });
+      // 선은 상자 테두리 위에 그려지고 화살촉·두께가 상자 밖으로 나간다 — 똑바른 세로/가로선은 상자 폭(높이)이
+      // 0이라 잘라 낸 조각이 비어 버렸다. 사방으로 조금 넓혀 잘라 온다.
+      const lineWidth = Number(((cxn['p:spPr'] as XmlNode | undefined)?.['a:ln'] as XmlNode | undefined)?.['@_w'] ?? 0) || 0;
+      const pad = Math.max(LINE_SNAPSHOT_PAD_EMU, lineWidth * 3);
+      push(cxn, 'p:nvCxnSpPr', {
+        kind: 'snapshot',
+        x: pos.x - pad,
+        y: pos.y - pad,
+        w: (pos.w ?? 0) + pad * 2,
+        h: (pos.h ?? 0) + pad * 2,
+        snapshot: true,
+      });
     }
 
     for (const grp of asArray<XmlNode>(node['p:grpSp'] as XmlNode | XmlNode[] | undefined)) {
@@ -779,15 +900,22 @@ export function parseSlideVisuals(zipEntries: Record<string, Uint8Array>, source
   if (!hides(slide)) {
     if (master && !hides(layout)) {
       const tree = spTreeOf(master);
+      partRank = 1;
       if (tree) collectVisualsRecursive(master, tree, [], true);
     }
     if (layout) {
       const tree = spTreeOf(layout);
+      partRank = 2;
       if (tree) collectVisualsRecursive(layout, tree, [], true);
     }
   }
   const slideTree = spTreeOf(slide);
+  partRank = 3;
   if (slideTree) collectVisualsRecursive(slide, slideTree, [], false);
 
-  return visuals;
+  // 배경(정렬 키 없음)은 맨 아래, 나머지는 마스터 → 레이아웃 → 슬라이드, 각 파트 안에서는 원본 순서
+  return visuals
+    .map((visual, index) => ({ visual, index, key: sortKey.get(visual) ?? -1 }))
+    .sort((a, b) => a.key - b.key || a.index - b.index)
+    .map((entry) => entry.visual);
 }

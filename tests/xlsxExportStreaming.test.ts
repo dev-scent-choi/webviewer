@@ -85,7 +85,7 @@ describe('xlsx/exportStreaming.ts: exportXlsxFromGridStreaming (large-file fallb
       name: 'Sheet2',
       rowCount: 1,
       colCount: 1,
-      colWidths: [],
+      colWidths: [], defaultColWidth: 64, defaultRowHeight: 20, rowHeights: [], showGridLines: true,
       merges: [],
       freezeRows: 0,
       freezeCols: 0,

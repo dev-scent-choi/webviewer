@@ -31,7 +31,7 @@ import {
 } from '../docx/import.js';
 import { MarkupValidationError, addMarkup, deleteMarkup, listMarkup, updateMarkup } from '../markup.js';
 import { touchPresence } from '../presence.js';
-import { flushNow, getCurrentBytes, getChangeLog, getFileCharts } from '../collab/room.js';
+import { flushNow, getCurrentBytes, getChangeLog, getFileCharts, getFileImages } from '../collab/room.js';
 import {
   buildGridFromOriginal,
   computeLineOffsets,
@@ -622,6 +622,23 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
       } catch (error) {
         request.log.warn(error, 'xlsx chart read failed');
         return { success: true, data: { charts: [] } };
+      }
+    },
+  );
+
+  // 파일에 있는 그림(로고·사진) — 보기·편집 화면이 칸 위치에 맞춰 그대로 얹는다.
+  app.get<{ Querystring: TokenQuery }>(
+    '/api/view/xlsx-images',
+    { schema: { querystring: tokenQuerySchema } },
+    async (request, reply) => {
+      const view = await resolveView(request.query.token, reply);
+      if (!view) return reply;
+      if (view.meta.ext !== 'xlsx') return { success: true, data: { images: [] } };
+      try {
+        return { success: true, data: { images: await getFileImages(view.meta.id) } };
+      } catch (error) {
+        request.log.warn(error, 'xlsx image read failed');
+        return { success: true, data: { images: [] } };
       }
     },
   );
