@@ -728,6 +728,43 @@ async function main(): Promise<void> {
   sheetNavPrev?.addEventListener('click', () => stepSheet(-1));
   sheetNavNext?.addEventListener('click', () => stepSheet(1));
   document.getElementById('sheet-add')?.addEventListener('click', () => addSheet());
+  // 엑셀처럼 탭 줄 왼쪽/오른쪽에 가려진 시트가 있으면 그쪽 끝에 "…" — 누르면 가려진 바로 옆 시트로 간다
+  const sheetMoreLeft = document.getElementById('sheet-more-left') as HTMLButtonElement | null;
+  const sheetMoreRight = document.getElementById('sheet-more-right') as HTMLButtonElement | null;
+  function hiddenTabs(): { left: number[]; right: number[] } {
+    const view = sheetTabsEl.getBoundingClientRect();
+    const left: number[] = [];
+    const right: number[] = [];
+    sheetTabsEl.querySelectorAll<HTMLElement>('.grid-sheet-tab').forEach((tab) => {
+      const r = tab.getBoundingClientRect();
+      const idx = Number(tab.dataset.sheetIdx);
+      if (r.left < view.left - 1) left.push(idx);
+      else if (r.right > view.right + 1) right.push(idx);
+    });
+    return { left, right };
+  }
+  function updateSheetMore(reveal = false): void {
+    if (!sheetMoreLeft || !sheetMoreRight) return;
+    if (reveal) revealActiveSheetTab();
+    const { left, right } = hiddenTabs();
+    const showLeft = left.length > 0;
+    const showRight = right.length > 0;
+    if (sheetMoreLeft.hidden !== !showLeft || sheetMoreRight.hidden !== !showRight) {
+      sheetMoreLeft.hidden = !showLeft;
+      sheetMoreRight.hidden = !showRight;
+      requestAnimationFrame(() => updateSheetMore(reveal)); // … 가 생기고 빠지면 탭 줄 폭이 바뀌므로 한 번 더 잰다
+    }
+  }
+  sheetMoreLeft?.addEventListener('click', () => {
+    const { left } = hiddenTabs();
+    if (left.length) switchToSheet(left[left.length - 1]);
+  });
+  sheetMoreRight?.addEventListener('click', () => {
+    const { right } = hiddenTabs();
+    if (right.length) switchToSheet(right[0]);
+  });
+  sheetTabsEl.addEventListener('scroll', () => updateSheetMore());
+  new ResizeObserver(() => updateSheetMore(true)).observe(sheetTabsEl.parentElement ?? sheetTabsEl);
   sheetTabsEl.addEventListener(
     'wheel',
     (event) => {
@@ -760,7 +797,7 @@ async function main(): Promise<void> {
         return tab;
       }),
     );
-    revealActiveSheetTab();
+    updateSheetMore(true);
   }
 
   /** order 필드만 다시 매긴다 — 셀 데이터는 전혀 건드리지 않으므로 시트가 몇 개든 가벼운 연산이다. */

@@ -2196,6 +2196,25 @@ body.home-hidden .doclist-link { display: none !important; }
 }
 .grid-sheet-tabs--clip::-webkit-scrollbar { display: none; }
 .grid-sheet-tabs--clip .grid-sheet-tab { flex: none; white-space: nowrap; }
+/* 가려진 탭이 있는 쪽 끝의 "…" — 엑셀처럼 탭과 같은 높이의 좁은 칸 */
+.grid-sheet-more {
+  flex: none;
+  align-self: stretch;
+  min-width: 22px;
+  padding: 0 4px;
+  margin-top: 1px;
+  border: 1px solid var(--v-glass-line);
+  border-bottom: none;
+  background: var(--v-glass);
+  color: var(--v-accent);
+  font-size: 0.85rem;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -1px;
+  cursor: pointer;
+}
+.grid-sheet-more[hidden] { display: none; }
+.grid-sheet-more:hover { background: var(--v-hover); }
 .grid-sheet-tab-add {
   flex: none;
   display: inline-flex;
