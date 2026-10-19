@@ -146,6 +146,16 @@ rec('sysDash 테두리는 SVG 점선(두께×3, 두께×1)', m.dashed.length ===
 rec('점선 사각형 모서리는 직각(호 없음)', m.dashed.length === 1 && !/A/.test(m.dashed[0].d), m.dashed[0]?.d);
 rec('adj 0 둥근 사각형은 직각', m.sharp === '0px', String(m.sharp));
 rec('기본 둥근 사각형은 원형 반지름(짧은 변의 1/6, 가로·세로 같음)', /^[\d.]+px$/.test(m.round ?? '') && parseFloat(m.round) > 2, String(m.round));
+// 왼쪽 슬라이드 창 — PowerPoint처럼 각진 썸네일, 번호는 썸네일 왼쪽, 선택은 굵은(3px 이상) 테두리
+const rail = await page.evaluate(() => {
+  const card = document.querySelector('#slides-rail .slide-card.active');
+  const thumb = card?.querySelector('.slide-card-thumb');
+  const num = card?.querySelector('.slide-card-number');
+  if (!thumb || !num) return null;
+  const cs = getComputedStyle(thumb);
+  return { radius: cs.borderTopLeftRadius, outline: parseFloat(cs.outlineWidth), numLeft: num.getBoundingClientRect().right <= thumb.getBoundingClientRect().left, bold: Number(getComputedStyle(num).fontWeight) >= 600 };
+});
+rec('슬라이드 창: 각진 썸네일·번호 왼쪽·선택 굵은 테두리', rail && rail.radius === '0px' && rail.numLeft && rail.outline >= 3 && rail.bold, JSON.stringify(rail));
 await page.screenshot({ path: path.join(shotDir, 'pptx-editor.png') });
 rec('페이지 오류 없음', errors.length === 0, errors.slice(0, 2).join(' | '));
 await browser.close();

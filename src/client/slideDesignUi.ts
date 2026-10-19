@@ -250,7 +250,7 @@ export function setupSlideDesign(host: SlideDesignHost): { onCanvasRendered(): v
       star.title = [eff.transition ? `전환: ${TRANSITION_LABELS[eff.transition.kind]}` : '', eff.animations.length ? `애니메이션 ${eff.animations.length}개` : '']
         .filter(Boolean)
         .join(' · ');
-      card.querySelector('.slide-card-thumb')?.append(star);
+      (card.querySelector('.slide-card-side') ?? card.querySelector('.slide-card-thumb'))?.append(star);
     }
   }
 

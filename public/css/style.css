@@ -1395,7 +1395,51 @@ body.home-hidden .doclist-link { display: none !important; }
    flex-shrink:0으로 각 카드가 aspect-ratio 기반 자연 높이를 절대 양보하지 않게 하면, 레일이
    대신 정상적으로 넘쳐 overflow-y:auto가 스크롤을 맡는다. */
 .slides-rail .slide-card { width: 100%; flex-shrink: 0; }
-.slides-rail .slide-card.active .slide-card-thumb { outline: 2px solid var(--v-accent); outline-offset: -2px; }
+
+/* PowerPoint 슬라이드 창과 같은 모양 — 왼쪽 칸에 번호(와 전환·애니메이션 ★), 오른쪽에 모서리 각진 썸네일,
+   선택한 슬라이드는 굵은 강조색 테두리. (아래 .slide-card 기본 카드 모양 — 둥근 모서리·그림자·번호 알약을 덮어쓴다) */
+.slides-rail .slide-card {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  align-items: start;
+  border: 0;
+  border-radius: 0;
+  overflow: visible;
+  background: transparent;
+  box-shadow: none;
+}
+.slides-rail .slide-card-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding-top: 1px;
+}
+.slides-rail .slide-card-number {
+  position: static;
+  padding: 0;
+  border-radius: 0;
+  background: none;
+  color: #444;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.2;
+}
+.slides-rail .slide-card.active .slide-card-number { color: var(--app-accent, var(--v-accent)); font-weight: 700; }
+.slides-rail .slide-card-transition { position: static; padding: 0; background: none; font-size: 11px; line-height: 1; }
+.slides-rail .slide-card-thumb {
+  aspect-ratio: var(--slide-ratio, 16 / 9);
+  border: 1px solid #c8c6c4;
+  border-radius: 0;
+  background: #fff;
+}
+.slides-rail .slide-card:hover .slide-card-thumb { border-color: #8a8886; }
+.slides-rail .slide-card.active .slide-card-thumb {
+  outline: 3px solid var(--app-accent, var(--v-accent));
+  outline-offset: 1px;
+  border-color: transparent;
+}
+.slides-rail .slide-card-thumb img { object-fit: fill; }
 
 /* 슬라이드는 가운데에 두되, 화면보다 크면 위·왼쪽 여백부터 시작해 스크롤한다(margin:auto = 안전한 가운데
    정렬). 예전 align-items:center는 넘친 위쪽이 스크롤로도 닿지 않는 곳으로 밀려 슬라이드 윗부분이 리본
