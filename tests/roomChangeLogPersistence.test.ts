@@ -114,6 +114,9 @@ describe('collab/changeLogPersistence.ts: room-close persistence of change logs'
     vi.resetModules();
     vi.stubEnv('DOCVIEW_DATA_DIR', tmpDir);
     vi.stubEnv('DOCVIEW_STORAGE', 'memory');
+    // 메모리 저장 모드는 기본으로 변경 이력을 디스크에 남기지 않는다(향기랩 "저장 안 함") — 이 묶음은
+    // 영속화 자체를 시험하므로 명시적으로 켠다. 꺼진 기본값은 맨 아래 별도 시험.
+    vi.stubEnv('DOCVIEW_PERSIST_LOGS', '1');
     vi.doMock('../src/converters/index.js', () => ({ findConverter: () => null }));
     vi.doMock('../src/audit.js', () => ({ recordAudit: async () => undefined }));
     // DOCVIEW_STORAGE=memory는 originals/converted/meta 디렉터리를 건너뛰지만 audit/changeLog
@@ -186,6 +189,15 @@ describe('collab/changeLogPersistence.ts: room-close persistence of change logs'
 
     // 룸은 이제 없다 — 실시간 API는 더 이상 이 변경을 알지 못한다(디스크만이 유일한 기록).
     expect(room.getParagraphChangeLog(docId)).toBeNull();
+  });
+
+  test('메모리 저장 모드 기본값(DOCVIEW_PERSIST_LOGS 없음)이면 편집 글자를 디스크에 남기지 않는다', async () => {
+    vi.stubEnv('DOCVIEW_PERSIST_LOGS', '');
+    vi.resetModules();
+    const { persistChangeLog } = await import('../src/collab/changeLogPersistence.js');
+    const docId = randomUUID();
+    await persistChangeLog(docId, 'docx', [{ paragraph: 1, before: '비밀', after: '비밀!' }]);
+    expect(await readPersistedEntries(docId)).toEqual([]);
   });
 
   test('xlsx: a cell edit is written to disk once the last editor leaves', async () => {
