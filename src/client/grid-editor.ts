@@ -26,6 +26,18 @@ import { initOfficeShell } from './officeShell.js';
 import { bindDropdown } from './ribbonMenus.js';
 import { currentRegion, setupGridCharts } from './gridCharts.js';
 import { setupGridLinks, type GridLinks } from './gridLinks.js';
+import {
+  CF_PRESETS,
+  computeStats,
+  GRID_COND_FORMATS_MAP,
+  needsStats,
+  paintCell,
+  rectContains,
+  subtractRect,
+  type CfRule,
+  type CfStats,
+  type CondFormatEntry,
+} from '../collab/condFormatShared.js';
 import type { CellRangeRef, ChartKind } from '../xlsx/chartModel.js';
 import { RowLayout } from '../xlsx/sheetGeometry.js';
 import { compareCells, filteredRows, GRID_FILTERS_MAP, shiftFormulaRows, sortOrder, type SheetFilter } from './gridSort.js';
@@ -192,6 +204,9 @@ function borderCss(weight: 1 | 2 | undefined): string {
 
 const VALIGN_TO_CSS: Record<'t' | 'm' | 'b', string> = { t: 'top', m: 'middle', b: 'bottom' };
 
+/** 조건부 서식 색 덧입히기 — main()이 연결한다. 칸 서식을 다시 칠하는 곳(applyStyleToTd)이 여러 군데라 그 끝에서 부른다. */
+let condFormatOverlay: ((td: HTMLTableCellElement) => void) | null = null;
+
 function applyStyleToTd(td: HTMLTableCellElement, style: CellStyleAttrs | undefined): void {
   td.style.fontWeight = style?.b ? '700' : '400';
   td.style.fontStyle = style?.i ? 'italic' : 'normal';
@@ -223,6 +238,7 @@ function applyStyleToTd(td: HTMLTableCellElement, style: CellStyleAttrs | undefi
   td.style.setProperty('--g-bl', borderCss(style?.bl) || 'none');
   td.classList.toggle('g-bord-tl', Boolean(style?.bt || style?.bl));
   td.classList.toggle('g-locked', style?.lk === 1);
+  condFormatOverlay?.(td);
 }
 
 function escapeXmlText(value: string): string {
@@ -284,6 +300,8 @@ async function main(): Promise<void> {
   const structure = ydoc.getMap<SheetStructure>(GRID_STRUCTURE_MAP);
   const styles = ydoc.getMap<CellStyleAttrs>(GRID_STYLES_MAP);
   const merges = ydoc.getMap<readonly GridMergeShape[]>(GRID_MERGES_MAP);
+  // 조건부 서식 규칙(시트마다 우선순위 순 목록 — condFormatShared.ts)
+  const condFormats = ydoc.getMap<readonly CondFormatEntry[]>(GRID_COND_FORMATS_MAP);
 
   const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const provider = new WebsocketProvider(`${wsProtocol}//${location.host}/ws/edit`, info.docId, ydoc, {
@@ -428,7 +446,7 @@ async function main(): Promise<void> {
   postPresenceToParent();
 
   // 병합(merges)도 함께 — 병합은 지운 칸 값·가운데 맞춤과 한 트랜잭션이라, 빠지면 Ctrl+Z가 값만 되살리고 병합은 남는다
-  const undoManager = new Y.UndoManager([cells, structure, styles, merges]);
+  const undoManager = new Y.UndoManager([cells, structure, styles, merges, condFormats]);
   const shell = initOfficeShell({
     token,
     docName: info.name,
@@ -553,6 +571,7 @@ async function main(): Promise<void> {
           style,
         );
     applySpillDisplay(td, key, text);
+    condFormatOverlay?.(td); // 값이 바뀌면 강조도 바뀐다(이 경로는 applyStyleToTd를 안 거칠 때가 있다)
     if (gridLinks) {
       const parsed = parseGridCellKey(key);
       if (parsed && parsed.sheetIdx === activeSheet) gridLinks.decorate(td, parsed.row, parsed.col);
@@ -3102,6 +3121,187 @@ async function main(): Promise<void> {
     });
     syncCellToolbarState(activeCellKey);
   }
+  // ---------- 스타일: 조건부 서식 (엑셀 "조건부 서식" 메뉴) ----------
+  // 규칙은 GRID_COND_FORMATS_MAP에 시트마다 통째로 있다(파일 규칙은 서버가 룸을 열 때 채운다). 화면 칸마다 판정해
+  // 기본 서식 위에 색을 덧입힌다(condFormatOverlay — applyStyleToTd·renderCellDisplay 끝에서 불린다).
+  // 중복·상위·평균·색조·막대는 범위 전체 값이 필요한데, 아직 불러오지 않은 페이지의 값은 모르므로 불러온 값으로 계산한다.
+  const cfEntries = (): readonly CondFormatEntry[] => condFormats.get(String(activeSheet)) ?? [];
+  function cfValueAt(row: number, col: number): string {
+    const raw = cells.get(gridCellKey(activeSheet, row, col)) ?? '';
+    return raw.startsWith('=') ? formatComputedValue(computeCellDisplay(activeSheet, row, col)) : raw;
+  }
+  let cfStats: Map<string, CfStats> | null = null;
+  let cfStatsSheet = -1;
+  function cfStatsNow(): ReadonlyMap<string, CfStats> {
+    if (cfStats && cfStatsSheet === activeSheet) return cfStats;
+    const next = new Map<string, CfStats>();
+    const withStats = cfEntries().filter((e) => needsStats(e.rule));
+    if (withStats.length > 0) {
+      const values = new Map<string, string[]>(withStats.map((e) => [e.id, []]));
+      const prefix = `${activeSheet}:`;
+      for (const key of cells.keys()) {
+        if (!key.startsWith(prefix)) continue;
+        const at = parseGridCellKey(key);
+        if (!at) continue;
+        for (const e of withStats) if (e.ranges.some((r) => rectContains(r, at.row, at.col))) values.get(e.id)?.push(cfValueAt(at.row, at.col));
+      }
+      for (const e of withStats) next.set(e.id, computeStats(e.rule, values.get(e.id) ?? []));
+    }
+    cfStats = next;
+    cfStatsSheet = activeSheet;
+    return next;
+  }
+  function applyCondFormatOverlay(td: HTMLTableCellElement): void {
+    const row = Number(td.dataset.row);
+    const col = Number(td.dataset.col);
+    if (!Number.isInteger(row) || !Number.isInteger(col) || td.dataset.row === undefined) return;
+    const entries = cfEntries();
+    if (entries.length === 0 && td.dataset.cf === undefined) return;
+    const paint = entries.length > 0 ? paintCell(entries, row, col, cfValueAt(row, col), cfStatsNow(), cfValueAt) : null;
+    if (!paint && td.dataset.cf === undefined) return;
+    // 기본 서식(applyStyleToTd와 같은 값)으로 되돌린 뒤 규칙 색을 얹는다 — 규칙이 더는 안 맞으면 원래 모습이 된다
+    const base = styles.get(gridCellKey(activeSheet, row, col));
+    td.style.background = paint?.style?.bg ?? paint?.scale ?? base?.bg ?? '';
+    td.style.color = paint?.style?.col ?? base?.col ?? '';
+    td.style.fontWeight = paint?.style?.b || base?.b ? '700' : '400';
+    if (paint?.bar) {
+      td.style.backgroundImage = `linear-gradient(90deg, ${paint.bar.color} 0%, ${paint.bar.color}33 100%)`;
+      td.style.backgroundSize = `${Math.round(paint.bar.ratio * 100)}% 76%`;
+      td.style.backgroundRepeat = 'no-repeat';
+      td.style.backgroundPosition = 'left center';
+    }
+    if (paint) td.dataset.cf = '1';
+    else delete td.dataset.cf;
+  }
+  condFormatOverlay = applyCondFormatOverlay;
+  // 값·계산 결과·규칙이 바뀌면 통계를 버리고 화면 칸을 한 번에 다시 칠한다(한 칸이 바뀌어도 상위 10개·중복 판정은 다른 칸이 바뀐다)
+  let cfRepaintQueued = false;
+  function scheduleCfRepaint(): void {
+    cfStats = null;
+    if (cfRepaintQueued) return;
+    if (cfEntries().length === 0 && !tableEl.querySelector('td[data-cf]')) return;
+    cfRepaintQueued = true;
+    requestAnimationFrame(() => {
+      cfRepaintQueued = false;
+      tableEl.querySelectorAll<HTMLTableCellElement>('td[data-row]').forEach(applyCondFormatOverlay);
+    });
+  }
+  cells.observe(scheduleCfRepaint);
+  computed.observe(scheduleCfRepaint);
+  condFormats.observe(scheduleCfRepaint);
+
+  function addCondFormat(rule: CfRule): void {
+    if (!canEdit || !activeCellKey) return;
+    const sel = rangeBounds();
+    const entry: CondFormatEntry = { id: `u${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, ranges: [sel], rule };
+    // 새 규칙이 맨 위(우선순위 가장 높음) — 엑셀과 같다
+    condFormats.set(String(activeSheet), [entry, ...cfEntries()]);
+  }
+  function clearCondFormats(scope: 'sel' | 'sheet'): void {
+    if (!canEdit) return;
+    const entries = cfEntries();
+    if (entries.length === 0) return;
+    if (scope === 'sheet') {
+      condFormats.delete(String(activeSheet));
+      return;
+    }
+    if (!activeCellKey) return;
+    const sel = rangeBounds();
+    const next = entries.map((e) => ({ ...e, ranges: e.ranges.flatMap((r) => subtractRect(r, sel)) })).filter((e) => e.ranges.length > 0);
+    if (next.length === entries.length && next.every((e, i) => e.ranges.length === entries[i].ranges.length && e.ranges.every((r, j) => r === entries[i].ranges[j]))) return;
+    if (next.length > 0) condFormats.set(String(activeSheet), next);
+    else condFormats.delete(String(activeSheet));
+  }
+
+  // 규칙 입력 창(엑셀 "보다 큼" 등 대화 상자와 같은 모양)
+  type CfDialogKind = 'gt' | 'lt' | 'between' | 'eq' | 'text' | 'dup' | 'top' | 'bottom' | 'aboveAvg' | 'belowAvg';
+  const CF_DIALOG: Record<CfDialogKind, { title: string; sub: string; v1?: string; v2?: boolean; dup?: boolean; def?: string }> = {
+    gt: { title: '보다 큼', sub: '다음 값보다 큰 셀의 서식 지정:', v1: '값' },
+    lt: { title: '보다 작음', sub: '다음 값보다 작은 셀의 서식 지정:', v1: '값' },
+    between: { title: '다음 값의 사이에 있음', sub: '다음 값 사이에 있는 셀의 서식 지정:', v1: '값', v2: true },
+    eq: { title: '같음', sub: '다음 값과 같은 셀의 서식 지정:', v1: '값' },
+    text: { title: '텍스트 포함', sub: '다음 텍스트를 포함하는 셀의 서식 지정:', v1: '텍스트' },
+    dup: { title: '중복 값', sub: '다음 값을 포함하는 셀의 서식 지정:', dup: true },
+    top: { title: '상위 10개 항목', sub: '상위 순위에 속하는 셀의 서식 지정:', v1: '개수', def: '10' },
+    bottom: { title: '하위 10개 항목', sub: '하위 순위에 속하는 셀의 서식 지정:', v1: '개수', def: '10' },
+    aboveAvg: { title: '평균 초과', sub: '선택한 범위에서 평균을 초과하는 셀의 서식 지정:' },
+    belowAvg: { title: '평균 미만', sub: '선택한 범위에서 평균 미만인 셀의 서식 지정:' },
+  };
+  const cfDialog = document.getElementById('cf-dialog') as HTMLElement | null;
+  const cfV1 = document.getElementById('cf-dialog-v1') as HTMLInputElement | null;
+  const cfV2 = document.getElementById('cf-dialog-v2') as HTMLInputElement | null;
+  const cfDup = document.getElementById('cf-dialog-dup') as HTMLSelectElement | null;
+  const cfStyleSelect = document.getElementById('cf-dialog-style') as HTMLSelectElement | null;
+  if (cfStyleSelect) {
+    for (const preset of CF_PRESETS) {
+      const option = document.createElement('option');
+      option.value = preset.key;
+      option.textContent = preset.label;
+      cfStyleSelect.append(option);
+    }
+  }
+  let cfDialogKind: CfDialogKind | null = null;
+  function openCfDialog(kind: CfDialogKind): void {
+    if (!canEdit || !activeCellKey || !cfDialog || !cfV1 || !cfV2) return;
+    const spec = CF_DIALOG[kind];
+    cfDialogKind = kind;
+    (document.getElementById('cf-dialog-title') as HTMLElement).textContent = spec.title;
+    (document.getElementById('cf-dialog-sub') as HTMLElement).textContent = spec.sub;
+    (document.getElementById('cf-dialog-v1-row') as HTMLElement).hidden = !spec.v1;
+    (document.getElementById('cf-dialog-v1-label') as HTMLElement).textContent = spec.v1 ?? '';
+    (document.getElementById('cf-dialog-v2-row') as HTMLElement).hidden = !spec.v2;
+    (document.getElementById('cf-dialog-dup-row') as HTMLElement).hidden = !spec.dup;
+    cfV1.value = spec.def ?? '';
+    cfV1.inputMode = kind === 'top' || kind === 'bottom' ? 'numeric' : 'text';
+    cfV2.value = '';
+    if (cfStyleSelect) cfStyleSelect.value = CF_PRESETS[0].key; // 엑셀처럼 열 때마다 기본 서식(연한 빨강 채우기)으로
+    if (cfDup) cfDup.value = 'dup';
+    cfDialog.hidden = false;
+    (spec.v1 ? cfV1 : cfStyleSelect)?.focus();
+  }
+  const closeCfDialog = () => {
+    if (cfDialog) cfDialog.hidden = true;
+    cfDialogKind = null;
+  };
+  function confirmCfDialog(): void {
+    const kind = cfDialogKind;
+    if (!kind || !cfV1 || !cfV2 || !cfDup || !cfStyleSelect) return;
+    const s = (CF_PRESETS.find((p) => p.key === cfStyleSelect.value) ?? CF_PRESETS[0]).s;
+    const v1 = cfV1.value.trim();
+    const v2 = cfV2.value.trim();
+    let rule: CfRule | null = null;
+    if (kind === 'gt' || kind === 'lt' || kind === 'eq') rule = v1 ? { t: 'cell', op: kind, v1, s } : null;
+    else if (kind === 'between') rule = v1 && v2 ? { t: 'cell', op: 'between', v1, v2, s } : null;
+    else if (kind === 'text') rule = v1 ? { t: 'text', op: 'contains', text: v1, s } : null;
+    else if (kind === 'dup') rule = { t: 'dup', ...(cfDup.value === 'unique' ? { unique: 1 as const } : {}), s };
+    else if (kind === 'top' || kind === 'bottom') {
+      const n = Number(v1);
+      rule = Number.isInteger(n) && n >= 1 && n <= 1000 ? { t: 'top', n, ...(kind === 'bottom' ? { bottom: 1 as const } : {}), s } : null;
+    } else rule = { t: 'avg', ...(kind === 'belowAvg' ? { below: 1 as const } : {}), s };
+    if (!rule) {
+      cfV1.focus();
+      return;
+    }
+    closeCfDialog();
+    addCondFormat(rule);
+  }
+  document.getElementById('cf-dialog-ok')?.addEventListener('click', confirmCfDialog);
+  document.getElementById('cf-dialog-cancel')?.addEventListener('click', closeCfDialog);
+  cfDialog?.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') closeCfDialog();
+    if (event.key === 'Enter' && (event.target as HTMLElement).tagName !== 'SELECT') {
+      event.preventDefault();
+      confirmCfDialog();
+    }
+  });
+  bindDropdown(document.getElementById('cf-dropdown'), (value) => {
+    if (value === 'clear-sel') clearCondFormats('sel');
+    else if (value === 'clear-sheet') clearCondFormats('sheet');
+    else if (value.startsWith('bar:')) addCondFormat({ t: 'bar', color: value.slice(4) });
+    else if (value.startsWith('scale:')) addCondFormat({ t: 'scale', colors: value.slice(6).split(',') });
+    else openCfDialog(value as CfDialogKind);
+  });
+
   document.getElementById('btn-merge-center')?.addEventListener('click', () => applyMerge('center'));
   bindDropdown(document.getElementById('merge-dropdown'), (value) => {
     if (value === 'unmerge') unmergeSelection();

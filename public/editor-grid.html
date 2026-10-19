@@ -277,6 +277,37 @@
 
       <div class="ribbon-group">
         <div class="ribbon-group-buttons">
+          <span class="dropdown-btn" id="cf-dropdown">
+            <button class="icon-btn icon-btn-big dropdown-caret" title="조건부 서식 — 값에 따라 칸의 색을 바꾸는 규칙">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><rect x="3.5" y="4.5" width="17" height="15" rx="1"/><path d="M3.5 9.5h17M3.5 14.5h17M9.5 4.5v15"/><rect x="10" y="10" width="10" height="4" fill="#F8696B" stroke="none"/><rect x="10" y="15" width="6" height="4" fill="#63BE7B" stroke="none"/><rect x="10" y="5" width="8" height="4" fill="#638EC6" stroke="none"/></svg>
+              <span>조건부<br>서식 ▾</span>
+            </button>
+            <div class="dropdown-menu cf-menu" hidden>
+              <div class="dropdown-menu-label">셀 강조 규칙</div>
+              <button data-value="gt">보다 큼…</button>
+              <button data-value="lt">보다 작음…</button>
+              <button data-value="between">다음 값의 사이에 있음…</button>
+              <button data-value="eq">같음…</button>
+              <button data-value="text">텍스트 포함…</button>
+              <button data-value="dup">중복 값…</button>
+              <div class="dropdown-menu-label">상위/하위 규칙</div>
+              <button data-value="top">상위 10개 항목…</button>
+              <button data-value="bottom">하위 10개 항목…</button>
+              <button data-value="aboveAvg">평균 초과…</button>
+              <button data-value="belowAvg">평균 미만…</button>
+              <div class="dropdown-menu-label">데이터 막대</div>
+              <button data-value="bar:#638EC6"><i class="cf-swatch cf-swatch-bar" style="--c:#638EC6"></i>파랑 데이터 막대</button>
+              <button data-value="bar:#63C384"><i class="cf-swatch cf-swatch-bar" style="--c:#63C384"></i>녹색 데이터 막대</button>
+              <button data-value="bar:#FF555A"><i class="cf-swatch cf-swatch-bar" style="--c:#FF555A"></i>빨강 데이터 막대</button>
+              <div class="dropdown-menu-label">색조</div>
+              <button data-value="scale:#63BE7B,#FFEB84,#F8696B"><i class="cf-swatch" style="--c:linear-gradient(90deg,#63BE7B,#FFEB84,#F8696B)"></i>녹색 - 노랑 - 빨강 색조</button>
+              <button data-value="scale:#F8696B,#FFEB84,#63BE7B"><i class="cf-swatch" style="--c:linear-gradient(90deg,#F8696B,#FFEB84,#63BE7B)"></i>빨강 - 노랑 - 녹색 색조</button>
+              <button data-value="scale:#FFFFFF,#63BE7B"><i class="cf-swatch" style="--c:linear-gradient(90deg,#FFFFFF,#63BE7B)"></i>흰색 - 녹색 색조</button>
+              <div class="dropdown-menu-label">규칙 지우기</div>
+              <button data-value="clear-sel">선택한 셀에서 규칙 지우기</button>
+              <button data-value="clear-sheet">시트 전체에서 규칙 지우기</button>
+            </div>
+          </span>
           <span class="dropdown-btn" id="home-table-style-dropdown">
             <button class="icon-btn icon-btn-big dropdown-caret" title="표 서식 — 선택한 범위(칸 하나면 둘러싼 데이터 영역)에 머리글·줄무늬·테두리 서식">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4.5" width="17" height="15" rx="1"/><path d="M3.5 9h17M3.5 14h17M9 4.5v15M15 4.5v15"/><rect x="3.5" y="4.5" width="17" height="4.5" fill="#2b7cd3" fill-opacity="0.45" stroke="none"/></svg>
@@ -604,6 +635,20 @@
         <label class="sort-dialog-check"><input id="sort-dialog-header" type="checkbox" /> 내 데이터에 머리글 표시</label>
       </div>
       <div class="office-dialog-actions"><button id="sort-dialog-ok" class="btn-mini">확인</button><button id="sort-dialog-cancel" class="btn-mini">취소</button></div>
+    </div>
+  </div>
+
+  <div id="cf-dialog" class="office-dialog" hidden role="dialog" aria-labelledby="cf-dialog-title">
+    <div class="office-dialog-card">
+      <h2 id="cf-dialog-title">보다 큼</h2>
+      <p id="cf-dialog-sub" class="office-dialog-sub">다음 값보다 큰 셀의 서식 지정:</p>
+      <div class="sort-dialog-fields cf-dialog-fields">
+        <label id="cf-dialog-v1-row"><span id="cf-dialog-v1-label">값</span> <input id="cf-dialog-v1" type="text" autocomplete="off" /></label>
+        <label id="cf-dialog-v2-row" hidden><span>그리고</span> <input id="cf-dialog-v2" type="text" autocomplete="off" /></label>
+        <label id="cf-dialog-dup-row" hidden><span>값</span> <select id="cf-dialog-dup"><option value="dup">중복</option><option value="unique">고유</option></select></label>
+        <label><span>적용할 서식</span> <select id="cf-dialog-style"></select></label>
+      </div>
+      <div class="office-dialog-actions"><button id="cf-dialog-ok" class="btn-mini">확인</button><button id="cf-dialog-cancel" class="btn-mini">취소</button></div>
     </div>
   </div>
 
