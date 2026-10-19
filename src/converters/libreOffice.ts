@@ -11,6 +11,7 @@ import { trimPdfMargins } from './pdfTrim.js';
 import type { Converter } from './types.js';
 import { guardedUnzipSync } from '../zipGuard.js';
 import { createLibreOfficeWorker } from './loWorker.js';
+import { ensureFontSubstitutions } from './loFontSubstitution.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -279,6 +280,7 @@ async function withProfileSlot<T>(task: (profileDir: string) => Promise<T>): Pro
   const profileDir = path.join(profileRoot, `slot-${slot}`);
   try {
     await fs.mkdir(profileDir, { recursive: true });
+    ensureFontSubstitutions(profileDir); // 서버에 없는 글꼴(KoPub돋움 등)을 비슷한 글꼴로 — loFontSubstitution.ts
     return await task(profileDir);
   } catch (error) {
     // 변환 실패가 프로필 손상 때문일 수 있으므로 다음 실행에서 새로 만들도록 비운다.
