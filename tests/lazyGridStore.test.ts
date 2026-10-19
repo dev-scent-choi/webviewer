@@ -15,6 +15,7 @@ import {
   setDirtyCell,
   shiftDirtyOverlayKeys,
   sweepOrphanedLazyGridFiles,
+  lazyGridOwnPrefix,
 } from '../src/xlsx/lazyGridStore.js';
 
 async function makeSampleXlsx(): Promise<Buffer> {
@@ -308,7 +309,7 @@ describe('xlsx/lazyGridStore.ts: cleanup', () => {
   test('sweepOrphanedLazyGridFiles removes leftover docview-lazygrid-* files old enough to be orphans', async () => {
     const os = await import('node:os');
     const path = await import('node:path');
-    const orphanPath = path.join(os.tmpdir(), `docview-lazygrid-orphan-${randomUUID()}.jsonl`);
+    const orphanPath = path.join(os.tmpdir(), `${lazyGridOwnPrefix()}orphan-${randomUUID()}.jsonl`);
     await fs.writeFile(orphanPath, 'leftover');
     // 서버 비정상 종료로 남은 파일을 흉내낸다 — 충분히 오래된 mtime으로 되돌려 둔다(실제로는
     // 이전 서버 프로세스가 죽은 시점부터의 나이다).
@@ -323,13 +324,35 @@ describe('xlsx/lazyGridStore.ts: cleanup', () => {
   test('sweepOrphanedLazyGridFiles does NOT remove a docview-lazygrid-* file created moments ago (still in active use elsewhere)', async () => {
     const os = await import('node:os');
     const path = await import('node:path');
-    const freshPath = path.join(os.tmpdir(), `docview-lazygrid-fresh-${randomUUID()}.jsonl`);
+    const freshPath = path.join(os.tmpdir(), `${lazyGridOwnPrefix()}fresh-${randomUUID()}.jsonl`);
     await fs.writeFile(freshPath, 'still being read by another worker');
 
     await sweepOrphanedLazyGridFiles();
 
     await expect(fs.access(freshPath)).resolves.toBeUndefined();
     await fs.rm(freshPath, { force: true });
+  });
+
+  test('다른 인스턴스(포트)의 파일은 오래됐어도 지우지 않고, 예전 이름 파일은 6시간 넘은 것만 지운다', async () => {
+    const os = await import('node:os');
+    const path = await import('node:path');
+    const other = path.join(os.tmpdir(), `docview-lazygrid-p65001-${randomUUID()}.jsonl`);
+    const legacyOld = path.join(os.tmpdir(), `docview-lazygrid-${randomUUID()}-old.jsonl`);
+    const legacyRecent = path.join(os.tmpdir(), `docview-lazygrid-${randomUUID()}-recent.jsonl`);
+    for (const f of [other, legacyOld, legacyRecent]) await fs.writeFile(f, 'x');
+    const day = new Date(Date.now() - 24 * 60 * 60_000);
+    const tenMin = new Date(Date.now() - 10 * 60_000);
+    await fs.utimes(other, day, day);
+    await fs.utimes(legacyOld, day, day);
+    await fs.utimes(legacyRecent, tenMin, tenMin);
+
+    await sweepOrphanedLazyGridFiles();
+
+    await expect(fs.access(other)).resolves.toBeUndefined();
+    await expect(fs.access(legacyOld)).rejects.toThrow();
+    await expect(fs.access(legacyRecent)).resolves.toBeUndefined();
+    await fs.rm(other, { force: true });
+    await fs.rm(legacyRecent, { force: true });
   });
 
   test('sweepOrphanedLazyGridFiles does not touch unrelated temp files', async () => {
