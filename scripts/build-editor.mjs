@@ -26,6 +26,9 @@ await build({
   target: 'es2020',
   platform: 'browser',
   sourcemap: true,
+  // 줄여서 내보낸다 — 받는 양과 브라우저가 읽는 시간이 준다. 함수·클래스 이름은 남긴다(이름에 기대는 코드·오류 추적용)
+  minify: true,
+  keepNames: true,
   logLevel: 'info',
   entryPoints: [
     'src/client/editor.ts',
