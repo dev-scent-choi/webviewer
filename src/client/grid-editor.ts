@@ -1,6 +1,7 @@
 import * as Y from 'yjs';
 import { WebsocketProvider } from 'y-websocket';
 import * as encoding from 'lib0/encoding';
+import * as decoding from 'lib0/decoding';
 import {
   DOC_META_MAP,
   DOC_META_SAVED_AT_KEY,
@@ -83,6 +84,16 @@ let afterGridRender: () => void = () => undefined;
 
 /** 지금 구독 중(서버가 채워 둔) 500행 페이지 — 정렬·필터는 이 안의 데이터로만 계산한다 */
 let lastSubscribedPages: ReadonlySet<number> = new Set();
+/** 그중 화면에 보이는(스크롤 위치 기준) 페이지 — 로딩 표시는 이것만 본다(필터 범위로 더 받는 페이지는 뒤에서) */
+let visiblePages: ReadonlySet<number> = new Set();
+/** 서버가 한 연결에 받아 주는 페이지 수 상한(room.ts MAX_SUBSCRIBED_PAGES_PER_CONN과 같게) */
+const MAX_SUBSCRIBED_PAGES = 32;
+/** 서버 → 편집기 "채움 완료" 알림 번호(room.ts와 같은 값) */
+const MESSAGE_PAGES_READY = 6;
+/** 시트별로 서버가 실제로 채워 준 페이지 — lastSubscribedPages는 "요청한" 것, 이건 "도착한" 것 */
+const arrivedPages = new Map<number, Set<number>>();
+/** 도착 알림을 받을 때마다 — 로딩 표시·필터를 다시 맞추는 쪽이 아래에서 채운다 */
+let pagesArrivedHook: () => void = () => undefined;
 /** 필터로 숨긴 행(지금 시트, 오름차순) — rowLayout에서 높이 0으로 계산된다 */
 let hiddenRowsSorted: number[] = [];
 let hiddenRowSet: ReadonlySet<number> = new Set();
@@ -278,6 +289,17 @@ async function main(): Promise<void> {
   const provider = new WebsocketProvider(`${wsProtocol}//${location.host}/ws/edit`, info.docId, ydoc, {
     params: { token },
   });
+  // 서버가 "이 페이지들은 다 채웠다"고 알린다(room.ts MESSAGE_PAGES_READY = 6) — 구독(요청)한 페이지가 실제로
+  // 도착했는지 이걸로 안다. 로딩 표시·필터 값 목록·정렬 가능 여부가 이 값을 본다.
+  (provider.messageHandlers as unknown as Array<(e: encoding.Encoder, d: decoding.Decoder) => void>)[MESSAGE_PAGES_READY] = (_encoder, decoder) => {
+    try {
+      const { sheet, pages } = JSON.parse(decoding.readVarString(decoder)) as { sheet: number; pages: number[] };
+      arrivedPages.set(sheet, new Set(pages));
+      pagesArrivedHook();
+    } catch {
+      /* 형식이 깨진 알림은 무시 — 다음 알림이 바로잡는다 */
+    }
+  };
 
   // 이름 기준으로 색을 정한다(ydoc.clientID는 접속마다 무작위라 같은 사람이 다른 브라우저로
   // 들어오면 매번 색이 달라져 버린다) — 같은 이름이면 항상 같은 색.
@@ -3110,13 +3132,17 @@ async function main(): Promise<void> {
   const filtersMap = ydoc.getMap<SheetFilter>(GRID_FILTERS_MAP);
   const activeSheetName = () => structure.get(String(activeSheet))?.name ?? '';
   const displayAt = (r: number, c: number) => valueText(activeSheetName(), r, c);
-  /** 서버가 채워 둔(구독 중인) 페이지 안의 행인지 — 정렬·필터는 화면 근처 데이터로만 계산한다 */
+  /** 서버가 실제로 채워 준(도착한) 페이지 안의 행인지 — 정렬·필터는 도착한 데이터로만 계산한다. 예전엔 "요청한"
+   * 페이지로 판정해서, 데이터가 오기 전에 정렬하면 빈 칸을 기준으로 줄을 옮길 수 있었고 필터 값 목록도 비어 보였다. */
   const rowsLoaded = (r1: number, r2: number) => {
+    const arrived = arrivedPages.get(activeSheet);
+    if (!arrived) return false;
     for (let page = Math.floor(r1 / PAGE_SIZE_ROWS); page <= Math.floor(r2 / PAGE_SIZE_ROWS); page += 1) {
-      if (!lastSubscribedPages.has(page)) return false;
+      if (!arrived.has(page)) return false;
     }
     return true;
   };
+  const rowArrived = (r: number) => arrivedPages.get(activeSheet)?.has(Math.floor(r / PAGE_SIZE_ROWS)) ?? false;
   /** 칸 하나만 골랐으면 둘러싼 데이터 영역, 범위를 골랐으면 그 범위 */
   function dataRegion(): CellRangeRef | null {
     const sel = rangeBounds();
@@ -3250,7 +3276,8 @@ async function main(): Promise<void> {
   function recomputeHiddenRows(): void {
     const filter = filtersMap.get(String(activeSheet));
     hiddenForSheet = activeSheet;
-    const next = filter ? filteredRows(filter, displayAt) : [];
+    // 아직 도착하지 않은 행은 값을 모르니 숨기지 않는다(도착하면 pagesArrivedHook이 다시 계산한다)
+    const next = filter ? filteredRows(filter, displayAt).filter(rowArrived) : [];
     const changed = next.length !== hiddenRowsSorted.length || next.some((r, i) => r !== hiddenRowsSorted[i]);
     if (changed) {
       hiddenRowsSorted = next;
@@ -3297,11 +3324,34 @@ async function main(): Promise<void> {
     if (!filterMenu.hidden && !filterMenu.contains(event.target as Node) && !(event.target as HTMLElement).closest('.grid-filter-btn')) filterMenu.hidden = true;
   });
 
+  /** 필터 목록이 열려 있는 열 — 데이터가 도착하면 그 목록을 다시 그린다 */
+  let openFilterCol: { col: number; anchor: HTMLElement } | null = null;
+
   function openFilterMenu(col: number, anchor: HTMLElement): void {
     const filter = filtersMap.get(String(activeSheet));
     if (!filter) return;
+    openFilterCol = { col, anchor };
+    // 필터 범위가 한 연결이 받을 수 있는 페이지 수보다 크면(약 16,000행 초과) 전부 받을 수 없다 — 받아 둔 부분만으로
+    // 목록을 만들고 그렇다고 알린다
+    const filterPageCount = Math.floor(filter.r2 / PAGE_SIZE_ROWS) - Math.floor(filter.r1 / PAGE_SIZE_ROWS) + 1;
+    const partial = filterPageCount > MAX_SUBSCRIBED_PAGES;
+    const ready = partial
+      ? [...lastSubscribedPages].every((page) => arrivedPages.get(activeSheet)?.has(page))
+      : rowsLoaded(filter.r1, filter.r2);
+    if (!ready) {
+      // 필터 범위의 데이터가 아직 다 오지 않았다 — 일부 값만으로 목록을 만들면 값이 빠져 보인다(실측: 목록이 비어 보임)
+      filterMenu.replaceChildren();
+      const waiting = document.createElement('div');
+      waiting.className = 'filter-loading';
+      waiting.innerHTML = '<span class="grid-spinner" aria-hidden="true"></span>값 목록을 불러오는 중…';
+      filterMenu.append(waiting);
+      positionFilterMenu(anchor);
+      scheduleSubscriptionUpdate();
+      return;
+    }
     const values = new Set<string>();
-    for (let r = filter.r1 + 1; r <= filter.r2; r += 1) values.add(displayAt(r, col));
+    // 도착한 행만 — 안 온 행을 빈 칸으로 세면 목록에 없는 "(필드 값 없음)"이 끼었다
+    for (let r = filter.r1 + 1; r <= filter.r2; r += 1) if (rowArrived(r)) values.add(displayAt(r, col));
     const sorted = [...values].sort((a, b) => compareCells(a, b, false));
     const allowed = filter.criteria[String(col)];
     const checked = new Set(allowed ?? sorted);
@@ -3324,6 +3374,12 @@ async function main(): Promise<void> {
         delete criteria[String(col)];
         filtersMap.set(String(activeSheet), { ...filter, criteria });
       });
+    }
+    if (partial) {
+      const note = document.createElement('div');
+      note.className = 'filter-note';
+      note.textContent = `행이 많아 일부(약 ${(MAX_SUBSCRIBED_PAGES * PAGE_SIZE_ROWS).toLocaleString()}행)만 보고 만든 목록입니다`;
+      filterMenu.append(note);
     }
     const list = document.createElement('div');
     list.className = 'filter-values';
@@ -3374,6 +3430,10 @@ async function main(): Promise<void> {
       else criteria[String(col)] = picked;
       filtersMap.set(String(activeSheet), { ...filter, criteria });
     });
+    positionFilterMenu(anchor);
+  }
+
+  function positionFilterMenu(anchor: HTMLElement): void {
     filterMenu.hidden = false;
     const rect = anchor.getBoundingClientRect();
     filterMenu.style.left = `${Math.max(4, Math.min(rect.left, window.innerWidth - filterMenu.offsetWidth - 4))}px`;
@@ -3561,8 +3621,16 @@ async function main(): Promise<void> {
       // 구독해 둔다 — 안 그러면 멀리 스크롤했을 때 고정된 헤더 행이 빈 칸으로 보일 수 있다.
       const freezeRows = structure.get(String(activeSheet))?.freezeRows ?? 0;
       if (freezeRows > 0) pages.add(0);
+      visiblePages = new Set(pages);
+      // 필터가 걸린 시트는 필터 범위 전체를 함께 받아 둔다 — 값 목록·숨길 행은 범위 전체 데이터가 있어야 맞다.
+      // 서버가 한 연결에 받아 주는 페이지 수(32)를 넘지 않게, 보이는 페이지를 먼저 두고 남는 만큼만.
+      const activeFilter = filtersMap.get(String(activeSheet));
+      if (activeFilter) {
+        for (let p = Math.floor(activeFilter.r1 / PAGE_SIZE_ROWS); p <= Math.floor(activeFilter.r2 / PAGE_SIZE_ROWS) && pages.size < MAX_SUBSCRIBED_PAGES; p += 1) pages.add(p);
+      }
       lastSubscribedPages = pages;
       sendPageSubscription(activeSheet, [...pages].sort((a, b) => a - b));
+      updateLoadingIndicator();
     }, 200);
   }
 
@@ -3580,6 +3648,44 @@ async function main(): Promise<void> {
   // 두고 창 가장자리에서 나가고 들어온 행만 patch한다 — 문맥이 조금이라도 의심되면 알아서
   // renderTableVirtualized()로 물러나므로 안전하다.
   let scrollRenderScheduled = false;
+  // ---------- 로딩 표시 — 화면에 보이는 페이지의 데이터가 아직 오지 않았으면 스피너 ----------
+  const loadingEl = document.createElement('div');
+  loadingEl.className = 'grid-loading';
+  loadingEl.hidden = true;
+  loadingEl.setAttribute('role', 'status');
+  loadingEl.innerHTML = '<span class="grid-spinner" aria-hidden="true"></span><span>데이터를 불러오는 중…</span>';
+  scrollHostEl.parentElement?.append(loadingEl);
+  let loadingTimer: ReturnType<typeof setTimeout> | null = null;
+  function updateLoadingIndicator(): void {
+    const arrived = arrivedPages.get(activeSheet);
+    const waiting = [...visiblePages].some((page) => !arrived?.has(page)) || visiblePages.size === 0;
+    if (!waiting) {
+      if (loadingTimer) clearTimeout(loadingTimer);
+      loadingTimer = null;
+      loadingEl.hidden = true;
+      setGridStatusText('준비');
+      return;
+    }
+    // 잠깐이면(스크롤 중 바로 도착) 깜빡이지 않게 조금 기다렸다 띄운다
+    if (!loadingTimer && loadingEl.hidden) {
+      loadingTimer = setTimeout(() => {
+        loadingTimer = null;
+        const stillWaiting = [...visiblePages].some((page) => !arrivedPages.get(activeSheet)?.has(page)) || visiblePages.size === 0;
+        if (stillWaiting) {
+          loadingEl.hidden = false;
+          setGridStatusText('불러오는 중');
+        }
+      }, 150);
+    }
+  }
+  pagesArrivedHook = () => {
+    updateLoadingIndicator();
+    if (filtersMap.get(String(activeSheet))) recomputeHiddenRows();
+    // "불러오는 중"을 보이고 있을 때만 다시 그린다 — 값 목록이 이미 떠 있으면 사용자가 고르던 체크가 날아간다
+    if (openFilterCol && !filterMenu.hidden && filterMenu.querySelector('.filter-loading')) openFilterMenu(openFilterCol.col, openFilterCol.anchor);
+  };
+  updateLoadingIndicator();
+
   scrollHostEl.addEventListener('scroll', () => {
     scheduleSubscriptionUpdate();
     if (editingKey !== null) return;

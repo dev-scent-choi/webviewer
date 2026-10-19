@@ -67,6 +67,9 @@ async function buildGrid(meta: DocumentMeta): Promise<GridDocument> {
  * 스프레드시트는 PDF 변환 없이 셀 데이터만 추출해 즉시 열람 가능하게 한다.
  * (대형 리스트의 수 분짜리 PDF 변환 대기 제거 — PDF는 출력 요청 시 생성)
  */
+/** 메모리 저장 모드(향기랩)에서 보기용 그리드 추출을 미루는 시간 — 편집기 첫 화면이 먼저 끝나게 */
+const GRID_EXTRACTION_DELAY_MS = 8000;
+
 async function runGridExtraction(app: FastifyInstance, meta: DocumentMeta): Promise<void> {
   try {
     await store.writeMeta({ ...meta, progress: PROGRESS_CONVERTING });
@@ -261,8 +264,11 @@ async function ingestUpload(
     // 변환은 백그라운드로 진행하고 즉시 응답한다. 클라이언트는 상태를 폴링한다.
     if (ext === 'xlsx' && config.storageMode === 'memory') {
       // 편집기로만 여는 곳 — 편집 세션용 인덱싱을 먼저(편집기가 기다리는 것), 보기용 그리드 추출은 그 뒤에.
-      // 서버는 한 줄로 일하므로 둘을 동시에 돌리면 서로 늦어질 뿐이다.
-      void prewarmXlsxRoom(id, data).finally(() => runGridExtraction(app, meta));
+      // 서버는 한 줄로 일하므로 둘을 동시에 돌리면 서로 늦어질 뿐이다. 인덱싱이 끝나는 바로 그때가 편집기가 첫
+      // 페이지를 채우는 때라 곧바로 추출하면 그것과 다퉜다 — 조금 미뤄 편집기 첫 화면이 먼저 끝나게 한다.
+      void prewarmXlsxRoom(id, data).finally(() => {
+        setTimeout(() => void runGridExtraction(app, meta), GRID_EXTRACTION_DELAY_MS).unref();
+      });
     } else if (GRID_VIEW_EXTS.has(ext)) {
       void runGridExtraction(app, meta);
     } else {

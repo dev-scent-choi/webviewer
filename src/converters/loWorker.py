@@ -73,17 +73,24 @@ def kill_tree(pid):
             pass
 
 
-def kill_leftover():
-    try:
-        with open(PIDFILE) as f:
-            pid = int(f.read().strip())
-    except (OSError, ValueError):
+def kill_profile_processes():
+    """이 프로필을 쓰는 soffice를 전부 끈다 — 처음 띄운 soffice.exe의 자식만 끄면, 스스로 다시 켜진 soffice.bin
+    (새 프로필을 만들 때 한 번 그렇게 된다)은 그 트리 밖이라 남았다. 명령줄의 프로필 폴더 이름으로 찾는다."""
+    if os.name != "nt":
         return
-    if os.name == "nt":
-        listed = subprocess.run(["tasklist", "/FI", "PID eq %d" % pid, "/NH"], capture_output=True, text=True).stdout.lower()
-        if "soffice" not in listed:
-            return  # 이미 없거나 다른 프로그램이 그 번호를 쓰고 있다
-    kill_tree(pid)
+    name = os.path.basename(PROFILE_DIR.rstrip("\\/"))
+    # 폴더 이름 바로 뒤가 영숫자가 아닐 때만 — worker-8000이 worker-80001까지 잡지 않게
+    script = (
+        "Get-CimInstance Win32_Process -Filter \"Name like 'soffice%'\" | "
+        "Where-Object { $_.CommandLine -match ([regex]::Escape('" + name + "') + '(?![0-9A-Za-z])') } | "
+        "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+    )
+    subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def kill_leftover():
+    # 지난번 변환기가 강제로 꺼져 남은 soffice가 이 프로필을 붙잡고 있으면 새 soffice가 그쪽으로 넘어가 버린다
+    kill_profile_processes()
 
 
 def stop():
@@ -103,6 +110,7 @@ def stop():
         if proc.poll() is None:
             kill_tree(proc.pid)
         proc = None
+    kill_profile_processes()
     try:
         os.remove(PIDFILE)
     except OSError:
@@ -120,8 +128,8 @@ def connect():
             desktop = ctx.ServiceManager.createInstanceWithContext("com.sun.star.frame.Desktop", ctx)
             return
         except NoConnectException:
-            if proc is None or proc.poll() is not None:
-                break
+            # soffice.exe가 끝나도 기다린다 — 새 프로필이면 soffice가 한 번 스스로 다시 켜지는데, 그때 soffice.exe는
+            # 끝나고 새 soffice.bin이 같은 파이프로 다시 받는다(그때 포기해서 새 프로필로는 변환기가 켜지지 않았다)
             time.sleep(0.25)
     raise RuntimeError("LibreOffice에 연결하지 못했습니다")
 
