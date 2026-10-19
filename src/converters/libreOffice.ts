@@ -10,6 +10,7 @@ import { strFromU8, strToU8, zipSync } from 'fflate';
 import { trimPdfMargins } from './pdfTrim.js';
 import type { Converter } from './types.js';
 import { guardedUnzipSync } from '../zipGuard.js';
+import { createLibreOfficeWorker } from './loWorker.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -32,6 +33,17 @@ function detectSoffice(): string | null {
 
 /** null이면 LibreOffice 미설치 → Office/DXF 변환기가 등록되지 않는다. */
 export const sofficePath = detectSoffice();
+
+/** 상주 변환기(loWorker.ts) — 작은 문서를 soffice를 새로 띄우지 않고 바꾼다. 없거나 실패하면 예전 방식 */
+const loWorker = createLibreOfficeWorker(sofficePath);
+
+/** 상주 변환기에 맡길 수 있는 변환 — 일반 PDF와 스프레드시트 "시트당 1쪽"만(DXF 등 특수 입력 필터는 예전 방식) */
+function workerFilterFor(extraArgs: readonly string[]): { readonly filterData: Readonly<Record<string, boolean>> | null } | null {
+  if (extraArgs.length !== 2 || extraArgs[0] !== '--convert-to') return null;
+  if (extraArgs[1] === 'pdf') return { filterData: null };
+  if (extraArgs[1] === SPREADSHEET_PDF_FILTER) return { filterData: { SinglePageSheets: true } };
+  return null;
+}
 
 /** soffice.exe 경로에서 LibreOffice 설치 루트를 역산한다(…/program/soffice.exe -> 그 두 단계 위). */
 function libreOfficeInstallRoot(): string | null {
@@ -308,6 +320,18 @@ async function convertWithSoffice(
       await fs.copyFile(sourcePath, stagedSource);
     }
 
+    const produced = path.join(workDir, `${path.parse(displayName).name}.pdf`);
+    const viaWorker = workerFilterFor(extraArgs);
+    if (loWorker && viaWorker && (await loWorker.tryConvert(stagedSource, produced, viaWorker.filterData))) {
+      try {
+        await fs.access(produced);
+        await fs.copyFile(produced, targetPdfPath);
+        return;
+      } catch {
+        /* 산출물이 없으면 아래 예전 방식으로 */
+      }
+    }
+
     await withProfileSlot(async (profileDir) => {
       await execFileAsync(
         sofficePath,
@@ -324,7 +348,6 @@ async function convertWithSoffice(
       );
     });
     // soffice는 변환 실패 시에도 종료 코드 0을 반환할 수 있어 산출물 존재로 판정한다.
-    const produced = path.join(workDir, `${path.parse(displayName).name}.pdf`);
     try {
       await fs.access(produced);
     } catch {
@@ -333,8 +356,12 @@ async function convertWithSoffice(
     await fs.copyFile(produced, targetPdfPath);
   } finally {
     // Windows에서 백신 등이 방금 만든 임시 파일을 잠깐 스캔하는 동안 삭제가 EBUSY로 실패하는
-    // 경우가 있어, 짧게 재시도한다.
-    await fs.rm(workDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    // 경우가 있어, 짧게 재시도한다. 상주 변환기는 응답을 먼저 보내고 문서를 닫으므로(큰 문서는 닫는 데 수 초)
+    // 원본 사본이 잠시 잠겨 있을 수 있다 — 그래도 변환은 이미 끝났으니 실패로 치지 않는다. 남은 폴더는
+    // 임시 폴더 청소(src/tempSweep.ts)가 지운다.
+    await fs.rm(workDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }).catch(() => {
+      setTimeout(() => void fs.rm(workDir, { recursive: true, force: true }).catch(() => undefined), 20_000).unref();
+    });
   }
 }
 
@@ -432,6 +459,7 @@ export async function convertLegacySpreadsheetToXlsx(
  */
 export async function warmUpProfiles(): Promise<void> {
   if (!sofficePath) return;
+  void loWorker?.warmUp();
   await Promise.all(
     Array.from({ length: PROFILE_POOL_SIZE }, async (_, index) => {
       const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'docview-warmup-'));
