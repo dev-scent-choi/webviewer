@@ -61,6 +61,10 @@ export const config = {
   renderScale: RENDER_SCALE,
   /** disk: 파일 저장(기본) / memory: 서버 메모리에만 보관 (재시작 시 소멸, 디스크 비잔류) */
   storageMode,
+  /** 감사 로그·변경 이력을 디스크에 남길지 — 메모리 저장(향기랩처럼 "올린 문서를 저장하지 않음")이면
+   * 기본으로 끈다. 그 로그엔 파일 이름과 편집한 글자(전/후)가 들어가 "저장하지 않음" 약속과 어긋났다.
+   * 메모리 모드에서도 꼭 필요하면 DOCVIEW_PERSIST_LOGS=1로 켠다. */
+  persistLogs: process.env.DOCVIEW_PERSIST_LOGS === '1' || storageMode !== 'memory',
   memoryBudgetBytes:
     Number(process.env.DOCVIEW_MEMORY_BUDGET_MB ?? DEFAULT_MEMORY_BUDGET_MB) * 1024 * 1024,
   /** 렌더링·파싱 캐시(그리드/PDF 텍스트/페이지 이미지)가 공유하는 총 메모리 상한 */
