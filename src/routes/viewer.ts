@@ -199,7 +199,15 @@ async function regenerateStaleGridCache(docId: string): Promise<boolean> {
 }
 
 async function loadGridUncached(docId: string, allowRegenerate = true): Promise<LoadedGrid> {
-  const buffer = await store.readDerived(docId, 'grid');
+  let buffer: Buffer;
+  try {
+    buffer = await store.readDerived(docId, 'grid');
+  } catch (error) {
+    // 아직 만들지 않았다 — 메모리 저장 모드(향기랩)는 편집기로만 열어서 보기용 그리드를 미리 만들지 않는다
+    // (documents.ts). 누가 보기 화면을 열면 그때 만든다.
+    if (!allowRegenerate || !(await regenerateStaleGridCache(docId))) throw error;
+    return loadGridUncached(docId, false);
+  }
   if (allowRegenerate && peekGridHeaderVersion(buffer) !== GRID_CACHE_FORMAT_VERSION) {
     // 재생성이 성공하면 방금 막 저장한 최신 버퍼를 처음부터 다시 읽어 이어간다(아래 재귀 호출,
     // allowRegenerate=false로 무한 재귀를 막는다) — 실패하면(위 문서 주석) 그냥 아래로 흘러가
