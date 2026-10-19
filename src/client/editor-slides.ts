@@ -410,6 +410,38 @@ function renderSlideVisual(visual: SlideVisual, pageImageUrl: string | null): HT
 function renderCanvasForSlide(entryId: string): void {
   renderCanvasForSlideInner(entryId);
   designHooks?.onCanvasRendered();
+  notifyParentWhenFirstSlideShown(entryId);
+}
+
+/** 부모 창(iframe으로 이 문서를 띄운 화면)에 첫 슬라이드가 다 보인다고 알린다 — 부모가 진행 게이지를
+ * 이 시점에 마친다(엑셀 편집기의 docview:ready와 같다). 내용(텍스트 상자·그림)이 처음 그려진 뒤, 그 슬라이드의
+ * 그림이 다 뜨면(최대 8초) 한 번만 보낸다. */
+let parentReadyPosted = false;
+function notifyParentWhenFirstSlideShown(entryId: string): void {
+  if (parentReadyPosted || window.parent === window) return;
+  const canvas = document.getElementById('slide-canvas');
+  if (!canvas?.querySelector('.slide-textbox, .slide-visual')) return; // 아직 시딩 전(빈 캔버스)
+  // 그림·도형 목록은 글자보다 조금 늦게 따로 도착한다 — 그것까지 받아 그린 뒤에 알린다(배경 그림 없이 끝나지 않게)
+  if (!slideVisuals.has(entryId)) return;
+  parentReadyPosted = true;
+  const images = [...canvas.querySelectorAll('img')].filter((img) => !img.complete);
+  const post = () => window.parent.postMessage({ type: 'docview:ready' }, '*');
+  if (images.length === 0) {
+    requestAnimationFrame(() => requestAnimationFrame(post));
+    return;
+  }
+  let left = images.length;
+  const timer = setTimeout(post, 8000);
+  const done = () => {
+    left -= 1;
+    if (left > 0) return;
+    clearTimeout(timer);
+    requestAnimationFrame(post);
+  };
+  for (const img of images) {
+    img.addEventListener('load', done, { once: true });
+    img.addEventListener('error', done, { once: true });
+  }
 }
 
 function renderCanvasForSlideInner(entryId: string): void {

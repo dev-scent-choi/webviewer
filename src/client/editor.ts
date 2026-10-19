@@ -607,8 +607,16 @@ async function main(): Promise<void> {
       showFatalError(event.reason || '서버가 연결을 거부했습니다.');
     }
   });
+  let readyPosted = false;
   provider.on('sync', (isSynced: boolean) => {
-    if (isSynced) statusEl.dataset.status = 'synced';
+    if (!isSynced) return;
+    statusEl.dataset.status = 'synced';
+    // 부모 창(iframe으로 이 문서를 띄운 화면)이 자신의 진행 게이지를 내용이 그려지는 이 시점에 마칠 수 있게
+    // 알린다(엑셀 편집기의 docview:ready와 같다) — 첫 동기화 내용이 그려진 다음 페인트 뒤에.
+    if (!readyPosted && window.parent !== window) {
+      readyPosted = true;
+      requestAnimationFrame(() => requestAnimationFrame(() => window.parent.postMessage({ type: 'docview:ready' }, '*')));
+    }
   });
   provider.awareness.on('change', () => renderPresenceAvatars(presenceEl, provider.awareness));
   renderPresenceAvatars(presenceEl, provider.awareness);
