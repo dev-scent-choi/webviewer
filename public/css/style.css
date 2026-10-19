@@ -3599,3 +3599,31 @@ body.review-pane-open #editor-zoom-host { margin-right: 320px; }
 .animation-target { font-size: 0.72rem; color: #605e5c; }
 .slide-anim-badge { position: absolute; left: -12px; top: -2px; z-index: 6; min-width: 14px; padding: 0 3px; border: 1px solid #a19f9d; background: #f3f2f1; color: #323130; font: 600 10px/14px var(--font-sans); text-align: center; pointer-events: none; }
 .slide-card-transition { position: absolute; left: 5px; bottom: 5px; padding: 0 3px; border-radius: 3px; background: rgba(255, 255, 255, 0.85); color: #605e5c; font-size: 11px; line-height: 15px; }
+
+/* ---------- 문서 글꼴 — PPT·워드에 적힌 글꼴 이름 그대로 쓸 수 있게(서버의 LibreOffice 대체표와 같은 규칙) ---------- */
+/* 에스코어 드림(S-Core, 상업 이용·재배포 허용 — https://s-core.co.kr/company/font/) — 문서가 이 글꼴을 쓸 때만 브라우저가 받는다 */
+@font-face { font-family: '에스코어 드림 1 Thin'; src: local('에스코어 드림 1 Thin'), url('/fonts/s-core-dream/SCDream1.otf') format('opentype'); font-display: swap; }
+@font-face { font-family: 'S-Core Dream 1 Thin'; src: local('S-Core Dream 1 Thin'), url('/fonts/s-core-dream/SCDream1.otf') format('opentype'); font-display: swap; }
+@font-face { font-family: '에스코어 드림 2 ExtraLight'; src: local('에스코어 드림 2 ExtraLight'), url('/fonts/s-core-dream/SCDream2.otf') format('opentype'); font-display: swap; }
+@font-face { font-family: 'S-Core Dream 2 ExtraLight'; src: local('S-Core Dream 2 ExtraLight'), url('/fonts/s-core-dream/SCDream2.otf') format('opentype'); font-display: swap; }
+@font-face { font-family: '에스코어 드림 3 Light'; src: local('에스코어 드림 3 Light'), url('/fonts/s-core-dream/SCDream3.otf') format('opentype'); font-display: swap; }
+@font-face { font-family: 'S-Core Dream 3 Light'; src: local('S-Core Dream 3 Light'), url('/fonts/s-core-dream/SCDream3.otf') format('opentype'); font-display: swap; }
+@font-face { font-family: '에스코어 드림 4 Regular'; src: local('에스코어 드림 4 Regular'), url('/fonts/s-core-dream/SCDream4.otf') format('opentype'); font-display: swap; }
+@font-face { font-family: 'S-Core Dream 4 Regular'; src: local('S-Core Dream 4 Regular'), url('/fonts/s-core-dream/SCDream4.otf') format('opentype'); font-display: swap; }
+@font-face { font-family: '에스코어 드림 5 Medium'; src: local('에스코어 드림 5 Medium'), url('/fonts/s-core-dream/SCDream5.otf') format('opentype'); font-display: swap; }
+@font-face { font-family: 'S-Core Dream 5 Medium'; src: local('S-Core Dream 5 Medium'), url('/fonts/s-core-dream/SCDream5.otf') format('opentype'); font-display: swap; }
+@font-face { font-family: '에스코어 드림 6 Bold'; src: local('에스코어 드림 6 Bold'), url('/fonts/s-core-dream/SCDream6.otf') format('opentype'); font-display: swap; }
+@font-face { font-family: 'S-Core Dream 6 Bold'; src: local('S-Core Dream 6 Bold'), url('/fonts/s-core-dream/SCDream6.otf') format('opentype'); font-display: swap; }
+@font-face { font-family: '에스코어 드림 7 ExtraBold'; src: local('에스코어 드림 7 ExtraBold'), url('/fonts/s-core-dream/SCDream7.otf') format('opentype'); font-display: swap; }
+@font-face { font-family: 'S-Core Dream 7 ExtraBold'; src: local('S-Core Dream 7 ExtraBold'), url('/fonts/s-core-dream/SCDream7.otf') format('opentype'); font-display: swap; }
+@font-face { font-family: '에스코어 드림 8 Heavy'; src: local('에스코어 드림 8 Heavy'), url('/fonts/s-core-dream/SCDream8.otf') format('opentype'); font-display: swap; }
+@font-face { font-family: 'S-Core Dream 8 Heavy'; src: local('S-Core Dream 8 Heavy'), url('/fonts/s-core-dream/SCDream8.otf') format('opentype'); font-display: swap; }
+@font-face { font-family: '에스코어 드림 9 Black'; src: local('에스코어 드림 9 Black'), url('/fonts/s-core-dream/SCDream9.otf') format('opentype'); font-display: swap; }
+@font-face { font-family: 'S-Core Dream 9 Black'; src: local('S-Core Dream 9 Black'), url('/fonts/s-core-dream/SCDream9.otf') format('opentype'); font-display: swap; }
+/* KoPub돋움체는 서버·웹에 실어 쓰려면 별도 승인이 필요해 싣지 않는다 — 사용자 PC에 있으면 그것, 없으면 같은 고딕 계열인 맑은 고딕 */
+@font-face { font-family: 'KoPub돋움체 Light'; src: local('KoPub돋움체 Light'), local('Malgun Gothic'), local('맑은 고딕'); font-display: swap; }
+@font-face { font-family: 'KoPubWorld돋움체 Light'; src: local('KoPubWorld돋움체 Light'), local('Malgun Gothic'), local('맑은 고딕'); font-display: swap; }
+@font-face { font-family: 'KoPub돋움체 Medium'; src: local('KoPub돋움체 Medium'), local('Malgun Gothic'), local('맑은 고딕'); font-display: swap; }
+@font-face { font-family: 'KoPubWorld돋움체 Medium'; src: local('KoPubWorld돋움체 Medium'), local('Malgun Gothic'), local('맑은 고딕'); font-display: swap; }
+@font-face { font-family: 'KoPub돋움체 Bold'; src: local('KoPub돋움체 Bold'), local('Malgun Gothic'), local('맑은 고딕'); font-display: swap; }
+@font-face { font-family: 'KoPubWorld돋움체 Bold'; src: local('KoPubWorld돋움체 Bold'), local('Malgun Gothic'), local('맑은 고딕'); font-display: swap; }

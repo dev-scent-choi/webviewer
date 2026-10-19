@@ -17,6 +17,7 @@ import { existsSync, statSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { ensureFontSubstitutions } from './loFontSubstitution.js';
 
 const WORKER_MAX_BYTES = 5 * 1024 * 1024;
 /** 맡는 형식 — 오피스 문서만. 한글(hwp)은 변환이 느려(56쪽 18초) 이득이 적은데 상주 soffice 메모리를 1GB로 키워
@@ -108,6 +109,7 @@ export class LibreOfficeWorker {
     if (Date.now() - this.failedAt < RETRY_AFTER_FAILURE_MS) return Promise.resolve(false);
     this.ready = new Promise<boolean>((resolve) => {
       const profile = path.join(os.tmpdir(), 'docview-lo-profiles', `worker-${this.tag}`);
+      ensureFontSubstitutions(profile);
       const child = spawn(this.pythonPath, [this.scriptPath, this.sofficePath, `docview_lo_${this.tag}_${process.pid}`, pathToFileURL(profile).href], {
         stdio: ['pipe', 'pipe', 'pipe'],
         windowsHide: true,
