@@ -3,6 +3,7 @@ import { recordAudit } from '../audit.js';
 import { checkRoomCapacity, joinEditSession } from '../collab/room.js';
 import { InvalidTokenError, verifyViewToken } from '../security.js';
 import { store } from '../storage.js';
+import { isOpenable } from '../conversionGate.js';
 
 interface EditQuery {
   readonly token?: string;
@@ -57,7 +58,7 @@ export async function editRoutes(app: FastifyInstance): Promise<void> {
       }
 
       const meta = await store.readMeta(claims.docId);
-      if (!meta || meta.status !== 'ready') {
+      if (!isOpenable(meta)) {
         socket.off('message', queueEarly);
         socket.close(4404, '문서를 찾을 수 없습니다.');
         return;

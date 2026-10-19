@@ -42,6 +42,7 @@ import {
 } from '../spreadsheet.js';
 import { store } from '../storage.js';
 import type { DocumentMeta, ViewClaims } from '../types.js';
+import { isOpenable } from '../conversionGate.js';
 
 export interface ViewContext {
   readonly claims: ViewClaims;
@@ -71,7 +72,7 @@ export async function resolveView(token: string | undefined, reply: FastifyReply
     throw error;
   }
   const meta = await store.readMeta(claims.docId);
-  if (!meta || meta.status !== 'ready') {
+  if (!isOpenable(meta)) {
     await reply.code(404).send({ success: false, error: '문서를 찾을 수 없습니다.' });
     return null;
   }

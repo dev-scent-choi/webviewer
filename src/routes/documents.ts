@@ -17,6 +17,7 @@ import { buildGridFromOriginal, saveGridDerived, type GridDocument } from '../sp
 import { newDocumentId, store } from '../storage.js';
 import type { DocumentMeta } from '../types.js';
 import { invalidateViewCaches } from './viewer.js';
+import { isOpenable, trackInitialConversion } from '../conversionGate.js';
 
 const tokenBodySchema = {
   type: 'object',
@@ -246,6 +247,8 @@ async function ingestUpload(
       pageCount: 0,
       createdAt: new Date().toISOString(),
       progress: 10,
+      // 워드는 편집기가 원본만으로 열리므로 변환을 기다리지 않게 한다(편집기 여는 시간 3초 남짓 단축)
+      ...(ext === 'docx' ? { editReady: true } : {}),
     };
     await store.writeMeta(meta);
     await recordAudit({
@@ -257,7 +260,7 @@ async function ingestUpload(
     if (GRID_VIEW_EXTS.has(ext)) {
       void runGridExtraction(app, meta);
     } else {
-      void runConversion(app, converter, meta);
+      trackInitialConversion(id, runConversion(app, converter, meta));
     }
     return { code: 201, body: { success: true, data: meta } };
   } catch (error) {
@@ -382,7 +385,7 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
     async (request, reply) => {
       const callerProject = (request as ApiKeyAuthenticatedRequest).callerProject;
       const meta = await store.readMeta(request.params.id);
-      if (!meta || meta.status !== 'ready') {
+      if (!isOpenable(meta)) {
         return reply.code(404).send({ success: false, error: '문서를 찾을 수 없습니다.' });
       }
       const { viewer, canPrint, canDownload, canCopy, canEdit } = request.body;
