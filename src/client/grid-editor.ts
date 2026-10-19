@@ -699,16 +699,50 @@ async function main(): Promise<void> {
     document.querySelectorAll('.sheet-context-menu, .sheet-move-menu, .grid-context-menu').forEach((el) => el.remove());
   }
 
+  function switchToSheet(idx: number): void {
+    if (activeSheet === idx) return;
+    activeSheet = idx;
+    resetSelectionForSheetSwitch();
+    renderSheetTabs();
+    renderTableVirtualized();
+  }
+
+  /** 엑셀처럼 탭 줄은 스크롤바 없이 잘려 보이고, 활성 탭이 잘려 있으면 보이는 곳까지 탭 줄을 민다 */
+  function revealActiveSheetTab(): void {
+    const tab = tabElFor(activeSheet);
+    if (!tab) return;
+    const left = tab.offsetLeft; // .grid-sheet-tabs--clip 이 position:relative 라 탭 줄 기준 위치
+    const right = left + tab.offsetWidth;
+    if (left < sheetTabsEl.scrollLeft) sheetTabsEl.scrollLeft = left;
+    else if (right > sheetTabsEl.scrollLeft + sheetTabsEl.clientWidth) sheetTabsEl.scrollLeft = right - sheetTabsEl.clientWidth;
+  }
+
+  // 맨 왼쪽 ◀ ▶ — 이전/다음 시트로 옮겨 간다(첫/마지막 시트에선 꺼진다). + 는 탭 줄 바깥에 있어 시트가 많아도 늘 보인다.
+  const sheetNavPrev = document.getElementById('sheet-nav-prev') as HTMLButtonElement | null;
+  const sheetNavNext = document.getElementById('sheet-nav-next') as HTMLButtonElement | null;
+  function stepSheet(delta: number): void {
+    const indices = sortedSheetIndices();
+    const target = indices[indices.indexOf(activeSheet) + delta];
+    if (target !== undefined) switchToSheet(target);
+  }
+  sheetNavPrev?.addEventListener('click', () => stepSheet(-1));
+  sheetNavNext?.addEventListener('click', () => stepSheet(1));
+  document.getElementById('sheet-add')?.addEventListener('click', () => addSheet());
+  sheetTabsEl.addEventListener(
+    'wheel',
+    (event) => {
+      if (sheetTabsEl.scrollWidth <= sheetTabsEl.clientWidth) return;
+      event.preventDefault();
+      sheetTabsEl.scrollLeft += event.deltaY || event.deltaX;
+    },
+    { passive: false },
+  );
+
   function renderSheetTabs(): void {
     const indices = sortedSheetIndices();
-    const addBtn = document.createElement('button');
-    addBtn.type = 'button';
-    addBtn.className = 'grid-sheet-tab-add';
-    addBtn.title = '시트 추가';
-    addBtn.setAttribute('aria-label', '시트 추가');
-    addBtn.innerHTML =
-      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>';
-    addBtn.addEventListener('click', () => addSheet());
+    const pos = indices.indexOf(activeSheet);
+    if (sheetNavPrev) sheetNavPrev.disabled = pos <= 0;
+    if (sheetNavNext) sheetNavNext.disabled = pos < 0 || pos >= indices.length - 1;
     sheetTabsEl.replaceChildren(
       ...indices.map((idx) => {
         const sheet = structure.get(String(idx))!;
@@ -717,13 +751,7 @@ async function main(): Promise<void> {
         tab.className = 'grid-sheet-tab' + (idx === activeSheet ? ' active' : '');
         tab.textContent = sheet.name;
         tab.dataset.sheetIdx = String(idx);
-        tab.addEventListener('click', () => {
-          if (activeSheet === idx) return;
-          activeSheet = idx;
-          resetSelectionForSheetSwitch();
-          renderSheetTabs();
-          renderTableVirtualized();
-        });
+        tab.addEventListener('click', () => switchToSheet(idx));
         tab.addEventListener('dblclick', () => startSheetRename(idx));
         tab.addEventListener('contextmenu', (event) => {
           event.preventDefault();
@@ -731,8 +759,8 @@ async function main(): Promise<void> {
         });
         return tab;
       }),
-      addBtn,
     );
+    revealActiveSheetTab();
   }
 
   /** order 필드만 다시 매긴다 — 셀 데이터는 전혀 건드리지 않으므로 시트가 몇 개든 가벼운 연산이다. */

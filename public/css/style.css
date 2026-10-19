@@ -2158,6 +2158,44 @@ body.home-hidden .doclist-link { display: none !important; }
 }
 .grid-hscroll-thumb:hover { background: #b0b0b0; }
 .grid-hscroll[data-scrollable="false"] { opacity: 0.45; pointer-events: none; }
+/* 편집기 하단 줄 — 엑셀과 같은 배치: [◀ ▶] [탭들…] (+) [가로 스크롤바]. 탭 줄은 자기 스크롤바 없이 잘려
+   보이고(◀ ▶·휠로 이동), + 는 탭 줄 바깥 바로 뒤에 있어 시트가 많아도 가려지지 않는다. */
+.grid-sheet-nav {
+  flex: none;
+  display: flex;
+  align-items: center;
+  height: 24px;
+  margin-bottom: 1px;
+}
+.grid-sheet-nav-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--v-text-dim);
+  cursor: pointer;
+}
+.grid-sheet-nav-btn:hover:not(:disabled) { color: var(--v-text); background: var(--v-hover); }
+.grid-sheet-nav-btn:disabled { opacity: 0.35; cursor: default; }
+.grid-sheet-nav-btn svg { width: 12px; height: 12px; }
+.grid-sheet-strip {
+  flex: 6;
+  min-width: 0;
+  display: flex;
+  align-items: flex-end;
+}
+.grid-sheet-strip .grid-sheet-tabs { flex: 0 1 auto; }
+.grid-sheet-tabs--clip {
+  position: relative;
+  overflow-x: hidden;
+  scrollbar-width: none;
+}
+.grid-sheet-tabs--clip::-webkit-scrollbar { display: none; }
+.grid-sheet-tabs--clip .grid-sheet-tab { flex: none; white-space: nowrap; }
 .grid-sheet-tab-add {
   flex: none;
   display: inline-flex;
