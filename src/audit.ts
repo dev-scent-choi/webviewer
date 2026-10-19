@@ -23,6 +23,7 @@ function auditLogPathFor(date: Date): string {
 
 /** 감사 로그 기록 실패가 본 요청을 실패시키지 않도록 내부에서 오류를 삼키되 콘솔에 남긴다. */
 export async function recordAudit(event: AuditEvent): Promise<void> {
+  if (!config.persistLogs) return;
   const now = new Date();
   const line = JSON.stringify({ at: now.toISOString(), ...event });
   try {

@@ -29,7 +29,7 @@ export async function persistChangeLog(
   docKind: 'xlsx' | 'docx' | 'pptx',
   entries: readonly object[],
 ): Promise<void> {
-  if (entries.length === 0) return;
+  if (entries.length === 0 || !config.persistLogs) return;
   const now = new Date();
   const closedAt = now.toISOString();
   const lines = entries.map((entry) => `${JSON.stringify({ docId, docKind, closedAt, ...entry })}\n`).join('');
