@@ -24,6 +24,8 @@ import {
 import type { GridCell, GridDocument, GridStyle } from '../spreadsheet.js';
 import { parseXlsxToGrid, unformattedCellValue, yieldToEventLoop, YIELD_EVERY_N_ROWS } from '../spreadsheet.js';
 import type { LazyGridSheetMeta, LazyGridStore } from './lazyGridStore.js';
+import { GRID_COND_FORMATS_MAP, type CondFormatEntry } from '../collab/condFormatShared.js';
+import { applyEditedCondFormats, preserveUnsupportedCfRules } from './condFormatExport.js';
 import { getRow } from './lazyGridStore.js';
 import { dateTextToDate, parseTypedNumber } from '../collab/cellValueShared.js';
 
@@ -444,6 +446,8 @@ export async function unseedGridPageFromXlsx(
 export async function seedGridStructureOnly(ydoc: Y.Doc, sheets: readonly LazyGridSheetMeta[]): Promise<void> {
   const structure = ydoc.getMap<SheetStructure>(GRID_STRUCTURE_MAP);
   const merges = ydoc.getMap<readonly GridMergeShape[]>(GRID_MERGES_MAP);
+  // 조건부 서식도 병합처럼 윈도잉하지 않고 시트마다 통째로 — 편집기가 보이는 칸을 그릴 때 바로 판정한다
+  const condFormats = ydoc.getMap<readonly CondFormatEntry[]>(GRID_COND_FORMATS_MAP);
 
   for (let sheetIdx = 0; sheetIdx < sheets.length; sheetIdx += 1) {
     const sheet = sheets[sheetIdx];
@@ -461,6 +465,7 @@ export async function seedGridStructureOnly(ydoc: Y.Doc, sheets: readonly LazyGr
         showGridLines: sheet.showGridLines,
       });
       if (sheet.merges.length > 0) merges.set(String(sheetIdx), sheet.merges);
+      if (sheet.condFormats && sheet.condFormats.length > 0) condFormats.set(String(sheetIdx), sheet.condFormats);
     }, GRID_WINDOW_SEED_ORIGIN);
     await yieldToEventLoop();
   }
@@ -890,6 +895,11 @@ export async function exportXlsxFromGrid(
   // 건드리지 않은 시트는 예전과 똑같이 원본(과 구조 연산 재생) 그대로 둔다. 값 쓰기가 다 끝난 **뒤에** 한다: ExcelJS는
   // 병합된 칸에 값을 쓰면 왼쪽 위 칸으로 넘겨 쓰므로, 먼저 병합하면 지운 칸의 빈 값이 왼쪽 위 값을 덮는다.
   applyEditedMerges(store, visibleSheets, removedSheets);
+  // 조건부 서식 — 편집·이동한 시트만 규칙 목록을 다시 쓰고, 모든 시트에서 ExcelJS가 못 쓰는 규칙을 수식 규칙으로 보존한다
+  applyEditedCondFormats(store.sheetMeta, visibleSheets, removedSheets);
+  visibleSheets.forEach((sheet, i) => {
+    if (sheet && !removedSheets.has(i)) preserveUnsupportedCfRules(sheet);
+  });
 
   for (let i = 0; i < visibleSheets.length; i += 1) {
     if (removedSheets.has(i)) continue; // 이미 워크북에서 제거된 시트 — 다시 잠글 대상이 아니다

@@ -67,6 +67,7 @@ import {
   GRID_WINDOW_SEED_ORIGIN,
 } from '../xlsx/collab.js';
 import { shiftMerges } from '../xlsx/gridShift.js';
+import { GRID_COND_FORMATS_MAP, shiftCondFormats, type CondFormatEntry } from './condFormatShared.js';
 import {
   EXCEL_DEFAULT_ROW_HEIGHT_PT,
   defaultColWidthPx,
@@ -1330,6 +1331,12 @@ async function applyGridStructureOp(room: Room, op: GridStructureOp): Promise<vo
     applyColShift(store, op.sheet, op.at, op.count, insert);
   }
   meta.merges = shiftMerges(meta.merges, onRows ? 'row' : 'col', op.at, op.count, insert);
+  // 조건부 서식 범위도 같은 축으로 옮긴다 — 저장 때 ExcelJS의 행/열 재생(spliceRows)은 규칙 범위를 옮기지 않으므로
+  // 규칙이 있는 시트는 저장 때 목록을 다시 쓰게 표시한다(condFormatsEdited)
+  if (meta.condFormats && meta.condFormats.length > 0) {
+    meta.condFormats = shiftCondFormats(meta.condFormats, onRows ? 'row' : 'col', op.at, op.count, insert);
+    meta.condFormatsEdited = true;
+  }
   if (onRows) meta.rowHeights = shiftRowHeightRuns(meta.rowHeights, op.at, op.count, insert);
   if (!onRows) {
     // 열 너비도 gridShift.ts의 옛 insertCanonicalCols/deleteCanonicalCols와 같은 규칙으로 직접
@@ -1352,9 +1359,12 @@ async function applyGridStructureOp(room: Room, op: GridStructureOp): Promise<vo
   //    같은 값으로 맞춘다(이 맵은 윈도잉 대상이 아니라 항상 전체가 들어 있다).
   const mergesMap = room.ydoc.getMap<readonly GridMergeShape[]>(GRID_MERGES_MAP);
   const mergesKey = String(op.sheet);
+  const condFormatsMap = room.ydoc.getMap<readonly CondFormatEntry[]>(GRID_COND_FORMATS_MAP);
   room.ydoc.transact(() => {
     if (meta.merges.length > 0) mergesMap.set(mergesKey, meta.merges);
     else if (mergesMap.has(mergesKey)) mergesMap.delete(mergesKey);
+    if (meta.condFormats && meta.condFormats.length > 0) condFormatsMap.set(mergesKey, meta.condFormats);
+    else if (condFormatsMap.has(mergesKey)) condFormatsMap.delete(mergesKey);
   }, GRID_STRUCTURE_SHIFT_ORIGIN);
 
   // 2) 셀 값·서식·계산값 — Yjs에 올라와 있는 페이지를 새 canonical 기준으로 다시 채운다. 서식은
@@ -1494,6 +1504,18 @@ async function seedRoom(room: Room): Promise<void> {
           if (!meta) continue;
           meta.merges = (mergesMap.get(key) ?? []).map((m) => ({ r: m.r, c: m.c, rs: m.rs, cs: m.cs }));
           meta.mergesEdited = true;
+        }
+      });
+      // 조건부 서식 — 병합과 같은 이유로 편집기가 고친 규칙 목록을 메타데이터에 반영한다
+      const condFormatsMap = ydoc.getMap<readonly CondFormatEntry[]>(GRID_COND_FORMATS_MAP);
+      condFormatsMap.observe((event) => {
+        const origin = event.transaction.origin;
+        if (origin === GRID_WINDOW_SEED_ORIGIN || origin === GRID_STRUCTURE_SHIFT_ORIGIN) return;
+        for (const key of event.keysChanged) {
+          const meta = lazyStore.sheetMeta[Number(key)];
+          if (!meta) continue;
+          meta.condFormats = condFormatsMap.get(key) ?? [];
+          meta.condFormatsEdited = true;
         }
       });
       // 예전에는 여기서 모든 시트를 한 번 통째로 재계산했다 — 윈도잉 이후에는 그 시점에 구독

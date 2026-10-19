@@ -34,6 +34,8 @@ import {
   type RowHeightRuns,
 } from './sheetGeometry.js';
 import { gridCellKey, parseGridCellKey } from '../collab/gridShared.js';
+import type { CondFormatEntry } from '../collab/condFormatShared.js';
+import { parseCondFormats, parseDxfs } from './condFormatParse.js';
 
 export interface LazyGridSheetMeta {
   name: string;
@@ -48,6 +50,13 @@ export interface LazyGridSheetMeta {
   merges: readonly GridMerge[];
   /** 편집기에서 병합을 바꾼 적이 있으면 true — 저장할 때 이 시트의 병합만 merges 그대로 다시 쓴다(collab.ts exportXlsxFromGrid) */
   mergesEdited?: boolean;
+  /** 조건부 서식(우선순위 순) — condFormatShared.ts. 파일에 없으면 비어 있다 */
+  condFormats?: readonly CondFormatEntry[];
+  /** 편집기에서 조건부 서식을 바꿨거나 행/열 이동으로 범위가 바뀌면 true — 저장할 때 이 시트의 규칙을 condFormats로 다시 쓴다 */
+  condFormatsEdited?: boolean;
+  /** 파일을 읽을 때 본(시트 본문 <conditionalFormatting>의) 규칙 priority — 저장 때 이 목록에 없는 원래 규칙(extLst 안의
+   * x14 규칙 등, 편집기가 읽지 않는 것)은 그대로 둔다(condFormatExport.ts) */
+  condFormatFilePriorities?: readonly number[];
   freezeRows: number;
   freezeCols: number;
 }
@@ -280,6 +289,15 @@ function computeColWidthsPx(colSpecs: readonly RawColSpec[], colCount: number, d
   return colWidths;
 }
 
+function condFormatsFor(
+  sheetXml: string | undefined,
+  dxfs: ReturnType<typeof parseDxfs>,
+  themeColors: readonly string[],
+): Pick<LazyGridSheetMeta, 'condFormats' | 'condFormatFilePriorities'> {
+  const condFormats = sheetXml ? parseCondFormats(sheetXml, dxfs, themeColors) : [];
+  return { condFormats, condFormatFilePriorities: condFormats.map((e) => e.p).filter((p): p is number => p !== undefined) };
+}
+
 export async function ingestXlsxLazily(docId: string, xlsxBytes: Buffer): Promise<LazyGridStore> {
   // zip은 한 번만 로드한다(JSZip.loadAsync가 central directory를 통째로 다시 훑으므로, 테마 색과
   // 워크시트 XML을 각자 따로 loadAsync하면 같은 파일을 두 번 파싱하게 된다).
@@ -287,7 +305,10 @@ export async function ingestXlsxLazily(docId: string, xlsxBytes: Buffer): Promis
   const themeColors = await extractThemeColorsFromLoadedZip(zip);
   const worksheetXmlsByPath = await loadWorksheetXmlsByPath(zip);
   // 열 너비 단위의 기준 — 통합 문서 기본 글꼴의 숫자 폭
-  const defaultFont = defaultFontOfStylesXml(await zip.file('xl/styles.xml')?.async('text'));
+  const stylesXmlText = await zip.file('xl/styles.xml')?.async('text');
+  const defaultFont = defaultFontOfStylesXml(stylesXmlText);
+  // 조건부 서식의 강조 서식(dxf) — 시트마다 규칙을 읽을 때 쓴다
+  const cfDxfs = parseDxfs(stylesXmlText, themeColors);
   const mdw = maxDigitWidthPx(defaultFont.name, defaultFont.size);
   const rowStorePath = path.join(os.tmpdir(), `${lazyGridOwnPrefix()}${docId}-${randomUUID()}.jsonl`);
   const writeHandle = await fs.open(rowStorePath, 'w');
@@ -468,6 +489,7 @@ export async function ingestXlsxLazily(docId: string, xlsxBytes: Buffer): Promis
           rowHeights: encodeRowHeights(rowHeightEntries.sort((a, b) => a[0] - b[0]), sheetFormat.defaultRowHeight),
           showGridLines: !(sheetXml && /<sheetView\b[^>]*\bshowGridLines="(0|false)"/.test(sheetXml)),
           merges,
+          ...condFormatsFor(sheetXml, cfDxfs, themeColors),
           freezeRows: frozen?.ySplit ?? 0,
           freezeCols: frozen?.xSplit ?? 0,
         });

@@ -331,7 +331,7 @@ interface ExcelColorLike {
 }
 
 /** argb / theme+tint / indexed 세 가지 색 표현을 모두 CSS 색으로 해석한다 */
-function resolveColor(
+export function resolveColor(
   color: ExcelColorLike | undefined,
   themeColors: readonly string[],
 ): string | undefined {
