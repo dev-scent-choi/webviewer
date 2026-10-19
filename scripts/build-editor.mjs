@@ -1,6 +1,3 @@
-import { createHash } from 'node:crypto';
-import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import path from 'node:path';
 import { build } from 'esbuild';
 
 /**
@@ -40,21 +37,3 @@ await build({
   entryNames: '[name].bundle',
   chunkNames: 'chunks/[name]-[hash]',
 });
-
-/**
- * 화면 HTML이 부르는 JS·CSS 주소에 내용 해시(?v=…)를 붙인다. 서버는 정적 파일을 no-cache로 내보내지만
- * 앞단 Cloudflare가 브라우저 캐시를 4시간으로 덮어써서, 고친 뒤에도 사용자 브라우저가 예전 JS·CSS로
- * 그리는 일이 있었다("고친 게 다시 안 된다"). HTML은 캐시되지 않으므로 내용이 바뀌면 주소가 바뀌어
- * 브라우저가 반드시 새 파일을 받는다. 내용이 같으면 HTML도 바뀌지 않는다.
- */
-const htmlFiles = readdirSync('public').filter((name) => name.endsWith('.html'));
-const hashOf = (file) => createHash('sha256').update(readFileSync(file)).digest('hex').slice(0, 10);
-for (const name of htmlFiles) {
-  const htmlPath = path.join('public', name);
-  const html = readFileSync(htmlPath, 'utf8');
-  const next = html.replace(/((?:src|href)=")(\/(?:js|css)\/[^"?]+)(?:\?v=[0-9a-f]*)?"/g, (whole, attr, url) => {
-    const file = path.join('public', url);
-    return existsSync(file) ? `${attr}${url}?v=${hashOf(file)}"` : whole;
-  });
-  if (next !== html) writeFileSync(htmlPath, next);
-}
