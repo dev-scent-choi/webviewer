@@ -37,3 +37,20 @@ describe('zipGuard: guardedUnzipSync', () => {
     expect(Object.keys(entries)).toEqual(['keep.xml']);
   });
 });
+
+describe('unzipXmlParts — 슬라이드 시딩용(그림은 이름만)', () => {
+  test('XML·관계 파트는 내용 그대로, 그림은 빈 자리표시(있는지만 확인할 수 있게)', async () => {
+    const { zipSync, strToU8, strFromU8 } = await import('fflate');
+    const { unzipXmlParts } = await import('../src/zipGuard.js');
+    const zip = zipSync({
+      'ppt/slides/slide1.xml': strToU8('<p:sld/>'),
+      'ppt/slides/_rels/slide1.xml.rels': strToU8('<Relationships/>'),
+      'ppt/media/image1.png': new Uint8Array(5000).fill(7),
+    });
+    const entries = unzipXmlParts(zip, 'test');
+    expect(strFromU8(entries['ppt/slides/slide1.xml'])).toBe('<p:sld/>');
+    expect(strFromU8(entries['ppt/slides/_rels/slide1.xml.rels'])).toBe('<Relationships/>');
+    expect(entries['ppt/media/image1.png']).toBeDefined();
+    expect(entries['ppt/media/image1.png'].length).toBe(0);
+  });
+});

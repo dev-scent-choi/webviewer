@@ -1,6 +1,6 @@
 import type { IncomingMessage } from 'node:http';
 import type { WebSocket } from 'ws';
-import { guardedUnzipSync } from '../zipGuard.js';
+import { unzipXmlParts } from '../zipGuard.js';
 import { strFromU8 } from 'fflate';
 import * as decoding from 'lib0/decoding';
 import * as encoding from 'lib0/encoding';
@@ -1449,7 +1449,7 @@ async function seedRoom(room: Room): Promise<void> {
         seedSlidesFromPptx(original, slidesArray);
         // 슬라이드마다 원본의 배경 색·전환·애니메이션(편집기 탭 표시용) — 원본 슬라이드 파트 이름으로
         const originals = ydoc.getMap<Required<SlideDesign>>(PPTX_SLIDE_DESIGN_ORIGINAL_MAP);
-        const zip = guardedUnzipSync(original, 'slideDesignOriginal');
+        const zip = unzipXmlParts(original, 'slideDesignOriginal');
         for (const entry of slidesArray.toArray()) {
           const part = entry.sourceSlidePart;
           const xml = part ? zip[`ppt/slides/${part}`] : undefined;
@@ -2085,7 +2085,8 @@ async function doSeedSlideContent(room: Room, slideEntryId: string, duplicateOfI
   // 무겁다)에서 텍스트 시딩과 표시용 시딩이 각자 다시 unzip하면 슬라이드 하나 열 때마다 같은
   // 무거운 작업을 두 번 하게 되어(FINAL REVIEW: 실사용 21MB/49슬라이드 파일에서 콘텐츠 영역
   // 표시가 눈에 띄게 느렸던 원인 중 하나) 체감 지연이 커진다.
-  const zipEntries = guardedUnzipSync(bytes, 'doSeedSlideContent');
+  // 슬라이드 XML만 필요하다 — 그림까지 다 풀지 않는다(zipGuard.unzipXmlParts)
+  const zipEntries = unzipXmlParts(bytes, 'doSeedSlideContent');
   room.ydoc.transact(
     () => seedSlideContentFromXml(slideContents, slideEntryId, zipEntries, sourceSlidePart),
     PPTX_SEED_ORIGIN,

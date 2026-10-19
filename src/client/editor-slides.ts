@@ -708,7 +708,8 @@ function cardFor(entry: SlideEntry, index: number): HTMLElement {
   if (entry.kind === 'blank' || pageNumber === null) {
     img.src = '/img/blank-slide.svg';
   } else {
-    const base = `/api/view/pages/${pageNumber}?token=${encodeURIComponent(token ?? '')}`;
+    // 슬라이드 창은 작은 미리보기(thumb=true, 0.5배)로 — 본문용 2배 그림은 장당 0.3~1.7MB였다
+    const base = `/api/view/pages/${pageNumber}?thumb=true&token=${encodeURIComponent(token ?? '')}`;
     // 저장 직후 서버는 슬라이드 목록(새 페이지 번호)을 먼저 갱신하고 PDF 재변환은 그 뒤에 수 초
     // 걸려 끝난다(room.ts flushToStore — 순서를 바꾸면 동시 편집 보호 구간이 길어진다). 그 사이
     // 새로 생긴 페이지 번호의 썸네일은 404가 나므로, 잠깐 기다렸다 다시 받는다(최대 약 15초).

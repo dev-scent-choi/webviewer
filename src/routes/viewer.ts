@@ -369,9 +369,14 @@ const pageRequestSchema = {
     properties: {
       token: { type: 'string' },
       scale: { type: 'integer', minimum: 1, maximum: 16, default: 2 },
+      /** 슬라이드 창 미리보기 — 0.5배로 작게(본문 2배 그림은 장당 0.3~1.7MB였다) */
+      thumb: { type: 'boolean' },
     },
   },
 } as const;
+
+/** 미리보기 배율 — 슬라이드 창 썸네일 폭(약 190px)을 고해상도 화면에서도 선명하게 */
+const THUMB_SCALE = 0.5;
 
 const gridRowsSchema = {
   type: 'object',
@@ -476,6 +481,7 @@ interface TextStyleQuery extends TokenQuery {
 }
 
 interface PageQuery extends TokenQuery {
+  readonly thumb?: boolean;
   readonly scale: number;
 }
 
@@ -697,9 +703,10 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
         const png = await renderPage(
           view.meta.id,
           request.params.page,
-          request.query.scale,
+          request.query.thumb ? THUMB_SCALE : request.query.scale,
           () => store.readDerived(view.meta.id, 'pdf'),
           pageSizePersistence(view.meta.id),
+          request.query.thumb === true,
         );
         return await reply.type('image/png').header('cache-control', 'private, no-store').send(png);
       } catch (error) {
@@ -754,12 +761,16 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
       }
       try {
         const bytes = await store.readOriginal(view.meta.id, 'pptx');
-        const zipEntries = guardedUnzipSync(bytes, 'slide-media');
+        // 요청한 그림 하나만 푼다 — 예전엔 그림 하나마다 파일 전체(실측 21MB pptx)를 풀어, 그동안 서버가
+        // 다른 요청을 못 받았다(그림당 약 0.1초, 동기 처리)
+        const zipEntries = guardedUnzipSync(bytes, 'slide-media', { filter: (file) => file.name === mediaPath });
         const mediaBytes = zipEntries[mediaPath];
         if (!mediaBytes) {
           return reply.code(404).send({ success: false, error: '이미지를 찾을 수 없습니다.' });
         }
-        return await reply.type(mime).header('cache-control', 'private, no-store').send(Buffer.from(mediaBytes));
+        // 편집기는 그림을 바꾸지 않는다 — 슬라이드를 오갈 때마다 수 MB를 다시 받지 않게 브라우저가 1시간 보관한다
+        // (주소에 열람 토큰이 있어 그 사람의 브라우저에만 남는다: private)
+        return await reply.type(mime).header('cache-control', 'private, max-age=3600').send(Buffer.from(mediaBytes));
       } catch (error) {
         request.log.error(error, 'slide media fetch failed');
         return reply.code(500).send({ success: false, error: '이미지를 불러오지 못했습니다.' });

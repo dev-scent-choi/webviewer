@@ -176,8 +176,8 @@ export function invalidateRenderCache(docId: string): void {
  * 요청 배율을 페이지 크기 기준 픽셀 상한에 맞게 낮춘다.
  * 도면처럼 원본이 벡터인 PDF는 배율을 올릴수록 선명해진다.
  */
-function clampScale(requestedScale: number, size: PageSize): number {
-  const bounded = Math.min(Math.max(requestedScale, 1), MAX_RENDER_SCALE);
+function clampScale(requestedScale: number, size: PageSize, minScale = 1): number {
+  const bounded = Math.min(Math.max(requestedScale, minScale), MAX_RENDER_SCALE);
   const longestEdge = Math.max(size.width, size.height);
   const maxByPixels = MAX_BITMAP_EDGE_PX / longestEdge;
   const clamped = Math.min(bounded, maxByPixels);
@@ -192,12 +192,14 @@ export async function renderPage(
   requestedScale: number,
   loadBytes: BytesProvider,
   persisted: PersistedPageSizes,
+  /** 미리보기(썸네일)처럼 1배보다 작게 그려도 되는 요청 */
+  allowSmall = false,
 ): Promise<Buffer> {
   const sizes = await getPageSizes(docId, loadBytes, persisted);
   if (pageNumber < 1 || pageNumber > sizes.length) {
     throw new PageOutOfRangeError(pageNumber, sizes.length);
   }
-  const scale = clampScale(requestedScale ?? config.renderScale, sizes[pageNumber - 1]);
+  const scale = clampScale(requestedScale ?? config.renderScale, sizes[pageNumber - 1], allowSmall ? 0.25 : 1);
   const document = await openDocument(docId, scale, loadBytes);
   return document.getPage(pageNumber);
 }
