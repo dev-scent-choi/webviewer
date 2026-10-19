@@ -2220,17 +2220,19 @@ body.home-hidden .doclist-link { display: none !important; }
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
-  margin: 0 0 2px 4px;
+  align-self: center; /* 엑셀처럼 탭 줄 끝과 가로 스크롤바 사이 한가운데, 탭 글자 높이에 맞춘 작은 원 */
+  width: 17px;
+  height: 17px;
+  padding: 0;
+  margin: 0 2px 0 8px; /* 오른쪽은 줄 간격(0.4rem)이 더해져 양옆이 같아진다 */
   border-radius: 50%;
-  border: 1px solid var(--v-glass-line);
+  border: 1px solid var(--v-text-dim);
   background: transparent;
   color: var(--v-text-dim);
   cursor: pointer;
 }
 .grid-sheet-tab-add:hover { background: var(--v-hover); color: var(--v-text); border-color: var(--v-text-dim); }
-.grid-sheet-tab-add svg { width: 13px; height: 13px; }
+.grid-sheet-tab-add svg { width: 11px; height: 11px; }
 
 .grid-sheet-tab {
   border: 1px solid var(--v-glass-line);
