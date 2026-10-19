@@ -109,11 +109,21 @@ def start():
     # 실제로 PDF까지 내보내야 그 다시 켜짐이 일어난다(빈 문서를 열고 닫기만 해서는 첫 실제 변환 때 일어났다 — 실측)
     warm_pdf = os.path.join(os.path.dirname(PIDFILE), "warmup.pdf")
     # 글·발표·표 세 종류를 모두 한 번씩 — 처음 쓰는 종류의 변환 뒤에 다시 켜지는 일이 있었다(실측: 발표 다음 첫 글 문서)
+    # 새 문서로만 하면 안 되고(실측) 디스크의 파일을 열어야 한다 — 빈 문서를 docx·pptx·xlsx로 저장했다가 그 파일을 열어 바꾼다
+    warm_dir = os.path.dirname(PIDFILE)
+    kinds = (
+        ("swriter", "MS Word 2007 XML", "warmup.docx"),
+        ("simpress", "Impress MS PowerPoint 2007 XML", "warmup.pptx"),
+        ("scalc", "Calc MS Excel 2007 XML", "warmup.xlsx"),
+    )
     for _ in range(3):
         try:
-            for factory, export in (("swriter", "writer_pdf_Export"), ("simpress", "impress_pdf_Export"), ("scalc", "calc_pdf_Export")):
-                doc = desktop.loadComponentFromURL("private:factory/" + factory, "_blank", 0, (pv("Hidden", True),))
-                uno.invoke(doc, "storeToURL", (uno.systemPathToFileUrl(warm_pdf), (pv("FilterName", export),)))
+            for factory, save_filter, name in kinds:
+                path = os.path.join(warm_dir, name)
+                blank = desktop.loadComponentFromURL("private:factory/" + factory, "_blank", 0, (pv("Hidden", True),))
+                uno.invoke(blank, "storeToURL", (uno.systemPathToFileUrl(path), (pv("FilterName", save_filter),)))
+                close_quietly(blank)
+                doc = convert(path, warm_pdf, None)
                 close_quietly(doc)
             time.sleep(1.5)  # 다시 켜짐은 내보낸 직후 조금 뒤에 일어난다
             desktop.getComponents()  # 연결이 살아 있는지
@@ -136,8 +146,8 @@ def connect():
             desktop = ctx.ServiceManager.createInstanceWithContext("com.sun.star.frame.Desktop", ctx)
             return
         except NoConnectException:
-            if proc is None or proc.poll() is not None:
-                break
+            # 띄운 soffice.exe가 끝나도 기다린다 — 스스로 다시 켜질 때 soffice.exe는 끝나고 새 soffice.bin이 같은
+            # 파이프로 다시 받는다(실측: 그때 포기해서 "연결하지 못했습니다"로 변환기가 꺼졌다)
             time.sleep(0.25)
     raise RuntimeError("LibreOffice에 연결하지 못했습니다")
 
