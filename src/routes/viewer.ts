@@ -31,7 +31,7 @@ import {
 } from '../docx/import.js';
 import { MarkupValidationError, addMarkup, deleteMarkup, listMarkup, updateMarkup } from '../markup.js';
 import { touchPresence } from '../presence.js';
-import { flushNow, getCurrentBytes, getChangeLog, getFileCharts, getFileImages } from '../collab/room.js';
+import { flushNow, getCurrentBytes, getChangeLog, getFileCharts, getFileExtras, getFileImages } from '../collab/room.js';
 import {
   buildGridFromOriginal,
   computeLineOffsets,
@@ -639,6 +639,23 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
       } catch (error) {
         request.log.warn(error, 'xlsx image read failed');
         return { success: true, data: { images: [] } };
+      }
+    },
+  );
+
+  // 파일의 하이퍼링크(바로가기)·목록 상자(데이터 유효성 "목록") — 편집 화면이 링크 이동·목록 고르기에 쓴다.
+  app.get<{ Querystring: TokenQuery }>(
+    '/api/view/xlsx-extras',
+    { schema: { querystring: tokenQuerySchema } },
+    async (request, reply) => {
+      const view = await resolveView(request.query.token, reply);
+      if (!view) return reply;
+      if (view.meta.ext !== 'xlsx') return { success: true, data: { links: [], lists: [] } };
+      try {
+        return { success: true, data: await getFileExtras(view.meta.id) };
+      } catch (error) {
+        request.log.warn(error, 'xlsx extras read failed');
+        return { success: true, data: { links: [], lists: [] } };
       }
     },
   );

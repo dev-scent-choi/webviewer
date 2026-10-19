@@ -12,6 +12,8 @@ export interface SheetFilter {
   readonly r2: number;
   readonly c2: number;
   readonly criteria: FilterCriteria;
+  /** 시트가 아니라 엑셀 표(표 서식)의 필터면 그 표 파트 경로 — 저장 때 시트 자동 필터로 다시 쓰지 않는다 */
+  readonly table?: string;
 }
 
 export const GRID_FILTERS_MAP = 'gridFilters';

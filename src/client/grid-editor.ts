@@ -24,6 +24,7 @@ import { parseTypedNumber, serialToDateText } from '../collab/cellValueShared.js
 import { initOfficeShell } from './officeShell.js';
 import { bindDropdown } from './ribbonMenus.js';
 import { currentRegion, setupGridCharts } from './gridCharts.js';
+import { setupGridLinks, type GridLinks } from './gridLinks.js';
 import type { CellRangeRef, ChartKind } from '../xlsx/chartModel.js';
 import { RowLayout } from '../xlsx/sheetGeometry.js';
 import { compareCells, filteredRows, GRID_FILTERS_MAP, shiftFormulaRows, sortOrder, type SheetFilter } from './gridSort.js';
@@ -503,6 +504,9 @@ async function main(): Promise<void> {
     }
   }
 
+  /** 하이퍼링크(바로가기)·목록 상자 — 아래 setupGridLinks로 채운다(그 전에 그려진 칸은 받은 뒤 다시 표시) */
+  let gridLinks: GridLinks | null = null;
+
   /** 셀 하나를 "지금 이 셀이 포커스 중인지"에 맞춰 원본 수식 또는 계산 결과로 그린다. */
   function renderCellDisplay(td: HTMLTableCellElement, key: string): void {
     const raw = cells.get(key) ?? '';
@@ -526,6 +530,10 @@ async function main(): Promise<void> {
           style,
         );
     applySpillDisplay(td, key, text);
+    if (gridLinks) {
+      const parsed = parseGridCellKey(key);
+      if (parsed && parsed.sheetIdx === activeSheet) gridLinks.decorate(td, parsed.row, parsed.col);
+    }
   }
 
   /** 실제 엑셀처럼, 스필(오른쪽 빈 칸 위로 값이 넘쳐 보이는 동작)은 기본이 왼쪽 정렬인 칸에서만
@@ -2312,6 +2320,9 @@ async function main(): Promise<void> {
     // 활성 칸이 없어졌으니 그 칸 오른쪽 아래에 떠 있던 채우기 핸들도 같이 감춘다 — 안 그러면 새
     // 시트 위에 그대로 남고, 그걸 끌면 (activeCellKey가 null이라) 아무 일도 안 하는 죽은 손잡이가 된다.
     positionFillHandle(null);
+    // 이전 시트에서 고른 칸의 주소·값이 수식 입력줄에 남아 새 시트의 다른 칸 값처럼 보였다
+    cellRefBoxEl.textContent = '';
+    formulaInputEl.value = '';
   }
   /** 앵커~포커스 사각형에 배경을 칠한다 — 1칸짜리(드래그 안 한 보통 클릭)면 기존 :focus 테두리로
    * 충분하니 별도 배경은 안 칠한다. */
@@ -2995,6 +3006,37 @@ async function main(): Promise<void> {
     setChartTabVisible: (visible) => shell.setContextualTab('chart', visible),
   });
   afterGridRender = () => charts.render();
+  gridLinks = setupGridLinks({
+    token,
+    tableEl,
+    scrollHost: scrollHostEl,
+    currentSheetName: () => structure.get(String(activeSheet))?.name ?? '',
+    goTo: (sheetName, row, col) => {
+      const target = sheetName === null ? activeSheet : [...structure.entries()].find(([, s]) => s.name === sheetName)?.[0];
+      if (target === undefined) return false;
+      const idx = Number(target);
+      if (idx !== activeSheet) {
+        activeSheet = idx;
+        resetSelectionForSheetSwitch();
+        renderSheetTabs();
+        renderTableVirtualized();
+      }
+      const td = tdForEnsureRendered(row, col);
+      if (td) {
+        td.focus();
+        scrollCellIntoView(td);
+      }
+      return true;
+    },
+    valueText,
+    pickValue: (td, row, col, value) => {
+      const key = gridCellKey(activeSheet, row, col);
+      enterEditMode(td, key, value);
+      if (editingKey !== key) return; // 잠긴 칸이거나 다른 사람이 편집 중
+      commitAndMove(td, key, row, col, 0, 0);
+    },
+    isEditing: (td) => td.contentEditable === 'true',
+  });
   let chartRenderScheduled = false;
   const scheduleChartRender = () => {
     if (chartRenderScheduled) return;

@@ -5,6 +5,7 @@
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 import { parseRangeFormula } from './chartModel.js';
 import { sheetPathsByName } from './drawingPassthrough.js';
+import { tableFilterOf } from './sheetExtras.js';
 import type { SheetFilter } from './filterModel.js';
 
 function decodeXml(value: string): string {
@@ -45,7 +46,8 @@ export function readAutoFilters(xlsx: Uint8Array, sheetNames: readonly string[])
   sheetNames.forEach((name, index) => {
     const path = paths.get(name);
     const bytes = path ? entries[path] : undefined;
-    const filter = bytes ? parseAutoFilter(strFromU8(bytes)) : null;
+    // 시트 자동 필터가 없으면 표(표 서식) 안의 필터 — 예전엔 이걸 몰라 표 머리글의 필터 단추가 안 보였다
+    const filter = bytes ? (parseAutoFilter(strFromU8(bytes)) ?? (path ? tableFilterOf(entries, path) : null)) : null;
     if (filter) out.set(index, filter);
   });
   return out;
@@ -53,7 +55,7 @@ export function readAutoFilters(xlsx: Uint8Array, sheetNames: readonly string[])
 
 /** 저장 파일의 <autoFilter ref=…/>에 조건을 붙인다(ExcelJS가 범위만 쓰므로) */
 export function writeFilterCriteria(xlsx: Uint8Array, filtersBySheetName: ReadonlyMap<string, SheetFilter>): Uint8Array {
-  const withCriteria = [...filtersBySheetName].filter(([, f]) => Object.keys(f.criteria).length > 0);
+  const withCriteria = [...filtersBySheetName].filter(([, f]) => !f.table && Object.keys(f.criteria).length > 0);
   if (withCriteria.length === 0) return xlsx;
   const entries: Record<string, Uint8Array> = unzipSync(xlsx);
   const paths = sheetPathsByName(entries);

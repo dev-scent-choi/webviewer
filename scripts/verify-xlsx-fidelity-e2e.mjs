@@ -66,9 +66,14 @@ async function buildFixture() {
   ws.getCell('H4').value = '끝';
   const img = wb.addImage({ buffer: PNG, extension: 'png' });
   ws.addImage(img, { tl: { col: 7, row: 0 }, ext: { width: 120, height: 40 } });
+  // 바로가기(문서 안 링크)·목록 상자 — 편집 화면에서 눌러 이동·골라 넣기
+  ws.getCell('H6').value = { text: '둘째로', hyperlink: "#'둘째'!B4" };
+  ws.getCell('I4').dataValidation = { type: 'list', allowBlank: true, formulae: ['"가,나,다"'] };
   const ws2 = wb.addWorksheet('둘째');
   ws2.properties.defaultColWidth = 18;
   ws2.getCell('A1').value = '둘째 시트';
+  // 표(표 서식) — 필터 단추는 시트가 아니라 표 정의에 있다
+  ws2.addTable({ name: '표1', ref: 'A3', headerRow: true, columns: [{ name: '이름', filterButton: true }, { name: '값', filterButton: true }], rows: [['a', 1], ['b', 2]] });
   return Buffer.from(await wb.xlsx.writeBuffer());
 }
 
@@ -161,9 +166,25 @@ for (const mode of ['viewer', 'editor']) {
   const hLine = await darkPixels(c5.x + 4, c5.y - 6, 1, 12);
   const vLine = await darkPixels(c5.x + c5.width - 6, c5.y + c5.height / 2, 12, 1);
   rec(`[${mode}] 맞닿은 테두리 1px(두 배로 굵지 않음)`, hLine === 1 && vLine === 1, `가로 ${hLine}px, 세로 ${vLine}px`);
+  if (mode === 'editor') {
+    await page.locator(sel(4, 9)).click();
+    await page.waitForTimeout(300);
+    rec('[editor] 목록 상자 칸을 고르면 ▼ 단추', await page.locator('.grid-list-btn').isVisible());
+    await page.locator('.grid-list-btn').click();
+    const items = await page.locator('.grid-list-menu button').allInnerTexts();
+    rec('[editor] 목록 항목', items.join(',') === '가,나,다', items.join(','));
+    await page.keyboard.press('Escape');
+  }
   await page.screenshot({ path: path.join(shotDir, `${mode}.png`) });
   const tabSel = mode === 'viewer' ? '.grid-sheet-tab' : '#sheet-tabs .grid-sheet-tab';
   rec(`[${mode}] 둘째 시트 탭이 있다`, (await page.locator(tabSel).count()) >= 2);
+  if (mode === 'editor') {
+    await page.locator(sel(6, 8)).click();
+    await page.waitForTimeout(800);
+    const where = await page.evaluate(() => [document.querySelector('#sheet-tabs .grid-sheet-tab.active')?.textContent, document.activeElement?.dataset?.row, document.activeElement?.dataset?.col].join(':'));
+    rec('[editor] 바로가기 클릭 → 둘째 시트 B4로 이동', where === '둘째:3:1', where);
+    rec('[editor] 표(표 서식)의 필터 단추', (await page.locator('.grid-filter-btn').count()) === 2, String(await page.locator('.grid-filter-btn').count()));
+  }
   await page.close();
 }
 rec('페이지 오류 없음', errors.length === 0, errors.slice(0, 2).join(' | '));
