@@ -48,6 +48,7 @@ import { exportXlsxFromGridStreaming } from '../xlsx/exportStreaming.js';
 import { GRID_CHARTS_MAP, type GridChart } from '../xlsx/chartModel.js';
 import { readSheetCharts, readSheetImages, type GridImage } from '../xlsx/drawingPassthrough.js';
 import { readAutoFilters } from '../xlsx/autoFilter.js';
+import { readSheetExtras, type SheetExtras } from '../xlsx/sheetExtras.js';
 import { PPTX_SLIDE_DESIGN_MAP, PPTX_SLIDE_DESIGN_ORIGINAL_MAP, readSlideDesign, type SlideDesign } from '../pptx/slideDesign.js';
 import { GRID_FILTERS_MAP, type SheetFilter } from '../xlsx/filterModel.js';
 import {
@@ -917,6 +918,14 @@ export async function getFileImages(docId: string): Promise<GridImage[]> {
   if (room) await room.ready;
   const bytes = room?.originalXlsxBytes ?? (await store.readOriginal(docId, 'xlsx'));
   return readSheetImages(bytes);
+}
+
+/** 파일의 하이퍼링크(바로가기)·목록 상자 — 편집 화면이 링크 이동·목록 고르기에 쓴다. 열린 룸이 있으면 그 원본 기준. */
+export async function getFileExtras(docId: string): Promise<SheetExtras> {
+  const room = rooms.get(docId);
+  if (room) await room.ready;
+  const bytes = room?.originalXlsxBytes ?? (await store.readOriginal(docId, 'xlsx'));
+  return readSheetExtras(bytes);
 }
 
 /**

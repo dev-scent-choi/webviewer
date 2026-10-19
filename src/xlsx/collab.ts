@@ -842,7 +842,8 @@ export async function exportXlsxFromGrid(
         if (sheet.autoFilter) (sheet as unknown as { autoFilter?: unknown }).autoFilter = undefined;
         continue;
       }
-      sheet.autoFilter = { from: { row: filter.r1 + 1, column: filter.c1 + 1 }, to: { row: filter.r2 + 1, column: filter.c2 + 1 } };
+      // 표(표 서식)의 필터는 표 파트가 이미 갖고 있다 — 시트 자동 필터로 겹쳐 쓰면 엑셀이 "복구"를 요구한다
+      if (!filter.table) sheet.autoFilter = { from: { row: filter.r1 + 1, column: filter.c1 + 1 }, to: { row: filter.r2 + 1, column: filter.c2 + 1 } };
       const hidden = new Set(filteredRows(filter, (r, c) => workbookCellText(workbook, sheet.name, r, c)));
       for (let r = filter.r1 + 1; r <= filter.r2; r += 1) {
         const row = sheet.getRow(r + 1);

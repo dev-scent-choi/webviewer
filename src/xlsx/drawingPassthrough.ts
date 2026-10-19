@@ -61,13 +61,13 @@ export function resolvePartPath(basePart: string, target: string): string {
   return parts.join('/');
 }
 
-function relsPathOf(part: string): string {
+export function relsPathOf(part: string): string {
   const dir = part.split('/').slice(0, -1).join('/');
   const name = part.split('/').pop() ?? '';
   return `${dir ? `${dir}/` : ''}_rels/${name}.rels`;
 }
 
-interface Relationship {
+export interface Relationship {
   readonly id: string;
   readonly type: string;
   readonly target: string;
@@ -75,7 +75,7 @@ interface Relationship {
   readonly raw: string;
 }
 
-function relationshipsOf(xml: string): Relationship[] {
+export function relationshipsOf(xml: string): Relationship[] {
   return [...xml.matchAll(/<Relationship\b[^>]*\/>/g)].map((match) => {
     const raw = match[0];
     const attr = (name: string) => new RegExp(`\\b${name}="([^"]*)"`).exec(raw)?.[1] ?? '';
@@ -87,7 +87,7 @@ function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function decodeXmlAttr(value: string): string {
+export function decodeXmlAttr(value: string): string {
   // ExcelJS는 한글 시트 이름을 &#49892;처럼 숫자 문자 참조로 쓴다
   return value
     .replace(/&#x([0-9a-f]+);/gi, (_, hex: string) => String.fromCodePoint(parseInt(hex, 16)))
