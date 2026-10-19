@@ -3300,8 +3300,11 @@ body[data-app] { --v-accent: var(--app-accent); --v-accent-ink: #ffffff; }
 .ribbon-collapse svg { width: 14px; height: 14px; transition: transform 0.2s ease; }
 .ribbon-collapse[aria-pressed="true"] svg { transform: rotate(180deg); }
 
+/* 오피스처럼 탭을 바꿔도 리본 높이가 같아야 아래 작업 영역(그리드·문서·슬라이드)이 위아래로 움직이지 않는다 —
+   예전엔 최소 높이(94px)만 있어 탭마다 94~107px로 달라 탭을 누를 때마다 그리드 크기가 바뀌었다.
+   가장 높은 탭(홈, 101px)에 맞추고, 그보다 큰 내용(워드 레이아웃 입력칸)은 줄여서 맞춘다. */
 .office-shell .toolbar-format.ribbon-panel {
-  min-height: 94px;
+  min-height: 101px;
   margin: 0 0.5rem 0.45rem;
   padding: 0.3rem 0.6rem 0.15rem;
   border-radius: 6px;
@@ -3507,10 +3510,10 @@ body[data-app] { --v-accent: var(--app-accent); --v-accent-ink: #ffffff; }
 .dropdown-menu.layout-menu button { display: flex; flex-direction: column; align-items: flex-start; gap: 0.1rem; padding: 0.45rem 0.7rem; }
 .dropdown-menu.layout-menu small { color: var(--v-text-dim); font-size: 0.72rem; }
 .layout-fields { gap: 1.1rem; align-items: flex-start; }
-.layout-field-col { display: flex; flex-direction: column; gap: 0.3rem; }
+.layout-field-col { display: flex; flex-direction: column; gap: 0.12rem; }
 .layout-field-title { font-size: 0.74rem; font-weight: 600; color: #484644; }
 .layout-field { display: grid; grid-template-columns: 2.6rem 4.4rem 1.4rem; align-items: center; gap: 0.3rem; font-size: 0.76rem; color: #484644; }
-.layout-field input { width: 100%; padding: 0.15rem 0.3rem; border: 1px solid #c8c6c4; border-radius: 2px; font: inherit; text-align: right; }
+.layout-field input { width: 100%; padding: 0.08rem 0.3rem; border: 1px solid #c8c6c4; border-radius: 2px; font: inherit; text-align: right; }
 .layout-field input:focus { outline: 2px solid var(--app-accent, var(--v-accent)); outline-offset: -1px; border-color: transparent; }
 .layout-field em { font-style: normal; color: var(--v-text-dim); }
 /* 페이지 나누기(w:br type=page) — Word의 "페이지 나누기" 표시처럼 점선과 글자로 보인다 */
