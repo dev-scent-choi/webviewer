@@ -35,7 +35,32 @@ export function parseAutoFilter(sheetXml: string): SheetFilter | null {
     if (/<filters\b[^>]*blank="1"/.test(col[2])) values.push('');
     if (values.length > 0) criteria[String(range.c1 + Number(col[1]))] = values;
   }
-  return { r1: range.r1, c1: range.c1, r2: range.r2, c2: range.c2, criteria };
+  return { r1: range.r1, c1: range.c1, r2: Math.max(range.r2, contiguousDataEnd(sheetXml, range.r1, range.c1, range.c2)), c2: range.c2, criteria };
+}
+
+function columnIndexOf(letters: string): number {
+  let n = 0;
+  for (const ch of letters) n = n * 26 + (ch.charCodeAt(0) - 64);
+  return n - 1;
+}
+
+/**
+ * 필터 범위가 머리글 한 줄뿐일 때(예: ref="A1:G1" — 엑셀이 아닌 도구가 만든 파일에 흔하다) 엑셀은 그 아래로 빈 줄 없이
+ * 이어진 데이터를 필터 대상으로 삼는다. 같은 규칙으로 머리글 아래 연속된 데이터의 마지막 행(0부터)을 찾는다 — 예전엔
+ * 범위를 적힌 그대로 써서 머리글 아래 행이 0개로 계산돼 필터 값 목록이 비었다(실사용 파일 "인터페이스 정의서").
+ */
+export function contiguousDataEnd(sheetXml: string, headerRow: number, c1: number, c2: number): number {
+  const rowsWithData = new Set<number>();
+  for (const cell of sheetXml.matchAll(/<c\b[^>]*\br="([A-Z]{1,3})(\d+)"[^>]*?(?:\/>|>([\s\S]*?)<\/c>)/g)) {
+    const inner = cell[3];
+    if (!inner || !/<(?:v|is|f)\b[^>]*>(?!<\/)/.test(inner)) continue; // 서식만 있는 빈 칸은 데이터가 아니다
+    const col = columnIndexOf(cell[1]);
+    if (col < c1 || col > c2) continue;
+    rowsWithData.add(Number(cell[2]) - 1);
+  }
+  let last = headerRow;
+  while (rowsWithData.has(last + 1)) last += 1;
+  return last;
 }
 
 /** 시트 이름 순서(편집기 시트 자리 번호)대로 파일의 자동 필터 */

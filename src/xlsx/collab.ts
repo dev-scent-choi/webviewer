@@ -535,7 +535,18 @@ function numFmtStringFor(style: CellStyleAttrs): string | undefined {
   }
 }
 
+/**
+ * 이 칸만의 서식 객체로 바꾼다. ExcelJS는 파일을 읽을 때 같은 서식(xf)을 쓰는 칸들이 서식 객체 하나를 함께 가리키게
+ * 두어서, `cell.font = …`처럼 고치면 같은 서식을 쓰던 다른 칸까지 함께 바뀌었다 — 한 칸에 준 맞춤·글꼴 크기가 옆 칸들로
+ * 번지고, 그 사이 다른 칸의 굵게·채우기·글자 색은 뒤에 고친 공유 서식에 덮여 저장 파일에서 사라졌다(2026-10-19 실측,
+ * "인터페이스 정의서"). 고치기 전에 얕은 사본을 만든다 — 아래에서 font·fill 등은 통째로 새 객체로 바꾸므로 얕은 사본이면 된다.
+ */
+export function detachCellStyle(cell: ExcelJS.Cell): void {
+  cell.style = { ...cell.style };
+}
+
 export function applyStyleToCell(cell: ExcelJS.Cell, style: CellStyleAttrs | undefined): void {
+  detachCellStyle(cell);
   if (!style) {
     cell.font = {};
     cell.fill = { type: 'pattern', pattern: 'none' };

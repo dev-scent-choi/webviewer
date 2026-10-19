@@ -81,3 +81,20 @@ describe('표(표 서식)의 자동 필터', () => {
     expect(tableFilterOf(entries, 'xl/worksheets/sheet1.xml')).toBeNull();
   });
 });
+
+describe('자동 필터 범위가 머리글 한 줄뿐일 때', () => {
+  test('엑셀처럼 머리글 아래로 빈 줄 없이 이어진 데이터까지 늘린다(서식만 있는 빈 칸·빈 줄 다음은 제외)', async () => {
+    const { parseAutoFilter } = await import('../src/xlsx/autoFilter.js');
+    const sheet =
+      '<worksheet><sheetData>' +
+      '<row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c></row>' +
+      '<row r="2"><c r="A2" t="s"><v>2</v></c></row>' +
+      '<row r="3"><c r="B3"><v>5</v></c></row>' +
+      '<row r="4"><c r="A4" s="3"/><c r="B4" s="3"/></row>' + // 서식만 있는 빈 줄 — 여기서 끊긴다
+      '<row r="5"><c r="A5"><v>9</v></c></row>' +
+      '</sheetData><autoFilter ref="A1:B1"/></worksheet>';
+    expect(parseAutoFilter(sheet)).toMatchObject({ r1: 0, c1: 0, r2: 2, c2: 1 });
+    // 범위가 이미 데이터를 덮고 있으면 그대로
+    expect(parseAutoFilter(sheet.replace('ref="A1:B1"', 'ref="A1:B5"'))).toMatchObject({ r2: 4 });
+  });
+});
