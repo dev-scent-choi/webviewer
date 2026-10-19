@@ -3265,6 +3265,18 @@ body[data-app] { --v-accent: var(--app-accent); --v-accent-ink: #ffffff; }
 .office-shell .ribbon-group { border-right-color: #e1dfdd; }
 .office-shell .ribbon-group-label { color: #605e5c; }
 .office-shell .icon-btn:hover { background: #f3f2f1; }
+/* 제목 줄(진한 색 띠)의 단추 — ← "다른 파일 열기"도 저장·실행 취소(.qa-btn)와 같은 모양·호버로. 바로 위 리본 단추
+   규칙(밝은 회색)이 제목 줄까지 덮어 ← 에 마우스를 올리면 밝은 회색 위 흰 아이콘이 되어 거의 안 보였다. */
+.office-shell .office-titlebar .icon-btn {
+  width: 30px;
+  height: 30px;
+  border-radius: 3px;
+  color: #ffffff;
+  text-decoration: none;
+}
+.office-shell .office-titlebar .icon-btn:hover,
+.office-shell .office-titlebar .icon-btn:hover:not(:disabled) { background: rgba(255, 255, 255, 0.16); color: #ffffff; }
+.office-shell .office-titlebar .icon-btn:focus-visible { outline: 2px solid #ffffff; outline-offset: -2px; }
 
 /* ---------- "파일" 화면 ---------- */
 .backstage {
