@@ -6,5 +6,8 @@ export default defineConfig({
   test: {
     testTimeout: 20_000,
     hookTimeout: 20_000,
+    // LibreOffice 상주 변환기(src/converters/loWorker.ts)는 시험 프로세스마다 soffice를 띄우게 되므로 끈다 —
+    // 변환기 자체는 tests/loWorker.test.ts가 따로 켜서 시험한다.
+    env: { DOCVIEW_LO_WORKER: '0' },
   },
 });
