@@ -28,7 +28,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "verify:xlsx": "node scripts/verify-xlsx-fidelity-e2e.mjs"
+    "verify:xlsx": "node scripts/verify-xlsx-fidelity-e2e.mjs",
+    "verify:pptx": "node scripts/verify-pptx-fidelity-e2e.mjs"
   },
   "dependencies": {
     "@fastify/multipart": "^9.0.0",

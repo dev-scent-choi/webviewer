@@ -658,7 +658,11 @@ function renderCanvasForSlideInner(entryId: string): void {
     if (meta.wrapNone) box.classList.add('slide-nowrap');
     // 원본의 안쪽 여백(bodyPr lIns/tIns/rIns/bIns, 레이아웃·마스터 상속) — 기본 여백과 다를 때만 온다.
     // 예전엔 늘 기본 여백이라 lIns="0"인 제목이 오른쪽·아래로 밀려 보였다.
-    if (meta.insets) box.style.padding = meta.insets.map((emu) => `calc(${emu / 12700} * var(--slide-pt, 1pt))`).join(' ');
+    if (meta.insets) {
+      // insets는 [왼, 위, 오른, 아래] — CSS padding 순서(위, 오른, 아래, 왼)로 바꿔 준다
+      const [l, t, r, b] = meta.insets;
+      box.style.padding = [t, r, b, l].map((emu) => `calc(${emu / 12700} * var(--slide-pt, 1pt))`).join(' ');
+    }
     // 번호 원·배지처럼 기본 안쪽 여백(좌우 0.1인치)보다 작은 도형 — 여백이 글자 칸을 음수로 만들어
     // 글자가 한쪽으로 밀려 도형 밖에 걸렸다. PowerPoint처럼 도형 가운데에 한 줄로 놓는다.
     if (meta.w !== null && meta.h !== null && meta.w !== undefined && meta.h !== undefined && meta.w < TINY_SHAPE_EMU && meta.h < TINY_SHAPE_EMU) {
