@@ -937,7 +937,7 @@ export async function getFileImages(docId: string): Promise<GridImage[]> {
 const PREWARM_TTL_MS = 3 * 60_000;
 const prewarmedXlsx = new Map<string, { store: Promise<LazyGridStore | null>; timer: NodeJS.Timeout }>();
 
-export function prewarmXlsxRoom(docId: string, bytes: Buffer): Promise<unknown> {
+export function prewarmXlsxRoom(docId: string, bytes: Buffer): Promise<LazyGridStore | null> {
   discardPrewarmedXlsx(docId);
   const store = ingestXlsxLazily(docId, bytes).catch(() => null);
   const timer = setTimeout(() => discardPrewarmedXlsx(docId), PREWARM_TTL_MS);
