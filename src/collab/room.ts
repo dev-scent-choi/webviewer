@@ -921,6 +921,40 @@ export async function getFileImages(docId: string): Promise<GridImage[]> {
   return readSheetImages(bytes);
 }
 
+/**
+ * 큰 엑셀은 편집 세션을 처음 열 때 파일 전체를 다시 읽느라(인덱싱) 첫 데이터까지 2~3초가 걸렸다(실측 2만 행).
+ * 올리자마자 편집기를 여는 곳(향기랩)에서는 올리는 순간 이 인덱싱을 시작해 두면 편집기 화면을 띄우는 동안
+ * 끝나 있다. 쓰이지 않으면 PREWARM_TTL_MS 뒤에 버린다(임시 행 파일도 지운다).
+ */
+const PREWARM_TTL_MS = 3 * 60_000;
+const prewarmedXlsx = new Map<string, { store: Promise<LazyGridStore | null>; timer: NodeJS.Timeout }>();
+
+export function prewarmXlsxRoom(docId: string, bytes: Buffer): Promise<unknown> {
+  discardPrewarmedXlsx(docId);
+  const store = ingestXlsxLazily(docId, bytes).catch(() => null);
+  const timer = setTimeout(() => discardPrewarmedXlsx(docId), PREWARM_TTL_MS);
+  timer.unref();
+  prewarmedXlsx.set(docId, { store, timer });
+  return store;
+}
+
+async function takePrewarmedXlsx(docId: string): Promise<LazyGridStore | null> {
+  const entry = prewarmedXlsx.get(docId);
+  if (!entry) return null;
+  prewarmedXlsx.delete(docId);
+  clearTimeout(entry.timer);
+  return entry.store;
+}
+
+/** 쓰이지 않은 미리 만든 인덱스를 버린다 — 시간이 지났거나 문서가 지워졌을 때 */
+export function discardPrewarmedXlsx(docId: string): void {
+  const entry = prewarmedXlsx.get(docId);
+  if (!entry) return;
+  prewarmedXlsx.delete(docId);
+  clearTimeout(entry.timer);
+  void entry.store.then((store) => (store ? closeLazyGridStore(store) : undefined)).catch(() => undefined);
+}
+
 /** 파일의 하이퍼링크(바로가기)·목록 상자 — 편집 화면이 링크 이동·목록 고르기에 쓴다. 열린 룸이 있으면 그 원본 기준. */
 export async function getFileExtras(docId: string): Promise<SheetExtras> {
   const room = rooms.get(docId);
@@ -1349,7 +1383,8 @@ async function seedRoom(room: Room): Promise<void> {
     if (!meta) return;
     const original = await store.readOriginal(docId, meta.ext);
     if (kind === 'xlsx') {
-      const lazyStore = await ingestXlsxLazily(docId, original);
+      // 올리자마자 미리 만들어 둔 인덱스가 있으면 그걸 쓴다(prewarmXlsxRoom) — 같은 원본이라 결과가 같다
+      const lazyStore = (await takePrewarmedXlsx(docId)) ?? (await ingestXlsxLazily(docId, original));
       room.lazyGrid = lazyStore;
       // 이후 모든 내보내기의 기준 원본 — 왜 매번 디스크를 다시 읽지 않는지는 Room.originalXlsxBytes 주석 참고.
       room.originalXlsxBytes = new Uint8Array(original);

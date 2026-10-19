@@ -4,7 +4,7 @@ import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { requireApiKey, type ApiKeyAuthenticatedRequest } from '../apiKeyAuth.js';
 import { recordAudit } from '../audit.js';
-import { forceCloseRoom, getChangeLog } from '../collab/room.js';
+import { discardPrewarmedXlsx, forceCloseRoom, getChangeLog, prewarmXlsxRoom } from '../collab/room.js';
 import { config } from '../config.js';
 import { convertDwgToDxf } from '../converters/dwgConverter.js';
 import { findConverter, supportedExtensions } from '../converters/index.js';
@@ -247,8 +247,10 @@ async function ingestUpload(
       pageCount: 0,
       createdAt: new Date().toISOString(),
       progress: 10,
-      // 워드는 편집기가 원본만으로 열리므로 변환을 기다리지 않게 한다(편집기 여는 시간 3초 남짓 단축)
-      ...(ext === 'docx' ? { editReady: true } : {}),
+      // 워드는 편집기가 원본만으로 열리므로 변환을 기다리지 않게 한다(편집기 여는 시간 3초 남짓 단축).
+      // 엑셀도 편집기는 원본만 읽는다 — 다만 보기 화면(그리드)을 쓰는 곳(디스크 저장, 8000)은 그리드가 먼저
+      // 필요하므로, 편집기로만 여는 메모리 저장 모드(향기랩)에서만 기다리지 않게 한다.
+      ...(ext === 'docx' || (ext === 'xlsx' && config.storageMode === 'memory') ? { editReady: true } : {}),
     };
     await store.writeMeta(meta);
     await recordAudit({
@@ -257,7 +259,11 @@ async function ingestUpload(
       detail: callerProject ? `${originalFilename} (caller=${callerProject})` : originalFilename,
     });
     // 변환은 백그라운드로 진행하고 즉시 응답한다. 클라이언트는 상태를 폴링한다.
-    if (GRID_VIEW_EXTS.has(ext)) {
+    if (ext === 'xlsx' && config.storageMode === 'memory') {
+      // 편집기로만 여는 곳 — 편집 세션용 인덱싱을 먼저(편집기가 기다리는 것), 보기용 그리드 추출은 그 뒤에.
+      // 서버는 한 줄로 일하므로 둘을 동시에 돌리면 서로 늦어질 뿐이다.
+      void prewarmXlsxRoom(id, data).finally(() => runGridExtraction(app, meta));
+    } else if (GRID_VIEW_EXTS.has(ext)) {
       void runGridExtraction(app, meta);
     } else {
       trackInitialConversion(id, runConversion(app, converter, meta));
@@ -366,6 +372,7 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
         return reply.code(404).send({ success: false, error: '문서를 찾을 수 없습니다.' });
       }
       await store.deleteDocument(meta.id);
+      discardPrewarmedXlsx(meta.id);
       // 반드시 삭제 뒤에 부른다 — forceCloseRoom 주석 참고(순서가 바뀌면 삭제 직후 파일이
       // 자동저장으로 되살아날 수 있다).
       forceCloseRoom(meta.id);
