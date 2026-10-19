@@ -41,3 +41,23 @@ export function guardedUnzipSync(
   if (total > maxBytes) throw new ZipTooLargeError(contextLabel, total, maxBytes);
   return entries;
 }
+
+const EMPTY = new Uint8Array(0);
+
+/**
+ * XML·관계 파트만 실제로 풀고, 나머지(그림·동영상·내장 파일)는 이름만 남긴다(빈 바이트) — 슬라이드를 처음 열 때
+ * 필요한 건 XML뿐인데 예전엔 매번 파일 전체(실측 21MB pptx의 그림까지)를 풀었다. 그림은 "있는지"만 확인하므로
+ * 빈 자리표시로 충분하다. 바이트가 필요한 곳(그림 내려주기·저장)은 이 함수를 쓰지 않는다.
+ */
+export function unzipXmlParts(data: Uint8Array, contextLabel: string): Unzipped {
+  const skipped: string[] = [];
+  const entries = guardedUnzipSync(data, contextLabel, {
+    filter: (file) => {
+      const isXml = /\.(xml|rels)$/i.test(file.name);
+      if (!isXml) skipped.push(file.name);
+      return isXml;
+    },
+  });
+  for (const name of skipped) entries[name] = EMPTY;
+  return entries;
+}

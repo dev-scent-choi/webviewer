@@ -51,7 +51,10 @@ export const PPTX_SEED_ORIGIN = 'pptx-seed';
 
 /** 원본 pptx를 열어 슬라이드 순서 배열을 초기 상태로 채운다 (room.ts의 seedRoom에서 호출). */
 export function seedSlidesFromPptx(pptxBytes: Uint8Array, slidesArray: Y.Array<SlideEntry>): void {
-  const zipEntries = guardedUnzipSync(pptxBytes, 'seedSlidesFromPptx');
+  // 슬라이드 목록만 읽는다 — 그림까지 풀 필요가 없다
+  const zipEntries = guardedUnzipSync(pptxBytes, 'seedSlidesFromPptx', {
+    filter: (file) => file.name === 'ppt/presentation.xml' || file.name === 'ppt/_rels/presentation.xml.rels',
+  });
   const presentationXml = strFromU8(zipEntries['ppt/presentation.xml']);
   const presentationRelsXml = strFromU8(zipEntries['ppt/_rels/presentation.xml.rels']);
 

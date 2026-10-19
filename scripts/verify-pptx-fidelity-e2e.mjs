@@ -156,6 +156,15 @@ const rail = await page.evaluate(() => {
   return { radius: cs.borderTopLeftRadius, outline: parseFloat(cs.outlineWidth), numLeft: num.getBoundingClientRect().right <= thumb.getBoundingClientRect().left, bold: Number(getComputedStyle(num).fontWeight) >= 600 };
 });
 rec('슬라이드 창: 각진 썸네일·번호 왼쪽·선택 굵은 테두리', rail && rail.radius === '0px' && rail.numLeft && rail.outline >= 3 && rail.bold, JSON.stringify(rail));
+// 미리보기 그림이 실제로 뜨고(작은 그림 요청이 거부돼 빈 칸으로 남은 적이 있다), 본문용보다 작은지
+await page.waitForFunction(() => [...document.querySelectorAll('#slides-rail .slide-card-thumb img')].every((i) => i.complete), null, { timeout: 30000 }).catch(() => {});
+const thumb = await page.evaluate(async () => {
+  const img = document.querySelector('#slides-rail .slide-card-thumb img');
+  if (!img) return null;
+  const res = await fetch(img.src);
+  return { loaded: img.naturalWidth > 0, small: img.src.includes('thumb=true'), status: res.status, width: img.naturalWidth };
+});
+rec('슬라이드 창 미리보기가 작은 그림으로 뜬다', thumb && thumb.loaded && thumb.small && thumb.status === 200 && thumb.width <= 600, JSON.stringify(thumb));
 await page.screenshot({ path: path.join(shotDir, 'pptx-editor.png') });
 rec('페이지 오류 없음', errors.length === 0, errors.slice(0, 2).join(' | '));
 await browser.close();
