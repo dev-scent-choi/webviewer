@@ -5,6 +5,7 @@ import rateLimit from '@fastify/rate-limit';
 import fastifyStatic from '@fastify/static';
 import fastifyWebsocket from '@fastify/websocket';
 import Fastify, { type FastifyInstance } from 'fastify';
+import { versionAssetUrls } from './assetVersion.js';
 import { config } from './config.js';
 import { adminRoutes } from './routes/admin.js';
 import { editRoutes } from './routes/edit.js';
@@ -71,6 +72,22 @@ export async function buildApp(): Promise<FastifyInstance> {
     done(null, payload);
   });
   await app.register(fastifyWebsocket);
+  // 화면 HTML의 JS·CSS 주소에 내용 해시를 붙여 내보낸다(assetVersion.ts 참고 — 앞단 캐시가 예전 파일을 내주지 않게)
+  app.addHook('onSend', async (_request, reply, payload) => {
+    if (reply.statusCode !== 200 || !String(reply.getHeader('content-type') ?? '').startsWith('text/html')) return payload;
+    let html: string;
+    if (typeof payload === 'string') html = payload;
+    else if (Buffer.isBuffer(payload)) html = payload.toString('utf8');
+    else if (payload && typeof (payload as NodeJS.ReadableStream).pipe === 'function') {
+      const chunks: Buffer[] = [];
+      for await (const chunk of payload as AsyncIterable<Buffer | string>) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      html = Buffer.concat(chunks).toString('utf8');
+    } else return payload;
+    const next = versionAssetUrls(html, publicDir);
+    reply.removeHeader('content-length');
+    reply.removeHeader('etag');
+    return next;
+  });
   await app.register(fastifyStatic, {
     root: publicDir,
     // 뷰어/관리 화면 JS가 브라우저에 캐시되어 구버전이 돌지 않도록 항상 재검증시킨다.
