@@ -10,6 +10,7 @@ import { isEphemeralSecret } from './security.js';
 import { ensureDataDirs } from './storage.js';
 import { sweepOrphanedLazyGridFiles } from './xlsx/lazyGridStore.js';
 import { startTempSweeper } from './tempSweep.js';
+import { startMemoryExpiry } from './memoryExpiry.js';
 
 /** public/rhwp/는 git에 커밋하지 않고 scripts/mirror-rhwp-studio.mjs로 받는다(tools/의 DWG
  * 변환기 바이너리와 같은 이유 — README "한글(hwp/hwpx) 편집" 참고). 없으면 hwp/hwpx의 PDF
@@ -54,6 +55,8 @@ async function main(): Promise<void> {
   await app.listen({ port: config.port, host: config.host });
   // 변환 도중 재시작·강제 종료로 남은 문서 사본(임시 폴더)을 지운다 — 지금과 이후 주기적으로
   startTempSweeper((removed) => app.log.info(`남은 변환 임시 폴더 ${removed}개 정리`));
+  // 메모리 저장 모드: 지우기 요청을 놓쳐 남은 오래된 문서를 지운다(2시간, 열려 있지 않은 것만)
+  startMemoryExpiry((removed) => app.log.info(`오래된 메모리 문서 ${removed}개 정리`));
   // 첫 변환의 콜드 스타트를 없애기 위해 백그라운드로 프로필을 웜업한다
   void warmUpProfiles().then(() => app.log.info('LibreOffice 프로필 웜업 완료'));
 }

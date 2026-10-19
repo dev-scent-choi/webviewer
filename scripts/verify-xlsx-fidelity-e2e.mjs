@@ -172,6 +172,18 @@ for (const mode of ['viewer', 'editor']) {
   const vLine = await darkPixels(c5.x + c5.width - 6, c5.y + c5.height / 2, 12, 1);
   rec(`[${mode}] 맞닿은 테두리 1px(두 배로 굵지 않음)`, hLine === 1 && vLine === 1, `가로 ${hLine}px, 세로 ${vLine}px`);
   if (mode === 'editor') {
+    // 리본 홈 탭의 단추가 다른 것(투명한 색 선택 입력 등)에 가려지지 않았는지 — 가운데를 눌렀을 때 그 단추가 받는지
+    const covered = await page.evaluate(() =>
+      [...document.querySelectorAll('.ribbon-panel:not([hidden]) button[id]')]
+        .filter((btn) => btn.getBoundingClientRect().width > 0)
+        .filter((btn) => {
+          const r = btn.getBoundingClientRect();
+          const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+          return !(hit && (hit === btn || btn.contains(hit)));
+        })
+        .map((btn) => btn.id),
+    );
+    rec('[editor] 리본 단추가 다른 요소에 가려지지 않음', covered.length === 0, covered.join(','));
     await page.locator(sel(4, 9)).click();
     await page.waitForTimeout(300);
     rec('[editor] 목록 상자 칸을 고르면 ▼ 단추', await page.locator('.grid-list-btn').isVisible());

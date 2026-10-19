@@ -1985,6 +1985,11 @@ function closeConn(room: Room, conn: WebSocket): void {
  * 곧바로 "문서가 삭제되었습니다"를 보여줄 수 있게 한다(grid-editor.ts의 connection-close 처리는
  * 4400번대 코드를 전부 영구 거부로 취급해 재연결을 멈추고 이유를 그대로 보여준다).
  */
+/** 지금 이 문서를 누가 열어 두고 있는지(편집 세션이 살아 있는지) */
+export function isRoomOpen(docId: string): boolean {
+  return rooms.has(docId);
+}
+
 export function forceCloseRoom(docId: string, reason = '문서가 삭제되었습니다.'): void {
   const room = rooms.get(docId);
   if (!room) return;
