@@ -287,7 +287,7 @@ export async function ingestXlsxLazily(docId: string, xlsxBytes: Buffer): Promis
   // 열 너비 단위의 기준 — 통합 문서 기본 글꼴의 숫자 폭
   const defaultFont = defaultFontOfStylesXml(await zip.file('xl/styles.xml')?.async('text'));
   const mdw = maxDigitWidthPx(defaultFont.name, defaultFont.size);
-  const rowStorePath = path.join(os.tmpdir(), `docview-lazygrid-${docId}-${randomUUID()}.jsonl`);
+  const rowStorePath = path.join(os.tmpdir(), `${lazyGridOwnPrefix()}${docId}-${randomUUID()}.jsonl`);
   const writeHandle = await fs.open(rowStorePath, 'w');
 
   const sheetMeta: LazyGridSheetMeta[] = [];
@@ -877,6 +877,18 @@ export async function closeLazyGridStore(store: LazyGridStore): Promise<void> {
  */
 const ORPHAN_SWEEP_MIN_AGE_MS = 60_000;
 
+/** 예전 이름(인스턴스 표시 없음)의 파일은 어느 인스턴스 것인지 몰라 아주 오래된 것만 지운다 */
+const LEGACY_ORPHAN_MIN_AGE_MS = 6 * 60 * 60_000;
+
+/**
+ * 행 저장소 파일 이름 앞부분 — 인스턴스(포트)를 넣는다. 같은 PC에서 8000·8010 두 서버가 같은 임시
+ * 폴더를 쓰는데, 예전엔 한 서버가 켜질 때 다른 서버가 지금 열어 쓰는(큰 엑셀) 파일까지 "60초 넘었다"며
+ * 지울 수 있었다(8000은 코드가 바뀔 때마다 자동 재시작한다). 이제 각자 자기 이름의 파일만 지운다.
+ */
+export function lazyGridOwnPrefix(): string {
+  return `docview-lazygrid-p${process.env.DOCVIEW_PORT ?? '8000'}-`;
+}
+
 /** 서버 비정상 종료로 남은 이 프로젝트의 임시 행 저장소 파일을 정리한다 — 정상 종료라면 이미
  * closeLazyGridStore가 다 지웠을 것이므로, 이건 그 경우를 복구하는 안전망일 뿐이다. */
 export async function sweepOrphanedLazyGridFiles(): Promise<void> {
@@ -893,9 +905,12 @@ export async function sweepOrphanedLazyGridFiles(): Promise<void> {
       .filter((name) => name.startsWith('docview-lazygrid-'))
       .map(async (name) => {
         const filePath = path.join(dir, name);
+        const own = name.startsWith(lazyGridOwnPrefix());
+        if (!own && /^docview-lazygrid-p\d+-/.test(name)) return; // 다른 인스턴스 것 — 그쪽이 지운다
         try {
           const stat = await fs.stat(filePath);
-          if (now - stat.mtimeMs < ORPHAN_SWEEP_MIN_AGE_MS) return; // 최근 파일 — 지금 쓰이고 있을 수 있다
+          const minAge = own ? ORPHAN_SWEEP_MIN_AGE_MS : LEGACY_ORPHAN_MIN_AGE_MS;
+          if (now - stat.mtimeMs < minAge) return; // 최근 파일 — 지금 쓰이고 있을 수 있다
           await fs.rm(filePath, { force: true });
         } catch {
           /* 이미 없어졌거나 stat/rm이 실패해도 이 안전망은 다음 서버 시작 때 다시 시도된다 */
