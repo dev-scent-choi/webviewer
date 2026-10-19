@@ -129,7 +129,11 @@ export class LibreOfficeWorker {
       this.onReady = finishStart;
       child.stdout.setEncoding('utf8');
       child.stdout.on('data', (chunk: string) => this.onData(chunk));
-      child.stderr.on('data', () => undefined); // 변환기 경고는 버린다(stdout만 약속된 응답)
+      // 변환기의 진단 출력(표준 오류) — 평소엔 버리고, 디버그 때만 보인다(stdout만 약속된 응답)
+      child.stderr.setEncoding('utf8');
+      child.stderr.on('data', (text: string) => {
+        if (DEBUG) process.stderr.write(text);
+      });
       child.on('error', () => finishStart(false));
       child.on('exit', () => {
         if (this.child === child) {
@@ -157,7 +161,7 @@ export class LibreOfficeWorker {
       const line = this.buffer.slice(0, newline).trim();
       this.buffer = this.buffer.slice(newline + 1);
       if (!line) continue;
-      let message: { ready?: boolean; idle?: boolean; recovered?: string | null; id?: number; ok?: boolean; error?: string; retried?: string | null };
+      let message: { ready?: boolean; idle?: boolean; restarted?: string | null; fatal?: string; id?: number; ok?: boolean; error?: string };
       try {
         message = JSON.parse(line);
       } catch {
@@ -169,7 +173,8 @@ export class LibreOfficeWorker {
       }
       if (message.idle) {
         this.settling = false;
-        if (message.recovered) console.warn(`상주 변환기: 문서를 닫은 뒤 LibreOffice가 다시 켜져 다시 붙었다(${message.recovered})`);
+        if (message.restarted && DEBUG) console.info(`[상주 변환기] ${message.restarted}`);
+        if (message.fatal) console.warn(`상주 변환기를 다시 띄우지 못했다(예전 방식으로 계속): ${message.fatal}`);
         continue;
       }
       const job = this.job;
@@ -177,7 +182,6 @@ export class LibreOfficeWorker {
         this.job = null;
         clearTimeout(job.timer);
         if (!message.ok) console.warn(`상주 변환기 실패(예전 방식으로 다시 변환, ${job.file}): ${message.error ?? ''}`);
-        else if (message.retried) console.warn(`상주 변환기 재시작 후 성공(${job.file}): ${message.retried}`);
         job.resolve(message.ok === true);
       }
     }
@@ -206,11 +210,10 @@ export class LibreOfficeWorker {
   }
 }
 
-/** LibreOffice와 함께 깔린 python(uno 모듈 포함)과 변환기 스크립트가 있을 때만 만든다.
- * 아직 기본은 꺼 둔다(DOCVIEW_LO_WORKER=1로 켬) — soffice가 첫 실제 변환 뒤 스스로 다시 켜지는 동작 때문에
- * 운영에서 첫 변환이 오히려 12초까지 늘었다(2026-10-19). 안정화를 마치면 기본으로 켠다. */
+/** LibreOffice와 함께 깔린 python(uno 모듈 포함)과 변환기 스크립트가 있을 때만 만든다. DOCVIEW_LO_WORKER=0이면 끈다.
+ * (한때 기본으로 꺼 두었다 — 발표 문서를 닫으면 soffice가 죽는 문제를 "닫지 않고 모았다가 새로 띄우기"로 풀고 다시 켰다) */
 export function createLibreOfficeWorker(sofficePath: string | null): LibreOfficeWorker | null {
-  if (!sofficePath || process.env.DOCVIEW_LO_WORKER !== '1') return null;
+  if (!sofficePath || process.env.DOCVIEW_LO_WORKER === '0') return null;
   const programDir = path.dirname(sofficePath);
   const python = [path.join(programDir, 'python.exe'), path.join(programDir, 'python')].find((p) => existsSync(p));
   const script = path.join(path.dirname(fileURLToPath(import.meta.url)), 'loWorker.py');

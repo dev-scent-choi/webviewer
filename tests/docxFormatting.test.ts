@@ -193,6 +193,21 @@ describe('검토: 메모 왕복', () => {
     expect(strFromU8(out['[Content_Types].xml'])).toContain('/word/comments.xml');
   });
 
+  test('관계 파일이 비어 있거나(스스로 닫힘) 아예 없어도 메모 관계를 넣는다 — 없으면 LibreOffice가 파일을 못 열었다', () => {
+    for (const rels of ['<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>', null]) {
+      const entries = unzipSync(withComments(body));
+      if (rels === null) delete entries['word/_rels/document.xml.rels'];
+      else entries['word/_rels/document.xml.rels'] = strToU8(rels);
+      const bytes = Buffer.from(zipSync(entries));
+      const { doc, comments } = importDocx(bytes);
+      const out = unzipSync(exportDocx(new Uint8Array(bytes), doc, null, comments));
+      const relsXml = strFromU8(out['word/_rels/document.xml.rels']);
+      expect(relsXml).toContain('Target="comments.xml"');
+      expect(relsXml).toMatch(/<Relationships [^>]*>.*<\/Relationships>$/s);
+      expect(relsXml).not.toMatch(/<Relationships [^>]*\/>/);
+    }
+  });
+
   test('여러 문단에 걸친 메모, 문서 끝까지 열린 메모도 올바르게 닫힌다', () => {
     const { nodes, marks } = docxSchema;
     const c = marks.comment.create({ id: 'abc' });

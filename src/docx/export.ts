@@ -179,17 +179,30 @@ function registerCommentsPart(entries: Record<string, Uint8Array>): void {
     entries['[Content_Types].xml'] = strToU8(xml);
   }
   const rels = entries['word/_rels/document.xml.rels'];
-  if (rels) {
-    let xml = strFromU8(rels);
-    for (const part of COMMENT_EXTENSION_PARTS) xml = xml.replace(new RegExp(`<Relationship [^>]*Target="${part}"[^>]*/>`), '');
-    if (!/Target="comments\.xml"/.test(xml)) {
-      xml = xml.replace(
-        '</Relationships>',
-        '<Relationship Id="rIdDocviewComments" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="comments.xml"/></Relationships>',
-      );
-    }
-    entries['word/_rels/document.xml.rels'] = strToU8(xml);
+  let relsXml = rels ? strFromU8(rels) : '';
+  for (const part of COMMENT_EXTENSION_PARTS) relsXml = relsXml.replace(new RegExp(`<Relationship [^>]*Target="${part}"[^>]*/>`), '');
+  if (rels) entries['word/_rels/document.xml.rels'] = strToU8(relsXml);
+  if (!/Target="comments\.xml"/.test(relsXml)) {
+    addDocumentRelationship(
+      entries,
+      '<Relationship Id="rIdDocviewComments" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="comments.xml"/>',
+    );
   }
+}
+
+const EMPTY_DOCUMENT_RELS =
+  '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>';
+
+/**
+ * word/_rels/document.xml.rels에 관계 하나를 덧붙인다. 관계가 하나도 없는 문서는 이 파일이
+ * `<Relationships …/>`(스스로 닫힘)이거나 아예 없는데, 예전엔 `</Relationships>` 앞에만 끼워 넣어서 이 경우
+ * 아무것도 들어가지 않았다 — 메모·스타일 파트는 있는데 관계가 없어 LibreOffice가 파일을 열지 못했다
+ * (편집기에서 메모를 달고 저장하면 PDF 재변환이 "source file could not be loaded"로 실패, 2026-10-19 실측).
+ */
+function addDocumentRelationship(entries: Record<string, Uint8Array>, relationship: string): void {
+  const existing = entries['word/_rels/document.xml.rels'];
+  const xml = (existing ? strFromU8(existing) : EMPTY_DOCUMENT_RELS).replace(/<Relationships\b([^>]*?)\/>/, '<Relationships$1></Relationships>');
+  entries['word/_rels/document.xml.rels'] = strToU8(xml.replace('</Relationships>', `${relationship}</Relationships>`));
 }
 
 function renderInline(node: PMNode): string {
@@ -569,16 +582,11 @@ function registerStylesPart(entries: Record<string, Uint8Array>): void {
     }
   }
   const rels = entries['word/_rels/document.xml.rels'];
-  if (rels) {
-    const xml = strFromU8(rels);
-    if (!xml.includes('relationships/styles"')) {
-      entries['word/_rels/document.xml.rels'] = strToU8(
-        xml.replace(
-          '</Relationships>',
-          '<Relationship Id="rIdDocviewStyles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>',
-        ),
-      );
-    }
+  if (!rels || !strFromU8(rels).includes('relationships/styles"')) {
+    addDocumentRelationship(
+      entries,
+      '<Relationship Id="rIdDocviewStyles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>',
+    );
   }
 }
 

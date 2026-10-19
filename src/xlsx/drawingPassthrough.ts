@@ -199,7 +199,10 @@ export function insertDrawingElement(sheetXml: string, rid: string): string {
 }
 
 function addRelationship(entries: Record<string, Uint8Array>, relsPath: string, type: string, target: string): string {
-  const existing = entries[relsPath] ? strFromU8(entries[relsPath]) : `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>`;
+  // 관계가 하나도 없는 파일은 `<Relationships …/>`(스스로 닫힘)일 수 있다 — 그대로 두면 아래 끼워 넣기가 아무것도 못 넣는다
+  const existing = (
+    entries[relsPath] ? strFromU8(entries[relsPath]) : `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>`
+  ).replace(/<Relationships\b([^>]*?)\/>/, '<Relationships$1></Relationships>');
   const used = new Set(relationshipsOf(existing).map((rel) => rel.id));
   let n = 1;
   while (used.has(`rIdDv${n}`)) n += 1;
