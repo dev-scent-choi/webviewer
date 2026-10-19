@@ -56,6 +56,8 @@ export interface SlideShapeMeta {
   readonly anchor?: 't' | 'ctr' | 'b';
   /** 줄바꿈 안 함(bodyPr wrap="none") — 글자가 상자 너비를 넘어도 한 줄로 그린다. */
   readonly wrapNone?: boolean;
+  /** 안쪽 여백(EMU) [왼, 위, 오른, 아래] — 기본(0.1"/0.05")과 다를 때만 있다. 없으면 CSS 기본 여백. */
+  readonly insets?: readonly [number, number, number, number];
   readonly defaultSizePt?: number;
   readonly defaultAlign?: 'l' | 'ctr' | 'r' | 'just';
   /** 목록 수준 0~8의 글머리·들여쓰기(pt)·크기(pt) — inheritance.ts LevelLook과 같은 모양. */
@@ -109,8 +111,12 @@ export interface SlideVisual {
   /** kind:'shape' — 원본 <a:prstGeom prst> 이름(사각형 'rect'는 생략). 클라이언트가 아는 모양은 그
    * 모양으로(editor-slides.ts PRESET_CLIP), 모르는 복잡한 모양은 사각형으로 표시한다. */
   readonly geom?: string;
-  /** kind:'shape' — 테두리(선). 없으면 테두리 없음. width는 EMU, dash는 CSS border-style로 바로 쓴다 */
-  readonly stroke?: { readonly color: string; readonly width: number; readonly dash: 'solid' | 'dashed' | 'dotted' };
+  /** kind:'shape' — 테두리(선). 없으면 테두리 없음. width는 EMU, dash는 CSS border-style로 줄인 값(예전 데이터 호환),
+   * prstDash는 원본 점선 이름(sysDot·sysDash·dash·lgDash…) — 클라이언트가 PowerPoint와 같은 점·대시 길이로 그린다 */
+  readonly stroke?: { readonly color: string; readonly width: number; readonly dash: 'solid' | 'dashed' | 'dotted'; readonly prstDash?: string };
+  /** kind:'shape' — 둥근 모서리 반지름(EMU) [왼위, 오른위, 오른아래, 왼아래]. 둥근 사각형 계열만 갖는다.
+   * 원본 조정값(<a:gd name="adj">)으로 계산한다 — adj 0이면 직각(예전엔 비율로 늘 둥글게 그렸다). */
+  readonly corners?: readonly [number, number, number, number];
   /** kind:'table' — 행 단위 셀 텍스트(행렬, 서식 없이 텍스트만) */
   readonly rows?: readonly (readonly string[])[];
   /** kind:'placeholder' — 표시할 라벨(예: "차트", "스마트아트") */

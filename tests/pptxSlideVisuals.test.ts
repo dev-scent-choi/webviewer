@@ -333,8 +333,21 @@ describe('parseSlideVisuals: 테두리·겹침 순서·회전된 선 (매뉴얼 
   test('채우기 없이 빨간 점선 테두리만 있는 사각형은 테두리로 그리고, 스크린샷보다 위에 놓인다', () => {
     const visuals = parseSlideVisuals(entriesFor(pic('2') + redDotRect('3')), 'slide1.xml');
     expect(visuals.map((v) => v.kind)).toEqual(['image', 'shape']);
-    expect(visuals[1]).toMatchObject({ kind: 'shape', x: 100, y: 200, stroke: { color: '#FF0000', width: 25400, dash: 'dotted' } });
+    expect(visuals[1]).toMatchObject({ kind: 'shape', x: 100, y: 200, stroke: { color: '#FF0000', width: 25400, dash: 'dotted', prstDash: 'sysDot' } });
     expect(visuals[1].fill).toBeUndefined();
+  });
+
+  test('둥근 사각형 모서리는 원본 조정값으로 — adj 0은 직각, 없으면 기본 16667(짧은 변의 1/6)', () => {
+    const rr = (id: string, av: string) =>
+      `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="버튼"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="600000" cy="300000"/></a:xfrm>` +
+      `<a:prstGeom prst="roundRect"><a:avLst>${av}</a:avLst></a:prstGeom><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></p:spPr></p:sp>`;
+    const visuals = parseSlideVisuals(entriesFor(rr('2', '<a:gd name="adj" fmla="val 0"/>') + rr('3', '') + rr('4', '<a:gd name="adj" fmla="val 50000"/>')), 'slide1.xml');
+    expect(visuals.map((v) => v.corners)).toEqual([[0, 0, 0, 0], [50001, 50001, 50001, 50001], [150000, 150000, 150000, 150000]]);
+  });
+
+  test('실선 테두리는 점선 이름을 싣지 않는다', () => {
+    const visuals = parseSlideVisuals(entriesFor(pic('2', '<a:ln><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></a:ln>')), 'slide1.xml');
+    expect(visuals[0].stroke?.prstDash).toBeUndefined();
   });
 
   test('겹침 순서는 원본 순서 — 테두리 상자가 그림보다 앞(아래)에 있으면 아래에 둔다', () => {

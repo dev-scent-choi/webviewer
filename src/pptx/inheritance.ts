@@ -40,6 +40,8 @@ export interface InheritedShapeLook {
   readonly anchor: Anchor;
   /** bodyPr wrap="none" — 상자 너비에서 줄을 바꾸지 않는다(PowerPoint의 "도형의 텍스트 줄 바꿈" 끔). */
   readonly wrapNone: boolean;
+  /** 글상자 안쪽 여백(EMU) [왼, 위, 오른, 아래] — bodyPr lIns/tIns/rIns/bIns, 없으면 기본 0.1"/0.05". */
+  readonly insets: readonly [number, number, number, number];
   /** 1수준 문단의 기본 글자 크기(pt) — 글자에 크기 서식이 없을 때 보이는 크기. */
   readonly defaultSizePt: number;
   /** 1수준 문단의 기본 정렬 — 문단에 정렬이 없을 때 보이는 정렬. */
@@ -105,6 +107,10 @@ interface ShapeLook {
   readonly h: number | null;
   readonly anchor: Anchor | undefined;
   readonly wrap: 'none' | 'square' | undefined;
+  readonly lIns: number | undefined;
+  readonly tIns: number | undefined;
+  readonly rIns: number | undefined;
+  readonly bIns: number | undefined;
   readonly sizePt: number | undefined;
   readonly align: Align | undefined;
   readonly levels: readonly PartialLevel[];
@@ -115,6 +121,8 @@ interface ShapeLook {
 }
 
 const ANCHORS = new Set(['t', 'ctr', 'b']);
+/** PowerPoint 기본 글상자 안쪽 여백(EMU) — 좌우 0.1", 위아래 0.05" */
+export const DEFAULT_INSETS: readonly [number, number, number, number] = [91440, 45720, 91440, 45720];
 const ALIGNS = new Set(['l', 'ctr', 'r', 'just']);
 
 function num(value: unknown): number | null {
@@ -193,6 +201,7 @@ function shapeLooks(root: XmlNode | null, rootTag: string): ShapeLook[] {
     const wrapRaw = typeof bodyPr === 'object' ? (bodyPr['@_wrap'] as string | undefined) : undefined;
     const levels = levelsOf(txBody?.['a:lstStyle'] as XmlNode | undefined);
     const { sizePt, align } = levels[0];
+    const inset = (key: string) => (typeof bodyPr === 'object' ? num(bodyPr[key]) ?? undefined : undefined);
     return {
       levels,
       fontRefColor: (sp['p:style'] as XmlNode | undefined)?.['a:fontRef'] as XmlNode | undefined,
@@ -208,6 +217,10 @@ function shapeLooks(root: XmlNode | null, rootTag: string): ShapeLook[] {
       h: num(ext?.['@_cy']),
       anchor: anchorRaw && ANCHORS.has(anchorRaw) ? (anchorRaw as Anchor) : undefined,
       wrap: wrapRaw === 'none' || wrapRaw === 'square' ? wrapRaw : undefined,
+      lIns: inset('@_lIns'),
+      tIns: inset('@_tIns'),
+      rIns: inset('@_rIns'),
+      bIns: inset('@_bIns'),
       sizePt,
       align,
     };
@@ -276,7 +289,7 @@ export function resolveSlideShapeLooks(
     const master = shape.ph ? matchMaster(shape.ph, masterShapes) : undefined;
     const cls = shape.ph ? phClass(shape.ph.type) : 'other';
     const chain = [shape, layout, master];
-    const pick = <K extends 'anchor' | 'wrap' | 'sizePt' | 'align'>(key: K) => chain.find((s) => s?.[key] !== undefined)?.[key];
+    const pick = <K extends 'anchor' | 'wrap' | 'sizePt' | 'align' | 'lIns' | 'tIns' | 'rIns' | 'bIns'>(key: K) => chain.find((s) => s?.[key] !== undefined)?.[key];
     // 위치는 네 값을 한 묶음으로 물려받는다(슬라이드가 위치만 바꾸고 크기는 안 쓰는 경우는 없다).
     const positioned = chain.find((s) => s && s.x !== null && s.y !== null && s.w !== null && s.h !== null);
     result.set(shape.id, {
@@ -286,6 +299,13 @@ export function resolveSlideShapeLooks(
       h: positioned?.h ?? null,
       anchor: (pick('anchor') as Anchor | undefined) ?? 't',
       wrapNone: pick('wrap') === 'none',
+      // 안쪽 여백은 네 값을 따로 물려받는다(lIns="0"만 쓴 도형은 위·아래·오른쪽은 기본값)
+      insets: [
+        (pick('lIns') as number | undefined) ?? DEFAULT_INSETS[0],
+        (pick('tIns') as number | undefined) ?? DEFAULT_INSETS[1],
+        (pick('rIns') as number | undefined) ?? DEFAULT_INSETS[2],
+        (pick('bIns') as number | undefined) ?? DEFAULT_INSETS[3],
+      ],
       defaultSizePt:
         (pick('sizePt') as number | undefined) ?? classStyle[cls].sizePt ?? defaultText.sizePt ?? 18,
       // 그린 도형(사각형·화살표 등, 글상자 아님)은 도형·개체 틀 어디에도 정렬이 없으면 가운데 —

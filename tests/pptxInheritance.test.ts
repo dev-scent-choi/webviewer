@@ -143,6 +143,36 @@ describe('resolveSlideShapeLooks: 줄바꿈 안 함(bodyPr wrap="none")', () => 
   });
 });
 
+describe('resolveSlideShapeLooks: 글상자 안쪽 여백(bodyPr lIns/tIns/rIns/bIns)', () => {
+  const zip = deck();
+  zip['ppt/slides/slide1.xml'] = enc(
+    `<p:sld ${NS}>` +
+      tree(
+        sp(5, '', xfrm(0, 0, 100, 100), '<a:bodyPr lIns="0" tIns="0" rIns="0" bIns="0"/>') +
+        sp(6, '', xfrm(0, 0, 100, 100), '<a:bodyPr lIns="0"/>') +
+        sp(7, '', xfrm(0, 0, 100, 100), '<a:bodyPr/>') +
+        sp(2, '<p:ph type="ctrTitle"/>', '', '<a:bodyPr tIns="36000"/>'),
+      ) +
+      '</p:sld>',
+  );
+  zip['ppt/slideLayouts/slideLayout1.xml'] = enc(
+    `<p:sldLayout ${NS}>` +
+      tree(sp(2, '<p:ph type="ctrTitle"/>', xfrm(1, 2, 3, 4), '<a:bodyPr lIns="0" rIns="0"/>')) +
+      '</p:sldLayout>',
+  );
+  const looks = resolveSlideShapeLooks(zip, 'slide1.xml');
+
+  test('적힌 값은 그대로, 없는 값은 PowerPoint 기본(좌우 91440·위아래 45720)', () => {
+    expect(looks.get('5')?.insets).toEqual([0, 0, 0, 0]);
+    expect(looks.get('6')?.insets).toEqual([0, 45720, 91440, 45720]);
+    expect(looks.get('7')?.insets).toEqual([91440, 45720, 91440, 45720]);
+  });
+
+  test('개체 틀은 네 값을 따로 물려받는다(슬라이드 tIns + 레이아웃 lIns/rIns)', () => {
+    expect(looks.get('2')?.insets).toEqual([0, 36000, 0, 45720]);
+  });
+});
+
 describe('resolveSlideShapeLooks: 그룹 안 도형', () => {
   const zip = deck();
   zip['ppt/slides/slide1.xml'] = enc(
