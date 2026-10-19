@@ -37,7 +37,21 @@ const nodes: Record<string, NodeSpec> = {
       const css =
         align === 'ctr' ? 'center' : align === 'r' ? 'right' : align === 'just' ? 'justify' : null;
       const attrs: Record<string, string> = { 'data-lvl': String(node.attrs.lvl ?? 0) };
-      if (css) attrs.style = `text-align: ${css}`;
+      const styles: string[] = [];
+      if (css) styles.push(`text-align: ${css}`);
+      // 줄 높이는 문단 글자 크기를 바탕으로 잡힌다 — 모든 글자에 크기가 정해진 문단은 그중 가장 큰 크기를
+      // 문단 크기로 둬서, 상자 기본 크기(18pt)가 11pt 글자의 줄 간격을 벌려 다음 줄이 아래 개체에 깔리거나
+      // 작은 번호 원의 숫자가 아래로 밀리던 문제를 막는다(PowerPoint도 줄 높이를 그 줄 글자 크기로 정한다).
+      let maxSize = 0;
+      let allSized = node.childCount > 0;
+      node.forEach((child) => {
+        if (!child.isText) return;
+        const size = child.marks.find((mark) => mark.type.name === 'fontSize')?.attrs.size as number | undefined;
+        if (typeof size === 'number' && size > 0) maxSize = Math.max(maxSize, size);
+        else allSized = false;
+      });
+      if (allSized && maxSize > 0) styles.push(`font-size: calc(${maxSize} * var(--slide-pt, 1pt))`);
+      if (styles.length > 0) attrs.style = styles.join('; ');
       if (node.attrs.bu !== null && node.attrs.bu !== undefined) attrs['data-bu'] = String(node.attrs.bu);
       return ['p', attrs, 0];
     },

@@ -331,6 +331,9 @@ const PRESET_CLIP: Record<string, string> = {
   snip1Rect: 'polygon(0 0, 85% 0, 100% 15%, 100% 100%, 0 100%)',
   snip2SameRect: 'polygon(15% 0, 85% 0, 100% 15%, 100% 100%, 0 100%, 0 15%)',
 };
+/** 이 크기(0.35인치)보다 가로·세로가 모두 작은 글자 도형은 배지로 보고 여백 없이 가운데에 놓는다 */
+const TINY_SHAPE_EMU = 320040;
+
 /** 둥근 계열 별칭 — CSS 클래스(slide-shape-ellipse/roundRect/stadium)로 그린다. */
 const ROUNDED_ALIAS: Record<string, string> = {
   flowChartConnector: 'ellipse',
@@ -338,6 +341,19 @@ const ROUNDED_ALIAS: Record<string, string> = {
   round2SameRect: 'roundRect',
   flowChartTerminator: 'stadium',
 };
+
+/** 도형·그림의 테두리 — PowerPoint 선은 가장자리 가운데에 걸치므로 두께만큼 바깥으로 반씩 넓혀
+ * 같은 자리에 그린다(안쪽 내용 크기는 그대로). */
+function applyVisualStroke(el: HTMLElement, visual: SlideVisual): void {
+  if (!visual.stroke) return;
+  const width = Math.max(1, emuToPx(visual.stroke.width));
+  el.style.border = `${width}px ${visual.stroke.dash} ${visual.stroke.color}`;
+  el.style.boxSizing = 'border-box';
+  el.style.left = `${emuToPx(visual.x ?? 0) - width / 2}px`;
+  el.style.top = `${emuToPx(visual.y ?? 0) - width / 2}px`;
+  el.style.width = `${emuToPx(visual.w ?? 0) + width}px`;
+  el.style.height = `${emuToPx(visual.h ?? 0) + width}px`;
+}
 
 /** 이미지/단순 도형/표/차트·스마트아트 자리표시자 하나를 표시 전용 엘리먼트로 그린다 —
  * 텍스트박스(.slide-textbox)와 달리 클릭해도 편집기가 뜨지 않는다(pointer-events는 CSS에서
@@ -357,8 +373,10 @@ function renderSlideVisual(visual: SlideVisual, pageImageUrl: string | null): HT
     img.src = `/api/view/slide-media?token=${encodeURIComponent(token ?? '')}&path=${encodeURIComponent(visual.mediaPath)}`;
     img.alt = '';
     el.append(img);
+    applyVisualStroke(el, visual);
   } else if (visual.kind === 'shape') {
     if (visual.fill) el.style.background = visual.fill;
+    applyVisualStroke(el, visual);
     if (visual.geom) {
       const clip = PRESET_CLIP[visual.geom];
       if (clip) el.style.clipPath = clip;
@@ -535,6 +553,11 @@ function renderCanvasForSlideInner(entryId: string): void {
     // 크기·정렬과 상자 안 세로 맞춤. 도형(geom)은 클래스가 이미 세로 가운데를 맡는다.
     if (meta.anchor && !meta.geom) box.classList.add(`slide-anchor-${meta.anchor}`);
     if (meta.wrapNone) box.classList.add('slide-nowrap');
+    // 번호 원·배지처럼 기본 안쪽 여백(좌우 0.1인치)보다 작은 도형 — 여백이 글자 칸을 음수로 만들어
+    // 글자가 한쪽으로 밀려 도형 밖에 걸렸다. PowerPoint처럼 도형 가운데에 한 줄로 놓는다.
+    if (meta.w !== null && meta.h !== null && meta.w !== undefined && meta.h !== undefined && meta.w < TINY_SHAPE_EMU && meta.h < TINY_SHAPE_EMU) {
+      box.classList.add('slide-textbox-tiny');
+    }
     if (meta.defaultSizePt) view.dom.style.fontSize = `calc(${meta.defaultSizePt} * var(--slide-pt, 1pt))`;
     const alignCss = { ctr: 'center', r: 'right', just: 'justify', l: '' }[meta.defaultAlign ?? 'l'];
     if (alignCss) view.dom.style.textAlign = alignCss;

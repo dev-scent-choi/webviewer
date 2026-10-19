@@ -109,6 +109,8 @@ export interface SlideVisual {
   /** kind:'shape' — 원본 <a:prstGeom prst> 이름(사각형 'rect'는 생략). 클라이언트가 아는 모양은 그
    * 모양으로(editor-slides.ts PRESET_CLIP), 모르는 복잡한 모양은 사각형으로 표시한다. */
   readonly geom?: string;
+  /** kind:'shape' — 테두리(선). 없으면 테두리 없음. width는 EMU, dash는 CSS border-style로 바로 쓴다 */
+  readonly stroke?: { readonly color: string; readonly width: number; readonly dash: 'solid' | 'dashed' | 'dotted' };
   /** kind:'table' — 행 단위 셀 텍스트(행렬, 서식 없이 텍스트만) */
   readonly rows?: readonly (readonly string[])[];
   /** kind:'placeholder' — 표시할 라벨(예: "차트", "스마트아트") */

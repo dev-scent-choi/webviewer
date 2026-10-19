@@ -1476,6 +1476,18 @@ body.home-hidden .doclist-link { display: none !important; }
 /* 원본 글상자의 세로 맞춤(bodyPr anchor, 레이아웃·마스터 상속 포함) — 기본은 위쪽 */
 .slide-textbox.slide-anchor-ctr,
 .slide-textbox.slide-anchor-b { display: flex; flex-direction: column; }
+/* 번호 원·배지(아주 작은 글자 도형) — 여백 없이 가운데 한 줄. 문단 줄 높이를 글자 자신의 크기로
+   잡아(기본 18pt 줄 높이가 작은 글자를 아래로 밀어내지 않게) 도형 정가운데에 놓는다. */
+.slide-textbox.slide-textbox-tiny {
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+}
+.slide-textbox.slide-textbox-tiny > .ProseMirror { width: auto !important; white-space: nowrap; min-height: 0; }
+.slide-textbox.slide-textbox-tiny > .ProseMirror p { line-height: 0; margin: 0; }
+.slide-textbox.slide-textbox-tiny > .ProseMirror p * { line-height: 1.2; }
 .slide-textbox.slide-anchor-ctr { justify-content: center; }
 .slide-textbox.slide-anchor-b { justify-content: flex-end; }
 .slide-textbox.slide-anchor-ctr > .ProseMirror,
