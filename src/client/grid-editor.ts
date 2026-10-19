@@ -717,16 +717,29 @@ async function main(): Promise<void> {
     else if (right > sheetTabsEl.scrollLeft + sheetTabsEl.clientWidth) sheetTabsEl.scrollLeft = right - sheetTabsEl.clientWidth;
   }
 
-  // 맨 왼쪽 ◀ ▶ — 이전/다음 시트로 옮겨 간다(첫/마지막 시트에선 꺼진다). + 는 탭 줄 바깥에 있어 시트가 많아도 늘 보인다.
+  // 맨 왼쪽 ◀ ▶ — 엑셀처럼 활성 시트는 그대로 두고 탭 줄만 누른 방향으로 한 탭씩 민다(더 갈 곳이 없으면 꺼진다).
+  // + 는 탭 줄 바깥에 있어 시트가 많아도 늘 보인다.
   const sheetNavPrev = document.getElementById('sheet-nav-prev') as HTMLButtonElement | null;
   const sheetNavNext = document.getElementById('sheet-nav-next') as HTMLButtonElement | null;
-  function stepSheet(delta: number): void {
-    const indices = sortedSheetIndices();
-    const target = indices[indices.indexOf(activeSheet) + delta];
-    if (target !== undefined) switchToSheet(target);
+  function scrollSheetTabs(direction: -1 | 1): void {
+    const tabs = [...sheetTabsEl.querySelectorAll<HTMLElement>('.grid-sheet-tab')];
+    const at = sheetTabsEl.scrollLeft;
+    const target =
+      direction > 0
+        ? tabs.find((tab) => tab.offsetLeft > at + 1) // 지금 맨 앞 탭 다음 탭이 맨 앞으로
+        : [...tabs].reverse().find((tab) => tab.offsetLeft < at - 1); // 왼쪽에 가려진 바로 앞 탭이 맨 앞으로
+    if (!target) return;
+    const max = sheetTabsEl.scrollWidth - sheetTabsEl.clientWidth;
+    sheetTabsEl.scrollLeft = Math.max(0, Math.min(max, target.offsetLeft));
+    updateSheetMore();
   }
-  sheetNavPrev?.addEventListener('click', () => stepSheet(-1));
-  sheetNavNext?.addEventListener('click', () => stepSheet(1));
+  function updateSheetNav(): void {
+    const max = sheetTabsEl.scrollWidth - sheetTabsEl.clientWidth;
+    if (sheetNavPrev) sheetNavPrev.disabled = sheetTabsEl.scrollLeft <= 0;
+    if (sheetNavNext) sheetNavNext.disabled = sheetTabsEl.scrollLeft >= max - 1;
+  }
+  sheetNavPrev?.addEventListener('click', () => scrollSheetTabs(-1));
+  sheetNavNext?.addEventListener('click', () => scrollSheetTabs(1));
   document.getElementById('sheet-add')?.addEventListener('click', () => addSheet());
   // 엑셀처럼 탭 줄 왼쪽/오른쪽에 가려진 시트가 있으면 그쪽 끝에 "…" — 누르면 가려진 바로 옆 시트로 간다
   const sheetMoreLeft = document.getElementById('sheet-more-left') as HTMLButtonElement | null;
@@ -746,6 +759,7 @@ async function main(): Promise<void> {
   function updateSheetMore(reveal = false): void {
     if (!sheetMoreLeft || !sheetMoreRight) return;
     if (reveal) revealActiveSheetTab();
+    updateSheetNav();
     const { left, right } = hiddenTabs();
     const showLeft = left.length > 0;
     const showRight = right.length > 0;
@@ -777,9 +791,6 @@ async function main(): Promise<void> {
 
   function renderSheetTabs(): void {
     const indices = sortedSheetIndices();
-    const pos = indices.indexOf(activeSheet);
-    if (sheetNavPrev) sheetNavPrev.disabled = pos <= 0;
-    if (sheetNavNext) sheetNavNext.disabled = pos < 0 || pos >= indices.length - 1;
     sheetTabsEl.replaceChildren(
       ...indices.map((idx) => {
         const sheet = structure.get(String(idx))!;
