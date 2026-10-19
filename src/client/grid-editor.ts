@@ -427,7 +427,8 @@ async function main(): Promise<void> {
   renderPresenceAvatars(presenceEl, provider.awareness);
   postPresenceToParent();
 
-  const undoManager = new Y.UndoManager([cells, structure, styles]);
+  // 병합(merges)도 함께 — 병합은 지운 칸 값·가운데 맞춤과 한 트랜잭션이라, 빠지면 Ctrl+Z가 값만 되살리고 병합은 남는다
+  const undoManager = new Y.UndoManager([cells, structure, styles, merges]);
   const shell = initOfficeShell({
     token,
     docName: info.name,
@@ -2735,27 +2736,84 @@ async function main(): Promise<void> {
     renderTableVirtualized();
   });
 
+  // 병합이 바뀌면(내가·다른 참여자가·실행 취소로) 표를 다시 그린다 — structure.observe와 같은 편집 중 가드
+  merges.observe(() => {
+    if (editingKey !== null) {
+      pendingStructureRender = true;
+      return;
+    }
+    renderTableVirtualized();
+    syncCellToolbarState(activeCellKey);
+  });
+
   function currentStructure(): SheetStructure {
     return structure.get(String(activeSheet)) ?? { name: 'Sheet1', rowCount: 1, colCount: 1 };
   }
 
+  // 홈 탭 "셀" 그룹 — 엑셀처럼 **선택한** 행/열 기준으로 삽입·삭제한다(예전엔 시트 맨 끝 행/열만 늘리고 줄였다).
+  // 행/열 머리글 오른쪽 클릭 메뉴와 같은 서버 연산(sendGridStructureOp)이라 값·서식·병합·열 너비·행 높이가 함께
+  // 밀리고, 저장할 때도 같은 순서로 재생된다. 선택한 줄 수만큼 한 번에 넣고 지운다. 열 전체를 고른 채 "행 삽입"처럼
+  // 다른 축 머리글이 선택돼 있으면 그 축의 선택 길이(=시트 전체)가 아니라 활성 칸 한 줄만 쓴다.
+  function selectedSpan(axis: 'row' | 'col'): { at: number; count: number } | null {
+    if (!activeCellKey) return null;
+    const active = parseGridCellKey(activeCellKey);
+    if (!active || active.sheetIdx !== activeSheet) return null;
+    const b = rangeBounds();
+    if (axis === 'row') {
+      return headerSelection?.kind === 'col' ? { at: active.row, count: 1 } : { at: b.r0, count: b.r1 - b.r0 + 1 };
+    }
+    return headerSelection?.kind === 'row' ? { at: active.col, count: 1 } : { at: b.c0, count: b.c1 - b.c0 + 1 };
+  }
+  /** 지울 줄에 (불러와 둔) 값이 하나라도 있는지 — 행/열 삭제는 Ctrl+Z로 되돌릴 수 없으니 그때만 한 번 묻는다. */
+  function spanHasValues(axis: 'row' | 'col', at: number, count: number): boolean {
+    const prefix = `${activeSheet}:`;
+    for (const [key, value] of cells) {
+      if (!key.startsWith(prefix) || value === '') continue;
+      const parsed = parseGridCellKey(key);
+      if (!parsed) continue;
+      const index = axis === 'row' ? parsed.row : parsed.col;
+      if (index >= at && index < at + count) return true;
+    }
+    return false;
+  }
+  function confirmSpanDelete(axis: 'row' | 'col', at: number, count: number): boolean {
+    if (!spanHasValues(axis, at, count)) return true;
+    const what = axis === 'row' ? '행' : '열';
+    return window.confirm(`선택한 ${count}개 ${what}을 삭제할까요?\n삭제한 ${what}은 실행 취소(Ctrl+Z)로 되돌릴 수 없습니다.`);
+  }
   document.getElementById('btn-add-row')?.addEventListener('click', () => {
-    const s = currentStructure();
-    structure.set(String(activeSheet), { ...s, rowCount: s.rowCount + 1 });
+    const span = selectedSpan('row');
+    if (!span) {
+      const s = currentStructure();
+      structure.set(String(activeSheet), { ...s, rowCount: s.rowCount + 1 });
+      return;
+    }
+    sendGridStructureOp('insertRows', span.at, span.count);
   });
   document.getElementById('btn-del-row')?.addEventListener('click', () => {
     const s = currentStructure();
-    if (s.rowCount <= 1) return;
-    structure.set(String(activeSheet), { ...s, rowCount: s.rowCount - 1 });
+    const span = selectedSpan('row');
+    if (!span || span.at >= s.rowCount) return;
+    const count = Math.min(span.count, s.rowCount - span.at);
+    if (s.rowCount - count < 1 || !confirmSpanDelete('row', span.at, count)) return;
+    sendGridStructureOp('deleteRows', span.at, count);
   });
   document.getElementById('btn-add-col')?.addEventListener('click', () => {
-    const s = currentStructure();
-    structure.set(String(activeSheet), { ...s, colCount: s.colCount + 1 });
+    const span = selectedSpan('col');
+    if (!span) {
+      const s = currentStructure();
+      structure.set(String(activeSheet), { ...s, colCount: s.colCount + 1 });
+      return;
+    }
+    sendGridStructureOp('insertCols', span.at, span.count);
   });
   document.getElementById('btn-del-col')?.addEventListener('click', () => {
     const s = currentStructure();
-    if (s.colCount <= 1) return;
-    structure.set(String(activeSheet), { ...s, colCount: s.colCount - 1 });
+    const span = selectedSpan('col');
+    if (!span || span.at >= s.colCount) return;
+    const count = Math.min(span.count, s.colCount - span.at);
+    if (s.colCount - count < 1 || !confirmSpanDelete('col', span.at, count)) return;
+    sendGridStructureOp('deleteCols', span.at, count);
   });
 
   // ---------- 자동 합계 — 엑셀처럼 위쪽(없으면 왼쪽)으로 연속된 숫자 칸을 찾아 SUM 수식을 채운다 ----------
@@ -2826,6 +2884,8 @@ async function main(): Promise<void> {
     setPressed('btn-cell-align-l', !style?.a || style.a === 'l');
     setPressed('btn-cell-align-c', style?.a === 'c');
     setPressed('btn-cell-align-r', style?.a === 'r');
+    const at = key ? parseGridCellKey(key) : null;
+    setPressed('btn-merge-center', Boolean(at && at.sheetIdx === activeSheet && mergeContaining(at.row, at.col)));
     setPressed('btn-valign-top', style?.va === 't');
     setPressed('btn-valign-middle', style?.va === 'm');
     setPressed('btn-valign-bottom', !style?.va || style.va === 'b');
@@ -2941,6 +3001,111 @@ async function main(): Promise<void> {
     document.getElementById(id)?.addEventListener('click', () => {
       updateStyle((current) => ({ ...current, va }));
     });
+  });
+
+  // ---------- 맞춤: 병합하고 가운데 맞춤 (엑셀과 같은 동작) ----------
+  // 병합 목록(GRID_MERGES_MAP, 1부터 센 좌표)은 시트마다 통째로 들어 있어(윈도잉하지 않는다) 여기서 바로 고쳐 쓴다.
+  // 서버는 이 변경을 시트 메타데이터에 반영해 두고(room.ts merges.observe), 저장할 때 그 시트의 병합을 다시 쓴다.
+  type Rect = { r0: number; r1: number; c0: number; c1: number };
+  // 함수 선언으로 둔다 — syncCellToolbarState(위쪽)가 이 줄이 실행되기 전에도 불릴 수 있다
+  function mergeRect(m: GridMergeShape): Rect {
+    return { r0: m.r - 1, r1: m.r - 2 + m.rs, c0: m.c - 1, c1: m.c - 2 + m.cs };
+  }
+  function rectsIntersect(a: Rect, b: Rect): boolean {
+    return !(a.r0 > b.r1 || a.r1 < b.r0 || a.c0 > b.c1 || a.c1 < b.c0);
+  }
+  function sheetMergeList(): GridMergeShape[] {
+    return [...(merges.get(String(activeSheet)) ?? [])];
+  }
+  function mergeContaining(row: number, col: number): GridMergeShape | undefined {
+    return sheetMergeList().find((m) => rectsIntersect(mergeRect(m), { r0: row, r1: row, c0: col, c1: col }));
+  }
+  function unmergeSelection(): void {
+    if (!canEdit || !activeCellKey) return;
+    const sel = rangeBounds();
+    const list = sheetMergeList();
+    const kept = list.filter((m) => !rectsIntersect(mergeRect(m), sel));
+    if (kept.length === list.length) return;
+    ydoc.transact(() => {
+      if (kept.length > 0) merges.set(String(activeSheet), kept);
+      else merges.delete(String(activeSheet));
+    });
+    syncCellToolbarState(activeCellKey);
+  }
+  function applyMerge(mode: 'center' | 'merge' | 'across'): void {
+    if (!canEdit || !activeCellKey) return;
+    const list = sheetMergeList();
+    const sel = rangeBounds();
+    // 병합된 칸(하나의 병합 안)을 고른 채 "병합하고 가운데 맞춤"을 누르면 엑셀처럼 병합을 푼다
+    const inside = list.find((m) => {
+      const r = mergeRect(m);
+      return sel.r0 >= r.r0 && sel.r1 <= r.r1 && sel.c0 >= r.c0 && sel.c1 <= r.c1;
+    });
+    if (inside && mode === 'center') {
+      unmergeSelection();
+      return;
+    }
+    // 고른 범위와 겹치는 기존 병합까지 감싸도록 넓힌다(엑셀도 병합 일부만 걸친 선택을 병합 전체로 넓힌다)
+    const box: Rect = { ...sel };
+    for (let grown = true; grown; ) {
+      grown = false;
+      for (const m of list) {
+        const r = mergeRect(m);
+        if (!rectsIntersect(r, box)) continue;
+        if (r.r0 < box.r0 || r.r1 > box.r1 || r.c0 < box.c0 || r.c1 > box.c1) {
+          box.r0 = Math.min(box.r0, r.r0);
+          box.r1 = Math.max(box.r1, r.r1);
+          box.c0 = Math.min(box.c0, r.c0);
+          box.c1 = Math.max(box.c1, r.c1);
+          grown = true;
+        }
+      }
+    }
+    const rects: Rect[] =
+      mode === 'across'
+        ? Array.from({ length: box.r1 - box.r0 + 1 }, (_, i) => ({ r0: box.r0 + i, r1: box.r0 + i, c0: box.c0, c1: box.c1 }))
+        : [box];
+    const targets = rects.filter((r) => r.r1 > r.r0 || r.c1 > r.c0);
+    if (targets.length === 0) {
+      if (mode === 'center') updateStyle((current) => ({ ...current, a: 'c' })); // 칸 하나 — 엑셀처럼 가운데 맞춤만
+      return;
+    }
+    if ((box.r1 - box.r0 + 1) * (box.c1 - box.c0 + 1) > 200_000) {
+      window.alert('범위가 너무 넓어 병합할 수 없습니다.');
+      return;
+    }
+    const drop: string[] = [];
+    for (const rect of targets) {
+      for (let r = rect.r0; r <= rect.r1; r += 1) {
+        for (let c = rect.c0; c <= rect.c1; c += 1) {
+          const key = gridCellKey(activeSheet, r, c);
+          if (styles.get(key)?.lk === 1) {
+            window.alert('잠긴 칸이 있어 병합할 수 없습니다.');
+            return;
+          }
+          if ((r !== rect.r0 || c !== rect.c0) && (cells.get(key) ?? '') !== '') drop.push(key);
+        }
+      }
+    }
+    if (drop.length > 0 && !window.confirm('셀을 병합하면 왼쪽 위의 값만 남고 나머지 값은 지워집니다. 계속할까요?')) return;
+    ydoc.transact(() => {
+      for (const key of drop) cells.delete(key);
+      const kept = list.filter((m) => !targets.some((t) => rectsIntersect(mergeRect(m), t)));
+      for (const t of targets) kept.push({ r: t.r0 + 1, c: t.c0 + 1, rs: t.r1 - t.r0 + 1, cs: t.c1 - t.c0 + 1 });
+      merges.set(String(activeSheet), kept);
+      if (mode === 'center') {
+        for (const t of targets) {
+          const key = gridCellKey(activeSheet, t.r0, t.c0);
+          styles.set(key, { ...(styles.get(key) ?? {}), a: 'c' });
+        }
+      }
+    });
+    syncCellToolbarState(activeCellKey);
+  }
+  document.getElementById('btn-merge-center')?.addEventListener('click', () => applyMerge('center'));
+  bindDropdown(document.getElementById('merge-dropdown'), (value) => {
+    if (value === 'unmerge') unmergeSelection();
+    else applyMerge(value as 'center' | 'merge' | 'across');
   });
 
   // ---------- 글꼴 이름/크기 ----------

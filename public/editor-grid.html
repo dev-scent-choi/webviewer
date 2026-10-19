@@ -223,6 +223,21 @@
             <button id="btn-cell-align-r" class="icon-btn" title="오른쪽 정렬">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M10 12h10M6 18h14"/></svg>
             </button>
+            <span class="dropdown-btn" id="merge-dropdown">
+              <button id="btn-merge-center" class="icon-btn ribbon-btn-labeled" title="병합하고 가운데 맞춤 — 병합된 칸에서 다시 누르면 병합 해제" aria-pressed="false">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="1"/><path d="M3 9.5h3M18 9.5h3M3 14.5h3M18 14.5h3" stroke-opacity=".55"/><path d="m8.5 12 2-2v4zM15.5 12l-2-2v4z" fill="currentColor" stroke="#2b7cd3"/><path d="M10.5 12h3" stroke="#2b7cd3"/></svg>
+                <span class="ribbon-btn-label">병합하고 가운데 맞춤</span>
+              </button>
+              <button class="dropdown-caret" aria-label="병합 옵션 더 보기">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+              </button>
+              <div class="dropdown-menu" hidden>
+                <button data-value="center">병합하고 가운데 맞춤(C)</button>
+                <button data-value="across">전체 병합(A)</button>
+                <button data-value="merge">셀 병합(M)</button>
+                <button data-value="unmerge">셀 분할(U)</button>
+              </div>
+            </span>
           </div>
         </div>
         <span class="ribbon-group-label">맞춤</span>
@@ -283,13 +298,13 @@
         <div class="ribbon-group-buttons">
           <div class="ribbon-group-buttons-wrap">
             <div class="ribbon-row">
-              <button id="btn-add-row" class="icon-btn icon-btn-insert ribbon-btn-labeled" title="행 추가">
+              <button id="btn-add-row" class="icon-btn icon-btn-insert ribbon-btn-labeled" title="행 삽입 — 선택한 행 위에, 선택한 행 수만큼">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="4.5"/><rect x="3" y="10.5" width="18" height="4.5" stroke-dasharray="2.2 2.2"/><path d="M12 19v4M9.5 21h5" stroke-width="2.2"/></svg>
                 <span class="ribbon-btn-label">행 삽입</span>
               </button>
             </div>
             <div class="ribbon-row">
-              <button id="btn-del-row" class="icon-btn icon-btn-delete ribbon-btn-labeled" title="마지막 행 삭제">
+              <button id="btn-del-row" class="icon-btn icon-btn-delete ribbon-btn-labeled" title="행 삭제 — 선택한 행">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="4.5"/><rect x="3" y="10.5" width="18" height="4.5" stroke-dasharray="2.2 2.2"/><path d="M9.5 21h5" stroke-width="2.2"/></svg>
                 <span class="ribbon-btn-label">행 삭제</span>
               </button>
@@ -297,13 +312,13 @@
           </div>
           <div class="ribbon-group-buttons-wrap">
             <div class="ribbon-row">
-              <button id="btn-add-col" class="icon-btn icon-btn-insert ribbon-btn-labeled" title="열 추가">
+              <button id="btn-add-col" class="icon-btn icon-btn-insert ribbon-btn-labeled" title="열 삽입 — 선택한 열 왼쪽에, 선택한 열 수만큼">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="4.5" height="18"/><rect x="10.5" y="3" width="4.5" height="18" stroke-dasharray="2.2 2.2"/><path d="M19 9.5v5M21.5 12h-5" stroke-width="2.2"/></svg>
                 <span class="ribbon-btn-label">열 삽입</span>
               </button>
             </div>
             <div class="ribbon-row">
-              <button id="btn-del-col" class="icon-btn icon-btn-delete ribbon-btn-labeled" title="마지막 열 삭제">
+              <button id="btn-del-col" class="icon-btn icon-btn-delete ribbon-btn-labeled" title="열 삭제 — 선택한 열">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="4.5" height="18"/><rect x="10.5" y="3" width="4.5" height="18" stroke-dasharray="2.2 2.2"/><path d="M21.5 12h-5" stroke-width="2.2"/></svg>
                 <span class="ribbon-btn-label">열 삭제</span>
               </button>

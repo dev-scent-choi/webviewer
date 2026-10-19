@@ -2654,17 +2654,18 @@ body.home-hidden .doclist-link { display: none !important; }
 .ribbon-btn-labeled { width: auto; min-width: 34px; height: 22px; padding: 0 0.4rem; gap: 0.3rem; }
 .ribbon-btn-label { font-size: 0.7rem; white-space: nowrap; }
 /* 엑셀 홈 탭(.grid-editor-page 한정 — 워드에도 같은 id의 단추가 있다) — 실제 엑셀처럼 창이 좁아지면 작은 단추의 글자를 접고 아이콘만 남긴다(이름은 title로 남는다).
-   1520px 아래에서 클립보드·셀 그룹, 1400px 아래에서 "자동 줄 바꿈", 1330px 아래에서 큰 단추 글자까지(그룹 여백도 줄임) — 그래야 향기랩 화면(약 1400px)에서도
+   1570px 아래에서 클립보드·셀·병합 단추, 1400px 아래에서 "자동 줄 바꿈", 1340px 아래에서 큰 단추 글자까지(그룹 여백도 줄임) — 그래야 향기랩 화면(약 1400px)에서도
    홈 탭이 옆으로 넘치지 않는다(예전 홈 탭처럼 1200px 창까지 한 화면에 들어간다). */
-@media (max-width: 1520px) {
+@media (max-width: 1570px) {
   .grid-editor-page #btn-cut .ribbon-btn-label, .grid-editor-page #btn-copy .ribbon-btn-label,
   .grid-editor-page #btn-add-row .ribbon-btn-label, .grid-editor-page #btn-del-row .ribbon-btn-label,
-  .grid-editor-page #btn-add-col .ribbon-btn-label, .grid-editor-page #btn-del-col .ribbon-btn-label { display: none; }
+  .grid-editor-page #btn-add-col .ribbon-btn-label, .grid-editor-page #btn-del-col .ribbon-btn-label,
+  .grid-editor-page #btn-merge-center .ribbon-btn-label { display: none; }
 }
 @media (max-width: 1399px) {
   .grid-editor-page #btn-wrap-text .ribbon-btn-label { display: none; }
 }
-@media (max-width: 1329px) {
+@media (max-width: 1339px) {
   .grid-editor-page .ribbon-panel[data-panel="home"] .ribbon-group { padding-left: 0.35rem; padding-right: 0.35rem; }
   .grid-editor-page #btn-paste, .grid-editor-page #home-table-style-dropdown .icon-btn-big, .grid-editor-page #home-sort-filter-dropdown .icon-btn-big, .grid-editor-page #btn-find-replace { width: 38px; }
   .grid-editor-page #btn-paste > span, .grid-editor-page #home-table-style-dropdown .icon-btn-big > span,
@@ -2719,6 +2720,8 @@ body.home-hidden .doclist-link { display: none !important; }
    우선순위가 높아져, 드롭다운 캐럿을 붙인 "붙여넣기" 큰 버튼까지 30px로 짜부라뜨려서
    "붙여넣기" 4글자가 한 줄에 못 들어가고 한 글자씩 세로로 줄바꿈되는 버그가 있었다. */
 .dropdown-btn .icon-btn:not(.icon-btn-big) { width: 30px; }
+/* 병합하고 가운데 맞춤(엑셀 홈) — 글자가 붙은 단추라 위의 30px 고정을 풀어야 글자가 옆 단추를 덮지 않는다 */
+#merge-dropdown .ribbon-btn-labeled { width: auto; }
 .dropdown-caret {
   display: inline-flex;
   align-items: center;
