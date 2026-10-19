@@ -1199,9 +1199,11 @@ async function main(): Promise<void> {
     const text = event.clipboardData?.getData('text/plain');
     if (!text) return;
     event.preventDefault();
+    pasteTextAt(text, Number(anchorTd.dataset.row), Number(anchorTd.dataset.col));
+  }
 
-    const startRow = Number(anchorTd.dataset.row);
-    const startCol = Number(anchorTd.dataset.col);
+  /** TSV 글을 (startRow, startCol)부터 칸마다 나눠 넣는다 — Ctrl+V(handlePaste)와 홈 탭 "붙여넣기" 단추가 함께 쓴다. */
+  function pasteTextAt(text: string, startRow: number, startCol: number): void {
     const rows = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
     while (rows.length > 1 && rows[rows.length - 1] === '') rows.pop();
     const grid = rows.map((line) => line.split('\t'));
@@ -2085,16 +2087,7 @@ async function main(): Promise<void> {
       case 'Backspace': {
         if (!canEdit) break;
         event.preventDefault();
-        const { r0, r1, c0, c1 } = rangeBounds();
-        ydoc.transact(() => {
-          for (let r = r0; r <= r1; r += 1) {
-            for (let c = c0; c <= c1; c += 1) {
-              const k = gridCellKey(activeSheet, r, c);
-              if (styles.get(k)?.lk === 1) continue; // 잠긴 칸은 건너뜀(선택 범위에 섞여 있어도 됨)
-              if ((cells.get(k) ?? '') !== '') cells.delete(k);
-            }
-          }
-        });
+        clearSelectionValues();
         break;
       }
       default:
@@ -2551,6 +2544,20 @@ async function main(): Promise<void> {
     isRangeDragging = false;
     document.removeEventListener('mousemove', onRangeDragMove);
     document.removeEventListener('mouseup', onRangeDragEnd);
+  }
+
+  /** 선택 범위의 값을 비운다(Delete 키·홈 탭 "잘라내기"). 잠긴 칸은 건너뛴다. */
+  function clearSelectionValues(): void {
+    const { r0, r1, c0, c1 } = rangeBounds();
+    ydoc.transact(() => {
+      for (let r = r0; r <= r1; r += 1) {
+        for (let c = c0; c <= c1; c += 1) {
+          const k = gridCellKey(activeSheet, r, c);
+          if (styles.get(k)?.lk === 1) continue; // 잠긴 칸은 건너뜀(선택 범위에 섞여 있어도 됨)
+          if ((cells.get(k) ?? '') !== '') cells.delete(k);
+        }
+      }
+    });
   }
 
   /** 지금 선택된 범위를 엑셀과 같은 TSV(탭=열, 줄바꿈=행)로 클립보드에 담는다 — handlePaste가
@@ -3203,6 +3210,31 @@ async function main(): Promise<void> {
     });
   }
   bindDropdown(document.getElementById('table-style-dropdown'), applyTableStyle);
+  // 홈 탭 "스타일"의 표 서식 — 삽입 탭과 같은 함수
+  bindDropdown(document.getElementById('home-table-style-dropdown'), applyTableStyle);
+
+  // ---------- 홈: 클립보드 ----------
+  // 브라우저는 스크립트의 클립보드 읽기를 권한으로 막을 수 있다 — 그때는 워드 편집기처럼 Ctrl+V를 안내한다.
+  document.getElementById('btn-copy')?.addEventListener('click', () => copySelectionToClipboard());
+  document.getElementById('btn-cut')?.addEventListener('click', () => {
+    copySelectionToClipboard();
+    if (canEdit) clearSelectionValues();
+  });
+  document.getElementById('btn-paste')?.addEventListener('click', async () => {
+    if (!canEdit) return;
+    const { r0, c0 } = rangeBounds();
+    let text = '';
+    try {
+      text = await navigator.clipboard.readText();
+    } catch {
+      window.alert('브라우저가 클립보드 읽기를 허용하지 않았습니다. Ctrl+V로 붙여넣으세요.');
+      return;
+    }
+    if (text) pasteTextAt(text, r0, c0);
+  });
+
+  // 홈 탭 "정렬 및 필터" — 데이터 탭의 같은 단추를 누른다(기능·상태는 그 단추 하나에만 있다)
+  bindDropdown(document.getElementById('home-sort-filter-dropdown'), (id) => document.getElementById(id)?.click());
 
   // ---------- 데이터: 정렬·필터 ----------
   const filtersMap = ydoc.getMap<SheetFilter>(GRID_FILTERS_MAP);
