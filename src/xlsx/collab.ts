@@ -691,6 +691,28 @@ const EMPTY_REMOVED_SHEETS: ReadonlySet<number> = new Set<number>();
  * 확장/축소는 `structuralOps`에 기록되지 않으므로 현재 값에서 역산할 수도 없다). 그래서 이 인자는
  * `room.baselineSheetExtents`(seedRoom이 `ingestXlsxLazily` 직후 한 번 스냅샷)로 그대로 유지한다.
  */
+/** exportXlsxFromGrid 참고 — mergesEdited 시트의 병합을 모두 풀고 sheetMeta.merges(1부터 센 좌표)로 다시 건다. */
+export function applyEditedMerges(
+  store: Pick<LazyGridStore, 'sheetMeta'>,
+  sheets: ReadonlyArray<ExcelJS.Worksheet | undefined>,
+  removedSheets: ReadonlySet<number>,
+): void {
+  store.sheetMeta.forEach((meta, sheetIdx) => {
+    const sheet = sheets[sheetIdx];
+    if (!meta.mergesEdited || !sheet || removedSheets.has(sheetIdx)) return;
+    const existing = Object.values((sheet as unknown as { _merges: Record<string, { range: string }> })._merges).map((m) => m.range);
+    for (const range of existing) sheet.unMergeCells(range);
+    for (const m of meta.merges) {
+      if (m.rs < 1 || m.cs < 1 || (m.rs === 1 && m.cs === 1)) continue;
+      try {
+        sheet.mergeCells(m.r, m.c, m.r + m.rs - 1, m.c + m.cs - 1);
+      } catch {
+        // 겹치는 병합(정상 편집기로는 만들 수 없다) — 그 하나만 건너뛰고 나머지는 저장한다
+      }
+    }
+  });
+}
+
 export async function exportXlsxFromGrid(
   originalXlsxBytes: Uint8Array,
   store: LazyGridStore,
@@ -863,6 +885,11 @@ export async function exportXlsxFromGrid(
       filtersByName.set(sheet.name, filter);
     }
   }
+
+  // 편집기에서 병합을 바꾼 시트(병합하고 가운데 맞춤·셀 분할)만 병합을 sheetMeta.merges 그대로 다시 쓴다 — 병합을
+  // 건드리지 않은 시트는 예전과 똑같이 원본(과 구조 연산 재생) 그대로 둔다. 값 쓰기가 다 끝난 **뒤에** 한다: ExcelJS는
+  // 병합된 칸에 값을 쓰면 왼쪽 위 칸으로 넘겨 쓰므로, 먼저 병합하면 지운 칸의 빈 값이 왼쪽 위 값을 덮는다.
+  applyEditedMerges(store, visibleSheets, removedSheets);
 
   for (let i = 0; i < visibleSheets.length; i += 1) {
     if (removedSheets.has(i)) continue; // 이미 워크북에서 제거된 시트 — 다시 잠글 대상이 아니다

@@ -46,6 +46,8 @@ export interface LazyGridSheetMeta {
   rowHeights: RowHeightRuns;
   showGridLines: boolean;
   merges: readonly GridMerge[];
+  /** 편집기에서 병합을 바꾼 적이 있으면 true — 저장할 때 이 시트의 병합만 merges 그대로 다시 쓴다(collab.ts exportXlsxFromGrid) */
+  mergesEdited?: boolean;
   freezeRows: number;
   freezeCols: number;
 }

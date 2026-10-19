@@ -51,6 +51,9 @@ export async function exportXlsxFromGridStreaming(
   structuralOps: readonly GridStructureOpRecord[],
   options: XlsxExportOptions = {},
 ): Promise<Uint8Array> {
+  if (store.sheetMeta.some((meta) => meta.mergesEdited)) {
+    throw new Error('대용량 파일 스트리밍 저장은 편집기에서 바꾼 병합을 아직 지원하지 않습니다 (mergesEdited).');
+  }
   if (structuralOps.length > 0) {
     throw new Error(
       '대용량 파일 스트리밍 저장은 행/열 삽입·삭제를 아직 지원하지 않습니다 (structuralOps.length > 0).',

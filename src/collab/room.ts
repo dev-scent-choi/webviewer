@@ -1482,6 +1482,20 @@ async function seedRoom(room: Room): Promise<void> {
         if (event.transaction.origin === GRID_STRUCTURE_SHIFT_ORIGIN) return;
         applyStructureChangeToCanonical(room, structure, event);
       });
+      // 병합(병합하고 가운데 맞춤·셀 분할) — 편집기가 고친 병합을 시트 메타데이터에 반영한다. 그래야 (1) 저장 파일에
+      // 쓰이고 (2) 뒤이은 행/열 삽입·삭제(applyGridStructureOp)가 옛 병합으로 Yjs를 덮어쓰지 않는다. 서버 자신의
+      // 시딩과 구조 연산이 쓴 값은 이미 메타데이터에서 나온 것이라 건너뛴다.
+      const mergesMap = ydoc.getMap<readonly GridMergeShape[]>(GRID_MERGES_MAP);
+      mergesMap.observe((event) => {
+        const origin = event.transaction.origin;
+        if (origin === GRID_WINDOW_SEED_ORIGIN || origin === GRID_STRUCTURE_SHIFT_ORIGIN) return;
+        for (const key of event.keysChanged) {
+          const meta = lazyStore.sheetMeta[Number(key)];
+          if (!meta) continue;
+          meta.merges = (mergesMap.get(key) ?? []).map((m) => ({ r: m.r, c: m.c, rs: m.rs, cs: m.cs }));
+          meta.mergesEdited = true;
+        }
+      });
       // 예전에는 여기서 모든 시트를 한 번 통째로 재계산했다 — 윈도잉 이후에는 그 시점에 구독
       // 중인 페이지가 하나도 없어(=Yjs에 아무 셀도 없어) 계산해 둘 곳도, 그걸 볼 사람도 없다.
       // 원본 파일에 이미 있던 수식의 최초 계산값은 그 페이지가 처음 구독되는 순간
