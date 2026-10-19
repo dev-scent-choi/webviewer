@@ -342,11 +342,74 @@ const ROUNDED_ALIAS: Record<string, string> = {
   flowChartTerminator: 'stadium',
 };
 
+/** PowerPoint 점선 모양 — 선 두께의 배수로 [칠함, 빔, …] (ECMA-376 ST_PresetLineDashVal 정의).
+ * CSS dotted/dashed는 점·대시 길이를 브라우저가 정해 원본과 달라 보였다. */
+const PRESET_DASH: Record<string, readonly number[]> = {
+  dot: [1, 3],
+  dash: [4, 3],
+  lgDash: [8, 3],
+  dashDot: [4, 3, 1, 3],
+  lgDashDot: [8, 3, 1, 3],
+  lgDashDotDot: [8, 3, 1, 3, 1, 3],
+  sysDot: [1, 1],
+  sysDash: [3, 1],
+  sysDashDot: [3, 1, 1, 1],
+  sysDashDotDot: [3, 1, 1, 1, 1, 1],
+};
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+/** 네 모서리 반지름이 각각인 둥근 사각형 경로(선 가운데 기준) */
+function roundedRectPath(x: number, y: number, w: number, h: number, [tl, tr, br, bl]: readonly number[]): string {
+  const c = (r: number) => Math.max(0, Math.min(r, w / 2, h / 2));
+  const [a, b, d, e] = [c(tl), c(tr), c(br), c(bl)];
+  return [
+    `M${x + a},${y}`, `H${x + w - b}`, b ? `A${b},${b} 0 0 1 ${x + w},${y + b}` : '',
+    `V${y + h - d}`, d ? `A${d},${d} 0 0 1 ${x + w - d},${y + h}` : '',
+    `H${x + e}`, e ? `A${e},${e} 0 0 1 ${x},${y + h - e}` : '',
+    `V${y + a}`, a ? `A${a},${a} 0 0 1 ${x + a},${y}` : '', 'Z',
+  ].join(' ');
+}
+
+/** 점선 테두리 — SVG 선으로 원본과 같은 점·대시 길이로 그린다. 선은 상자 가장자리 가운데에 걸친다. */
+function applyDashedStroke(el: HTMLElement, visual: SlideVisual, pattern: readonly number[], width: number): void {
+  const w = emuToPx(visual.w ?? 0);
+  const h = emuToPx(visual.h ?? 0);
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  svg.classList.add('slide-visual-stroke');
+  svg.setAttribute('width', String(w));
+  svg.setAttribute('height', String(h));
+  const geom = ROUNDED_ALIAS[visual.geom ?? ''] ?? visual.geom;
+  let shape: SVGElement;
+  if (geom === 'ellipse') {
+    shape = document.createElementNS(SVG_NS, 'ellipse');
+    shape.setAttribute('cx', String(w / 2));
+    shape.setAttribute('cy', String(h / 2));
+    shape.setAttribute('rx', String(w / 2));
+    shape.setAttribute('ry', String(h / 2));
+  } else {
+    const radii = visual.corners?.map(emuToPx) ?? (geom === 'stadium' ? [h / 2, h / 2, h / 2, h / 2] : [0, 0, 0, 0]);
+    shape = document.createElementNS(SVG_NS, 'path');
+    shape.setAttribute('d', roundedRectPath(0, 0, w, h, radii));
+  }
+  shape.setAttribute('fill', 'none');
+  shape.setAttribute('stroke', visual.stroke!.color);
+  shape.setAttribute('stroke-width', String(width));
+  shape.setAttribute('stroke-dasharray', pattern.map((n) => n * width).join(' '));
+  svg.append(shape);
+  el.style.overflow = 'visible';
+  el.append(svg);
+}
+
 /** 도형·그림의 테두리 — PowerPoint 선은 가장자리 가운데에 걸치므로 두께만큼 바깥으로 반씩 넓혀
- * 같은 자리에 그린다(안쪽 내용 크기는 그대로). */
+ * 같은 자리에 그린다(안쪽 내용 크기는 그대로). 점선은 SVG로(applyDashedStroke). */
 function applyVisualStroke(el: HTMLElement, visual: SlideVisual): void {
   if (!visual.stroke) return;
   const width = Math.max(1, emuToPx(visual.stroke.width));
+  const pattern = visual.stroke.prstDash ? PRESET_DASH[visual.stroke.prstDash] : undefined;
+  if (pattern) {
+    applyDashedStroke(el, visual, pattern, width);
+    return;
+  }
   el.style.border = `${width}px ${visual.stroke.dash} ${visual.stroke.color}`;
   el.style.boxSizing = 'border-box';
   el.style.left = `${emuToPx(visual.x ?? 0) - width / 2}px`;
@@ -381,6 +444,12 @@ function renderSlideVisual(visual: SlideVisual, pageImageUrl: string | null): HT
       const clip = PRESET_CLIP[visual.geom];
       if (clip) el.style.clipPath = clip;
       else el.classList.add(`slide-shape-${ROUNDED_ALIAS[visual.geom] ?? visual.geom}`);
+    }
+    // 둥근 사각형 계열은 원본 조정값으로 계산한 실제 반지름 — 클래스의 비율 반지름보다 우선한다
+    // (adj 0인 "둥근 사각형"은 직각으로 보여야 한다). 예전 시딩 데이터엔 없어 클래스 값을 쓴다.
+    if (visual.corners) {
+      const grow = visual.stroke && !visual.stroke.prstDash ? Math.max(1, emuToPx(visual.stroke.width)) / 2 : 0;
+      el.style.borderRadius = visual.corners.map((r) => `${r ? emuToPx(r) + grow : 0}px`).join(' ');
     }
   } else if (visual.kind === 'table' && visual.rows) {
     for (const row of visual.rows) {
@@ -523,6 +592,8 @@ function renderCanvasForSlideInner(entryId: string): void {
       // 리본 "도형"으로 넣은 도형 — 저장 파일의 prstGeom/solidFill과 같은 모양으로 그린다.
       box.classList.add('slide-shape', `slide-shape-${meta.geom}`);
       if (meta.fill && /^#[0-9A-Fa-f]{6}$/.test(meta.fill)) box.style.background = meta.fill;
+      // 저장 파일의 roundRect 기본 조정값(16667) — 짧은 변의 1/6 반지름(가로세로 비율로 찌그러지지 않게)
+      if (meta.geom === 'roundRect' && meta.w && meta.h) box.style.borderRadius = `${emuToPx(Math.min(meta.w, meta.h) / 6)}px`;
     }
     canvasEl.append(box);
 
@@ -585,6 +656,9 @@ function renderCanvasForSlideInner(entryId: string): void {
     // 크기·정렬과 상자 안 세로 맞춤. 도형(geom)은 클래스가 이미 세로 가운데를 맡는다.
     if (meta.anchor && !meta.geom) box.classList.add(`slide-anchor-${meta.anchor}`);
     if (meta.wrapNone) box.classList.add('slide-nowrap');
+    // 원본의 안쪽 여백(bodyPr lIns/tIns/rIns/bIns, 레이아웃·마스터 상속) — 기본 여백과 다를 때만 온다.
+    // 예전엔 늘 기본 여백이라 lIns="0"인 제목이 오른쪽·아래로 밀려 보였다.
+    if (meta.insets) box.style.padding = meta.insets.map((emu) => `calc(${emu / 12700} * var(--slide-pt, 1pt))`).join(' ');
     // 번호 원·배지처럼 기본 안쪽 여백(좌우 0.1인치)보다 작은 도형 — 여백이 글자 칸을 음수로 만들어
     // 글자가 한쪽으로 밀려 도형 밖에 걸렸다. PowerPoint처럼 도형 가운데에 한 줄로 놓는다.
     if (meta.w !== null && meta.h !== null && meta.w !== undefined && meta.h !== undefined && meta.w < TINY_SHAPE_EMU && meta.h < TINY_SHAPE_EMU) {

@@ -537,6 +537,42 @@ export function readSlideSizeEmu(zipEntries: Record<string, Uint8Array>): { cx: 
   return cx > 0 && cy > 0 ? { cx, cy } : { cx: SLIDE_WIDTH_EMU, cy: SLIDE_HEIGHT_EMU };
 }
 
+/** 프리셋 모양의 조정값(<a:avLst><a:gd name fmla="val N">) — 없으면 undefined */
+function geomAdjust(spPr: XmlNode | undefined, name: string): number | undefined {
+  const avLst = (spPr?.['a:prstGeom'] as XmlNode | undefined)?.['a:avLst'] as XmlNode | undefined;
+  for (const gd of asArray<XmlNode>(avLst?.['a:gd'] as XmlNode | XmlNode[] | undefined)) {
+    if (gd['@_name'] !== name) continue;
+    const m = /^val\s+(-?\d+)$/.exec(String(gd['@_fmla'] ?? ''));
+    if (m) return Number(m[1]);
+  }
+  return undefined;
+}
+
+/**
+ * 둥근 사각형 계열의 모서리 반지름(EMU, [왼위, 오른위, 오른아래, 왼아래]) — OOXML 프리셋 정의대로
+ * 짧은 변 × adj/100000(최대 절반). roundRect 기본 adj 16667, round2SameRect는 위 adj1(16667)·아래 adj2(0),
+ * flowChartAlternateProcess는 짧은 변의 1/6 고정. 그 밖의 모양은 undefined.
+ */
+export function cornerRadiiOf(geom: string | undefined, spPr: XmlNode | undefined, w: number | null, h: number | null): [number, number, number, number] | undefined {
+  if (w === null || h === null) return undefined;
+  const ss = Math.min(w, h);
+  const r = (adj: number) => Math.round((ss * Math.max(0, Math.min(50000, adj))) / 100000);
+  if (geom === 'roundRect') {
+    const v = r(geomAdjust(spPr, 'adj') ?? 16667);
+    return [v, v, v, v];
+  }
+  if (geom === 'round2SameRect') {
+    const top = r(geomAdjust(spPr, 'adj1') ?? 16667);
+    const bottom = r(geomAdjust(spPr, 'adj2') ?? 0);
+    return [top, top, bottom, bottom];
+  }
+  if (geom === 'flowChartAlternateProcess') {
+    const v = Math.round(ss / 6);
+    return [v, v, v, v];
+  }
+  return undefined;
+}
+
 function presetGeomFromSpPr(spPr: XmlNode | undefined): string | undefined {
   const prst = (spPr?.['a:prstGeom'] as XmlNode | undefined)?.['@_prst'];
   return typeof prst === 'string' && prst !== 'rect' && /^[A-Za-z0-9]+$/.test(prst) ? prst : undefined;
@@ -618,7 +654,7 @@ function strokeFromSpPr(spPr: XmlNode | undefined, theme?: ThemeColors, style?: 
   const width = Number(ln?.['@_w'] ?? 9525) || 9525;
   const prstDash = String((ln?.['a:prstDash'] as XmlNode | undefined)?.['@_val'] ?? 'solid');
   const dash = prstDash === 'solid' ? 'solid' : /dot/i.test(prstDash) && !/dash/i.test(prstDash) ? 'dotted' : 'dashed';
-  return { color, width, dash };
+  return { color, width, dash, ...(prstDash === 'solid' ? {} : { prstDash }) };
 }
 
 /** 회전(<a:xfrm rot>, 1/60000도)이 걸린 개체가 실제로 차지하는 영역 — 원본 렌더링에서 잘라 올 때 쓴다.
@@ -836,11 +872,13 @@ export function parseSlideVisuals(zipEntries: Record<string, Uint8Array>, source
         continue;
       }
       if (!fill && !(stroke && STROKABLE_GEOMS.has(geom) && !custom)) continue;
+      const corners = custom ? undefined : cornerRadiiOf(geom, spPr, pos.w, pos.h);
       push(sp, 'p:nvSpPr', {
         kind: 'shape',
         ...pos,
         fill,
         ...(geom ? { geom } : {}),
+        ...(corners ? { corners } : {}),
         ...(stroke && STROKABLE_GEOMS.has(geom) && !custom ? { stroke } : {}),
       });
     }

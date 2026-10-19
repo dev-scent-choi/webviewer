@@ -1479,7 +1479,7 @@ body.home-hidden .doclist-link { display: none !important; }
 /* 번호 원·배지(아주 작은 글자 도형) — 여백 없이 가운데 한 줄. 문단 줄 높이를 글자 자신의 크기로
    잡아(기본 18pt 줄 높이가 작은 글자를 아래로 밀어내지 않게) 도형 정가운데에 놓는다. */
 .slide-textbox.slide-textbox-tiny {
-  padding: 0;
+  padding: 0 !important; /* 원본 안쪽 여백(인라인)보다 우선 — 배지는 가운데 한 줄 */
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -1505,7 +1505,9 @@ body.home-hidden .doclist-link { display: none !important; }
 /* 타원의 글자 영역은 PowerPoint처럼 내접 사각형(좌우 약 15%씩 안쪽) — 곡선에 글자가 잘리지 않게.
    (flex 컨테이너에 % padding을 주면 글자 영역 폭이 0으로 계산돼 입력 자체가 안 됐다 — 실측) */
 .slide-shape-ellipse > .ProseMirror { width: 70%; margin: 0 auto; }
+/* 둥근 사각형의 실제 반지름은 JS가 크기로 계산해 인라인으로 준다(짧은 변 × 조정값). 이 값은 예전 데이터용 근사. */
 .slide-shape-roundRect { border-radius: 16%/26%; }
+.slide-visual-stroke { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
 .slide-shape-ellipse { border-radius: 50%; }
 .slide-shape-stadium { border-radius: 9999px; }
 
