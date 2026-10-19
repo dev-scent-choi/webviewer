@@ -34,6 +34,7 @@ import { invalidateRenderCache } from '../rendering.js';
 import { convertToPdf } from '../routes/documents.js';
 import { invalidateViewCaches } from '../routes/viewer.js';
 import { store } from '../storage.js';
+import { waitForInitialConversion } from '../conversionGate.js';
 import {
   saveGridDerived,
   yieldToEventLoop,
@@ -1645,6 +1646,8 @@ async function flushToStore(room: Room): Promise<void> {
 
     const converter = findConverter(meta.ext);
     if (converter) {
+      // 업로드 직후 첫 변환(편집 전 원본)이 아직 돌고 있으면 끝나길 기다린다 — 그게 나중에 끝나 새 PDF를 덮지 않게
+      await waitForInitialConversion(docId);
       try {
         const { pageCount } = await convertToPdf(meta, converter);
         await store.writeMeta({ ...meta, pageCount, status: 'ready', viewKind: 'pages', progress: 100 });

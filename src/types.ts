@@ -23,6 +23,8 @@ export interface DocumentMeta {
   /** 변환 단계 진행률(0~100). 서버가 단계별로 기록한다. */
   readonly progress?: number;
   readonly error?: string;
+  /** 변환(PDF)이 끝나기 전에도 편집기를 열 수 있다 — 워드(docx) 편집기는 원본만 읽는다(conversionGate.ts) */
+  readonly editReady?: boolean;
 }
 
 export interface ViewClaims {
