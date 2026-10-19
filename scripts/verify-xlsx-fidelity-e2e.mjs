@@ -129,7 +129,7 @@ for (const mode of ['viewer', 'editor']) {
     return {
       wrapLines: el ? Math.round(el.getBoundingClientRect().height / 18) : 0,
       vtop: document.querySelector(topSel) ? getComputedStyle(document.querySelector(topSel)).verticalAlign : null,
-      border: document.querySelector(borderSel) ? getComputedStyle(document.querySelector(borderSel)).borderTopStyle : null,
+      border: document.querySelector(borderSel) ? getComputedStyle(document.querySelector(borderSel)).borderBottomStyle : null,
       noGrid: table?.classList.contains('g-no-gridlines'),
       images: document.querySelectorAll(m === 'viewer' ? '#grid-image-layer img' : '.grid-chart-layer img.grid-image').length,
     };
@@ -139,6 +139,28 @@ for (const mode of ['viewer', 'editor']) {
   rec(`[${mode}] 칸 테두리(실선)`, info.border === 'solid', info.border);
   rec(`[${mode}] 격자선 숨김 시트`, info.noGrid === true);
   rec(`[${mode}] 그림 표시`, info.images === 1, String(info.images));
+  // 맞닿은 두 칸의 테두리가 겹쳐 두 배로 굵어지지 않는다 — 4행/5행(둘 다 테두리) 경계선과 C/D열 경계선을 화면 픽셀로 잰다
+  const darkPixels = async (x, y, w, h) => {
+    const png = await page.screenshot({ clip: { x: Math.round(x), y: Math.round(y), width: w, height: h } });
+    return page.evaluate(async (b64) => {
+      const img = new Image();
+      img.src = `data:image/png;base64,${b64}`;
+      await img.decode();
+      const canvas = document.createElement('canvas');
+      canvas.width = img.width;
+      canvas.height = img.height;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0);
+      const data = ctx.getImageData(0, 0, img.width, img.height).data;
+      let n = 0;
+      for (let i = 0; i < data.length; i += 4) if ((data[i] + data[i + 1] + data[i + 2]) / 3 < 120) n += 1;
+      return n;
+    }, png.toString('base64'));
+  };
+  const c5 = await box(5, 3);
+  const hLine = await darkPixels(c5.x + 4, c5.y - 6, 1, 12);
+  const vLine = await darkPixels(c5.x + c5.width - 6, c5.y + c5.height / 2, 12, 1);
+  rec(`[${mode}] 맞닿은 테두리 1px(두 배로 굵지 않음)`, hLine === 1 && vLine === 1, `가로 ${hLine}px, 세로 ${vLine}px`);
   await page.screenshot({ path: path.join(shotDir, `${mode}.png`) });
   const tabSel = mode === 'viewer' ? '.grid-sheet-tab' : '#sheet-tabs .grid-sheet-tab';
   rec(`[${mode}] 둘째 시트 탭이 있다`, (await page.locator(tabSel).count()) >= 2);
