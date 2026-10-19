@@ -27,6 +27,13 @@ const JOB_TIMEOUT_MS = 120_000;
 const START_TIMEOUT_MS = 90_000;
 /** 띄우기에 실패하면 이만큼 지난 뒤에야 다시 시도한다(그동안은 예전 방식) */
 const RETRY_AFTER_FAILURE_MS = 10 * 60_000;
+/** DOCVIEW_LO_WORKER_DEBUG=1이면 변환마다 어느 길로 갔는지 남긴다(운영 기본은 조용히) */
+const DEBUG = process.env.DOCVIEW_LO_WORKER_DEBUG === '1';
+
+function debugSkip(src: string, reason: string): false {
+  if (DEBUG) console.info(`[상주 변환기] ${path.basename(src)} → 예전 방식(${reason})`);
+  return false;
+}
 
 type FilterData = Readonly<Record<string, boolean | string | number>>;
 
@@ -43,6 +50,8 @@ export class LibreOfficeWorker {
   private job: Job | null = null;
   /** 결과를 돌려준 뒤 문서를 닫고 soffice가 멀쩡한지 확인하는 중 — 그동안은 새 변환을 맡지 않는다(예전 방식으로) */
   private settling = false;
+  /** 띄우기를 마치고 연결된 상태 — 아직이면 변환을 기다리게 하지 않고 예전 방식으로 보낸다 */
+  private isReady = false;
   private nextId = 1;
   private jobsDone = 0;
   private failedAt = 0;
@@ -69,8 +78,14 @@ export class LibreOfficeWorker {
     } catch {
       return false;
     }
-    if (this.job || this.settling) return false; // 다른 변환 중이거나 뒷정리 중 — 기다리지 않는다
-    if (!(await this.ensureStarted()) || this.job || this.settling || !this.child) return false;
+    if (this.job || this.settling) return debugSkip(src, this.job ? '다른 변환 중' : '뒷정리 중');
+    // 아직 띄우는 중이면(첫 프로필 생성·스스로 다시 켜짐은 10초 넘게 걸린다 — 실측: 그동안 첫 변환이 12초를 기다렸다)
+    // 기다리지 않고 예전 방식으로 보내고, 띄우기는 뒤에서 계속한다
+    if (!this.isReady || !this.child) {
+      void this.ensureStarted();
+      return debugSkip(src, '아직 준비 안 됨');
+    }
+    const began = Date.now();
     const id = this.nextId++;
     const ok = await new Promise<boolean>((resolve) => {
       const timer = setTimeout(() => {
@@ -83,6 +98,7 @@ export class LibreOfficeWorker {
       this.child!.stdin.write(`${JSON.stringify({ id, src, out, filterData })}\n`);
     });
     this.jobsDone += 1;
+    if (DEBUG) console.info(`[상주 변환기] ${path.basename(src)} ${ok ? '성공' : '실패'} ${Date.now() - began}ms`);
     if (this.jobsDone >= WORKER_JOBS_BEFORE_RESTART) this.kill();
     return ok;
   }
@@ -106,6 +122,8 @@ export class LibreOfficeWorker {
           this.failedAt = Date.now();
           this.kill();
         }
+        this.isReady = ok;
+        if (DEBUG) console.info(`[상주 변환기] 준비 ${ok ? '됨' : '실패'}`);
         resolve(ok);
       };
       this.onReady = finishStart;
@@ -118,6 +136,7 @@ export class LibreOfficeWorker {
           this.child = null;
           this.ready = null;
           this.settling = false;
+          this.isReady = false;
         }
         this.onReady?.(false);
         const job = this.job;
@@ -171,6 +190,7 @@ export class LibreOfficeWorker {
     this.ready = null;
     this.buffer = '';
     this.settling = false;
+    this.isReady = false;
     if (!child) return;
     try {
       child.stdin.end();
@@ -186,9 +206,11 @@ export class LibreOfficeWorker {
   }
 }
 
-/** LibreOffice와 함께 깔린 python(uno 모듈 포함)과 변환기 스크립트가 있을 때만 만든다. DOCVIEW_LO_WORKER=0이면 끈다. */
+/** LibreOffice와 함께 깔린 python(uno 모듈 포함)과 변환기 스크립트가 있을 때만 만든다.
+ * 아직 기본은 꺼 둔다(DOCVIEW_LO_WORKER=1로 켬) — soffice가 첫 실제 변환 뒤 스스로 다시 켜지는 동작 때문에
+ * 운영에서 첫 변환이 오히려 12초까지 늘었다(2026-10-19). 안정화를 마치면 기본으로 켠다. */
 export function createLibreOfficeWorker(sofficePath: string | null): LibreOfficeWorker | null {
-  if (!sofficePath || process.env.DOCVIEW_LO_WORKER === '0') return null;
+  if (!sofficePath || process.env.DOCVIEW_LO_WORKER !== '1') return null;
   const programDir = path.dirname(sofficePath);
   const python = [path.join(programDir, 'python.exe'), path.join(programDir, 'python')].find((p) => existsSync(p));
   const script = path.join(path.dirname(fileURLToPath(import.meta.url)), 'loWorker.py');

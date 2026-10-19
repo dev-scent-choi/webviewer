@@ -301,6 +301,7 @@ async function convertWithSoffice(
     throw new Error('LibreOffice(soffice)를 찾을 수 없습니다.');
   }
   const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'docview-lo-'));
+  let cleanupInBackground = false;
   try {
     // LibreOffice가 문서 머리글에 UUID 대신 원래 파일명을 쓰도록 표시용 이름으로 복사해 변환한다.
     const ext = path.extname(sourcePath).slice(1).toLowerCase();
@@ -326,6 +327,9 @@ async function convertWithSoffice(
       try {
         await fs.access(produced);
         await fs.copyFile(produced, targetPdfPath);
+        // 상주 변환기는 응답한 뒤에 문서를 닫으므로 원본 사본이 잠시 잠겨 있다 — 지우기를 기다리면 잠금이 풀릴 때까지
+        // 재시도하느라 변환이 10초 넘게 늘었다(실측: 닫다가 soffice가 다시 켜지는 pptx). 뒤에서 지운다.
+        cleanupInBackground = true;
         return;
       } catch {
         /* 산출물이 없으면 아래 예전 방식으로 */
@@ -359,9 +363,15 @@ async function convertWithSoffice(
     // 경우가 있어, 짧게 재시도한다. 상주 변환기는 응답을 먼저 보내고 문서를 닫으므로(큰 문서는 닫는 데 수 초)
     // 원본 사본이 잠시 잠겨 있을 수 있다 — 그래도 변환은 이미 끝났으니 실패로 치지 않는다. 남은 폴더는
     // 임시 폴더 청소(src/tempSweep.ts)가 지운다.
-    await fs.rm(workDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }).catch(() => {
+    const removeLater = () =>
       setTimeout(() => void fs.rm(workDir, { recursive: true, force: true }).catch(() => undefined), 20_000).unref();
-    });
+    if (cleanupInBackground) {
+      // 바로 지우면 soffice가 아직 닫고 있는 문서의 폴더(잠금 파일 포함)를 건드려, 닫다가 soffice가 다시 켜지는
+      // 일이 거의 매번 생겼다 — 닫을 시간을 준 뒤에 지운다
+      setTimeout(() => void fs.rm(workDir, { recursive: true, force: true }).catch(removeLater), 15_000).unref();
+    } else {
+      await fs.rm(workDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }).catch(removeLater);
+    }
   }
 }
 
