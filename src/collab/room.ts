@@ -158,6 +158,12 @@ const MESSAGE_PAGE_SUBSCRIBE = 2;
  */
 const MESSAGE_GRID_STRUCTURE_OP = 4;
 const MESSAGE_SLIDE_CONTENT_SUBSCRIBE = 5;
+/**
+ * 서버 → 편집기: "이 시트의 이 페이지들은 다 채웠다"(JSON {sheet, pages}). 편집기는 구독(요청)만 알고 실제 도착은
+ * 몰라서, 데이터가 오기 전 빈 칸을 그대로 보여 주고(로딩 표시 없음) 필터 값 목록도 비어 보였다. 이 알림으로
+ * 로딩 표시를 끄고, 필터·정렬은 도착한 데이터로만 계산한다.
+ */
+const MESSAGE_PAGES_READY = 6;
 
 const AUTOSAVE_IDLE_MS = 8_000;
 const PING_INTERVAL_MS = 30_000;
@@ -287,6 +293,8 @@ interface Room {
   /** xlsx 룸에서만 쓰인다 — 연결별로 "지금 이 시트의 이 페이지들을 보고 있다"를 추적한다.
    * 연결이 끊기면(closeConn) 이 맵에서 즉시 제거한다. */
   readonly pageSubscriptions: Map<WebSocket, { sheet: number; pages: readonly number[] }>;
+  /** xlsx 룸 — 시트별로 지금 Yjs에 실제로 채워 둔 페이지(빈 페이지 포함). 편집기에 "준비됨"을 알릴 때 쓴다. */
+  readonly loadedPages: Map<number, Set<number>>;
   /**
    * pptx 룸에서만 쓰인다 — 지금 진행 중인(아직 안 끝난) 슬라이드 콘텐츠 시딩 Promise,
    * slideEntryId별로 최대 하나씩(FINAL REVIEW I1). seedSlideContentIfNeeded가 실제 작업을
@@ -1848,6 +1856,7 @@ function getOrCreateRoom(docId: string, ext: string): Room {
     removedSheetIndices: new Set<number>(),
     sheetDisplayOrder: new Map<number, number>(),
     pageSubscriptions: new Map(),
+    loadedPages: new Map(),
     canonicalGrowth: Promise.resolve(),
     backgroundWork: new Set<Promise<void>>(),
     pendingSlideSeeds: new Map(),
@@ -2548,6 +2557,10 @@ async function reconcilePageSubscriptions(
     if (before.has(page)) continue;
     await seedGridPageFromXlsx(room.ydoc, lazyStore, sheet, page);
     await recomputeFormulasForPage(room, sheet, page);
+    loadedPagesOf(room, sheet).add(page);
+    // 한 페이지 채울 때마다 알린다 — 필터 범위처럼 여러 페이지를 한꺼번에 구독해도 화면에 보이는 페이지가 먼저
+    // 준비됐다고 편집기가 알 수 있게(전부 끝날 때까지 로딩 표시가 남지 않게)
+    notifyPagesReady(room, sheet);
   }
 
   // 3) 빠진 페이지의 지연 제거를 예약한다.
@@ -2570,6 +2583,7 @@ async function reconcilePageSubscriptions(
         // 있어도 여기서 한 번 더 확인해 "보고 있는 페이지를 비우는" 사고를 막는다.
         if (getSubscribedPageUnion(room, sheet).has(page)) return;
         const rowCount = room.lazyGrid.sheetMeta[sheet]?.rowCount ?? 0;
+        loadedPagesOf(room, sheet).delete(page);
         void unseedGridPageFromXlsx(room.ydoc, sheet, page, rowCount).catch((error: unknown) => {
           console.error(`페이지 비우기 실패 (문서 ${room.docId}, 시트 ${sheet}, 페이지 ${page}):`, error);
         });
@@ -2590,10 +2604,35 @@ async function reconcilePageSubscriptions(
 function reconcileInBackground(room: Room, sheet: number, before: Set<number>, after: Set<number>): void {
   trackBackgroundWork(
     room,
-    reconcilePageSubscriptions(room, sheet, before, after).catch((error: unknown) => {
-      console.error(`페이지 구독 반영 실패 (문서 ${room.docId}, 시트 ${sheet}):`, error);
-    }),
+    reconcilePageSubscriptions(room, sheet, before, after)
+      .catch((error: unknown) => {
+        console.error(`페이지 구독 반영 실패 (문서 ${room.docId}, 시트 ${sheet}):`, error);
+      })
+      .then(() => notifyPagesReady(room, sheet)),
   );
+}
+
+function loadedPagesOf(room: Room, sheet: number): Set<number> {
+  let set = room.loadedPages.get(sheet);
+  if (!set) {
+    set = new Set();
+    room.loadedPages.set(sheet, set);
+  }
+  return set;
+}
+
+/** 이 시트를 보는 연결마다, 구독한 페이지 중 이미 채워진 것을 알린다(MESSAGE_PAGES_READY). Yjs 갱신은 채우는
+ * 즉시 같은 연결로 먼저 나가므로, 이 알림을 받은 편집기는 그 페이지의 데이터를 이미 갖고 있다. */
+function notifyPagesReady(room: Room, sheet: number): void {
+  if (rooms.get(room.docId) !== room) return;
+  const loaded = loadedPagesOf(room, sheet);
+  for (const [conn, subscription] of room.pageSubscriptions) {
+    if (subscription.sheet !== sheet) continue;
+    const encoder = encoding.createEncoder();
+    encoding.writeVarUint(encoder, MESSAGE_PAGES_READY);
+    encoding.writeVarString(encoder, JSON.stringify({ sheet, pages: subscription.pages.filter((p) => loaded.has(p)) }));
+    send(room, conn, encoding.toUint8Array(encoder));
+  }
 }
 
 /**

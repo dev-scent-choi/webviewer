@@ -74,6 +74,11 @@ async function buildFixture() {
   ws2.getCell('A1').value = '둘째 시트';
   // 표(표 서식) — 필터 단추는 시트가 아니라 표 정의에 있다
   ws2.addTable({ name: '표1', ref: 'A3', headerRow: true, columns: [{ name: '이름', filterButton: true }, { name: '값', filterButton: true }], rows: [['a', 1], ['b', 2]] });
+  // 여러 페이지(500행 단위)에 걸친 필터 — 편집기가 화면 근처만 받아 오므로, 뒤쪽 행에만 있는 값이 목록에서 빠지던 문제
+  const ws3 = wb.addWorksheet('긴목록');
+  ws3.addRow(['번호', '상태']);
+  for (let i = 1; i <= 1200; i += 1) ws3.addRow([i, i > 1150 ? '끝쪽값' : ['양호', '불량'][i % 2]]);
+  ws3.autoFilter = 'A1:B1201';
   return Buffer.from(await wb.xlsx.writeBuffer());
 }
 
@@ -184,6 +189,15 @@ for (const mode of ['viewer', 'editor']) {
     const where = await page.evaluate(() => [document.querySelector('#sheet-tabs .grid-sheet-tab.active')?.textContent, document.activeElement?.dataset?.row, document.activeElement?.dataset?.col].join(':'));
     rec('[editor] 바로가기 클릭 → 둘째 시트 B4로 이동', where === '둘째:3:1', where);
     rec('[editor] 표(표 서식)의 필터 단추', (await page.locator('.grid-filter-btn').count()) === 2, String(await page.locator('.grid-filter-btn').count()));
+    // 긴 목록 시트: 로딩 표시가 사라지고, 필터 목록에 뒤쪽 행(1151~1200)의 값까지 나온다
+    await page.locator('#sheet-tabs .grid-sheet-tab', { hasText: '긴목록' }).click();
+    await page.waitForFunction(() => document.querySelector('.grid-loading')?.hidden === true, null, { timeout: 30000 }).catch(() => {});
+    rec('[editor] 데이터가 오면 로딩 표시가 사라진다', await page.locator('.grid-loading').isHidden());
+    await page.locator('.grid-filter-btn').nth(1).click();
+    await page.waitForFunction(() => document.querySelectorAll('.filter-menu .filter-values label').length > 0, null, { timeout: 30000 }).catch(() => {});
+    const longValues = await page.locator('.filter-menu .filter-values label').allInnerTexts();
+    rec('[editor] 여러 페이지에 걸친 필터 목록에 뒤쪽 값까지(빈 값 없이)', longValues.includes('끝쪽값') && !longValues.some((v) => v.includes('값 없음')), longValues.join(','));
+    await page.keyboard.press('Escape');
   }
   await page.close();
 }
