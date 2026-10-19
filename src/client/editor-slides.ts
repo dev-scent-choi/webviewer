@@ -1227,6 +1227,8 @@ async function main(): Promise<void> {
     SLIDE_W_EMU = info.slideSize.cx;
     SLIDE_H_EMU = info.slideSize.cy;
   }
+  // 레일 썸네일도 실제 슬라이드 비율(4:3 등)로 — 16:9 칸에 넣으면 좌우에 회색 띠가 생겼다
+  railEl.style.setProperty('--slide-ratio', `${SLIDE_W_EMU} / ${SLIDE_H_EMU}`);
   // 읽기 전용 토큰이어도 이 화면 자체는 그대로 보여주고 쓰기만 막는다 — grid-editor.ts와 동일한
   // 패턴(canEdit:false로 fatal error를 띄우면 "바로보기"가 동시편집 화면을 못 씀). 실제 쓰기
   // 차단은 room.ts의 readOnlyConns(서버 쪽)가 이미 하고 있고, 여기서는 UI만 맞춘다.
