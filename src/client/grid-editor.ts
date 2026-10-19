@@ -200,10 +200,16 @@ function applyStyleToTd(td: HTMLTableCellElement, style: CellStyleAttrs | undefi
   } else {
     td.style.textAlign = NUMERIC_VALUE.test((td.textContent ?? '').trim()) ? 'right' : '';
   }
-  td.style.borderTop = borderCss(style?.bt);
+  // 이 표는 칸마다 테두리를 따로 그린다(border-collapse: separate) — 위·왼쪽 테두리를 칸 안쪽에 그리면 위 칸의
+  // 아래 선·왼쪽 칸의 오른쪽 선과 나란히 붙어 엑셀보다 두 배 굵어졌다. 오른쪽·아래는 칸 자체 테두리로, 위·왼쪽은
+  // 이웃 칸의 경계선 위에 겹쳐 그린다(CSS .g-bord-tl::before).
+  td.style.borderTop = '';
+  td.style.borderLeft = '';
   td.style.borderRight = borderCss(style?.br);
   td.style.borderBottom = borderCss(style?.bb);
-  td.style.borderLeft = borderCss(style?.bl);
+  td.style.setProperty('--g-bt', borderCss(style?.bt) || 'none');
+  td.style.setProperty('--g-bl', borderCss(style?.bl) || 'none');
+  td.classList.toggle('g-bord-tl', Boolean(style?.bt || style?.bl));
   td.classList.toggle('g-locked', style?.lk === 1);
 }
 
