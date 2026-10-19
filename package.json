@@ -27,7 +27,8 @@
     "prepare": "npm run build:editor && npm run build:server",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "verify:xlsx": "node scripts/verify-xlsx-fidelity-e2e.mjs"
   },
   "dependencies": {
     "@fastify/multipart": "^9.0.0",
