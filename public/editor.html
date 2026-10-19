@@ -21,6 +21,25 @@
     if (new URLSearchParams(location.search).get('home') === 'hidden') {
       document.body.classList.add('home-hidden');
     }
+    // 다른 서비스에 iframe으로 넣었을 때(?back=parent) — 제목 줄의 ← 버튼을 "그 서비스로 돌아가기"로
+    // 쓴다. 누르면 부모 창에 알리기만 하고(문서 정리·화면 전환은 부모가 맡는다) 이 창은 이동하지 않는다.
+    if (new URLSearchParams(location.search).get('back') === 'parent' && window.parent !== window) {
+      document.body.classList.remove('home-hidden');
+      document.addEventListener('click', function (event) {
+        var link = event.target && event.target.closest && event.target.closest('.doclist-link');
+        if (!link) return;
+        // 보기 화면의 ← 자체 처리(webviewer 홈으로 이동)까지 막는다
+        event.preventDefault();
+        event.stopPropagation();
+        window.parent.postMessage({ type: 'docview:back' }, '*');
+      }, true);
+      document.addEventListener('DOMContentLoaded', function () {
+        document.querySelectorAll('.doclist-link').forEach(function (link) {
+          link.title = '다른 파일 열기';
+          link.setAttribute('aria-label', '다른 파일 열기');
+        });
+      });
+    }
   </script>
   <header class="editor-toolbar office-shell" id="toolbar" data-app="word">
     <div class="office-titlebar">
