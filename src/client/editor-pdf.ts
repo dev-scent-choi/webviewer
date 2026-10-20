@@ -16,6 +16,7 @@ import { PageOps } from './pdf/pageOps.js';
 import { setupOrganize, type OrganizeView } from './pdf/organizeView.js';
 import { FormLayer } from './pdf/formLayer.js';
 import { EditLayer } from './pdf/editLayer.js';
+import { askPassword, setupDocTools, type DocTools } from './pdf/docTools.js';
 import { setupSignUi, type SignUi } from './pdf/signUi.js';
 import { pickPresenceColorForName, renderPresenceAvatars } from './presence.js';
 
@@ -76,7 +77,7 @@ function showNotice(text: string): void {
   noticeTimer = window.setTimeout(() => (notice.hidden = true), 2600);
 }
 
-function setupChrome(view: PageView, find: FindController, info: ViewInfo, panels: Panels, organize: OrganizeView, sign: SignUi): void {
+function setupChrome(view: PageView, find: FindController, info: ViewInfo, panels: Panels, organize: OrganizeView, sign: SignUi, docTools: DocTools): void {
   // 오른쪽 줄 — 쪽 번호·이동·배율
   const pageInput = $<HTMLInputElement>('page-input');
   const pageCount = $('page-count');
@@ -154,13 +155,16 @@ function setupChrome(view: PageView, find: FindController, info: ViewInfo, panel
     // 읽기 전용이면 고치는 도구는 숨기고, 추출·나누기는 내려받기 권한이 있을 때만
     const tool = item.dataset.tool;
     const allowed =
-      tool === 'organize' || tool === 'combine' || tool === 'comment' || tool === 'fill' ? info.permissions.canEdit : tool === 'extract' || tool === 'download' ? info.permissions.canDownload : true;
+      tool === 'organize' || tool === 'combine' || tool === 'comment' || tool === 'fill' || tool === 'protect' || tool === 'compress' ? info.permissions.canEdit : tool === 'extract' || tool === 'download' ? info.permissions.canDownload : true;
     if (!allowed) item.closest('li')!.hidden = true;
     item.addEventListener('click', () => {
       const tool = item.dataset.tool;
       if (tool === 'download') download();
       else if (tool === 'comment') selectMode('edit');
       else if (tool === 'fill') selectMode('sign');
+      else if (tool === 'protect') docTools.openProtect();
+      else if (tool === 'compress') docTools.openCompress();
+      else if (tool === 'props') docTools.openProps();
       else if (tool === 'organize') organize.open();
       else if (tool === 'combine') organize.pickFiles();
       else if (tool === 'extract') organize.open('추출할 쪽을 고른 뒤 ‘고른 쪽 추출’ 또는 ‘나누기’를 누르세요.');
@@ -219,8 +223,7 @@ function setupChrome(view: PageView, find: FindController, info: ViewInfo, panel
   const printBtn = $('print-btn');
   printBtn.hidden = !info.permissions.canPrint;
   printBtn.addEventListener('click', () => window.open(`/api/view/print?token=${encodeURIComponent(token)}`, '_blank'));
-  $('info-btn').addEventListener('click', () => void showInfo(view, info));
-  $('info-close').addEventListener('click', () => ($('info-dialog').hidden = true));
+  $('info-btn').addEventListener('click', () => docTools.openProps());
 
   // 단축키
   document.addEventListener('keydown', (event) => {
@@ -251,32 +254,6 @@ function setupChrome(view: PageView, find: FindController, info: ViewInfo, panel
   });
 }
 
-async function showInfo(view: PageView, info: ViewInfo): Promise<void> {
-  const list = $('info-list');
-  list.replaceChildren();
-  const add = (label: string, value: string) => {
-    const dt = document.createElement('dt');
-    dt.textContent = label;
-    const dd = document.createElement('dd');
-    dd.textContent = value;
-    list.append(dt, dd);
-  };
-  add('파일 이름', info.name);
-  add('쪽 수', `${view.pageCount}쪽`);
-  const meta = await currentDoc?.getMetadata().catch(() => null);
-  const infoDict = (meta?.info ?? {}) as Record<string, unknown>;
-  const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v : '—');
-  add('제목', str(infoDict.Title));
-  add('작성자', str(infoDict.Author));
-  add('만든 프로그램', str(infoDict.Creator ?? infoDict.Producer));
-  add('PDF 버전', str(infoDict.PDFFormatVersion));
-  const first = await currentDoc?.getPage(view.currentPage);
-  if (first) {
-    const vp = first.getViewport({ scale: 1 });
-    add('지금 쪽 크기', `${Math.round((vp.width / 72) * 25.4)} × ${Math.round((vp.height / 72) * 25.4)} mm`);
-  }
-  $('info-dialog').hidden = false;
-}
 
 let currentDoc: Awaited<ReturnType<typeof openPdf>> | null = null;
 
@@ -298,13 +275,23 @@ async function main(): Promise<void> {
 
   let base = '';
   try {
-    const res = await fetch(`/api/view/pdf-source?token=${encodeURIComponent(token)}`);
-    if (!res.ok) throw new Error(`pdf-source ${res.status}`);
-    base = res.headers.get('x-pdf-base') ?? '';
-    currentDoc = await openPdfData(new Uint8Array(await res.arrayBuffer()));
+    // 암호 파일 — 서버가 423(잠김)을 주면 비밀번호 창을 띄우고, 맞히면 같은 화면에서 다시 받는다
+    // (새로 고치면 방이 닫혔다 다시 잠긴 채로 열릴 수 있다)
+    for (;;) {
+      const res = await fetch(`/api/view/pdf-source?token=${encodeURIComponent(token)}`);
+      if (res.status === 423) {
+        $('pdf-loading').hidden = true;
+        await askPassword(token);
+        $('pdf-loading').hidden = false;
+        continue;
+      }
+      if (!res.ok) throw new Error(`pdf-source ${res.status}`);
+      base = res.headers.get('x-pdf-base') ?? '';
+      currentDoc = await openPdfData(new Uint8Array(await res.arrayBuffer()));
+      break;
+    }
   } catch (error) {
-    const name = (error as { name?: string })?.name;
-    showFatalError(name === 'PasswordException' ? '암호가 걸린 PDF는 아직 열 수 없습니다(다음 업데이트에서 지원).' : 'PDF를 열지 못했습니다.');
+    showFatalError('PDF를 열지 못했습니다.');
     console.error(error);
     return;
   }
@@ -435,7 +422,8 @@ async function main(): Promise<void> {
     if (n) showNotice(`${n}곳을 가렸습니다 — 저장 파일에서 그 내용이 지워집니다.`);
   });
   sign = setupSignUi({ view, layer, forms, doc: currentDoc, canEdit: info.permissions.canEdit, showPanel: (name) => panels.show(name), notice: showNotice });
-  setupChrome(view, find, info, panels, organize, sign);
+  const docTools = setupDocTools({ token, ydoc, canEdit: info.permissions.canEdit, docName: info.name, pageCount: () => view.pageCount, notice: showNotice });
+  setupChrome(view, find, info, panels, organize, sign, docTools);
   // 처음 배율: 폭에 맞추되 너무 크게(작은 쪽을 넓은 화면에) 키우지 않는다
   view.setScale('fit-width');
   if (view.scale > 1.25) view.setScale(1.25);
