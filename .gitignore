@@ -24,6 +24,11 @@ public/js/editor-slides.bundle.js
 public/js/editor-slides.bundle.js.map
 public/js/editor-hwp.bundle.js
 public/js/editor-hwp.bundle.js.map
+public/js/editor-pdf.bundle.js
+public/js/editor-pdf.bundle.js.map
+# PDF 편집기의 pdf.js 부속(build-editor.mjs가 node_modules/pdfjs-dist에서 복사)
+public/js/pdf.worker.mjs
+public/pdfjs/
 # splitting:true가 뽑아내는 공유 chunk(prosemirror/yjs 등 여러 편집기가 겹쳐 쓰는 코드) — 파일명이
 # 빌드마다 content-hash로 바뀌어 소스가 아니다.
 public/js/chunks/

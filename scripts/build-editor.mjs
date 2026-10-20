@@ -1,3 +1,4 @@
+import { cpSync, mkdirSync } from 'node:fs';
 import { build } from 'esbuild';
 
 /**
@@ -24,6 +25,8 @@ await build({
   splitting: true,
   format: 'esm',
   target: 'es2020',
+  // pdf.js(PDF 편집기)가 모듈 최상위에서 await를 쓴다 — ESM 출력이라 브라우저가 그대로 실행한다(다른 편집기 코드는 안 씀)
+  supported: { 'top-level-await': true },
   platform: 'browser',
   sourcemap: true,
   // 줄여서 내보낸다 — 받는 양과 브라우저가 읽는 시간이 준다. 함수·클래스 이름은 남긴다(이름에 기대는 코드·오류 추적용)
@@ -35,8 +38,16 @@ await build({
     'src/client/grid-editor.ts',
     'src/client/editor-slides.ts',
     'src/client/editor-hwp.ts',
+    'src/client/editor-pdf.ts',
   ],
   outdir: 'public/js',
   entryNames: '[name].bundle',
   chunkNames: 'chunks/[name]-[hash]',
 });
+
+// PDF 편집기(editor-pdf.ts)가 쓰는 pdf.js 부속 — worker(별도 스레드에서 PDF 해석), cMap(글꼴이 안 들어 있는 한글·중국어·
+// 일본어 PDF), 표준 글꼴. 외부 CDN 없이 자체 호스팅한다.
+mkdirSync('public/pdfjs', { recursive: true });
+cpSync('node_modules/pdfjs-dist/build/pdf.worker.min.mjs', 'public/js/pdf.worker.mjs');
+cpSync('node_modules/pdfjs-dist/cmaps', 'public/pdfjs/cmaps', { recursive: true });
+cpSync('node_modules/pdfjs-dist/standard_fonts', 'public/pdfjs/standard_fonts', { recursive: true });
