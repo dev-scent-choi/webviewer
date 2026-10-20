@@ -9,14 +9,9 @@ import { PDFDocument } from 'pdf-lib';
 import * as Y from 'yjs';
 import { readManagedAnnots, stripManagedAnnots } from './annotRead.js';
 import { writeAnnots } from './annotWrite.js';
-import { ANNOT_LABELS, origIndexOf, type PdfAnnot } from './annotTypes.js';
+import { ANNOT_LABELS, origIndexOf, PDF_ANNOTS_MAP, PDF_FORM_MAP, PDF_PAGES_ARRAY, type PdfAnnot } from './annotTypes.js';
 
-/** 최종 쪽 순서(3단계 쪽 정리) */
-export const PDF_PAGES_ARRAY = 'pdfPages';
-/** 주석 id → 주석 */
-export const PDF_ANNOTS_MAP = 'pdfAnnots';
-/** 양식 칸 이름 → 값(4단계) */
-export const PDF_FORM_MAP = 'pdfForm';
+export { PDF_ANNOTS_MAP, PDF_FORM_MAP, PDF_PAGES_ARRAY };
 /** 방을 열 때 파일 주석을 맵에 넣는 트랜잭션 표시 — 편집이 아니다 */
 export const PDF_SEED_ORIGIN = Symbol('pdf-seed');
 

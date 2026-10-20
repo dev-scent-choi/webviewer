@@ -2,6 +2,14 @@
  * PDF 편집기 주석 형식 — 서버(읽기·쓰기)와 브라우저(그리기·도구)가 함께 쓴다. 좌표는 원래 쪽의 PDF 좌표(회전 전, 아래가 y=0).
  * 주석은 "원본 몇 쪽"(pageKey 'o:<0부터>')에 붙는다 — 3단계 쪽 정리에서 순서가 바뀌어도 그 쪽을 따라간다.
  */
+/** PDF 편집 방의 Y.Doc 이름들 — 브라우저(편집기)와 서버(pdfModel.ts)가 같이 쓴다 */
+/** 최종 쪽 순서(3단계 쪽 정리) */
+export const PDF_PAGES_ARRAY = 'pdfPages';
+/** 주석 id → 주석 */
+export const PDF_ANNOTS_MAP = 'pdfAnnots';
+/** 양식 칸 이름 → 값(4단계) */
+export const PDF_FORM_MAP = 'pdfForm';
+
 export type PdfAnnotType = 'note' | 'highlight' | 'underline' | 'strike' | 'ink' | 'freetext' | 'rect' | 'ellipse' | 'line' | 'arrow';
 
 export const PDF_ANNOT_TYPES: readonly PdfAnnotType[] = ['note', 'highlight', 'underline', 'strike', 'ink', 'freetext', 'rect', 'ellipse', 'line', 'arrow'];

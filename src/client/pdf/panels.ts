@@ -5,14 +5,20 @@
 import { readLayers, readOutline, type OutlineNode, type PDFDocumentProxy } from './pdfDocument.js';
 import type { PageView } from './pageView.js';
 
-export type PanelName = 'thumbs' | 'outline' | 'layers';
+export type PanelName = 'thumbs' | 'outline' | 'layers' | 'comments';
 
 const THUMB_WIDTH = 140;
 
 export interface Panels {
   show(panel: PanelName | null): void;
   readonly current: PanelName | null;
+  /** 썸네일 위에 주석을 그리는 함수를 단다(annotLayer.drawOverlay) — 그려 둔 썸네일도 바로 다시 그린다 */
+  setThumbOverlay(draw: ThumbOverlay): void;
+  /** 이 쪽들의 썸네일 주석을 다시 그린다(주석이 바뀌었을 때) */
+  refreshThumbOverlays(pages: Iterable<number>): void;
 }
+
+export type ThumbOverlay = (page: number, host: HTMLElement, viewport: ReturnType<Awaited<ReturnType<PDFDocumentProxy['getPage']>>['getViewport']>) => void;
 
 export function setupPanels(opts: { doc: PDFDocumentProxy; view: PageView }): Panels {
   const { doc, view } = opts;
@@ -48,13 +54,34 @@ export function setupPanels(opts: { doc: PDFDocumentProxy; view: PageView }): Pa
     get current() {
       return current;
     },
+    setThumbOverlay: (draw) => thumbs.setOverlay(draw),
+    refreshThumbOverlays: (pages) => thumbs.refreshOverlays(pages),
   };
 }
 
-function setupThumbs(doc: PDFDocumentProxy, view: PageView): { markCurrent(page: number): void; reveal(page: number): void } {
+function setupThumbs(
+  doc: PDFDocumentProxy,
+  view: PageView,
+): { markCurrent(page: number): void; reveal(page: number): void; setOverlay(draw: ThumbOverlay): void; refreshOverlays(pages: Iterable<number>): void } {
   const host = document.getElementById('thumbs') as HTMLElement;
   const buttons: HTMLButtonElement[] = [];
   const drawn = new Set<number>();
+  // 썸네일마다 그린 viewport — 주석 겹침 층을 다시 그릴 때 쓴다
+  const viewports = new Map<number, Parameters<ThumbOverlay>[2]>();
+  let overlay: ThumbOverlay | null = null;
+  const paintOverlay = (page: number) => {
+    const vp = viewports.get(page);
+    const box = buttons[page - 1]?.querySelector<HTMLElement>('.pdf-thumb-img');
+    if (!overlay || !vp || !box) return;
+    let layer = box.querySelector<HTMLElement>('.pdf-thumb-annots');
+    if (!layer) {
+      layer = document.createElement('div');
+      layer.className = 'pdf-thumb-annots';
+      box.append(layer);
+    }
+    layer.replaceChildren();
+    overlay(page, layer, vp);
+  };
   const observer = new IntersectionObserver(
     (entries) => {
       for (const entry of entries) {
@@ -62,7 +89,11 @@ function setupThumbs(doc: PDFDocumentProxy, view: PageView): { markCurrent(page:
         const page = Number((entry.target as HTMLElement).dataset.page);
         if (drawn.has(page)) continue;
         drawn.add(page);
-        void drawThumb(doc, page, entry.target.querySelector('.pdf-thumb-img') as HTMLElement);
+        void drawThumb(doc, page, entry.target.querySelector('.pdf-thumb-img') as HTMLElement).then((vp) => {
+          if (!vp) return;
+          viewports.set(page, vp);
+          paintOverlay(page);
+        });
       }
     },
     { root: host, rootMargin: '200px 0px' },
@@ -96,10 +127,20 @@ function setupThumbs(doc: PDFDocumentProxy, view: PageView): { markCurrent(page:
   }
   markCurrent(1);
   view.onPageChange((page) => reveal(page));
-  return { markCurrent, reveal };
+  return {
+    markCurrent,
+    reveal,
+    setOverlay(draw) {
+      overlay = draw;
+      for (const page of viewports.keys()) paintOverlay(page);
+    },
+    refreshOverlays(pages) {
+      for (const page of pages) paintOverlay(page);
+    },
+  };
 }
 
-async function drawThumb(doc: PDFDocumentProxy, pageNumber: number, box: HTMLElement): Promise<void> {
+async function drawThumb(doc: PDFDocumentProxy, pageNumber: number, box: HTMLElement): Promise<Parameters<ThumbOverlay>[2] | null> {
   try {
     const page = await doc.getPage(pageNumber);
     const base = page.getViewport({ scale: 1 });
@@ -111,11 +152,13 @@ async function drawThumb(doc: PDFDocumentProxy, pageNumber: number, box: HTMLEle
     canvas.height = Math.floor(viewport.height * ratio);
     box.style.height = `${Math.round(viewport.height)}px`;
     const ctx = canvas.getContext('2d', { alpha: false });
-    if (!ctx) return;
+    if (!ctx) return null;
     await page.render({ canvasContext: ctx, viewport, transform: ratio !== 1 ? [ratio, 0, 0, ratio, 0, 0] : undefined }).promise;
     box.replaceChildren(canvas);
+    return viewport;
   } catch (error) {
     console.error(`썸네일 ${pageNumber} 실패:`, error);
+    return null;
   }
 }
 

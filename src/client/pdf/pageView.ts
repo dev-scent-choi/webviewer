@@ -10,6 +10,7 @@ import type { FindMatch } from './findText.js';
 
 type PDFPageProxy = Awaited<ReturnType<PDFDocumentProxy['getPage']>>;
 type RenderTask = ReturnType<PDFPageProxy['render']>;
+export type PageViewport = ReturnType<PDFPageProxy['getViewport']>;
 
 interface Slot {
   readonly page: number;
@@ -17,6 +18,10 @@ interface Slot {
   canvas: HTMLCanvasElement;
   readonly textLayer: HTMLDivElement;
   readonly hitLayer: HTMLDivElement;
+  /** 주석 층(annotLayer.ts가 채운다) — 글자 층 위 */
+  readonly annotLayer: HTMLDivElement;
+  /** 지금 그려진 상태의 viewport(주석 좌표 변환용) */
+  viewport: PageViewport | null;
   /** 배율 1·회전 0에서의 크기(pt). 아직 그 쪽을 읽지 않았으면 1쪽 크기 */
   baseW: number;
   baseH: number;
@@ -45,6 +50,7 @@ export class PageView {
   private current = 1;
   private readonly pageListeners: Array<(page: number) => void> = [];
   private readonly scaleListeners: Array<(scale: number) => void> = [];
+  private readonly renderListeners: Array<(page: number, layer: HTMLDivElement, viewport: PageViewport) => void> = [];
   private observer: IntersectionObserver | null = null;
   private readonly visible = new Set<number>();
   private ocConfig: OptionalContentConfig | null = null;
@@ -80,6 +86,28 @@ export class PageView {
   onScaleChange(cb: (scale: number) => void): void {
     this.scaleListeners.push(cb);
   }
+  /** 쪽이 (다시) 그려질 때마다 — 주석 층이 그 viewport로 주석을 다시 그린다 */
+  onPageRendered(cb: (page: number, layer: HTMLDivElement, viewport: PageViewport) => void): void {
+    this.renderListeners.push(cb);
+  }
+  viewportOf(page: number): PageViewport | null {
+    return this.slots[page - 1]?.viewport ?? null;
+  }
+  pageElement(page: number): HTMLDivElement | null {
+    return this.slots[page - 1]?.el ?? null;
+  }
+  /** 그려진 쪽 번호들 */
+  renderedPages(): number[] {
+    return this.slots.filter((s) => s.viewport && s.renderedKey !== null).map((s) => s.page);
+  }
+  /** 주석이 붙는 열쇠 — 지금은 원본 쪽 순서 그대로(3단계 쪽 정리에서 바뀐다) */
+  pageKeyOf(page: number): string {
+    return `o:${page - 1}`;
+  }
+  pageOfKey(pageKey: string): number | null {
+    const m = /^o:(\d+)$/.exec(pageKey);
+    return m ? Number(m[1]) + 1 : null;
+  }
 
   async init(): Promise<void> {
     const first = await this.doc.getPage(1);
@@ -95,10 +123,12 @@ export class PageView {
       textLayer.className = 'pdf-text-layer';
       const hitLayer = document.createElement('div');
       hitLayer.className = 'pdf-hit-layer';
+      const annotLayer = document.createElement('div');
+      annotLayer.className = 'pdf-annot-layer';
       const label = document.createElement('span');
       label.className = 'pdf-page-label';
       label.textContent = String(page);
-      el.append(canvas, textLayer, hitLayer, label);
+      el.append(canvas, textLayer, hitLayer, annotLayer, label);
       this.host.append(el);
       this.slots.push({
         page,
@@ -106,6 +136,8 @@ export class PageView {
         canvas,
         textLayer,
         hitLayer,
+        annotLayer,
+        viewport: null,
         baseW: vp.width * userUnit,
         baseH: vp.height * userUnit,
         pageRotate: page === 1 ? first.rotate : 0,
@@ -247,6 +279,8 @@ export class PageView {
     slot.canvas.height = 0;
     slot.textLayer.replaceChildren();
     slot.hitLayer.replaceChildren();
+    slot.annotLayer.replaceChildren();
+    slot.viewport = null;
     slot.textDivs = [];
     slot.textStrs = [];
     slot.renderedKey = null;
@@ -315,7 +349,9 @@ export class PageView {
         slot.textDivs = textDivs;
         slot.textStrs = textStrs;
         slot.renderedKey = key;
+        slot.viewport = viewport;
         this.drawHits(slot);
+        for (const cb of this.renderListeners) cb(slot.page, slot.annotLayer, viewport);
       } catch (error) {
         if ((error as { name?: string })?.name !== 'RenderingCancelledException') console.error(`쪽 ${slot.page} 그리기 실패:`, error);
       } finally {

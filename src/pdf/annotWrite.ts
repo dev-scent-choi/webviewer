@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fontkit from '@pdf-lib/fontkit';
-import { PDFDocument, PDFHexString, PDFName, PDFRef, StandardFonts, type PDFContext, type PDFFont, type PDFPage } from 'pdf-lib';
+import { PDFDocument, PDFHexString, PDFName, PDFRef, PDFString, StandardFonts, type PDFContext, type PDFFont, type PDFPage } from 'pdf-lib';
 import { origIndexOf, type PdfAnnot } from './annotTypes.js';
 
 /** 프로젝트 루트 assets/fonts — 이 파일 위치 기준이라 실행 cwd와 무관하다(rendering.ts와 같은 방식) */
@@ -259,9 +259,9 @@ async function writeOne(doc: PDFDocument, page: PDFPage, a: PdfAnnot, fonts: Fon
   };
   if (a.opacity < 1) dict.CA = a.opacity;
   const m = pdfDate(a.modifiedAt);
-  if (m) dict.M = PDFHexString.fromText(m);
+  if (m) dict.M = PDFString.of(m);
   const c = pdfDate(a.createdAt);
-  if (c) dict.CreationDate = PDFHexString.fromText(c);
+  if (c) dict.CreationDate = PDFString.of(c);
   if (a.text !== undefined && a.text !== '') dict.Contents = PDFHexString.fromText(a.text);
   switch (a.type) {
     case 'note':
@@ -278,7 +278,7 @@ async function writeOne(doc: PDFDocument, page: PDFPage, a: PdfAnnot, fonts: Fon
       dict.InkList = (a.paths ?? []).map((p) => [...p]);
       break;
     case 'freetext':
-      dict.DA = PDFHexString.fromText(`/Helv ${f(a.fontSize ?? 12)} Tf ${colorArray(a.color).map(f).join(' ')} rg`);
+      dict.DA = PDFString.of(`/Helv ${f(a.fontSize ?? 12)} Tf ${colorArray(a.color).map(f).join(' ')} rg`);
       dict.C = [];
       dict.Contents = PDFHexString.fromText(a.text ?? '');
       dict.Border = [0, 0, 0];

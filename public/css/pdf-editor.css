@@ -178,6 +178,9 @@
 /* pdf.js 글자 층(pdfjs-dist/web/pdf_viewer.css의 .textLayer 규칙과 같은 값) — 글자는 투명, 선택만 보인다.
    크기는 바깥 .pdf-page의 --scale-factor(배율)로 pdf.js가 계산한다. */
 .pdf-text-layer { position: absolute; inset: 0; overflow: hidden; text-align: initial; opacity: 1; line-height: 1; text-size-adjust: none; -webkit-text-size-adjust: none; forced-color-adjust: none; transform-origin: 0 0; caret-color: CanvasText; z-index: 2; }
+.pdf-text-layer[data-main-rotation="90"] { transform: rotate(90deg) translateY(-100%); }
+.pdf-text-layer[data-main-rotation="180"] { transform: rotate(180deg) translate(-100%, -100%); }
+.pdf-text-layer[data-main-rotation="270"] { transform: rotate(270deg) translateX(-100%); }
 .pdf-text-layer :is(span, br) { color: transparent; position: absolute; white-space: pre; cursor: text; transform-origin: 0% 0%; }
 .pdf-text-layer span.markedContent { top: 0; height: 0; }
 .pdf-text-layer ::selection { background: rgba(26, 115, 232, 0.28); }
@@ -305,3 +308,87 @@
 .pdf-hit-layer { position: absolute; inset: 0; z-index: 3; pointer-events: none; }
 /* pdf.js가 글자 폭 계산용으로 body에 붙이는 canvas — pdf_viewer.css와 같이 숨긴다(안 그러면 단추 위를 덮어 눌리지 않았다) */
 .hiddenCanvasElement { position: absolute; top: 0; left: 0; width: 0; height: 0; display: none; }
+
+/* ---------- 2단계: 주석 ---------- */
+/* 주석 층 — 글자 층 위. 평소엔 눌림을 막지 않고(글자 고르기), 주석 자체와 그리는 도구일 때만 눌린다 */
+.pdf-annot-layer { position: absolute; inset: 0; z-index: 4; pointer-events: none; }
+.pdf-annot-svg, .pdf-annot-preview { position: absolute; inset: 0; overflow: visible; pointer-events: none; }
+.pdf-annot-multiply { mix-blend-mode: multiply; }
+.pdf-scroll[data-tool="select"] .pdf-annot,
+.pdf-scroll[data-tool="eraser"] .pdf-annot { pointer-events: visiblePainted; cursor: pointer; }
+.pdf-scroll[data-tool="select"] .pdf-annot-fill,
+.pdf-scroll[data-tool="eraser"] .pdf-annot-fill { pointer-events: all; }
+.pdf-annot-hit { pointer-events: stroke; }
+.pdf-scroll[data-tool="eraser"] .pdf-annot:hover { opacity: 0.45 !important; }
+/* 그리는 도구 — 쪽 전체가 붓이 된다 */
+.pdf-scroll:is([data-tool="note"], [data-tool="ink"], [data-tool="freetext"], [data-tool="rect"], [data-tool="ellipse"], [data-tool="line"], [data-tool="arrow"]) .pdf-annot-layer { pointer-events: auto; cursor: crosshair; }
+.pdf-scroll[data-tool="note"] .pdf-annot-layer { cursor: copy; }
+.pdf-scroll[data-tool="freetext"] .pdf-annot-layer { cursor: text; }
+
+.pdf-note-icon { position: absolute; padding: 0; border: none; background: none; cursor: pointer; pointer-events: auto; filter: drop-shadow(0 1px 1.5px rgba(0, 0, 0, 0.3)); }
+.pdf-note-icon svg { display: block; width: 100%; height: 100%; }
+.pdf-freetext { position: absolute; transform-origin: 0 0; padding: 2px; box-sizing: border-box; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.2; font-family: 'Pretendard', 'Malgun Gothic', sans-serif; pointer-events: auto; cursor: default; }
+.pdf-scroll[data-tool="select"] .pdf-freetext { cursor: move; }
+.pdf-freetext:empty::before { content: "글을 입력하세요"; color: #9a9aa3; }
+.pdf-freetext-editor { position: absolute; z-index: 6; transform-origin: 0 0; box-sizing: border-box; padding: 2px; border: 1.5px solid var(--pdf-accent); border-radius: 2px; background: rgba(255, 255, 255, 0.92); font-family: 'Pretendard', 'Malgun Gothic', sans-serif; line-height: 1.2; resize: none; outline: none; pointer-events: auto; }
+
+.pdf-annot-selection { position: absolute; border: 1.5px dashed var(--pdf-accent); border-radius: 2px; pointer-events: none; }
+.pdf-annot-handle { position: absolute; right: -6px; bottom: -6px; width: 11px; height: 11px; border: 1.5px solid var(--pdf-accent); border-radius: 2px; background: #fff; cursor: nwse-resize; pointer-events: auto; }
+
+.pdf-note-popup { position: absolute; z-index: 7; width: 250px; padding: 10px; border-radius: 10px; background: #fff; box-shadow: 0 6px 22px rgba(0, 0, 0, 0.2), 0 0 0 1px rgba(0, 0, 0, 0.06); pointer-events: auto; }
+.pdf-note-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 6px; font-size: 12.5px; }
+.pdf-note-head span { color: var(--pdf-dim); font-size: 11.5px; }
+.pdf-note-popup textarea { width: 100%; min-height: 80px; box-sizing: border-box; padding: 6px 8px; border: 1px solid var(--pdf-line); border-radius: 6px; font: inherit; font-size: 13px; resize: vertical; outline: none; }
+.pdf-note-popup textarea:focus { border-color: var(--pdf-accent); }
+.pdf-note-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 8px; }
+.pdf-note-actions button { padding: 5px 12px; border: 1px solid var(--pdf-line); border-radius: 6px; background: #fff; cursor: pointer; font-size: 12.5px; }
+.pdf-note-actions button.primary { border-color: var(--pdf-accent); background: var(--pdf-accent); color: #fff; }
+
+/* 떠 있는 도구 줄의 주석 도구 */
+.pdf-annot-tools { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.pdf-annot-tools[hidden] { display: none; }
+.pdf-float-sep { width: 22px; height: 1px; margin: 2px 0; background: var(--pdf-line); }
+.pdf-float-btn:disabled { opacity: 0.35; cursor: default; background: transparent; }
+.pdf-float-group { position: relative; display: flex; }
+.pdf-float-more { position: absolute; right: 0; bottom: 0; width: 12px; height: 12px; padding: 0; border: none; background: transparent; cursor: pointer; }
+.pdf-float-more::after { content: ""; position: absolute; right: 2px; bottom: 2px; border: 3px solid transparent; border-right-color: var(--pdf-dim); border-bottom-color: var(--pdf-dim); }
+.pdf-float-menu { position: absolute; left: 42px; top: -6px; z-index: 8; display: flex; flex-direction: column; gap: 2px; padding: 6px; border-radius: 10px; background: #fff; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.16), 0 0 0 1px rgba(0, 0, 0, 0.05); }
+.pdf-float-menu[hidden] { display: none; }
+.pdf-float-menu button { display: flex; align-items: center; gap: 8px; padding: 6px 10px 6px 6px; border: none; border-radius: 6px; background: transparent; cursor: pointer; white-space: nowrap; }
+.pdf-float-menu button:hover { background: var(--pdf-hover); }
+.pdf-float-menu svg { width: 18px; height: 18px; }
+.pdf-style-dot { display: block; width: 16px; height: 16px; border-radius: 50%; background: var(--dot, #d93025); box-shadow: 0 0 0 2px #fff, 0 0 0 3px rgba(0, 0, 0, 0.2); }
+
+/* 색·굵기·투명도 상자 */
+.pdf-style-pop { position: absolute; left: 66px; z-index: 8; width: 230px; padding: 10px 12px; border-radius: 12px; background: #fff; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.16), 0 0 0 1px rgba(0, 0, 0, 0.05); }
+.pdf-style-pop[hidden] { display: none; }
+.pdf-style-row { display: flex; align-items: center; gap: 8px; margin: 6px 0; font-size: 12.5px; color: var(--pdf-dim); }
+.pdf-style-row[hidden] { display: none; }
+.pdf-style-row span { flex: none; width: 54px; }
+.pdf-style-row input[type="range"] { flex: 1; accent-color: var(--pdf-accent); }
+.pdf-style-row em { flex: none; width: 38px; text-align: right; font-style: normal; font-variant-numeric: tabular-nums; }
+.pdf-style-row input[type="color"] { width: 36px; height: 24px; padding: 0; border: 1px solid var(--pdf-line); border-radius: 4px; background: none; }
+.pdf-style-colors { gap: 6px; }
+.pdf-style-swatch { width: 22px; height: 22px; padding: 0; border: 2px solid #fff; border-radius: 50%; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.18); cursor: pointer; }
+.pdf-style-swatch[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--pdf-accent); }
+
+/* 메모 목록 */
+.pdf-count { margin-left: 4px; font-size: 13px; font-weight: 500; color: var(--pdf-dim); }
+.pdf-comments { flex: 1; overflow-y: auto; padding: 2px 10px 20px; }
+.pdf-comment-page { margin: 12px 4px 6px; font-size: 12px; color: var(--pdf-dim); }
+.pdf-comment { display: flex; gap: 10px; width: 100%; padding: 8px; border: 1px solid transparent; border-radius: 8px; background: transparent; text-align: left; cursor: pointer; }
+.pdf-comment:hover { background: var(--pdf-hover); }
+.pdf-comment.selected { border-color: var(--pdf-accent); background: var(--pdf-accent-soft); }
+.pdf-comment-dot { flex: none; width: 10px; height: 10px; margin-top: 4px; border-radius: 3px; background: var(--c); }
+.pdf-comment-body { flex: 1; min-width: 0; }
+.pdf-comment-meta { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; column-gap: 8px; font-size: 12px; color: var(--pdf-dim); }
+.pdf-comment-meta strong { white-space: nowrap; }
+.pdf-comment-meta span { white-space: nowrap; font-size: 11.5px; }
+.pdf-comment-meta strong { color: var(--pdf-text); font-weight: 600; }
+.pdf-comment-text { margin-top: 2px; font-size: 13px; overflow-wrap: anywhere; white-space: pre-wrap; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.pdf-comment-del { flex: none; align-self: center; visibility: hidden; }
+.pdf-comment:hover .pdf-comment-del { visibility: visible; }
+.pdf-thumb-img { overflow: hidden; }
+.pdf-thumb-annots { position: absolute; inset: 0; pointer-events: none; }
+.pdf-thumb-annots * { pointer-events: none !important; }
+.pdf-thumb-annots .pdf-freetext { padding: 0; }
