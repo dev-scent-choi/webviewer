@@ -11,7 +11,7 @@
  */
 import { pdfjs, type OptionalContentConfig, type PDFDocumentProxy } from './pdfDocument.js';
 import type { FindMatch } from './findText.js';
-import { identityPages, parsePageKey, type PdfPageEntry } from '../../pdf/annotTypes.js';
+import { identityPages, parsePageKey, type OcrWord, type PdfPageEntry } from '../../pdf/annotTypes.js';
 
 type PDFPageProxy = Awaited<ReturnType<PDFDocumentProxy['getPage']>>;
 type RenderTask = ReturnType<PDFPageProxy['render']>;
@@ -82,6 +82,9 @@ export class PageView {
   private scrollRaf = 0;
   private defaultW = 612;
   private defaultH = 792;
+  /** OCR로 인식한 낱말(쪽 열쇠별) — 글자 층에 투명한 낱말로 더해 찾기·고르기·복사가 되게 한다 */
+  private extraText: (key: string) => readonly OcrWord[] = () => [];
+  private measureCtx: CanvasRenderingContext2D | null = null;
   /** pdf.js PageViewport 생성자 — 4.2는 클래스를 내보내지 않아 첫 쪽 viewport에서 빌린다(빈 쪽 좌표 변환용) */
   private viewportCtor: (new (params: { viewBox: number[]; scale: number; rotation: number; offsetX: number; offsetY: number; dontFlip: boolean }) => PageViewport) | null = null;
 
@@ -195,6 +198,9 @@ export class PageView {
     const canvas = document.createElement('canvas');
     const textLayer = document.createElement('div');
     textLayer.className = 'pdf-text-layer';
+    // OCR 낱말(보기 회전·배율을 반영한 viewport 좌표로 놓는다 — pdf.js 글자 층은 회전 전 좌표라 따로 둔다)
+    const ocrLayer = document.createElement('div');
+    ocrLayer.className = 'pdf-ocr-layer';
     const hitLayer = document.createElement('div');
     hitLayer.className = 'pdf-hit-layer';
     // 고친 글·가리기 미리 보기(editLayer.ts) — 글자 층 위
@@ -208,7 +214,7 @@ export class PageView {
     const label = document.createElement('span');
     label.className = 'pdf-page-label';
     label.textContent = String(page);
-    el.append(canvas, textLayer, hitLayer, editLayer, formLayer, annotLayer, label);
+    el.append(canvas, textLayer, ocrLayer, hitLayer, editLayer, formLayer, annotLayer, label);
     this.host.append(el);
     const blank = parsePageKey(entry.key)?.kind === 'blank' ? entry.blank : undefined;
     const slot: Slot = {
@@ -388,6 +394,7 @@ export class PageView {
     slot.canvas.width = 0;
     slot.canvas.height = 0;
     slot.textLayer.replaceChildren();
+    slot.el.querySelector('.pdf-ocr-layer')?.replaceChildren();
     slot.hitLayer.replaceChildren();
     slot.annotLayer.replaceChildren();
     slot.el.querySelector('.pdf-form-layer')?.replaceChildren();
@@ -478,6 +485,7 @@ export class PageView {
           });
           await textTask.promise;
         }
+        this.appendOcrWords(slot, viewport, textDivs, textStrs);
         slot.textDivs = textDivs;
         slot.textStrs = textStrs;
         slot.renderedKey = key;
@@ -545,6 +553,40 @@ export class PageView {
     return annots.filter((a) => a.subtype === 'Widget');
   }
 
+  /** OCR용 그림 — 쪽 자체 회전만 반영(보기 회전·목록 회전 빼고), 그 viewport로 화소 → PDF 좌표를 바꾼다. 빈 쪽이면 null */
+  async renderForOcr(page: number, fallbackScale: number): Promise<{ canvas: HTMLCanvasElement; viewport: PageViewport } | null> {
+    const slot = this.slots[page - 1];
+    if (!slot) return null;
+    const proxy = await this.proxyOf(slot.entry);
+    if (!proxy) return null;
+    // 스캔본은 쪽에 그림 한 장 — 그 그림의 원래 화소 수로 그린다(늘리거나 줄이면 흐려져 인식이 틀렸다, 실측)
+    let scale = fallbackScale;
+    try {
+      const ops = await proxy.getOperatorList();
+      let largest = 0;
+      ops.fnArray.forEach((fn, i) => {
+        if (fn === pdfjs.OPS.paintImageXObject) {
+          const [, w, h] = ops.argsArray[i] as [unknown, number, number];
+          if (typeof w === 'number' && typeof h === 'number') largest = Math.max(largest, Math.max(w, h));
+        }
+      });
+      const base = proxy.getViewport({ scale: 1, rotation: proxy.rotate });
+      if (largest > 0) scale = Math.min(4.2, Math.max(1.5, largest / Math.max(base.width, base.height)));
+    } catch {
+      // 명령 목록을 못 읽으면 기본 배율
+    }
+    const viewport = proxy.getViewport({ scale, rotation: proxy.rotate });
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.floor(viewport.width);
+    canvas.height = Math.floor(viewport.height);
+    const ctx = canvas.getContext('2d', { alpha: false });
+    if (!ctx) return null;
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    await proxy.render({ canvasContext: ctx, viewport }).promise;
+    return { canvas, viewport };
+  }
+
   // ---------- 레이어 ----------
   setLayerVisibility(id: string, visible: boolean): void {
     if (!this.ocConfig) return;
@@ -555,6 +597,56 @@ export class PageView {
 
   // ---------- 찾기 ----------
   /** 찾기용 쪽 글자 조각 — 글자 층과 같은 순서(pdf.js가 조각마다 span 하나) */
+  /** OCR 낱말을 알려 줄 함수(편집기가 방의 pdfOcr로) */
+  setExtraText(fn: (key: string) => readonly OcrWord[]): void {
+    this.extraText = fn;
+  }
+
+  /** 그 쪽의 OCR 낱말이 바뀌었을 때 — 찾기용 글자를 비우고 다시 그린다 */
+  refreshText(key: string): void {
+    this.textCache.delete(key);
+    const slot = this.slots.find((s) => s.entry.key === key);
+    if (slot && slot.renderedKey !== null) {
+      slot.renderedKey = 'stale';
+      this.renderVisible();
+    }
+  }
+
+  /** 투명한 OCR 낱말 span — 글자 층 span 뒤에 이어 붙여(찾기의 조각 순번과 맞게) 고르기·찾기가 된다 */
+  private appendOcrWords(slot: Slot, vp: PageViewport, textDivs: HTMLElement[], textStrs: string[]): void {
+    const layer = slot.el.querySelector<HTMLElement>('.pdf-ocr-layer');
+    if (!layer) return;
+    layer.replaceChildren();
+    const words = this.extraText(slot.entry.key);
+    if (!words.length) return;
+    this.measureCtx ??= document.createElement('canvas').getContext('2d');
+    for (const w of words) {
+      const len = Math.hypot(w.ex - w.x, w.ey - w.y) || 1;
+      const ux = -(w.ey - w.y) / len;
+      const uy = (w.ex - w.x) / len;
+      const [x0, y0] = vp.convertToViewportPoint(w.x, w.y) as number[];
+      const [x1, y1] = vp.convertToViewportPoint(w.ex, w.ey) as number[];
+      const [tx, ty] = vp.convertToViewportPoint(w.x + ux * w.h, w.y + uy * w.h) as number[];
+      const fontPx = Math.hypot(tx - x0, ty - y0);
+      const widthPx = Math.hypot(x1 - x0, y1 - y0);
+      if (fontPx < 1 || widthPx < 1) continue;
+      const span = document.createElement('span');
+      span.textContent = `${w.t} `;
+      span.style.left = `${tx}px`;
+      span.style.top = `${ty}px`;
+      span.style.fontSize = `${fontPx}px`;
+      let measured = widthPx;
+      if (this.measureCtx) {
+        this.measureCtx.font = `${fontPx}px sans-serif`;
+        measured = this.measureCtx.measureText(w.t).width || widthPx;
+      }
+      span.style.transform = `rotate(${Math.atan2(y1 - y0, x1 - x0)}rad) scaleX(${widthPx / measured})`;
+      layer.append(span);
+      textDivs.push(span);
+      textStrs.push(span.textContent);
+    }
+  }
+
   async textItems(page: number): Promise<string[]> {
     return (await this.textItemInfos(page)).map((i) => i.str);
   }
@@ -568,9 +660,15 @@ export class PageView {
       cached = this.proxyOf(slot.entry).then(async (p) => {
         if (!p) return [];
         const content = await p.getTextContent();
-        return content.items.map((item) =>
+        const items = content.items.map((item) =>
           'str' in item ? { str: item.str, transform: item.transform as number[], width: item.width, height: item.height } : { str: '', transform: [1, 0, 0, 1, 0, 0], width: 0, height: 0 },
         );
+        // OCR 낱말은 글자 층에서처럼 pdf.js 조각 뒤에(찾기의 조각 순번이 span 순서와 같게)
+        for (const w of this.extraText(slot.entry.key)) {
+          const len = Math.hypot(w.ex - w.x, w.ey - w.y);
+          items.push({ str: `${w.t} `, transform: [(w.ex - w.x) / (len || 1) * w.h, (w.ey - w.y) / (len || 1) * w.h, 0, w.h, w.x, w.y], width: len, height: w.h });
+        }
+        return items;
       });
       this.textCache.set(slot.entry.key, cached);
     }

@@ -91,6 +91,7 @@
         <li><button class="pdf-tool-item" data-tool="combine" style="--tc:#3a6fd8"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M8 4h7l3 3v10H8z"/><path d="M5 7v13h10"/></svg><span>파일 합치기</span></button></li>
         <li><button class="pdf-tool-item" data-tool="extract" style="--tc:#7a52c7"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h8l4 4v14H6z"/><path d="M9 14h6M12 11v6"/></svg><span>페이지 추출·나누기</span></button></li>
         <li><button class="pdf-tool-item" data-tool="fill" style="--tc:#c4302b"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13 7l4 4"/></svg><span>양식 채우기·서명</span></button></li>
+        <li><button class="pdf-tool-item" data-tool="ocr" style="--tc:#7a52c7"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/><path d="M8 9h8M8 12h8M8 15h5"/></svg><span>글자 인식(OCR)</span></button></li>
         <li><button class="pdf-tool-item" data-tool="convert" style="--tc:#3a6fd8"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h12l-3-3M20 17H8l3 3"/></svg><span>변환</span></button></li>
         <li><button class="pdf-tool-item" data-tool="protect" style="--tc:#b26a00"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg><span>암호·권한</span></button></li>
         <li><button class="pdf-tool-item" data-tool="compress" style="--tc:#2e9b5f"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v5H3M16 3v5h5M8 21v-5H3M16 21v-5h5"/></svg><span>압축</span></button></li>
@@ -340,6 +341,25 @@
         <button class="btn-mini" type="button" data-close>취소</button>
         <button id="compress-preview" class="btn-mini" type="button">크기 미리 보기</button>
         <button id="compress-apply" class="btn-mini btn-mini-primary" type="button">적용</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="ocr-dialog" class="office-dialog" hidden role="dialog" aria-labelledby="ocr-dialog-title">
+    <div class="office-dialog-card pdf-small-card">
+      <h2 id="ocr-dialog-title">글자 인식(OCR)</h2>
+      <p class="pdf-dialog-text">스캔한 쪽처럼 글자가 그림으로만 있는 쪽을 읽어, 찾기·글자 고르기·복사가 되게 합니다(한국어·영어). 이 브라우저에서 읽으므로 문서가 밖으로 나가지 않습니다.</p>
+      <div class="pdf-check-list" role="radiogroup" aria-label="읽을 쪽">
+        <label class="pdf-check-row"><input type="radio" name="ocr-scope" value="empty" checked /> 글자가 없는 쪽만</label>
+        <label class="pdf-check-row"><input type="radio" name="ocr-scope" value="current" /> 지금 쪽</label>
+        <label class="pdf-check-row"><input type="radio" name="ocr-scope" value="all" /> 모든 쪽(다시 읽기)</label>
+      </div>
+      <p id="ocr-status" class="pdf-dialog-result" aria-live="polite"></p>
+      <div class="office-dialog-actions">
+        <button id="ocr-clear" class="btn-mini" type="button">지금 쪽 결과 지우기</button>
+        <button class="btn-mini" type="button" data-close>닫기</button>
+        <button id="ocr-stop" class="btn-mini" type="button" hidden>멈추기</button>
+        <button id="ocr-run" class="btn-mini btn-mini-primary" type="button">읽기 시작</button>
       </div>
     </div>
   </div>

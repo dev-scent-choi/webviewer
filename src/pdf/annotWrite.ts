@@ -11,6 +11,7 @@ import fontkit from '@pdf-lib/fontkit';
 import { PDFDocument, PDFHexString, PDFName, PDFRef, PDFString, StandardFonts, type PDFContext, type PDFFont, type PDFPage } from 'pdf-lib';
 import { isStampImage, origIndexOf, type PdfAnnot } from './annotTypes.js';
 import { STAMP_IMAGE_KEY } from './annotRead.js';
+import { fixToUnicode } from './toUnicodeFix.js';
 
 /** 프로젝트 루트 assets/fonts — 이 파일 위치 기준이라 실행 cwd와 무관하다(rendering.ts와 같은 방식) */
 /** pdf-lib의 사전 리터럴 형식(패키지가 따로 내보내지 않아 flateStream의 매개변수에서 꺼낸다) */
@@ -107,6 +108,8 @@ const WIN_ANSI = /^[\x20-\x7e\n\r\t]*$/;
 export interface Fonts {
   standard(): Promise<PDFFont>;
   korean(): Promise<PDFFont>;
+  /** 저장 직전 — 한글 글꼴을 넣었으면 글자 대응표를 바로잡는다(toUnicodeFix.ts) */
+  finish(): Promise<void>;
 }
 
 export function fontsFor(doc: PDFDocument): Fonts {
@@ -117,9 +120,14 @@ export function fontsFor(doc: PDFDocument): Fonts {
     korean: () => {
       if (!ko) {
         doc.registerFontkit(fontkit);
-        ko = doc.embedFont(fs.readFileSync(PRETENDARD), { subset: false });
+        // 문맥 대체·합자(calt·clig·liga·rclt)를 끈다 — 켜 두면 숫자 사이 "-" 등이 유니코드 대응이 없는 대체 글리프로 바뀌어
+        // 복사·찾기에서 다른 글자(㏄·㏆)가 나왔다(실측). 한글 완성형 글자는 이 기능을 쓰지 않는다.
+        ko = doc.embedFont(fs.readFileSync(PRETENDARD), { subset: false, features: { calt: false, clig: false, liga: false, rclt: false } });
       }
       return ko;
+    },
+    async finish() {
+      if (ko) await fixToUnicode(doc, await ko);
     },
   };
 }
