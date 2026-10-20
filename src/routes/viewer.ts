@@ -1,8 +1,11 @@
 import fs from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { basePdfForEditor } from '../pdf/pdfModel.js';
-import { addPdfPart, compressRoomPdf, editorSourceOf, extractPdfGroups, PdfRoomError, pdfInfoOf, protectPdf, readPdfPart, tokenKey, unlockPdf, type ProtectRequest } from '../pdf/pdfRoomOps.js';
+import { addPdfPart, compressRoomPdf, currentPlainBytes, editorSourceOf, extractPdfGroups, PdfRoomError, pdfInfoOf, protectPdf, readPdfPart, tokenKey, unlockPdf, type ProtectRequest } from '../pdf/pdfRoomOps.js';
 import { isCompressLevel } from '../pdf/pdfCompress.js';
+import { convertPdf, isConvertTarget } from '../pdf/pdfConvert.js';
+import { fileToPdf, FileToPdfError } from '../pdf/fileToPdf.js';
+import { ConversionError } from '../converters/types.js';
 import os from 'node:os';
 import path from 'node:path';
 import type { FastifyInstance, FastifyReply } from 'fastify';
@@ -1132,6 +1135,54 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
+  // 7단계 — 변환(PDF → 워드·PPT·엑셀·텍스트), 그림 내보내기용 지금 상태의 PDF, 다른 파일 → PDF
+  const downloadOnly = pdfRoute((p) => p.canDownload, '저장(다운로드) 권한이 없습니다.');
+  const attachment = (reply: FastifyReply, bytes: Uint8Array, fileName: string, mime: string) =>
+    reply.type(mime).header('cache-control', 'no-store').header('content-disposition', `attachment; filename*=UTF-8''${encodeURIComponent(fileName)}`).send(Buffer.from(bytes));
+
+  app.post<{ Querystring: { token?: string }; Body: { to?: unknown } }>('/api/view/pdf-convert', async (request, reply) => {
+    const view = await downloadOnly(request.query.token, reply);
+    if (!view) return reply;
+    const to = request.body?.to;
+    if (!isConvertTarget(to)) return reply.code(400).send({ success: false, error: '바꿀 형식이 올바르지 않습니다.' });
+    const meta = view.meta;
+    try {
+      const plain = await currentPlainBytes(meta.id, () => store.readOriginal(meta.id, meta.ext), tokenKey(request.query.token!));
+      const out = await convertPdf(plain, to, meta.name);
+      await recordAudit({ type: 'downloaded', docId: meta.id, viewer: view.claims.viewer });
+      return attachment(reply, out.bytes, out.fileName, out.mime);
+    } catch (error) {
+      if (error instanceof ConversionError) return reply.code(422).send({ success: false, error: error.message });
+      return pdfFail(reply, error);
+    }
+  });
+
+  app.get<{ Querystring: { token?: string } }>('/api/view/pdf-current', async (request, reply) => {
+    const view = await downloadOnly(request.query.token, reply);
+    if (!view) return reply;
+    const meta = view.meta;
+    try {
+      const plain = await currentPlainBytes(meta.id, () => store.readOriginal(meta.id, meta.ext), tokenKey(request.query.token!));
+      return reply.type('application/pdf').header('cache-control', 'no-store').send(Buffer.from(plain));
+    } catch (error) {
+      return pdfFail(reply, error);
+    }
+  });
+
+  app.post<{ Querystring: { token?: string; name?: string } }>('/api/view/file-to-pdf', async (request, reply) => {
+    const view = await downloadOnly(request.query.token, reply);
+    if (!view) return reply;
+    if (!Buffer.isBuffer(request.body) || request.body.length === 0) return reply.code(415).send({ success: false, error: '파일을 보내 주세요.' });
+    const name = (request.query.name ?? 'file').slice(0, 200);
+    try {
+      const pdf = await fileToPdf(new Uint8Array(request.body), name);
+      return attachment(reply, pdf, `${name.replace(/\.[^.]+$/, '') || 'document'}.pdf`, 'application/pdf');
+    } catch (error) {
+      if (error instanceof FileToPdfError) return reply.code(error.status).send({ success: false, error: error.message });
+      throw error;
+    }
+  });
+
   app.get<{ Querystring: { token?: string } }>('/api/view/pdf-info', async (request, reply) => {
     const view = await viewOnly(request.query.token, reply);
     if (!view) return reply;
@@ -1145,7 +1196,7 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // PDF 편집기 — 다른 PDF 넣기(파일에서 넣기·파일 합치기). 본문은 PDF 바이트(application/octet-stream).
-  app.post<{ Querystring: { token?: string } }>('/api/view/pdf-part', async (request, reply) => {
+  app.post<{ Querystring: { token?: string; name?: string } }>('/api/view/pdf-part', async (request, reply) => {
     const view = await resolveView(request.query.token, reply);
     if (!view) return reply;
     const perms = view.claims.perms;
@@ -1154,7 +1205,7 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
     }
     if (!Buffer.isBuffer(request.body)) return reply.code(415).send({ success: false, error: 'PDF 파일을 보내 주세요.' });
     try {
-      const data = await addPdfPart(view.meta.id, new Uint8Array(request.body), config.maxUploadBytes, tokenKey(request.query.token!));
+      const data = await addPdfPart(view.meta.id, new Uint8Array(request.body), config.maxUploadBytes, tokenKey(request.query.token!), request.query.name ?? 'file.pdf');
       return reply.send({ success: true, data });
     } catch (error) {
       if (error instanceof PdfRoomError) return reply.code(error.status).send({ success: false, error: error.message });

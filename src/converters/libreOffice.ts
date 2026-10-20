@@ -8,7 +8,7 @@ import { promisify } from 'node:util';
 import { PDFDocument } from 'pdf-lib';
 import { strFromU8, strToU8, zipSync } from 'fflate';
 import { trimPdfMargins } from './pdfTrim.js';
-import type { Converter } from './types.js';
+import { ConversionError, type Converter } from './types.js';
 import { guardedUnzipSync } from '../zipGuard.js';
 import { createLibreOfficeWorker } from './loWorker.js';
 import { ensureFontSubstitutions } from './loFontSubstitution.js';
@@ -374,6 +374,37 @@ async function convertWithSoffice(
     } else {
       await fs.rm(workDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }).catch(removeLater);
     }
+  }
+}
+
+/**
+ * PDF → 워드(docx)·파워포인트(pptx) — LibreOffice의 PDF 가져오기 필터(writer_pdf_import·impress_pdf_import)로.
+ * 쪽마다 글상자·도형을 제자리에 놓는 "모양 그대로" 변환이다(PDF 편집기 7단계, src/pdf/pdfConvert.ts).
+ */
+export async function convertPdfToOffice(pdfBytes: Uint8Array, to: 'docx' | 'pptx'): Promise<Uint8Array> {
+  if (!sofficePath) throw new ConversionError('이 서버에는 LibreOffice가 없어 변환할 수 없습니다.');
+  const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'docview-pdf2office-'));
+  try {
+    const source = path.join(workDir, 'document.pdf');
+    await fs.writeFile(source, pdfBytes);
+    const args =
+      to === 'docx'
+        ? ['--infilter=writer_pdf_import', '--convert-to', 'docx:MS Word 2007 XML']
+        : ['--infilter=impress_pdf_import', '--convert-to', 'pptx:Impress MS PowerPoint 2007 XML'];
+    await withProfileSlot(async (profileDir) => {
+      await execFileAsync(
+        sofficePath!,
+        ['--headless', '--norestore', `-env:UserInstallation=${pathToFileURL(profileDir).href}`, ...args, '--outdir', workDir, source],
+        { timeout: CONVERT_TIMEOUT_MS },
+      );
+    });
+    try {
+      return new Uint8Array(await fs.readFile(path.join(workDir, `document.${to}`)));
+    } catch {
+      throw new ConversionError('변환하지 못했습니다(LibreOffice가 결과를 만들지 않았습니다).');
+    }
+  } finally {
+    await fs.rm(workDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }).catch(() => undefined);
   }
 }
 
