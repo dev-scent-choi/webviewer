@@ -428,6 +428,18 @@ async function main(): Promise<void> {
   /** 이 문서를 iframe으로 임베드한 부모 창(예: 업체별 접속현황 탭)이 자기 UI 안에 접속자 아바타를
    * 직접 그릴 수 있도록, webviewer 자신의 툴바(chrome=hidden이면 안 보임)와는 별개로 접속자 목록을
    * 그대로 postMessage로도 흘려보낸다 — webviewer는 그 목록을 "어디에" 보여줄지 전혀 몰라도 된다. */
+  /** 참여자 이름·칸 내용은 이 화면을 띄운 부모 창(출처)에만 보낸다 — 부모 출처를 모르면(리퍼러를 숨긴 부모) 예전처럼 '*' */
+  function parentOrigin(): string {
+    const ancestors = (location as Location & { ancestorOrigins?: DOMStringList }).ancestorOrigins;
+    if (ancestors && ancestors.length > 0) return ancestors[0];
+    try {
+      if (document.referrer) return new URL(document.referrer).origin;
+    } catch {
+      /* 리퍼러가 주소가 아니면 아래로 */
+    }
+    return '*';
+  }
+
   function postPresenceToParent(): void {
     if (window.parent === window) return;
     const states = [...provider.awareness.getStates().entries()] as Array<[number, AwarenessUserState]>;
@@ -435,7 +447,7 @@ async function main(): Promise<void> {
       name: state.user!.name!,
       color: state.user!.color ?? pickPresenceColorForName(state.user!.name!),
     }));
-    window.parent.postMessage({ type: 'docview:presence', users }, '*');
+    window.parent.postMessage({ type: 'docview:presence', users }, parentOrigin());
   }
   provider.awareness.on('change', () => {
     renderPresenceAvatars(presenceEl, provider.awareness);
@@ -1465,7 +1477,7 @@ async function main(): Promise<void> {
                 text: cells.get(key) ?? '',
                 rect: { top: rect.top, left: rect.left, bottom: rect.bottom, right: rect.right, width: rect.width, height: rect.height },
               },
-              '*',
+              parentOrigin(),
             );
           }
         });

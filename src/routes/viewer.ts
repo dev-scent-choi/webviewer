@@ -15,7 +15,7 @@ import { config } from '../config.js';
 import { findConverter } from '../converters/index.js';
 import { IMAGE_MIME_BY_EXT, readSlideSizeEmu } from '../pptx/slideContent.js';
 import { unzipSync } from 'fflate';
-import { guardedUnzipSync } from '../zipGuard.js';
+import { assertZipNotTooLarge, guardedUnzipSync, ZipTooLargeError } from '../zipGuard.js';
 import { convertToPdf } from './documents.js';
 import {
   PageOutOfRangeError,
@@ -547,6 +547,9 @@ const slideMediaQuerySchema = {
 interface SlideMediaQuery extends TokenQuery {
   readonly path: string;
 }
+
+/** 무거운 작업(LibreOffice 변환·암호 풀기·서명) — 접속 IP마다 분당 상한(비밀번호 맞히기·변환 대기열 채우기 방지) */
+const HEAVY_RATE_LIMIT = { max: 20, timeWindow: '1 minute' } as const;
 
 export async function viewerRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Querystring: TokenQuery }>(
@@ -1095,7 +1098,7 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
   const viewOnly = pdfRoute(() => true, '이 문서는 PDF 편집기로 열 수 없습니다.');
   const editOnly = pdfRoute((p) => p.canEdit, '이 문서를 고칠 권한이 없습니다.');
 
-  app.post<{ Querystring: { token?: string }; Body: { password?: unknown } }>('/api/view/pdf-unlock', async (request, reply) => {
+  app.post<{ Querystring: { token?: string }; Body: { password?: unknown } }>('/api/view/pdf-unlock', { config: { rateLimit: HEAVY_RATE_LIMIT } }, async (request, reply) => {
     const view = await viewOnly(request.query.token, reply);
     if (!view) return reply;
     const password = typeof request.body?.password === 'string' ? request.body.password.slice(0, 256) : '';
@@ -1140,7 +1143,7 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
   const attachment = (reply: FastifyReply, bytes: Uint8Array, fileName: string, mime: string) =>
     reply.type(mime).header('cache-control', 'no-store').header('content-disposition', `attachment; filename*=UTF-8''${encodeURIComponent(fileName)}`).send(Buffer.from(bytes));
 
-  app.post<{ Querystring: { token?: string }; Body: { to?: unknown } }>('/api/view/pdf-convert', async (request, reply) => {
+  app.post<{ Querystring: { token?: string }; Body: { to?: unknown } }>('/api/view/pdf-convert', { config: { rateLimit: HEAVY_RATE_LIMIT } }, async (request, reply) => {
     const view = await downloadOnly(request.query.token, reply);
     if (!view) return reply;
     const to = request.body?.to;
@@ -1169,7 +1172,7 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
-  app.post<{ Querystring: { token?: string; name?: string } }>('/api/view/file-to-pdf', async (request, reply) => {
+  app.post<{ Querystring: { token?: string; name?: string } }>('/api/view/file-to-pdf', { bodyLimit: config.maxUploadBytes, config: { rateLimit: HEAVY_RATE_LIMIT } }, async (request, reply) => {
     const view = await downloadOnly(request.query.token, reply);
     if (!view) return reply;
     if (!Buffer.isBuffer(request.body) || request.body.length === 0) return reply.code(415).send({ success: false, error: '파일을 보내 주세요.' });
@@ -1185,7 +1188,7 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
 
   // 9단계 — 인증서 전자서명. 본문: { p12(base64), password, reason?, location?, pageKey?, rect? } — 인증서·비밀번호는 기록하지 않는다
   const signOnly = pdfRoute((p) => p.canEdit && p.canDownload, '이 문서에 서명할 권한이 없습니다.');
-  app.post<{ Querystring: { token?: string }; Body: Record<string, unknown> }>('/api/view/pdf-sign', async (request, reply) => {
+  app.post<{ Querystring: { token?: string }; Body: Record<string, unknown> }>('/api/view/pdf-sign', { config: { rateLimit: HEAVY_RATE_LIMIT } }, async (request, reply) => {
     const view = await signOnly(request.query.token, reply);
     if (!view) return reply;
     const body = request.body ?? {};
@@ -1223,7 +1226,7 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // PDF 편집기 — 다른 PDF 넣기(파일에서 넣기·파일 합치기). 본문은 PDF 바이트(application/octet-stream).
-  app.post<{ Querystring: { token?: string; name?: string } }>('/api/view/pdf-part', async (request, reply) => {
+  app.post<{ Querystring: { token?: string; name?: string } }>('/api/view/pdf-part', { bodyLimit: config.maxUploadBytes }, async (request, reply) => {
     const view = await resolveView(request.query.token, reply);
     if (!view) return reply;
     const perms = view.claims.perms;
@@ -1359,7 +1362,7 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
   // 호출하는 "저장" 한 번이 곧 전체 문서 교체다.
   app.post<{ Querystring: TokenQuery }>(
     '/api/view/hwp-save',
-    { schema: { querystring: tokenQuerySchema } },
+    { schema: { querystring: tokenQuerySchema }, bodyLimit: config.maxUploadBytes },
     async (request, reply) => {
       const view = await resolveView(request.query.token, reply);
       if (!view) return reply;
@@ -1372,6 +1375,12 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
       const data = request.body as Buffer;
       if (!data || data.length === 0) {
         return reply.code(400).send({ success: false, error: '저장할 문서 내용이 없습니다.' });
+      }
+      try {
+        assertZipNotTooLarge(data, 'hwp-save');
+      } catch (error) {
+        if (error instanceof ZipTooLargeError) return reply.code(413).send({ success: false, error: '압축을 풀면 너무 큰 파일입니다.' });
+        throw error;
       }
       await store.saveOriginal(view.meta.id, view.meta.ext, data);
 

@@ -29,6 +29,12 @@ function parseApiKeys(raw: string | undefined): ReadonlyMap<string, string> {
   return map;
 }
 
+function parseTrustProxy(raw: string | undefined): string[] | false {
+  if (raw?.trim().toLowerCase() === 'false') return false;
+  const list = (raw ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+  return list.length > 0 ? list : ['127.0.0.1', '::1', '::ffff:127.0.0.1'];
+}
+
 function parseAllowedOrigins(raw: string | undefined): readonly string[] {
   return (raw ?? '')
     .split(',')
@@ -58,6 +64,12 @@ export const config = {
   changeLogDir: path.join(dataRoot, 'changeLogs'),
   tokenTtlSeconds: Number(process.env.DOCVIEW_TOKEN_TTL ?? DEFAULT_TOKEN_TTL_SECONDS),
   maxUploadBytes: MAX_UPLOAD_BYTES,
+  /** 파일을 받지 않는 라우트의 본문 상한(JSON 등) — 인증서 서명(base64 ≤200KB)·주석·쪽 목록이 넉넉히 들어간다 */
+  defaultBodyLimit: Number(process.env.DOCVIEW_BODY_LIMIT ?? 4 * 1024 * 1024),
+  /** WebSocket 메시지 한 개 상한 — 큰 문서의 첫 동기화도 넉넉히 */
+  wsMaxPayload: Number(process.env.DOCVIEW_WS_MAX_PAYLOAD ?? 64 * 1024 * 1024),
+  /** 믿을 프록시 주소(쉼표 구분). 기본은 이 컴퓨터(루프백)뿐 — 'false'면 끈다 */
+  trustProxy: parseTrustProxy(process.env.DOCVIEW_TRUST_PROXY),
   renderScale: RENDER_SCALE,
   /** disk: 파일 저장(기본) / memory: 서버 메모리에만 보관 (재시작 시 소멸, 디스크 비잔류) */
   storageMode,
