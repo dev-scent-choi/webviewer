@@ -91,6 +91,7 @@
         <li><button class="pdf-tool-item" data-tool="combine" style="--tc:#3a6fd8"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M8 4h7l3 3v10H8z"/><path d="M5 7v13h10"/></svg><span>파일 합치기</span></button></li>
         <li><button class="pdf-tool-item" data-tool="extract" style="--tc:#7a52c7"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h8l4 4v14H6z"/><path d="M9 14h6M12 11v6"/></svg><span>페이지 추출·나누기</span></button></li>
         <li><button class="pdf-tool-item" data-tool="fill" style="--tc:#c4302b"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13 7l4 4"/></svg><span>양식 채우기·서명</span></button></li>
+        <li><button class="pdf-tool-item" data-tool="certsign" style="--tc:#1a5fa8"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h8l4 4v6"/><path d="M6 3v18h7"/><circle cx="17.5" cy="17" r="3"/><path d="m16 19.5-.8 2.5 2.3-1 2.3 1-.8-2.5"/></svg><span>인증서 서명</span></button></li>
         <li><button class="pdf-tool-item" data-tool="ocr" style="--tc:#7a52c7"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/><path d="M8 9h8M8 12h8M8 15h5"/></svg><span>글자 인식(OCR)</span></button></li>
         <li><button class="pdf-tool-item" data-tool="convert" style="--tc:#3a6fd8"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h12l-3-3M20 17H8l3 3"/></svg><span>변환</span></button></li>
         <li><button class="pdf-tool-item" data-tool="protect" style="--tc:#b26a00"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg><span>암호·권한</span></button></li>
@@ -188,6 +189,9 @@
             </span>
           </span>
           <span class="pdf-float-sep"></span>
+          <button id="sign-cert" class="pdf-float-btn" type="button" title="인증서 서명 — 공동인증서·사설 인증서(.pfx·.p12)로 전자서명한 PDF 내려받기" aria-label="인증서 서명">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h8l4 4v6"/><path d="M6 3v18h7"/><circle cx="17.5" cy="17" r="3"/><path d="m16 19.5-.8 2.5 2.3-1 2.3 1-.8-2.5"/></svg>
+          </button>
           <button id="sign-fields" class="pdf-float-btn" type="button" title="양식 칸 목록" aria-label="양식 칸 목록">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><rect x="4" y="4" width="16" height="5" rx="1"/><rect x="4" y="13" width="16" height="5" rx="1"/><path d="M7 6.5h5M7 15.5h3"/></svg>
           </button>
@@ -380,6 +384,29 @@
         <p class="pdf-dialog-note">워드·엑셀·파워포인트·한글·그림 파일을 PDF로 바꿔 내려받습니다. 지금 문서에 쪽으로 넣으려면 페이지 정리의 ‘파일에서 넣기’를 쓰세요.</p>
         <button id="convert-file-btn" class="btn-mini" type="button">파일 고르기…</button>
         <input id="convert-file" type="file" hidden />
+      </div>
+    </div>
+  </div>
+
+  <div id="cert-dialog" class="office-dialog" hidden role="dialog" aria-labelledby="cert-dialog-title">
+    <div class="office-dialog-card pdf-props-card">
+      <h2 id="cert-dialog-title">인증서 서명</h2>
+      <p class="pdf-dialog-text">지금 편집한 상태를 인증서로 전자서명한 PDF를 내려받습니다. 문서 자체는 바뀌지 않습니다.</p>
+      <label class="pdf-prop-row"><span>인증서</span><input id="cert-file" type="file" accept=".pfx,.p12,application/x-pkcs12" /></label>
+      <label class="pdf-prop-row"><span>비밀번호</span><input id="cert-password" type="password" autocomplete="off" maxlength="256" /></label>
+      <label class="pdf-prop-row"><span>사유</span><input id="cert-reason" type="text" maxlength="200" placeholder="예: 계약 승인" /></label>
+      <label class="pdf-prop-row"><span>장소</span><input id="cert-location" type="text" maxlength="200" placeholder="예: 서울" /></label>
+      <label class="pdf-prop-row"><span>서명 칸</span><select id="cert-position">
+        <option value="bottom-right" selected>지금 쪽 오른쪽 아래</option>
+        <option value="bottom-left">지금 쪽 왼쪽 아래</option>
+        <option value="top-right">지금 쪽 오른쪽 위</option>
+        <option value="none">보이지 않는 서명</option>
+      </select></label>
+      <p class="pdf-dialog-note">인증서와 비밀번호는 서명하는 동안에만 쓰고 저장하지 않습니다. 서명한 뒤 파일을 고치면 서명이 깨집니다. 암호를 걸도록 해 둔 문서는 서명할 수 없습니다.</p>
+      <p id="cert-status" class="pdf-dialog-result" aria-live="polite"></p>
+      <div class="office-dialog-actions">
+        <button class="btn-mini" type="button" data-close>닫기</button>
+        <button id="cert-run" class="btn-mini btn-mini-primary" type="button">서명해서 내려받기</button>
       </div>
     </div>
   </div>

@@ -20,6 +20,7 @@ import { askPassword, setupDocTools, type DocTools } from './pdf/docTools.js';
 import { setupConvert, type ConvertUi } from './pdf/convertUi.js';
 import { setupOcr, type OcrUi } from './pdf/ocrUi.js';
 import { setupSignUi, type SignUi } from './pdf/signUi.js';
+import { setupCertSign, type CertSignUi } from './pdf/certSignUi.js';
 import { pickPresenceColorForName, renderPresenceAvatars } from './presence.js';
 
 interface ViewInfo {
@@ -79,7 +80,7 @@ function showNotice(text: string): void {
   noticeTimer = window.setTimeout(() => (notice.hidden = true), 2600);
 }
 
-function setupChrome(view: PageView, find: FindController, info: ViewInfo, panels: Panels, organize: OrganizeView, sign: SignUi, docTools: DocTools, convert: ConvertUi, ocr: OcrUi): void {
+function setupChrome(view: PageView, find: FindController, info: ViewInfo, panels: Panels, organize: OrganizeView, sign: SignUi, docTools: DocTools, convert: ConvertUi, ocr: OcrUi, certSign: CertSignUi): void {
   // 오른쪽 줄 — 쪽 번호·이동·배율
   const pageInput = $<HTMLInputElement>('page-input');
   const pageCount = $('page-count');
@@ -157,7 +158,7 @@ function setupChrome(view: PageView, find: FindController, info: ViewInfo, panel
     // 읽기 전용이면 고치는 도구는 숨기고, 추출·나누기는 내려받기 권한이 있을 때만
     const tool = item.dataset.tool;
     const allowed =
-      tool === 'organize' || tool === 'combine' || tool === 'comment' || tool === 'fill' || tool === 'protect' || tool === 'compress' || tool === 'ocr' ? info.permissions.canEdit : tool === 'extract' || tool === 'download' || tool === 'convert' ? info.permissions.canDownload : true;
+      tool === 'organize' || tool === 'combine' || tool === 'comment' || tool === 'fill' || tool === 'protect' || tool === 'compress' || tool === 'ocr' ? info.permissions.canEdit : tool === 'extract' || tool === 'download' || tool === 'convert' ? info.permissions.canDownload : tool === 'certsign' ? info.permissions.canEdit && info.permissions.canDownload : true;
     if (!allowed) item.closest('li')!.hidden = true;
     item.addEventListener('click', () => {
       const tool = item.dataset.tool;
@@ -169,6 +170,7 @@ function setupChrome(view: PageView, find: FindController, info: ViewInfo, panel
       else if (tool === 'props') docTools.openProps();
       else if (tool === 'convert') convert.open();
       else if (tool === 'ocr') ocr.open();
+      else if (tool === 'certsign') certSign.open();
       else if (tool === 'organize') organize.open();
       else if (tool === 'combine') organize.pickFiles();
       else if (tool === 'extract') organize.open('추출할 쪽을 고른 뒤 ‘고른 쪽 추출’ 또는 ‘나누기’를 누르세요.');
@@ -437,7 +439,18 @@ async function main(): Promise<void> {
   });
   for (const key of ocrMap.keys()) view.refreshText(key);
   const ocr = setupOcr({ view, ydoc, map: ocrMap, author: info.viewer, notice: showNotice });
-  setupChrome(view, find, info, panels, organize, sign, docTools, convert, ocr);
+  const certSign = setupCertSign({
+    token,
+    docName: info.name,
+    currentPage: () => view.currentPage,
+    pageKeyOf: (page) => view.pageKeyOf(page),
+    sizeOf: (page) => view.sizeOf(page),
+    notice: showNotice,
+  });
+  const certBtn = $<HTMLButtonElement>('sign-cert');
+  certBtn.hidden = !(info.permissions.canEdit && info.permissions.canDownload);
+  certBtn.addEventListener('click', () => certSign.open());
+  setupChrome(view, find, info, panels, organize, sign, docTools, convert, ocr, certSign);
   // 처음 배율: 폭에 맞추되 너무 크게(작은 쪽을 넓은 화면에) 키우지 않는다
   view.setScale('fit-width');
   if (view.scale > 1.25) view.setScale(1.25);

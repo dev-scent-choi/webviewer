@@ -121,7 +121,10 @@ pdfcraft의 배치를 따른다. 모든 문구는 한국어.
 6. **보안·압축·문서 속성**: 암호 걸기·풀기, 압축, 속성.
 7. **변환**: PDF → 워드·엑셀·PPT·그림·텍스트, 파일 → PDF 만들기.
 8. **OCR**: 한국어·영어 글자 인식, 보이지 않는 글자 층.
-9. **인증서 전자서명**.
+9. **인증서 전자서명**: 서명 탭·모든 도구의 ‘인증서 서명’ — .pfx/.p12로 보이는(지금 쪽 모서리)·보이지 않는 서명, 서명한 파일은 내려받기만.
+
+상태(2026-10-20): 1~9단계 모두 운영 반영. 브라우저 확인은 `verify:pdf`, `verify:pdf-annots`, `verify:pdf-organize`, `verify:pdf-forms`,
+`verify:pdf-textedit`, `verify:pdf-security`, `verify:pdf-convert`, `verify:pdf-ocr`, `verify:pdf-sign`.
 
 ## 5. 시험
 
