@@ -303,3 +303,5 @@
   .pdf-modes .pdf-mode { padding: 0 8px; }
 }
 .pdf-hit-layer { position: absolute; inset: 0; z-index: 3; pointer-events: none; }
+/* pdf.js가 글자 폭 계산용으로 body에 붙이는 canvas — pdf_viewer.css와 같이 숨긴다(안 그러면 단추 위를 덮어 눌리지 않았다) */
+.hiddenCanvasElement { position: absolute; top: 0; left: 0; width: 0; height: 0; display: none; }
