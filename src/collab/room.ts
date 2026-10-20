@@ -31,7 +31,7 @@ import { PptxChangeTracker, type PptxChangeSummary } from './pptxChangeLog.js';
 import { exportDocx } from '../docx/export.js';
 import { importDocx } from '../docx/import.js';
 import { invalidateRenderCache } from '../rendering.js';
-import { exportPdfFromRoom, pdfChangeLogOf, pdfModelIsEmpty } from '../pdf/pdfModel.js';
+import { exportPdfFromRoom, pdfChangeLogOf, PdfChangeTracker, PDF_SEED_ORIGIN, seedPdfModel } from '../pdf/pdfModel.js';
 import { convertToPdf } from '../routes/documents.js';
 import { invalidateViewCaches } from '../routes/viewer.js';
 import { store } from '../storage.js';
@@ -240,6 +240,8 @@ interface Room {
   /** 마지막 저장 이후 사용자 편집이 있었는지 — pptx는 이게 false면 마지막 참여자가 나갈 때 저장하지
    * 않는다(슬라이드를 열어 보기만 한 대용량 파일을 통째로 다시 내보내고 PDF 재변환하지 않도록). */
   editedSinceSave: boolean;
+  /** pdf 룸 — 주석 추가·변경·삭제 기록(src/pdf/pdfModel.ts) */
+  pdfChangeTracker?: PdfChangeTracker;
   /**
    * xlsx 룸에서만 쓰인다 — 룸이 사는 동안 진짜로 상주하는 지연(lazy) 그리드 저장소(Task 3-7).
    * 값·서식 편집은 전부 `dirtyOverlay`에만 반영되고, 편집되지 않은 원본 셀은 필요할 때만
@@ -1525,8 +1527,9 @@ async function seedRoom(room: Room): Promise<void> {
       // 원본 파일에 이미 있던 수식의 최초 계산값은 그 페이지가 처음 구독되는 순간
       // reconcilePageSubscriptions가 셀 데이터와 함께 채운다.
     } else if (kind === 'pdf') {
-      // PDF 편집기 1단계: 시딩할 것이 없다 — 편집기가 원본을 /api/view/pdf-source로 받아 pdf.js로 그리고, 바뀐 것만
-      // 이 방의 맵(src/pdf/pdfModel.ts)에 쌓는다
+      // 파일의 (편집기가 다루는) 주석을 맵에 넣는다 — 편집기는 그 주석을 뺀 PDF(/api/view/pdf-source)를 그리고 주석은 맵에서 그린다
+      await seedPdfModel(original, ydoc);
+      room.pdfChangeTracker = new PdfChangeTracker(ydoc, (origin) => room.viewerByConn.get(origin as WebSocket) ?? null);
     } else if (kind === 'pptx') {
       const slidesArray = ydoc.getArray<SlideEntry>(PPTX_SLIDES_ARRAY);
       ydoc.transact(() => {
@@ -1722,10 +1725,11 @@ async function flushToStore(room: Room): Promise<void> {
       }
     }
   } else if (kind === 'pdf') {
-    // 바뀐 것이 없으면 원본을 다시 쓰지 않는다(1단계는 늘 이 경우)
-    if (pdfModelIsEmpty(ydoc)) return;
+    // 바뀐 것이 없으면 원본을 다시 쓰지 않는다(열기만 한 방). 저장이 실패하면 queueFlush가 다시 true로 돌린다.
+    if (!room.editedSinceSave) return;
+    room.editedSinceSave = false;
     const original = await store.readOriginal(docId, meta.ext);
-    await store.saveOriginal(docId, meta.ext, Buffer.from(await exportPdfFromRoom(original, ydoc)));
+    await store.saveOriginal(docId, meta.ext, Buffer.from(await exportPdfFromRoom(original, ydoc, true)));
     const converter = findConverter(meta.ext);
     if (converter) {
       try {
@@ -1824,7 +1828,7 @@ export async function getCurrentBytes(docId: string): Promise<Uint8Array | null>
   const meta = await store.readMeta(docId);
   if (!meta) return null;
   const original = await store.readOriginal(docId, meta.ext);
-  if (room.kind === 'pdf') return exportPdfFromRoom(original, room.ydoc);
+  if (room.kind === 'pdf') return exportPdfFromRoom(original, room.ydoc, room.editedSinceSave);
   if (room.kind === 'xlsx') {
     if (!room.lazyGrid || !room.baselineSheetExtents) return null;
     // flushToStore와 같은 이유로 진행 중인 행/열 이동을 먼저 기다린다 — 이 경로는 사용자가 방금
@@ -1945,7 +1949,7 @@ function getOrCreateRoom(docId: string, ext: string): Room {
     // 열기만 해도(구독 → 그 페이지 재계산 → computed 쓰기) 자동저장이 걸려, 아무도 편집하지 않은
     // 문서를 읽는 동안 전체 export + 재파싱이 반복된다. 진짜 편집은 GRID_CELLS_MAP 쓰기로
     // 도착하고 그건 이 표식이 없으므로 그대로 자동저장을 예약한다.
-    if (isAutosaveExemptOrigin(origin) || origin === PPTX_SEED_ORIGIN) return;
+    if (isAutosaveExemptOrigin(origin) || origin === PPTX_SEED_ORIGIN || origin === PDF_SEED_ORIGIN) return;
     if (!room.suppressAutosaveReschedule) {
       room.editedSinceSave = true;
       scheduleAutosave(room);
@@ -2006,7 +2010,7 @@ function closeConn(room: Room, conn: WebSocket): void {
       void persistChangeLog(room.docId, room.kind, changeLogOf(room));
       if (room.lazyGrid) void closeLazyGridStore(room.lazyGrid);
       void room.ready
-        .then(() => (room.kind === 'pptx' && !room.editedSinceSave ? undefined : queueFlush(room)))
+        .then(() => ((room.kind === 'pptx' || room.kind === 'pdf') && !room.editedSinceSave ? undefined : queueFlush(room)))
         .catch((error) => console.error(`동시편집 종료 저장 실패 (문서 ${room.docId}):`, error))
         .finally(() => room.ydoc.destroy());
     } else if (subscription !== undefined && before !== null) {
@@ -2544,7 +2548,7 @@ export function getCellChangeLog(docId: string): readonly CellChangeSummary[] | 
  * 형식별 추적기 중 이 룸의 kind에 해당하는 것의 현재 누적 목록. */
 function changeLogOf(room: Room): readonly object[] {
   if (room.kind === 'xlsx') return cellChangeLogOf(room);
-  if (room.kind === 'pdf') return pdfChangeLogOf(room.ydoc);
+  if (room.kind === 'pdf') return pdfChangeLogOf(room.pdfChangeTracker);
   if (room.kind === 'docx') return room.docxChangeTracker?.list() ?? [];
   return room.pptxChangeTracker?.list() ?? [];
 }

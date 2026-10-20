@@ -1,4 +1,6 @@
 import fs from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { basePdfForEditor } from '../pdf/pdfModel.js';
 import os from 'node:os';
 import path from 'node:path';
 import type { FastifyInstance, FastifyReply } from 'fastify';
@@ -56,6 +58,18 @@ export interface ViewContext {
  *
  * `src/routes/edit.ts`(동시편집 WebSocket 라우트)도 동일한 검증이 필요해 이 함수를 재사용한다.
  */
+/** PDF 편집기용 PDF(다루는 주석을 뺀 것) — 문서 id·길이·내용 해시로 최근 몇 개만 기억한다 */
+const editorBaseCache = new Map<string, Uint8Array>();
+async function editorBaseOf(docId: string, bytes: Uint8Array): Promise<Uint8Array> {
+  const key = `${docId}:${bytes.length}:${createHash('sha1').update(bytes).digest('hex')}`;
+  const hit = editorBaseCache.get(key);
+  if (hit) return hit;
+  const base = await basePdfForEditor(bytes);
+  editorBaseCache.set(key, base);
+  while (editorBaseCache.size > 8) editorBaseCache.delete(editorBaseCache.keys().next().value as string);
+  return base;
+}
+
 export async function resolveView(token: string | undefined, reply: FastifyReply): Promise<ViewContext | null> {
   if (!token) {
     await reply.code(401).send({ success: false, error: '열람 토큰이 없습니다.' });
@@ -1041,8 +1055,10 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
     if (view.claims.perms.pdfEditor !== true || !view.claims.perms.canDownload) {
       return reply.code(403).send({ success: false, error: '이 문서는 PDF 편집기로 열 수 없습니다.' });
     }
-    const data = (await getCurrentBytes(view.meta.id)) ?? (await store.readOriginal(view.meta.id, view.meta.ext));
-    return reply.type('application/pdf').header('cache-control', 'no-store').send(Buffer.from(data));
+    // 편집기가 다루는 주석은 뺀 PDF — 그 주석은 편집 방의 맵에서 그린다(src/pdf/pdfModel.ts). 주석만 바뀌는 동안에는 저장된
+    // 원본에서 빼도 결과가 같으므로 저장본 기준으로 만들고, 같은 바이트면 다시 계산하지 않는다.
+    const original = await store.readOriginal(view.meta.id, view.meta.ext);
+    return reply.type('application/pdf').header('cache-control', 'no-store').send(Buffer.from(await editorBaseOf(view.meta.id, original)));
   });
 
   app.get<{ Querystring: TokenWithMarkupQuery }>(

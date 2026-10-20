@@ -7,7 +7,10 @@ import * as Y from 'yjs';
 import { WebsocketProvider } from 'y-websocket';
 import { openPdf } from './pdf/pdfDocument.js';
 import { PageView } from './pdf/pageView.js';
-import { setupPanels } from './pdf/panels.js';
+import { setupPanels, type Panels } from './pdf/panels.js';
+import { AnnotLayer } from './pdf/annotLayer.js';
+import { setupAnnotUi } from './pdf/annotUi.js';
+import { PDF_ANNOTS_MAP, type PdfAnnot } from '../pdf/annotTypes.js';
 import { FindController } from './pdf/findController.js';
 import { pickPresenceColorForName, renderPresenceAvatars } from './presence.js';
 
@@ -34,7 +37,7 @@ async function fetchViewInfo(): Promise<ViewInfo> {
   return json.data;
 }
 
-function connect(info: ViewInfo): void {
+function connect(info: ViewInfo): Y.Doc {
   const ydoc = new Y.Doc();
   const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const provider = new WebsocketProvider(`${wsProtocol}//${location.host}/ws/edit`, info.docId, ydoc, { params: { token } });
@@ -55,9 +58,10 @@ function connect(info: ViewInfo): void {
   });
   const presence = $('presence');
   provider.awareness.on('change', () => renderPresenceAvatars(presence, provider.awareness));
+  return ydoc;
 }
 
-function setupChrome(view: PageView, find: FindController, info: ViewInfo): void {
+function setupChrome(view: PageView, find: FindController, info: ViewInfo, panels: Panels): void {
   // 오른쪽 줄 — 쪽 번호·이동·배율
   const pageInput = $<HTMLInputElement>('page-input');
   const pageCount = $('page-count');
@@ -117,33 +121,31 @@ function setupChrome(view: PageView, find: FindController, info: ViewInfo): void
   const modes = [...document.querySelectorAll<HTMLButtonElement>('.pdf-mode')];
   if (!info.permissions.canEdit) for (const m of modes) if (m.dataset.editOnly !== undefined) m.hidden = true;
   const selectMode = (mode: string) => {
-    if (mode === 'edit' || mode === 'sign') {
-      showNotice(mode === 'edit' ? '주석·글자 편집 도구는 다음 업데이트에서 열립니다.' : '양식 채우기·서명은 다음 업데이트에서 열립니다.');
+    if (mode === 'sign') {
+      showNotice('양식 채우기·서명은 다음 업데이트에서 열립니다.');
       return;
     }
     for (const m of modes) m.setAttribute('aria-selected', String(m.dataset.mode === mode));
     document.body.classList.toggle('mode-read', mode === 'read');
+    document.body.classList.toggle('mode-edit', mode === 'edit');
     if (mode === 'tools') setToolsOpen(true);
+    // 편집 — 왼쪽 목록을 접고 오른쪽에 메모 목록(pdfcraft의 주석 달기와 같다)
+    if (mode === 'edit') {
+      setToolsOpen(false);
+      panels.show('comments');
+    }
   };
   for (const m of modes) m.addEventListener('click', () => selectMode(m.dataset.mode ?? 'tools'));
   for (const item of document.querySelectorAll<HTMLButtonElement>('.pdf-tool-item')) {
     item.addEventListener('click', () => {
       if (item.dataset.tool === 'download') download();
+      else if (item.dataset.tool === 'comment') selectMode('edit');
       else showNotice(`'${item.querySelector('span')?.textContent ?? ''}'은(는) 다음 업데이트에서 열립니다.`);
     });
   }
 
-  // 떠 있는 도구 줄 — 선택 / 손(끌어서 이동)
+  // 손 도구(annotUi가 고르면 .hand) — 끌어서 이동
   const scroller = $('pdf-scroll');
-  const selectBtn = $('tool-select');
-  const handBtn = $('tool-hand');
-  const setHand = (on: boolean) => {
-    scroller.classList.toggle('hand', on);
-    selectBtn.setAttribute('aria-pressed', String(!on));
-    handBtn.setAttribute('aria-pressed', String(on));
-  };
-  selectBtn.addEventListener('click', () => setHand(false));
-  handBtn.addEventListener('click', () => setHand(true));
   let drag: { x: number; y: number; left: number; top: number } | null = null;
   scroller.addEventListener('pointerdown', (event) => {
     if (!scroller.classList.contains('hand') || event.button !== 0) return;
@@ -215,9 +217,7 @@ function setupChrome(view: PageView, find: FindController, info: ViewInfo): void
     } else if (mod && event.key === '0') {
       event.preventDefault();
       view.setScale('fit-width');
-    } else if (!typing && !mod && (event.key === 'h' || event.key === 'H')) setHand(true);
-    else if (!typing && !mod && (event.key === 'v' || event.key === 'V')) setHand(false);
-    else if (!typing && (event.key === 'PageDown' || event.key === 'PageUp')) {
+    } else if (!typing && (event.key === 'PageDown' || event.key === 'PageUp')) {
       event.preventDefault();
       view.goTo(view.currentPage + (event.key === 'PageDown' ? 1 : -1));
     } else if (!typing && mod && (event.key === 'Home' || event.key === 'End')) {
@@ -270,7 +270,7 @@ async function main(): Promise<void> {
   }
   $('doc-name').textContent = info.name;
   document.title = `${info.name} — PDF 편집`;
-  connect(info);
+  const ydoc = connect(info);
 
   try {
     currentDoc = await openPdf(`/api/view/pdf-source?token=${encodeURIComponent(token)}`);
@@ -290,8 +290,15 @@ async function main(): Promise<void> {
     next: $<HTMLButtonElement>('find-next'),
     close: $<HTMLButtonElement>('find-close'),
   });
-  setupPanels({ doc: currentDoc, view });
-  setupChrome(view, find, info);
+  const panels = setupPanels({ doc: currentDoc, view });
+  // 주석 — 협업 맵(방을 열 때 서버가 파일 주석을 채운다)을 쪽마다 그리고 도구로 고친다
+  const annotMap = ydoc.getMap<PdfAnnot>(PDF_ANNOTS_MAP);
+  const layer = new AnnotLayer({ view, map: annotMap, ydoc, canEdit: info.permissions.canEdit, author: info.viewer, scroller: $('pdf-scroll') });
+  setupAnnotUi({ layer, map: annotMap, canEdit: info.permissions.canEdit, onShowComments: () => panels.show('comments') });
+  // 썸네일에도 주석
+  panels.setThumbOverlay((page, host, vp) => layer.drawOverlay(page, host, vp));
+  layer.onPagesChanged((pages) => panels.refreshThumbOverlays(pages));
+  setupChrome(view, find, info, panels);
   // 처음 배율: 폭에 맞추되 너무 크게(작은 쪽을 넓은 화면에) 키우지 않는다
   view.setScale('fit-width');
   if (view.scale > 1.25) view.setScale(1.25);
