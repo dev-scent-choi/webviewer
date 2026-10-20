@@ -12,7 +12,8 @@ import { createHash } from 'node:crypto';
 import { degrees, PDFArray, PDFDict, PDFDocument, PDFName, PDFPageTree, PDFRef, PDFStream, type PDFObject, type PDFPage } from 'pdf-lib';
 import * as Y from 'yjs';
 import { readManagedAnnots, stripManagedAnnots } from './annotRead.js';
-import { writeAnnots } from './annotWrite.js';
+import { fontsFor, writeAnnots } from './annotWrite.js';
+import { applyFormValues, dropFieldsOnRemovedPages } from './pdfForm.js';
 import {
   ANNOT_LABELS,
   cleanPageList,
@@ -97,7 +98,10 @@ export async function buildPdfFromRoom(original: Uint8Array, ydoc: Y.Doc, parts?
   const annots = [...ydoc.getMap<PdfAnnot>(PDF_ANNOTS_MAP).values()]
     .filter((a) => order.has(a.pageKey))
     .sort((a, b) => order.get(a.pageKey)! - order.get(b.pageKey)! || a.createdAt.localeCompare(b.createdAt));
-  await writeAnnots(doc, annots, (key) => pageOfKey.get(key));
+  const fonts = fontsFor(doc);
+  await writeAnnots(doc, annots, (key) => pageOfKey.get(key), fonts);
+  // 양식 값(바꾼 칸만) — 한글은 주석과 같은 Pretendard 한 벌을 쓴다
+  await applyFormValues(doc, ydoc.getMap<unknown>(PDF_FORM_MAP).entries(), () => fonts.korean());
   return { bytes: await doc.save(), keys: [...pageOfKey.keys()] };
 }
 
@@ -161,7 +165,16 @@ async function arrangePages(doc: PDFDocument, entries: readonly PdfPageEntry[], 
   }
   doc.catalog.set(PDFName.of('Pages'), pagesRef);
   const kept = new Set(ordered.map(({ page }) => page.ref.tag));
-  if (origPages.some((p) => !kept.has(p.ref.tag))) dropUnreachable(doc);
+  const removedPages = origPages.filter((p) => !kept.has(p.ref.tag));
+  if (removedPages.length > 0) {
+    const removedAnnots = new Set<string>();
+    for (const p of removedPages) {
+      const annots = p.node.Annots();
+      for (const item of annots?.asArray() ?? []) if (item instanceof PDFRef) removedAnnots.add(item.tag);
+    }
+    dropFieldsOnRemovedPages(doc, removedAnnots);
+    dropUnreachable(doc);
+  }
   return result;
 }
 
@@ -222,7 +235,7 @@ export async function preparePdfPart(
 
 /** 변경 기록 한 줄 — 같은 주석은 마지막 상태로 하나만, 쪽 정리는 요약 한 줄 */
 export interface PdfChangeEntry {
-  readonly kind: 'annot_added' | 'annot_changed' | 'annot_removed' | 'pages_changed';
+  readonly kind: 'annot_added' | 'annot_changed' | 'annot_removed' | 'pages_changed' | 'form_changed';
   readonly annotType?: string;
   readonly label: string;
   readonly page: number | null;
@@ -264,6 +277,18 @@ export class PdfChangeTracker {
         return;
       }
       this.pagesEdit = { viewer: this.resolveViewer(transaction.origin), at: new Date().toISOString() };
+    });
+    // 양식 값 — 칸마다 마지막 값 한 줄
+    const form = ydoc.getMap<unknown>(PDF_FORM_MAP);
+    form.observe((event, transaction) => {
+      if (transaction.origin === PDF_SEED_ORIGIN) return;
+      const viewer = this.resolveViewer(transaction.origin);
+      const at = new Date().toISOString();
+      for (const name of event.keysChanged) {
+        const value = form.get(name);
+        const shown = value === undefined ? '(되돌림)' : typeof value === 'boolean' ? (value ? '체크' : '체크 해제') : Array.isArray(value) ? value.join(', ') : String(value);
+        this.entries.set(`form:${name}`, { kind: 'form_changed', label: '양식', page: null, text: `${name}: ${shown.slice(0, 200)}`, viewer, at });
+      }
     });
     const map = ydoc.getMap<PdfAnnot>(PDF_ANNOTS_MAP);
     for (const key of map.keys()) this.seeded.add(key);

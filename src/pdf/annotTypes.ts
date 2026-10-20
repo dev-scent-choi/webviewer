@@ -50,9 +50,9 @@ export function identityPages(count: number): PdfPageEntry[] {
   return Array.from({ length: count }, (_, i) => ({ key: `o:${i}`, rotate: 0 as const }));
 }
 
-export type PdfAnnotType = 'note' | 'highlight' | 'underline' | 'strike' | 'ink' | 'freetext' | 'rect' | 'ellipse' | 'line' | 'arrow';
+export type PdfAnnotType = 'note' | 'highlight' | 'underline' | 'strike' | 'ink' | 'freetext' | 'rect' | 'ellipse' | 'line' | 'arrow' | 'stamp';
 
-export const PDF_ANNOT_TYPES: readonly PdfAnnotType[] = ['note', 'highlight', 'underline', 'strike', 'ink', 'freetext', 'rect', 'ellipse', 'line', 'arrow'];
+export const PDF_ANNOT_TYPES: readonly PdfAnnotType[] = ['note', 'highlight', 'underline', 'strike', 'ink', 'freetext', 'rect', 'ellipse', 'line', 'arrow', 'stamp'];
 
 export interface PdfAnnot {
   readonly id: string;
@@ -77,6 +77,8 @@ export interface PdfAnnot {
   /** 메모 내용·글상자 글 */
   readonly text?: string;
   readonly fontSize?: number;
+  /** 서명·도장(stamp): 그림 data URL(image/png 또는 image/jpeg, base64) */
+  readonly image?: string;
   readonly author: string;
   readonly createdAt: string;
   readonly modifiedAt: string;
@@ -104,6 +106,7 @@ export const ANNOT_DEFAULTS: Record<PdfAnnotType, { color: string; width: number
   ellipse: { color: '#D93025', width: 2, opacity: 1 },
   line: { color: '#D93025', width: 2, opacity: 1 },
   arrow: { color: '#D93025', width: 2, opacity: 1 },
+  stamp: { color: '#000000', width: 0, opacity: 1 },
 };
 
 export const ANNOT_LABELS: Record<PdfAnnotType, string> = {
@@ -117,4 +120,11 @@ export const ANNOT_LABELS: Record<PdfAnnotType, string> = {
   ellipse: '타원',
   line: '선',
   arrow: '화살표',
+  stamp: '서명·도장',
 };
+
+/** 서명·도장 그림으로 받는 data URL(크기 상한 — Y.Doc·저장 파일이 커지지 않게) */
+export const STAMP_IMAGE_MAX_CHARS = 1_500_000;
+export function isStampImage(value: unknown): value is string {
+  return typeof value === 'string' && value.length <= STAMP_IMAGE_MAX_CHARS && /^data:image\/(png|jpeg);base64,[A-Za-z0-9+/=]+$/.test(value);
+}
