@@ -10,6 +10,44 @@ export const PDF_PAGES_ARRAY = 'pdfPages';
 export const PDF_ANNOTS_MAP = 'pdfAnnots';
 /** 양식 칸 이름 → 값(4단계) */
 export const PDF_FORM_MAP = 'pdfForm';
+/** 기존 글자 고치기(5단계) — id → PdfTextEdit */
+export const PDF_TEXT_EDITS_MAP = 'pdfTextEdits';
+/** 가리기(5단계) — id → PdfRedaction. applied가 true인 것만 저장 때 실제로 지운다 */
+export const PDF_REDACT_MAP = 'pdfRedactions';
+
+export interface PdfTextEdit {
+  readonly id: string;
+  readonly pageKey: string;
+  /** 고친 글 조각이 있던 자리(PDF 좌표) */
+  readonly rect: readonly [number, number, number, number];
+  readonly oldText: string;
+  readonly newText: string;
+  readonly fontSize: number;
+  readonly author: string;
+  readonly createdAt: string;
+}
+
+export interface PdfRedaction {
+  readonly id: string;
+  readonly pageKey: string;
+  readonly rect: readonly [number, number, number, number];
+  readonly applied: boolean;
+  readonly author: string;
+  readonly createdAt: string;
+}
+
+const finiteRect = (r: unknown): r is [number, number, number, number] =>
+  Array.isArray(r) && r.length === 4 && r.every((v) => typeof v === 'number' && Number.isFinite(v)) && r[2] > r[0] && r[3] > r[1];
+
+export function isTextEdit(v: unknown): v is PdfTextEdit {
+  const e = v as PdfTextEdit;
+  return !!e && typeof e.id === 'string' && typeof e.pageKey === 'string' && finiteRect(e.rect) && typeof e.oldText === 'string' && typeof e.newText === 'string' && e.newText.length <= 2000 && typeof e.fontSize === 'number';
+}
+export function isRedaction(v: unknown): v is PdfRedaction {
+  const r = v as PdfRedaction;
+  return !!r && typeof r.id === 'string' && typeof r.pageKey === 'string' && finiteRect(r.rect) && typeof r.applied === 'boolean';
+}
+
 /** 방 정보 — base: 방을 열 때의 원본 지문(편집기가 받은 원본과 같은지 확인) */
 export const PDF_META_MAP = 'pdfMeta';
 
