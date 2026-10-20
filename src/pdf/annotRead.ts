@@ -120,7 +120,8 @@ function parseDa(da: string | undefined): { fontSize?: number; color?: string } 
 function toAnnot(doc: PDFDocument, dict: PDFDict, type: PdfAnnotType, pageIndex: number, order: number): PdfAnnot | undefined {
   const rect = rectOf(nums(doc, dict.get(PDFName.of('Rect'))));
   if (!rect) return undefined;
-  const id = text(doc, dict.get(PDFName.of('NM'))) || `f${pageIndex}-${order}`;
+  // NM은 보통 문자열이지만 이름(/NM /abc)으로 쓰는 프로그램도 있다
+  const id = text(doc, dict.get(PDFName.of('NM'))) || nameOf(doc, dict.get(PDFName.of('NM'))) || `f${pageIndex}-${order}`;
   const modified = pdfDateToIso(text(doc, dict.get(PDFName.of('M'))));
   const created = pdfDateToIso(text(doc, dict.get(PDFName.of('CreationDate')))) || modified;
   const base = {

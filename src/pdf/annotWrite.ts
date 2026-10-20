@@ -8,10 +8,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fontkit from '@pdf-lib/fontkit';
-import { PDFDocument, PDFHexString, PDFName, PDFRef, StandardFonts, type PDFFont, type PDFPage } from 'pdf-lib';
+import { PDFDocument, PDFHexString, PDFName, PDFRef, StandardFonts, type PDFContext, type PDFFont, type PDFPage } from 'pdf-lib';
 import { origIndexOf, type PdfAnnot } from './annotTypes.js';
 
 /** 프로젝트 루트 assets/fonts — 이 파일 위치 기준이라 실행 cwd와 무관하다(rendering.ts와 같은 방식) */
+/** pdf-lib의 사전 리터럴 형식(패키지가 따로 내보내지 않아 flateStream의 매개변수에서 꺼낸다) */
+type Dict = NonNullable<Parameters<PDFContext['flateStream']>[1]>;
+
 const PRETENDARD = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'assets', 'fonts', 'Pretendard-Regular.ttf');
 
 const f = (n: number) => (Math.round(n * 1000) / 1000).toString();
@@ -224,8 +227,8 @@ async function writeOne(doc: PDFDocument, page: PDFPage, a: PdfAnnot, fonts: Fon
   const ctx = doc.context;
   const bounds = boundsOf(a);
   const ap = await appearanceOf(a, fonts);
-  const resources: Record<string, unknown> = {};
-  const gs: Record<string, unknown> = {};
+  const resources: Dict = {};
+  const gs: Dict = {};
   if (a.opacity < 1) Object.assign(gs, { CA: a.opacity, ca: a.opacity });
   if (ap.multiply) gs.BM = 'Multiply';
   let content = ap.content;
@@ -241,7 +244,7 @@ async function writeOne(doc: PDFDocument, page: PDFPage, a: PdfAnnot, fonts: Fon
     Resources: ctx.obj(resources),
   });
   const apRef = ctx.register(stream);
-  const dict: Record<string, unknown> = {
+  const dict: Dict = {
     Type: 'Annot',
     Subtype: SUBTYPE[a.type],
     Rect: a.type === 'line' || a.type === 'arrow' || a.type === 'ink' || a.type === 'highlight' || a.type === 'underline' || a.type === 'strike' ? bounds : a.rect,
