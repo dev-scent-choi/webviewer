@@ -12,12 +12,29 @@ import { editRoutes } from './routes/edit.js';
 import { documentRoutes } from './routes/documents.js';
 import { viewerRoutes } from './routes/viewer.js';
 
+/** 로그용 — 쿼리스트링(토큰)을 지운 주소 */
+export function redactQuery(url: string): string {
+  const q = url.indexOf('?');
+  return q < 0 ? url : `${url.slice(0, q)}?…`;
+}
+
 const publicDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 
 export async function buildApp(): Promise<FastifyInstance> {
   const app = Fastify({
-    logger: { level: process.env.LOG_LEVEL ?? 'info' },
-    bodyLimit: config.maxUploadBytes,
+    logger: {
+      level: process.env.LOG_LEVEL ?? 'info',
+      // 뷰어·편집기 주소의 ?token= 은 열람 권한 그 자체다 — 로그에는 쿼리 없이 경로만 남긴다
+      serializers: {
+        req: (req: { method: string; url: string; ip?: string }) => ({ method: req.method, url: redactQuery(req.url), remoteAddress: req.ip }),
+      },
+    },
+    // 기본 본문 상한은 작게 — 파일을 받는 라우트(업로드·hwp 저장·PDF 넣기·파일→PDF)만 라우트에서 크게 연다.
+    // 토큰 확인은 핸들러 안에서 하므로, 전역 상한이 크면 인증 없이 큰 본문을 읽게 된다.
+    bodyLimit: config.defaultBodyLimit,
+    // 앞단 프록시(cloudflared 등 같은 컴퓨터)가 붙인 X-Forwarded-For로 실제 접속 IP를 쓴다 — 요청 수 제한·관리자 IP 검사가
+    // 모든 사용자를 127.0.0.1 하나로 보지 않게. 믿는 것은 이 컴퓨터(루프백)에서 온 연결의 헤더뿐이다.
+    trustProxy: config.trustProxy,
   });
 
   // 모든 응답에 기본으로 걸어도 무해한 보안 헤더 — 라우트를 가리지 않고 전역으로 건다.
@@ -61,6 +78,16 @@ export async function buildApp(): Promise<FastifyInstance> {
     }),
   });
 
+  // 500 오류의 내부 메시지(파일 경로 등)를 밖에 보이지 않는다 — 로그에만. 4xx는 원래 메시지 그대로.
+  app.setErrorHandler((error: Error & { statusCode?: number; validation?: unknown }, request, reply) => {
+    const status = error.statusCode && error.statusCode >= 400 ? error.statusCode : 500;
+    if (status >= 500) {
+      request.log.error(error);
+      return reply.code(status).send({ success: false, error: '서버 오류가 발생했습니다.' });
+    }
+    return reply.code(status).send(error); // 4xx(검증 오류·429 등)는 기본 처리 그대로
+  });
+
   await app.register(multipart, {
     limits: { fileSize: config.maxUploadBytes, files: 1 },
   });
@@ -71,7 +98,8 @@ export async function buildApp(): Promise<FastifyInstance> {
   app.addContentTypeParser('application/octet-stream', { parseAs: 'buffer' }, (_request, payload, done) => {
     done(null, payload);
   });
-  await app.register(fastifyWebsocket);
+  // 편집 메시지(Yjs 갱신 등) 한 개 상한 — 기본값(100MB)은 인증 전에도 받아 쌓을 수 있어 너무 크다
+  await app.register(fastifyWebsocket, { options: { maxPayload: config.wsMaxPayload } });
   // 화면 HTML의 JS·CSS 주소에 내용 해시를 붙여 내보낸다(assetVersion.ts 참고 — 앞단 캐시가 예전 파일을 내주지 않게)
   app.addHook('onSend', async (_request, reply, payload) => {
     if (reply.statusCode !== 200 || !String(reply.getHeader('content-type') ?? '').startsWith('text/html')) return payload;

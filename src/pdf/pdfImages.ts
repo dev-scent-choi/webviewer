@@ -70,7 +70,10 @@ export async function decodeImage(ctx: PDFContext, stream: PDFObject | undefined
   if (!W || !H || d.get(PDFName.of('ImageMask')) || d.has(PDFName.of('Decode'))) return null;
   const filters = filtersOf(ctx, stream);
   if (filters.length === 1 && filters[0] === 'DCTDecode') {
-    const { data, info } = await sharp(Buffer.from(stream.getContents())).raw().toBuffer({ resolveWithObject: true });
+    const contents = stream.getContents();
+    // JPEG(FF D8)만 sharp에 — 다른 형식 바이트가 다른 해석기로 가지 않게
+    if (contents[0] !== 0xff || contents[1] !== 0xd8) return null;
+    const { data, info } = await sharp(Buffer.from(contents)).raw().toBuffer({ resolveWithObject: true });
     if (info.width !== W || info.height !== H || (info.channels !== 1 && info.channels !== 3)) return null;
     return { raw: new Uint8Array(data), width: W, height: H, channels: info.channels, colorSpace: PDFName.of(info.channels === 1 ? 'DeviceGray' : 'DeviceRGB'), wasJpeg: true };
   }

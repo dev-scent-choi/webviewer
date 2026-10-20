@@ -18,6 +18,7 @@ import { newDocumentId, store } from '../storage.js';
 import type { DocumentMeta } from '../types.js';
 import { invalidateViewCaches } from './viewer.js';
 import { isOpenable, trackInitialConversion } from '../conversionGate.js';
+import { assertZipNotTooLarge, ZipTooLargeError } from '../zipGuard.js';
 
 const tokenBodySchema = {
   type: 'object',
@@ -232,6 +233,13 @@ async function ingestUpload(
 ): Promise<UploadResult> {
   let ext = path.extname(originalFilename).slice(1).toLowerCase();
   let displayName = originalFilename;
+  // docx·xlsx·pptx·hwpx 등 zip 형식 — 풀었을 때 크기(중앙 디렉터리 선언)가 상한을 넘으면 받지 않는다(zip 폭탄)
+  try {
+    assertZipNotTooLarge(data, `upload ${ext}`);
+  } catch (error) {
+    if (error instanceof ZipTooLargeError) return { code: 413, body: { success: false, error: '압축을 풀면 너무 큰 파일입니다.' } };
+    throw error;
+  }
   // xls/ods(레거시 바이너리·ODF 스프레드시트)는 이 서비스의 그리드 뷰·동시편집 엔진이 전제하는
   // xlsx 구조가 아니라서, 지금까지는 PDF 전용 열람만 가능했고 편집은 아예 지원되지 않았다.
   // 여기서 xlsx로 정규화해 두면 이후 로직 전체(findConverter부터 GRID_VIEW_EXTS 분기까지)가
@@ -320,7 +328,7 @@ const TOKEN_RATE_LIMIT = { max: 120, timeWindow: '1 minute' } as const;
 export async function documentRoutes(app: FastifyInstance): Promise<void> {
   app.post(
     '/api/documents',
-    { preHandler: requireApiKey, config: { rateLimit: WRITE_RATE_LIMIT } },
+    { bodyLimit: config.maxUploadBytes, preHandler: requireApiKey, config: { rateLimit: WRITE_RATE_LIMIT } },
     async (request, reply) => {
       const callerProject = (request as ApiKeyAuthenticatedRequest).callerProject;
       let file;
@@ -348,6 +356,7 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Querystring: { filename: string } }>(
     '/api/documents/stream',
     {
+      bodyLimit: config.maxUploadBytes,
       preHandler: requireApiKey,
       config: { rateLimit: WRITE_RATE_LIMIT },
       schema: {

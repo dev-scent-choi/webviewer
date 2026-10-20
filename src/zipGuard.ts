@@ -35,6 +35,7 @@ export function guardedUnzipSync(
   opts?: UnzipOptions,
   maxBytes: number = DEFAULT_MAX_UNCOMPRESSED_BYTES,
 ): Unzipped {
+  assertZipNotTooLarge(data, contextLabel, maxBytes);
   const entries = opts ? unzipSync(data, opts) : unzipSync(data);
   let total = 0;
   for (const bytes of Object.values(entries)) total += bytes.length;
@@ -60,4 +61,66 @@ export function unzipXmlParts(data: Uint8Array, contextLabel: string): Unzipped 
   });
   for (const name of skipped) entries[name] = EMPTY;
   return entries;
+}
+
+/**
+ * zip의 중앙 디렉터리에 적힌 "풀린 크기"의 합 — 압축을 풀지 않고 읽는다(ZIP64 포함). zip이 아니거나 구조를 읽지
+ * 못하면 null. fflate는 이 선언 크기만큼의 출력 버퍼에 풀기 때문에, 이 합이 상한 안이면 풀기에 드는 메모리도 그 안이다.
+ */
+export function declaredUnzippedSize(data: Uint8Array): number | null {
+  if (data.length < 22 || data[0] !== 0x50 || data[1] !== 0x4b) return null;
+  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  const u16 = (o: number) => view.getUint16(o, true);
+  const u32 = (o: number) => view.getUint32(o, true);
+  const u64 = (o: number) => u32(o) + u32(o + 4) * 2 ** 32;
+  let eocd = -1;
+  for (let i = data.length - 22; i >= Math.max(0, data.length - 22 - 0xffff); i -= 1) {
+    if (u32(i) === 0x06054b50) {
+      eocd = i;
+      break;
+    }
+  }
+  if (eocd < 0) return null;
+  let count = u16(eocd + 10);
+  let offset = u32(eocd + 16);
+  if ((count === 0xffff || offset === 0xffffffff) && eocd >= 20 && u32(eocd - 20) === 0x07064b50) {
+    const z64 = u64(eocd - 12);
+    if (z64 + 56 > data.length || u32(z64) !== 0x06064b50) return null;
+    count = u64(z64 + 32);
+    offset = u64(z64 + 48);
+  }
+  let total = 0;
+  let p = offset;
+  for (let n = 0; n < count; n += 1) {
+    if (p + 46 > data.length || u32(p) !== 0x02014b50) return null;
+    let size = u32(p + 24);
+    const nameLen = u16(p + 28);
+    const extraLen = u16(p + 30);
+    const commentLen = u16(p + 32);
+    if (size === 0xffffffff) {
+      // ZIP64 추가 필드(0x0001)의 첫 8바이트가 풀린 크기
+      let e = p + 46 + nameLen;
+      const end = e + extraLen;
+      size = -1;
+      while (e + 4 <= end && e + 4 <= data.length) {
+        const id = u16(e);
+        const len = u16(e + 2);
+        if (id === 0x0001 && len >= 8 && e + 12 <= data.length) {
+          size = u64(e + 4);
+          break;
+        }
+        e += 4 + len;
+      }
+      if (size < 0) return null;
+    }
+    total += size;
+    p += 46 + nameLen + extraLen + commentLen;
+  }
+  return total;
+}
+
+/** 선언된 풀린 크기가 상한을 넘으면 오류 — 업로드·저장 때 미리, 그리고 풀기 직전에 부른다 */
+export function assertZipNotTooLarge(data: Uint8Array, contextLabel: string, maxBytes: number = DEFAULT_MAX_UNCOMPRESSED_BYTES): void {
+  const declared = declaredUnzippedSize(data);
+  if (declared !== null && declared > maxBytes) throw new ZipTooLargeError(contextLabel, declared, maxBytes);
 }

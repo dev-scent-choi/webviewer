@@ -1,6 +1,6 @@
 import { strToU8, zipSync } from 'fflate';
 import { describe, expect, test } from 'vitest';
-import { guardedUnzipSync, ZipTooLargeError } from '../src/zipGuard.js';
+import { assertZipNotTooLarge, declaredUnzippedSize, guardedUnzipSync, ZipTooLargeError } from '../src/zipGuard.js';
 
 describe('zipGuard: guardedUnzipSync', () => {
   test('returns entries unchanged when the decompressed total is within the cap', () => {
@@ -52,5 +52,34 @@ describe('unzipXmlParts — 슬라이드 시딩용(그림은 이름만)', () => 
     expect(strFromU8(entries['ppt/slides/_rels/slide1.xml.rels'])).toBe('<Relationships/>');
     expect(entries['ppt/media/image1.png']).toBeDefined();
     expect(entries['ppt/media/image1.png'].length).toBe(0);
+  });
+});
+
+describe('zipGuard: 풀기 전 선언 크기(declaredUnzippedSize)', () => {
+  test('중앙 디렉터리의 풀린 크기 합 — 풀지 않고 읽는다', () => {
+    const zip = zipSync({ 'a.txt': strToU8('x'.repeat(5000)), 'dir/b.xml': strToU8('<a/>') }, { comment: 'c' });
+    expect(declaredUnzippedSize(zip)).toBe(5004);
+  });
+
+  test('zip이 아니거나 깨졌으면 null(판단은 뒤 단계에 맡김)', () => {
+    expect(declaredUnzippedSize(strToU8('%PDF-1.7 ...'))).toBeNull();
+    const zip = zipSync({ 'a.txt': strToU8('hello') });
+    expect(declaredUnzippedSize(zip.subarray(0, zip.length - 30))).toBeNull();
+  });
+
+  test('선언 크기가 상한을 넘으면 풀기 전에 거부 — 크기를 속여 적은 zip은 fflate가 그 크기 안에서만 푼다', () => {
+    const zip = zipSync({ 'big.txt': strToU8('x'.repeat(1000)) });
+    expect(() => assertZipNotTooLarge(zip, 'upload', 10)).toThrow(ZipTooLargeError);
+    expect(() => assertZipNotTooLarge(zip, 'upload', 1000)).not.toThrow();
+    // 선언 크기를 10으로 줄여 적은 파일: fflate는 선언 크기만큼만 풀고(잘림) 그보다 큰 버퍼를 만들지 않는다
+    const forged = new Uint8Array(zip);
+    const view = new DataView(forged.buffer);
+    for (let i = 0; i + 4 <= forged.length; i += 1) {
+      const sig = view.getUint32(i, true);
+      if (sig === 0x04034b50) view.setUint32(i + 22, 10, true);
+      if (sig === 0x02014b50) view.setUint32(i + 24, 10, true);
+    }
+    expect(declaredUnzippedSize(forged)).toBe(10);
+    expect(guardedUnzipSync(forged, 'forged', undefined, 100)['big.txt'].length).toBe(10);
   });
 });
