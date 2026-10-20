@@ -90,7 +90,7 @@
         <li><button class="pdf-tool-item" data-tool="organize" style="--tc:#2e9b5f"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="4" width="7" height="7" rx="1"/><rect x="13" y="4" width="7" height="7" rx="1"/><rect x="4" y="13" width="7" height="7" rx="1"/><rect x="13" y="13" width="7" height="7" rx="1"/></svg><span>페이지 정리</span></button></li>
         <li><button class="pdf-tool-item" data-tool="combine" style="--tc:#3a6fd8"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M8 4h7l3 3v10H8z"/><path d="M5 7v13h10"/></svg><span>파일 합치기</span></button></li>
         <li><button class="pdf-tool-item" data-tool="extract" style="--tc:#7a52c7"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h8l4 4v14H6z"/><path d="M9 14h6M12 11v6"/></svg><span>페이지 추출·나누기</span></button></li>
-        <li><button class="pdf-tool-item" data-tool="fill" style="--tc:#c4302b"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13 7l4 4"/></svg><span>양식 채우기·서명</span><em>다음 단계</em></button></li>
+        <li><button class="pdf-tool-item" data-tool="fill" style="--tc:#c4302b"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13 7l4 4"/></svg><span>양식 채우기·서명</span></button></li>
         <li><button class="pdf-tool-item" data-tool="download" style="--tc:#3a6fd8"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 10l5 5 5-5"/><path d="M5 20h14"/></svg><span>내려받기</span></button></li>
       </ul>
     </aside>
@@ -148,6 +148,35 @@
           </button>
           <button id="annot-redo" class="pdf-float-btn" type="button" title="다시 실행 (Ctrl+Y)" aria-label="다시 실행" disabled>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m15 14 5-5-5-5"/><path d="M20 9H9a5 5 0 0 0 0 10h3"/></svg>
+          </button>
+        </div>
+        <!-- 서명 탭 도구(signUi.ts) -->
+        <div id="sign-tools" class="pdf-annot-tools pdf-sign-tools" hidden>
+          <span class="pdf-float-sep"></span>
+          <button id="sign-new" class="pdf-float-btn" type="button" title="서명 만들기 — 그리기·그림·글자" aria-label="서명 만들기">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17c2-1 3.5-5 5-5s1 4 3 4 3-6 5-6 1.5 4 5 4"/><path d="M3 21h18"/></svg>
+          </button>
+          <div id="sign-list" class="pdf-sign-list" aria-label="내 서명"></div>
+          <span class="pdf-float-sep"></span>
+          <button id="sign-date" class="pdf-float-btn" type="button" aria-pressed="false" title="날짜 — 누른 곳에 오늘 날짜" aria-label="날짜">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M9 3v4M15 3v4"/></svg>
+          </button>
+          <span class="pdf-float-group" data-group="seal">
+            <button id="sign-seal" class="pdf-float-btn" type="button" aria-pressed="false" title="글자 도장" aria-label="글자 도장">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><rect x="3.5" y="6" width="17" height="12" rx="2"/><path d="M8 12h8" stroke-linecap="round"/></svg>
+            </button>
+            <button class="pdf-float-more" type="button" aria-label="도장 글자 고르기" title="도장 글자"></button>
+            <span class="pdf-float-menu" hidden>
+              <button type="button" data-seal="승인"><span>승인</span></button>
+              <button type="button" data-seal="검토"><span>검토</span></button>
+              <button type="button" data-seal="확인"><span>확인</span></button>
+              <button type="button" data-seal="반려"><span>반려</span></button>
+              <button type="button" data-seal=""><span>직접 입력…</span></button>
+            </span>
+          </span>
+          <span class="pdf-float-sep"></span>
+          <button id="sign-fields" class="pdf-float-btn" type="button" title="양식 칸 목록" aria-label="양식 칸 목록">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><rect x="4" y="4" width="16" height="5" rx="1"/><rect x="4" y="13" width="16" height="5" rx="1"/><path d="M7 6.5h5M7 15.5h3"/></svg>
           </button>
         </div>
       </div>
@@ -219,6 +248,10 @@
         <div class="pdf-panel-head"><h2>메모 <span id="comments-count" class="pdf-count"></span></h2><button class="pdf-icon-btn pdf-panel-close" type="button" data-close-panel title="닫기" aria-label="닫기"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
         <div id="comments" class="pdf-comments"></div>
       </section>
+      <section id="panel-fields" class="pdf-panel" data-panel="fields" hidden>
+        <div class="pdf-panel-head"><h2>양식 칸 <em id="fields-count"></em></h2><button class="pdf-icon-btn pdf-panel-close" type="button" data-close-panel title="닫기" aria-label="닫기"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+        <div id="fields" class="pdf-fields"></div>
+      </section>
       <section id="panel-layers" class="pdf-panel" data-panel="layers" hidden>
         <div class="pdf-panel-head"><h2>레이어</h2><button class="pdf-icon-btn pdf-panel-close" type="button" data-close-panel title="닫기" aria-label="닫기"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
         <div id="layers" class="pdf-layers"></div>
@@ -235,6 +268,9 @@
       </button>
       <button id="rail-outline" class="pdf-rail-btn" type="button" data-panel="outline" aria-pressed="false" title="책갈피" aria-label="책갈피">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M7 3h10v18l-5-4-5 4z"/></svg>
+      </button>
+      <button id="rail-fields" class="pdf-rail-btn" type="button" data-panel="fields" aria-pressed="false" title="양식 칸" aria-label="양식 칸">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><rect x="4" y="4" width="16" height="5" rx="1"/><rect x="4" y="13" width="16" height="5" rx="1"/><path d="M7 6.5h5M7 15.5h3"/></svg>
       </button>
       <button id="rail-layers" class="pdf-rail-btn" type="button" data-panel="layers" aria-pressed="false" title="레이어" aria-label="레이어">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13 9 5 9-5"/></svg>
@@ -259,6 +295,42 @@
       <h2 id="info-dialog-title">문서 정보</h2>
       <dl id="info-list" class="office-dialog-stats"></dl>
       <div class="office-dialog-actions"><button id="info-close" class="btn-mini">닫기</button></div>
+    </div>
+  </div>
+
+  <div id="sign-dialog" class="office-dialog" hidden role="dialog" aria-labelledby="sign-dialog-title">
+    <div class="office-dialog-card pdf-sign-card">
+      <h2 id="sign-dialog-title">서명 만들기</h2>
+      <div class="pdf-sign-tabs" role="tablist">
+        <button type="button" role="tab" data-sign-tab="draw" aria-selected="true">그리기</button>
+        <button type="button" role="tab" data-sign-tab="image" aria-selected="false">그림 올리기</button>
+        <button type="button" role="tab" data-sign-tab="type" aria-selected="false">글자로</button>
+      </div>
+      <div class="pdf-sign-pane" data-sign-pane="draw">
+        <canvas id="sign-pad" class="pdf-sign-pad" width="960" height="320" aria-label="여기에 서명을 그리세요"></canvas>
+        <div class="pdf-sign-row">
+          <span class="pdf-sign-colors">
+            <button type="button" data-ink="#1f1f23" aria-pressed="true" title="검정" style="--c:#1f1f23"></button>
+            <button type="button" data-ink="#1a3fa8" aria-pressed="false" title="파랑" style="--c:#1a3fa8"></button>
+            <button type="button" data-ink="#c62828" aria-pressed="false" title="빨강" style="--c:#c62828"></button>
+          </span>
+          <button id="sign-clear" class="btn-mini" type="button">지우기</button>
+        </div>
+      </div>
+      <div class="pdf-sign-pane" data-sign-pane="image" hidden>
+        <label class="pdf-sign-drop"><input id="sign-file" type="file" accept="image/png,image/jpeg" /><span>서명·도장 그림(PNG·JPG)을 고르세요</span></label>
+        <img id="sign-preview" class="pdf-sign-preview" alt="고른 그림 미리 보기" hidden />
+        <label class="pdf-sign-check"><input id="sign-whiten" type="checkbox" checked /> 흰 바탕을 투명하게</label>
+      </div>
+      <div class="pdf-sign-pane" data-sign-pane="type" hidden>
+        <input id="sign-text" class="pdf-sign-text" type="text" maxlength="40" placeholder="이름을 입력하세요" />
+        <div id="sign-styles" class="pdf-sign-styles"></div>
+      </div>
+      <p id="sign-error" class="pdf-sign-error" hidden></p>
+      <div class="office-dialog-actions">
+        <button id="sign-cancel" class="btn-mini" type="button">취소</button>
+        <button id="sign-ok" class="btn-mini btn-mini-primary" type="button">만들고 놓기</button>
+      </div>
     </div>
   </div>
 

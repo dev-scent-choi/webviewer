@@ -67,7 +67,7 @@ export function setupAnnotUi(opts: {
   for (const b of toolButtons) b.addEventListener('click', () => setTool(b.dataset.tool as ToolName));
 
   // 묶음(형광펜류·도형): ▾를 누르면 종류 목록, 고르면 그 종류가 묶음 단추가 된다
-  const groups = [...document.querySelectorAll<HTMLElement>('.pdf-float-group')];
+  const groups = [...toolsBox.querySelectorAll<HTMLElement>('.pdf-float-group')];
   function closeMenus(): void {
     for (const g of groups) (g.querySelector('.pdf-float-menu') as HTMLElement).hidden = true;
   }

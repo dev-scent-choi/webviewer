@@ -49,8 +49,11 @@ export async function applyFormValues(doc: PDFDocument, values: Iterable<[string
         if (value) field.check();
         else field.uncheck();
       } else if (field instanceof PDFRadioGroup && typeof value === 'string') {
+        // 편집기는 위젯의 켜짐 상태 이름을 보낸다. /Opt가 있는 칸은 상태 이름이 번호('0','1'…)이고 선택지 이름은 /Opt에 있다
+        const options = field.getOptions();
+        const option = options.includes(value) ? value : /^\d+$/.test(value) ? options[Number(value)] : undefined;
         if (value === '' || value === 'Off') field.clear();
-        else if (field.getOptions().includes(value)) field.select(value);
+        else if (option !== undefined) field.select(option);
         else continue;
       } else if (field instanceof PDFDropdown && typeof value === 'string') {
         if (value === '') field.clear();

@@ -62,6 +62,14 @@ describe('PDF 양식·서명 저장', () => {
     expect(f.getTextField('second').getText()).toBeUndefined();
   });
 
+  test('라디오 — 편집기가 보내는 위젯 상태 번호(/Opt 칸)도 그 선택지로', async () => {
+    const original = await formPdf();
+    const ydoc = await seeded(original);
+    ydoc.getMap<unknown>(PDF_FORM_MAP).set('size', '0');
+    const out = await PDFDocument.load(await exportPdfFromRoom(original, ydoc, true));
+    expect(out.getForm().getRadioGroup('size').getSelected()).toBe('S');
+  });
+
   test('한글 값은 pdf.js로 다시 읽어도 그 값(모양 포함)', async () => {
     const original = await formPdf();
     const ydoc = await seeded(original);
@@ -106,11 +114,11 @@ describe('PDF 양식·서명 저장', () => {
     await pdf.destroy();
     // 다른 프로그램의 Stamp(그림 사본 없음)는 다루지 않는다
     const other = await PDFDocument.load(bytes);
-    const dict = other.context.lookup(other.getPage(0).node.Annots()!.asArray().find((r) => (other.context.lookup(r) as { get(n: PDFName): unknown }).get(PDFName.of('Subtype')) === PDFName.of('Stamp'))!) as unknown as { delete(n: PDFName): void };
+    const dict = other.context.lookup(other.getPage(0).node.Annots()!.asArray().find((r) => (other.context.lookup(r) as unknown as { get(n: PDFName): unknown }).get(PDFName.of('Subtype')) === PDFName.of('Stamp'))!) as unknown as { delete(n: PDFName): void };
     dict.delete(PDFName.of('DocviewImage'));
     expect(readManagedAnnots(other)).toHaveLength(0);
     stripManagedAnnots(other);
-    expect(other.getPage(0).node.Annots()!.asArray().some((r) => (other.context.lookup(r) as { get(n: PDFName): unknown }).get(PDFName.of('Subtype')) === PDFName.of('Stamp'))).toBe(true);
+    expect(other.getPage(0).node.Annots()!.asArray().some((r) => (other.context.lookup(r) as unknown as { get(n: PDFName): unknown }).get(PDFName.of('Subtype')) === PDFName.of('Stamp'))).toBe(true);
   });
 
   test('변경 기록 — 양식 칸마다 마지막 값', async () => {

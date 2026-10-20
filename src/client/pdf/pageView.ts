@@ -188,12 +188,15 @@ export class PageView {
     textLayer.className = 'pdf-text-layer';
     const hitLayer = document.createElement('div');
     hitLayer.className = 'pdf-hit-layer';
+    // 양식 입력란(formLayer.ts가 채운다) — 글자 층 위, 주석 층 아래
+    const formLayer = document.createElement('div');
+    formLayer.className = 'pdf-form-layer';
     const annotLayer = document.createElement('div');
     annotLayer.className = 'pdf-annot-layer';
     const label = document.createElement('span');
     label.className = 'pdf-page-label';
     label.textContent = String(page);
-    el.append(canvas, textLayer, hitLayer, annotLayer, label);
+    el.append(canvas, textLayer, hitLayer, formLayer, annotLayer, label);
     this.host.append(el);
     const blank = parsePageKey(entry.key)?.kind === 'blank' ? entry.blank : undefined;
     const slot: Slot = {
@@ -375,6 +378,7 @@ export class PageView {
     slot.textLayer.replaceChildren();
     slot.hitLayer.replaceChildren();
     slot.annotLayer.replaceChildren();
+    slot.el.querySelector('.pdf-form-layer')?.replaceChildren();
     slot.viewport = null;
     slot.textDivs = [];
     slot.textStrs = [];
@@ -516,6 +520,16 @@ export class PageView {
       console.error(`썸네일 ${page} 실패:`, error);
       return null;
     }
+  }
+
+  /** 그 쪽의 양식 위젯(pdf.js 주석 정보) — 원본 쪽만(넣은 PDF의 양식은 저장 때 빠지므로 다루지 않는다) */
+  async widgetsOf(page: number): Promise<Array<Record<string, unknown>>> {
+    const slot = this.slots[page - 1];
+    if (!slot || parsePageKey(slot.entry.key)?.kind !== 'orig') return [];
+    const proxy = await this.proxyOf(slot.entry);
+    if (!proxy) return [];
+    const annots = (await proxy.getAnnotations({ intent: 'display' })) as Array<Record<string, unknown>>;
+    return annots.filter((a) => a.subtype === 'Widget');
   }
 
   // ---------- 레이어 ----------
