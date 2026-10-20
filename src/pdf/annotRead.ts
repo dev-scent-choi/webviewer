@@ -157,7 +157,8 @@ function toAnnot(doc: PDFDocument, dict: PDFDict, type: PdfAnnotType, pageIndex:
     }
     case 'freetext': {
       const da = parseDa(text(doc, dict.get(PDFName.of('DA'))));
-      return { ...base, type, text: contents ?? '', fontSize: da.fontSize ?? 12, color: da.color ?? '#000000' };
+      // 글상자는 테두리 없이 쓰므로(annotWrite) 굵기는 의미가 없다 — 늘 1로 맞춰 다시 읽어도 같은 값
+      return { ...base, type, width: 1, text: contents ?? '', fontSize: da.fontSize ?? 12, color: da.color ?? '#000000' };
     }
     case 'rect':
     case 'ellipse': {
