@@ -242,6 +242,10 @@ interface Room {
   editedSinceSave: boolean;
   /** pdf 룸 — 주석 추가·변경·삭제 기록(src/pdf/pdfModel.ts) */
   pdfChangeTracker?: PdfChangeTracker;
+  /** pdf 룸 — 방을 열 때의 원본. 저장·내려받기는 늘 이것에서 다시 만든다(쪽 정리를 저장본에 또 적용하지 않게 — originalXlsxBytes와 같은 이유) */
+  originalPdfBytes?: Uint8Array;
+  /** pdf 룸 — 편집 중 넣은 PDF(부속 id → 다루는 주석을 뺀 바이트). 방이 사는 동안만 두고, 저장하면 원본에 들어간다 */
+  pdfParts?: Map<string, Uint8Array>;
   /**
    * xlsx 룸에서만 쓰인다 — 룸이 사는 동안 진짜로 상주하는 지연(lazy) 그리드 저장소(Task 3-7).
    * 값·서식 편집은 전부 `dirtyOverlay`에만 반영되고, 편집되지 않은 원본 셀은 필요할 때만
@@ -1529,6 +1533,8 @@ async function seedRoom(room: Room): Promise<void> {
     } else if (kind === 'pdf') {
       // 파일의 (편집기가 다루는) 주석을 맵에 넣는다 — 편집기는 그 주석을 뺀 PDF(/api/view/pdf-source)를 그리고 주석은 맵에서 그린다
       await seedPdfModel(original, ydoc);
+      room.originalPdfBytes = new Uint8Array(original);
+      room.pdfParts = new Map();
       room.pdfChangeTracker = new PdfChangeTracker(ydoc, (origin) => room.viewerByConn.get(origin as WebSocket) ?? null);
     } else if (kind === 'pptx') {
       const slidesArray = ydoc.getArray<SlideEntry>(PPTX_SLIDES_ARRAY);
@@ -1728,8 +1734,8 @@ async function flushToStore(room: Room): Promise<void> {
     // 바뀐 것이 없으면 원본을 다시 쓰지 않는다(열기만 한 방). 저장이 실패하면 queueFlush가 다시 true로 돌린다.
     if (!room.editedSinceSave) return;
     room.editedSinceSave = false;
-    const original = await store.readOriginal(docId, meta.ext);
-    await store.saveOriginal(docId, meta.ext, Buffer.from(await exportPdfFromRoom(original, ydoc, true)));
+    const original = room.originalPdfBytes ?? (await store.readOriginal(docId, meta.ext));
+    await store.saveOriginal(docId, meta.ext, Buffer.from(await exportPdfFromRoom(original, ydoc, true, (id) => room.pdfParts?.get(id))));
     const converter = findConverter(meta.ext);
     if (converter) {
       try {
@@ -1821,6 +1827,17 @@ export async function flushNow(docId: string): Promise<boolean> {
  * 없으면(=마지막 참여자가 나가며 이미 flushToStore로 디스크에 반영됨) null을 돌려주고, 호출측은
  * store.readOriginal을 그대로 쓰면 된다.
  */
+/** 열려 있는 pdf 방의 원본·Y.Doc·부속(src/pdf/pdfRoomOps.ts가 쓴다). 방이 없거나 아직 준비 중이면 null */
+export async function pdfRoomState(
+  docId: string,
+): Promise<{ original: Uint8Array; ydoc: Y.Doc; parts: Map<string, Uint8Array> } | null> {
+  const room = rooms.get(docId);
+  if (!room || room.kind !== 'pdf') return null;
+  await room.ready;
+  if (!room.originalPdfBytes || !room.pdfParts) return null;
+  return { original: room.originalPdfBytes, ydoc: room.ydoc, parts: room.pdfParts };
+}
+
 export async function getCurrentBytes(docId: string): Promise<Uint8Array | null> {
   const room = rooms.get(docId);
   if (!room) return null;
@@ -1828,7 +1845,11 @@ export async function getCurrentBytes(docId: string): Promise<Uint8Array | null>
   const meta = await store.readMeta(docId);
   if (!meta) return null;
   const original = await store.readOriginal(docId, meta.ext);
-  if (room.kind === 'pdf') return exportPdfFromRoom(original, room.ydoc, room.editedSinceSave);
+  if (room.kind === 'pdf') {
+    // 바꾼 것이 없으면 저장본이 곧 최신, 있으면 방을 열 때의 원본에서 다시 만든다
+    if (!room.editedSinceSave || !room.originalPdfBytes) return original;
+    return exportPdfFromRoom(room.originalPdfBytes, room.ydoc, true, (id) => room.pdfParts?.get(id));
+  }
   if (room.kind === 'xlsx') {
     if (!room.lazyGrid || !room.baselineSheetExtents) return null;
     // flushToStore와 같은 이유로 진행 중인 행/열 이동을 먼저 기다린다 — 이 경로는 사용자가 방금

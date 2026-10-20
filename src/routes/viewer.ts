@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { basePdfForEditor } from '../pdf/pdfModel.js';
+import { addPdfPart, editorSourceOf, extractPdfGroups, PdfRoomError, readPdfPart } from '../pdf/pdfRoomOps.js';
 import os from 'node:os';
 import path from 'node:path';
 import type { FastifyInstance, FastifyReply } from 'fastify';
@@ -1057,8 +1058,71 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
     }
     // 편집기가 다루는 주석은 뺀 PDF — 그 주석은 편집 방의 맵에서 그린다(src/pdf/pdfModel.ts). 주석만 바뀌는 동안에는 저장된
     // 원본에서 빼도 결과가 같으므로 저장본 기준으로 만들고, 같은 바이트면 다시 계산하지 않는다.
-    const original = await store.readOriginal(view.meta.id, view.meta.ext);
-    return reply.type('application/pdf').header('cache-control', 'no-store').send(Buffer.from(await editorBaseOf(view.meta.id, original)));
+    // 편집 방이 열려 있으면 방을 열 때의 원본(쪽 목록 열쇠의 기준) — 지문(x-pdf-base)으로 편집기가 방과 맞는지 확인한다.
+    const meta = view.meta;
+    const { bytes, base } = await editorSourceOf(meta.id, () => store.readOriginal(meta.id, meta.ext));
+    return reply
+      .type('application/pdf')
+      .header('cache-control', 'no-store')
+      .header('x-pdf-base', base)
+      .send(Buffer.from(await editorBaseOf(meta.id, bytes)));
+  });
+
+  // PDF 편집기 — 다른 PDF 넣기(파일에서 넣기·파일 합치기). 본문은 PDF 바이트(application/octet-stream).
+  app.post<{ Querystring: { token?: string } }>('/api/view/pdf-part', async (request, reply) => {
+    const view = await resolveView(request.query.token, reply);
+    if (!view) return reply;
+    const perms = view.claims.perms;
+    if (view.meta.ext !== 'pdf' || perms.pdfEditor !== true || !perms.canEdit || !perms.canDownload) {
+      return reply.code(403).send({ success: false, error: '이 문서에는 파일을 넣을 수 없습니다.' });
+    }
+    if (!Buffer.isBuffer(request.body)) return reply.code(415).send({ success: false, error: 'PDF 파일을 보내 주세요.' });
+    try {
+      const data = await addPdfPart(view.meta.id, new Uint8Array(request.body), config.maxUploadBytes);
+      return reply.send({ success: true, data });
+    } catch (error) {
+      if (error instanceof PdfRoomError) return reply.code(error.status).send({ success: false, error: error.message });
+      throw error;
+    }
+  });
+
+  app.get<{ Querystring: { token?: string }; Params: { partId: string } }>('/api/view/pdf-part/:partId', async (request, reply) => {
+    const view = await resolveView(request.query.token, reply);
+    if (!view) return reply;
+    if (view.meta.ext !== 'pdf' || view.claims.perms.pdfEditor !== true || !view.claims.perms.canDownload) {
+      return reply.code(403).send({ success: false, error: '이 문서는 PDF 편집기로 열 수 없습니다.' });
+    }
+    const bytes = /^[A-Za-z0-9_-]{1,40}$/.test(request.params.partId) ? await readPdfPart(view.meta.id, request.params.partId) : null;
+    if (!bytes) return reply.code(404).send({ success: false, error: '넣은 파일을 찾을 수 없습니다.' });
+    return reply.type('application/pdf').header('cache-control', 'no-store').send(Buffer.from(bytes));
+  });
+
+  // PDF 편집기 — 고른 쪽 추출(한 묶음 → pdf) / 나누기(여러 묶음 → zip). 문서는 그대로.
+  app.post<{ Querystring: { token?: string }; Body: { groups?: unknown } }>('/api/view/pdf-extract', async (request, reply) => {
+    const view = await resolveView(request.query.token, reply);
+    if (!view) return reply;
+    if (view.meta.ext !== 'pdf' || view.claims.perms.pdfEditor !== true || !view.claims.perms.canDownload) {
+      return reply.code(403).send({ success: false, error: '저장(다운로드) 권한이 없습니다.' });
+    }
+    const groups = request.body?.groups;
+    const valid =
+      Array.isArray(groups) &&
+      groups.length > 0 &&
+      groups.length <= 2000 &&
+      groups.every((g) => Array.isArray(g) && g.length <= 10000 && g.every((k) => typeof k === 'string' && k.length <= 64));
+    if (!valid) return reply.code(400).send({ success: false, error: '고른 쪽이 올바르지 않습니다.' });
+    const meta = view.meta;
+    try {
+      const out = await extractPdfGroups(meta.id, groups as string[][], meta.name, () => store.readOriginal(meta.id, meta.ext));
+      await recordAudit({ type: 'downloaded', docId: meta.id, viewer: view.claims.viewer });
+      return reply
+        .type(out.type === 'pdf' ? 'application/pdf' : 'application/zip')
+        .header('content-disposition', `attachment; filename*=UTF-8''${encodeURIComponent(out.fileName)}`)
+        .send(Buffer.from(out.bytes));
+    } catch (error) {
+      if (error instanceof PdfRoomError) return reply.code(error.status).send({ success: false, error: error.message });
+      throw error;
+    }
   });
 
   app.get<{ Querystring: TokenWithMarkupQuery }>(
