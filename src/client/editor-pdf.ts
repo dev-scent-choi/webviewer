@@ -17,6 +17,7 @@ import { setupOrganize, type OrganizeView } from './pdf/organizeView.js';
 import { FormLayer } from './pdf/formLayer.js';
 import { EditLayer } from './pdf/editLayer.js';
 import { askPassword, setupDocTools, type DocTools } from './pdf/docTools.js';
+import { setupConvert, type ConvertUi } from './pdf/convertUi.js';
 import { setupSignUi, type SignUi } from './pdf/signUi.js';
 import { pickPresenceColorForName, renderPresenceAvatars } from './presence.js';
 
@@ -77,7 +78,7 @@ function showNotice(text: string): void {
   noticeTimer = window.setTimeout(() => (notice.hidden = true), 2600);
 }
 
-function setupChrome(view: PageView, find: FindController, info: ViewInfo, panels: Panels, organize: OrganizeView, sign: SignUi, docTools: DocTools): void {
+function setupChrome(view: PageView, find: FindController, info: ViewInfo, panels: Panels, organize: OrganizeView, sign: SignUi, docTools: DocTools, convert: ConvertUi): void {
   // 오른쪽 줄 — 쪽 번호·이동·배율
   const pageInput = $<HTMLInputElement>('page-input');
   const pageCount = $('page-count');
@@ -155,7 +156,7 @@ function setupChrome(view: PageView, find: FindController, info: ViewInfo, panel
     // 읽기 전용이면 고치는 도구는 숨기고, 추출·나누기는 내려받기 권한이 있을 때만
     const tool = item.dataset.tool;
     const allowed =
-      tool === 'organize' || tool === 'combine' || tool === 'comment' || tool === 'fill' || tool === 'protect' || tool === 'compress' ? info.permissions.canEdit : tool === 'extract' || tool === 'download' ? info.permissions.canDownload : true;
+      tool === 'organize' || tool === 'combine' || tool === 'comment' || tool === 'fill' || tool === 'protect' || tool === 'compress' ? info.permissions.canEdit : tool === 'extract' || tool === 'download' || tool === 'convert' ? info.permissions.canDownload : true;
     if (!allowed) item.closest('li')!.hidden = true;
     item.addEventListener('click', () => {
       const tool = item.dataset.tool;
@@ -165,6 +166,7 @@ function setupChrome(view: PageView, find: FindController, info: ViewInfo, panel
       else if (tool === 'protect') docTools.openProtect();
       else if (tool === 'compress') docTools.openCompress();
       else if (tool === 'props') docTools.openProps();
+      else if (tool === 'convert') convert.open();
       else if (tool === 'organize') organize.open();
       else if (tool === 'combine') organize.pickFiles();
       else if (tool === 'extract') organize.open('추출할 쪽을 고른 뒤 ‘고른 쪽 추출’ 또는 ‘나누기’를 누르세요.');
@@ -423,7 +425,8 @@ async function main(): Promise<void> {
   });
   sign = setupSignUi({ view, layer, forms, doc: currentDoc, canEdit: info.permissions.canEdit, showPanel: (name) => panels.show(name), notice: showNotice });
   const docTools = setupDocTools({ token, ydoc, canEdit: info.permissions.canEdit, docName: info.name, pageCount: () => view.pageCount, notice: showNotice });
-  setupChrome(view, find, info, panels, organize, sign, docTools);
+  const convert = setupConvert({ token, docName: info.name, notice: showNotice });
+  setupChrome(view, find, info, panels, organize, sign, docTools, convert);
   // 처음 배율: 폭에 맞추되 너무 크게(작은 쪽을 넓은 화면에) 키우지 않는다
   view.setScale('fit-width');
   if (view.scale > 1.25) view.setScale(1.25);

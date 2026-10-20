@@ -91,6 +91,7 @@
         <li><button class="pdf-tool-item" data-tool="combine" style="--tc:#3a6fd8"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M8 4h7l3 3v10H8z"/><path d="M5 7v13h10"/></svg><span>파일 합치기</span></button></li>
         <li><button class="pdf-tool-item" data-tool="extract" style="--tc:#7a52c7"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h8l4 4v14H6z"/><path d="M9 14h6M12 11v6"/></svg><span>페이지 추출·나누기</span></button></li>
         <li><button class="pdf-tool-item" data-tool="fill" style="--tc:#c4302b"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13 7l4 4"/></svg><span>양식 채우기·서명</span></button></li>
+        <li><button class="pdf-tool-item" data-tool="convert" style="--tc:#3a6fd8"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h12l-3-3M20 17H8l3 3"/></svg><span>변환</span></button></li>
         <li><button class="pdf-tool-item" data-tool="protect" style="--tc:#b26a00"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg><span>암호·권한</span></button></li>
         <li><button class="pdf-tool-item" data-tool="compress" style="--tc:#2e9b5f"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v5H3M16 3v5h5M8 21v-5H3M16 21v-5h5"/></svg><span>압축</span></button></li>
         <li><button class="pdf-tool-item" data-tool="props" style="--tc:#5f5f68"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/></svg><span>문서 속성</span></button></li>
@@ -241,7 +242,7 @@
           <button id="org-close" class="pdf-org-primary" type="button" title="닫기 (Esc)">닫기</button>
         </div>
         <div id="org-grid" class="pdf-org-grid" tabindex="-1" aria-label="쪽 목록" aria-multiselectable="true"></div>
-        <input id="org-file" type="file" accept="application/pdf,.pdf" multiple hidden />
+        <input id="org-file" type="file" multiple hidden />
       </div>
     </section>
 
@@ -339,6 +340,26 @@
         <button class="btn-mini" type="button" data-close>취소</button>
         <button id="compress-preview" class="btn-mini" type="button">크기 미리 보기</button>
         <button id="compress-apply" class="btn-mini btn-mini-primary" type="button">적용</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="convert-dialog" class="office-dialog" hidden role="dialog" aria-labelledby="convert-dialog-title">
+    <div class="office-dialog-card pdf-props-card">
+      <h2 id="convert-dialog-title">변환</h2>
+      <p class="pdf-dialog-text">지금 편집한 상태 그대로 바꿉니다.</p>
+      <div id="convert-targets" class="pdf-convert-list" role="radiogroup" aria-label="바꿀 형식"></div>
+      <label id="convert-dpi-row" class="pdf-prop-row" hidden><span>해상도</span><select id="convert-dpi"><option value="72">화면용(72dpi)</option><option value="150" selected>보통(150dpi)</option><option value="300">인쇄용(300dpi)</option></select></label>
+      <p id="convert-status" class="pdf-dialog-result" aria-live="polite"></p>
+      <div class="office-dialog-actions">
+        <button class="btn-mini" type="button" data-close>닫기</button>
+        <button id="convert-run" class="btn-mini btn-mini-primary" type="button">바꿔서 내려받기</button>
+      </div>
+      <div class="pdf-convert-other">
+        <p class="pdf-dialog-sub">다른 파일을 PDF로</p>
+        <p class="pdf-dialog-note">워드·엑셀·파워포인트·한글·그림 파일을 PDF로 바꿔 내려받습니다. 지금 문서에 쪽으로 넣으려면 페이지 정리의 ‘파일에서 넣기’를 쓰세요.</p>
+        <button id="convert-file-btn" class="btn-mini" type="button">파일 고르기…</button>
+        <input id="convert-file" type="file" hidden />
       </div>
     </div>
   </div>

@@ -572,3 +572,19 @@ input.pdf-form-field[type="checkbox"], input.pdf-form-field[type="radio"] { padd
 .pdf-font-list em { flex: none; font-style: normal; color: var(--pdf-dim); }
 .pdf-font-list em.warn { color: #b26a00; }
 .pdf-small-card .office-dialog-actions, .pdf-props-card .office-dialog-actions { margin-top: 16px; }
+
+/* ---------- 변환 창(convertUi.ts) ---------- */
+.pdf-convert-list { display: flex; flex-direction: column; gap: 2px; }
+.pdf-convert-row { display: flex; align-items: flex-start; gap: 10px; padding: 8px 10px; border-radius: 8px; cursor: pointer; }
+.pdf-convert-row:hover { background: var(--pdf-hover); }
+.pdf-convert-row:has(input:checked) { background: var(--pdf-accent-soft); }
+.pdf-convert-row input { margin-top: 3px; accent-color: var(--pdf-accent); }
+.pdf-convert-row span { display: flex; flex-direction: column; gap: 2px; }
+.pdf-convert-row strong { font-size: 13.5px; font-weight: 600; }
+.pdf-convert-row em { font-style: normal; color: var(--pdf-dim); font-size: 12.5px; }
+#convert-dpi-row { margin-top: 10px; }
+#convert-dpi-row[hidden] { display: none; }
+#convert-dpi { height: 32px; padding: 0 8px; border: 1px solid var(--pdf-line); border-radius: 7px; font: inherit; font-size: 13.5px; }
+.pdf-convert-other { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--pdf-line); }
+.pdf-convert-other .pdf-dialog-sub { margin-top: 0; }
+.pdf-convert-other .pdf-dialog-note { margin: 0 0 10px; }

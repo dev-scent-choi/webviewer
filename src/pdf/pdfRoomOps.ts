@@ -12,6 +12,7 @@ import { compressPdf, isCompressLevel, COMPRESS_LEVELS, type CompressLevel } fro
 import { decryptPdf, isEncryptedPdf, readPermissions, summarize, ALL_PERMISSIONS, type PdfPermissions, type PdfProtection } from './pdfSecurity.js';
 import { pdfInfo, type PdfInfo } from './pdfProps.js';
 import type { PdfAnnot } from './annotTypes.js';
+import { fileToPdf, FileToPdfError } from './fileToPdf.js';
 
 export class PdfRoomError extends Error {
   constructor(
@@ -41,13 +42,20 @@ export interface PdfPartInfo {
   readonly annots: readonly PdfAnnot[];
 }
 
-/** 부속 PDF를 방에 넣는다. maxBytes는 한 파일, 방 합계는 그 4배까지 */
-export async function addPdfPart(docId: string, bytes: Uint8Array, maxBytes: number, key: string): Promise<PdfPartInfo> {
+/** 부속 PDF를 방에 넣는다. maxBytes는 한 파일, 방 합계는 그 4배까지. name이 PDF가 아니면(워드·한글·그림…) 먼저 PDF로 바꾼다 */
+export async function addPdfPart(docId: string, input: Uint8Array, maxBytes: number, key: string, name = 'file.pdf'): Promise<PdfPartInfo> {
   const state = await pdfRoomState(docId);
   if (!state) throw new PdfRoomError(409, '편집 연결이 없습니다. 편집기를 다시 열어 주세요.');
   await assertUnlocked(state, key);
-  if (bytes.length === 0) throw new PdfRoomError(400, '빈 파일입니다.');
-  if (bytes.length > maxBytes) throw new PdfRoomError(413, '파일이 너무 큽니다.');
+  if (input.length === 0) throw new PdfRoomError(400, '빈 파일입니다.');
+  if (input.length > maxBytes) throw new PdfRoomError(413, '파일이 너무 큽니다.');
+  let bytes: Uint8Array;
+  try {
+    bytes = await fileToPdf(input, name);
+  } catch (error) {
+    if (error instanceof FileToPdfError) throw new PdfRoomError(error.status, error.message);
+    throw error;
+  }
   let total = 0;
   for (const b of state.parts.values()) total += b.length;
   if (total + bytes.length > maxBytes * 4) throw new PdfRoomError(413, '이 문서에 넣은 파일이 너무 많습니다. 저장한 뒤 다시 열어 주세요.');
@@ -135,6 +143,18 @@ export async function extractPdfGroups(
   const entries: Record<string, Uint8Array> = {};
   files.forEach((f, i) => (entries[`${stem}-${String(i + 1).padStart(width, '0')}.pdf`] = f));
   return { bytes: zipSync(entries, { level: 0 }), type: 'zip', fileName: `${stem}-나누기.zip` };
+}
+
+/** 지금 편집 상태의 PDF(암호·압축 전) — 변환·그림 내보내기가 쓴다. 방이 없으면 저장본 */
+export async function currentPlainBytes(docId: string, readStored: () => Promise<Uint8Array>, key: string): Promise<Uint8Array> {
+  const state = await pdfRoomState(docId);
+  if (state) {
+    await assertUnlocked(state, key);
+    return (await buildPdfFromRoom(state.original, state.ydoc, (id) => state.parts.get(id))).bytes;
+  }
+  const bytes = await readStored();
+  if (await isEncryptedPdf(bytes)) throw LOCKED();
+  return bytes;
 }
 
 // ---------- 6단계: 암호 풀기·걸기, 압축, 정보 ----------
