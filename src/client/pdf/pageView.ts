@@ -50,6 +50,15 @@ const PAGE_GAP = 16;
 
 export type ScaleMode = number | 'fit-width' | 'fit-page';
 
+/** 글 조각(pdf.js 글자 층의 span 하나) — PDF 좌표 */
+export interface TextItemInfo {
+  readonly str: string;
+  /** [a, b, c, d, e, f] — e, f가 기준점 */
+  readonly transform: readonly number[];
+  readonly width: number;
+  readonly height: number;
+}
+
 /** 넣은 PDF(부속)를 연다 — 편집기가 /api/view/pdf-part에서 받아 캐시한다 */
 export type PartLoader = (partId: string) => Promise<PDFDocumentProxy>;
 
@@ -69,7 +78,7 @@ export class PageView {
   private ocVersion = 0;
   private matchesByPage = new Map<number, FindMatch[]>();
   private currentMatch: FindMatch | null = null;
-  private readonly textCache = new Map<string, Promise<string[]>>();
+  private readonly textCache = new Map<string, Promise<TextItemInfo[]>>();
   private scrollRaf = 0;
   private defaultW = 612;
   private defaultH = 792;
@@ -188,6 +197,9 @@ export class PageView {
     textLayer.className = 'pdf-text-layer';
     const hitLayer = document.createElement('div');
     hitLayer.className = 'pdf-hit-layer';
+    // 고친 글·가리기 미리 보기(editLayer.ts) — 글자 층 위
+    const editLayer = document.createElement('div');
+    editLayer.className = 'pdf-edit-layer';
     // 양식 입력란(formLayer.ts가 채운다) — 글자 층 위, 주석 층 아래
     const formLayer = document.createElement('div');
     formLayer.className = 'pdf-form-layer';
@@ -196,7 +208,7 @@ export class PageView {
     const label = document.createElement('span');
     label.className = 'pdf-page-label';
     label.textContent = String(page);
-    el.append(canvas, textLayer, hitLayer, formLayer, annotLayer, label);
+    el.append(canvas, textLayer, hitLayer, editLayer, formLayer, annotLayer, label);
     this.host.append(el);
     const blank = parsePageKey(entry.key)?.kind === 'blank' ? entry.blank : undefined;
     const slot: Slot = {
@@ -379,6 +391,7 @@ export class PageView {
     slot.hitLayer.replaceChildren();
     slot.annotLayer.replaceChildren();
     slot.el.querySelector('.pdf-form-layer')?.replaceChildren();
+    slot.el.querySelector('.pdf-edit-layer')?.replaceChildren();
     slot.viewport = null;
     slot.textDivs = [];
     slot.textStrs = [];
@@ -542,7 +555,12 @@ export class PageView {
 
   // ---------- 찾기 ----------
   /** 찾기용 쪽 글자 조각 — 글자 층과 같은 순서(pdf.js가 조각마다 span 하나) */
-  textItems(page: number): Promise<string[]> {
+  async textItems(page: number): Promise<string[]> {
+    return (await this.textItemInfos(page)).map((i) => i.str);
+  }
+
+  /** 쪽의 글 조각(위치 포함) — 글자 층 span과 같은 순서 */
+  textItemInfos(page: number): Promise<TextItemInfo[]> {
     const slot = this.slots[page - 1];
     if (!slot) return Promise.resolve([]);
     let cached = this.textCache.get(slot.entry.key);
@@ -550,11 +568,25 @@ export class PageView {
       cached = this.proxyOf(slot.entry).then(async (p) => {
         if (!p) return [];
         const content = await p.getTextContent();
-        return content.items.map((item) => ('str' in item ? item.str : ''));
+        return content.items.map((item) =>
+          'str' in item ? { str: item.str, transform: item.transform as number[], width: item.width, height: item.height } : { str: '', transform: [1, 0, 0, 1, 0, 0], width: 0, height: 0 },
+        );
       });
       this.textCache.set(slot.entry.key, cached);
     }
     return cached;
+  }
+
+  /** 글자 층 span → (쪽, 조각 순번) */
+  textSpanIndex(span: Element): { page: number; index: number } | null {
+    const slot = this.slots.find((s) => s.el.contains(span));
+    if (!slot) return null;
+    const index = slot.textDivs.indexOf(span as HTMLElement);
+    return index < 0 ? null : { page: slot.page, index };
+  }
+  /** 그 쪽의 글자 층 span들(그려진 경우) */
+  textDivsOf(page: number): readonly HTMLElement[] {
+    return this.slots[page - 1]?.textDivs ?? [];
   }
 
   highlight(matches: readonly FindMatch[], current: FindMatch | null): void {

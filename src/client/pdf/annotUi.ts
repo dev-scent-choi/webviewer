@@ -52,7 +52,7 @@ export function setupAnnotUi(opts: {
     const sel = layer.selectedAnnot;
     if (sel) return sel.type;
     const t = layer.currentTool;
-    return t === 'select' || t === 'hand' || t === 'eraser' ? null : t;
+    return t === 'select' || t === 'hand' || t === 'eraser' || t === 'textedit' || t === 'redact' ? null : t;
   }
   function setTool(tool: ToolName): void {
     layer.setTool(tool);

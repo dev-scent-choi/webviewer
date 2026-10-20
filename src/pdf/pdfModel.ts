@@ -24,11 +24,52 @@ import {
   PDF_FORM_MAP,
   PDF_META_MAP,
   PDF_PAGES_ARRAY,
+  PDF_REDACT_MAP,
+  PDF_TEXT_EDITS_MAP,
+  isRedaction,
+  isTextEdit,
   type PdfAnnot,
   type PdfPageEntry,
+  type PdfRedaction,
+  type PdfTextEdit,
 } from './annotTypes.js';
+import { rewritePage, type RewriteTarget } from './textRewrite.js';
 
-export { PDF_ANNOTS_MAP, PDF_FORM_MAP, PDF_META_MAP, PDF_PAGES_ARRAY };
+export { PDF_ANNOTS_MAP, PDF_FORM_MAP, PDF_META_MAP, PDF_PAGES_ARRAY, PDF_REDACT_MAP, PDF_TEXT_EDITS_MAP };
+
+/** 쪽 열쇠별 고치기·(적용한) 가리기 대상 */
+function rewriteTargetsOf(ydoc: Y.Doc): Map<string, RewriteTarget[]> {
+  const byKey = new Map<string, RewriteTarget[]>();
+  const add = (key: string, t: RewriteTarget) => byKey.set(key, [...(byKey.get(key) ?? []), t]);
+  for (const e of ydoc.getMap<PdfTextEdit>(PDF_TEXT_EDITS_MAP).values()) {
+    if (isTextEdit(e)) add(e.pageKey, { id: e.id, mode: 'edit', rect: e.rect, oldText: e.oldText, newText: e.newText, fontSize: e.fontSize });
+  }
+  for (const r of ydoc.getMap<PdfRedaction>(PDF_REDACT_MAP).values()) {
+    if (isRedaction(r) && r.applied) add(r.pageKey, { id: r.id, mode: 'redact', rect: r.rect });
+  }
+  return byKey;
+}
+
+/** 적용한 가리기 영역(쪽 열쇠별) */
+export function appliedRedactions(ydoc: Y.Doc): PdfRedaction[] {
+  return [...ydoc.getMap<PdfRedaction>(PDF_REDACT_MAP).values()].filter((r) => isRedaction(r) && r.applied);
+}
+
+/** 편집기에 줄 원본에 적용한 가리기만 반영한 것 — 가린 내용이 다른 참여자에게도 가지 않게(쪽 순서는 그대로) */
+export async function redactedBase(original: Uint8Array, ydoc: Y.Doc): Promise<Uint8Array> {
+  const redactions = appliedRedactions(ydoc).filter((r) => origIndexOf(r.pageKey) !== null);
+  if (redactions.length === 0) return original;
+  const doc = await loadPdf(original);
+  const fonts = fontsFor(doc);
+  const pages = doc.getPages();
+  const byIndex = new Map<number, RewriteTarget[]>();
+  for (const r of redactions) {
+    const i = origIndexOf(r.pageKey)!;
+    byIndex.set(i, [...(byIndex.get(i) ?? []), { id: r.id, mode: 'redact', rect: r.rect }]);
+  }
+  for (const [i, targets] of byIndex) if (pages[i]) await rewritePage(doc, pages[i], targets, fonts);
+  return doc.save();
+}
 
 /** 원본 지문 — 편집기가 받은 원본이 방의 원본과 같은지 확인한다 */
 export function pdfBaseFingerprint(bytes: Uint8Array): string {
@@ -95,10 +136,20 @@ export async function buildPdfFromRoom(original: Uint8Array, ydoc: Y.Doc, parts?
   const raw = ydoc.getArray<PdfPageEntry>(PDF_PAGES_ARRAY).toArray();
   const pageOfKey = await arrangePages(doc, raw.length > 0 ? cleanPageList(raw) : identityPages(doc.getPageCount()), parts);
   const order = new Map([...pageOfKey.keys()].map((key, i) => [key, i]));
-  const annots = [...ydoc.getMap<PdfAnnot>(PDF_ANNOTS_MAP).values()]
-    .filter((a) => order.has(a.pageKey))
-    .sort((a, b) => order.get(a.pageKey)! - order.get(b.pageKey)! || a.createdAt.localeCompare(b.createdAt));
   const fonts = fontsFor(doc);
+  // 글자 고치기·가리기(쪽 내용 자체를 고쳐 쓴다) — 주석을 쓰기 전에
+  const targets = rewriteTargetsOf(ydoc);
+  for (const [key, list] of targets) {
+    const page = pageOfKey.get(key);
+    if (page) await rewritePage(doc, page, list, fonts);
+  }
+  // 가린 곳에 걸치는 편집기 주석은 남기지 않는다
+  const redacted = appliedRedactions(ydoc);
+  const hidden = (a: PdfAnnot) =>
+    redacted.some((r) => r.pageKey === a.pageKey && r.rect[0] < a.rect[2] && r.rect[2] > a.rect[0] && r.rect[1] < a.rect[3] && r.rect[3] > a.rect[1]);
+  const annots = [...ydoc.getMap<PdfAnnot>(PDF_ANNOTS_MAP).values()]
+    .filter((a) => order.has(a.pageKey) && !hidden(a))
+    .sort((a, b) => order.get(a.pageKey)! - order.get(b.pageKey)! || a.createdAt.localeCompare(b.createdAt));
   await writeAnnots(doc, annots, (key) => pageOfKey.get(key), fonts);
   // 양식 값(바꾼 칸만) — 한글은 주석과 같은 Pretendard 한 벌을 쓴다
   await applyFormValues(doc, ydoc.getMap<unknown>(PDF_FORM_MAP).entries(), () => fonts.korean());
@@ -235,7 +286,7 @@ export async function preparePdfPart(
 
 /** 변경 기록 한 줄 — 같은 주석은 마지막 상태로 하나만, 쪽 정리는 요약 한 줄 */
 export interface PdfChangeEntry {
-  readonly kind: 'annot_added' | 'annot_changed' | 'annot_removed' | 'pages_changed' | 'form_changed';
+  readonly kind: 'annot_added' | 'annot_changed' | 'annot_removed' | 'pages_changed' | 'form_changed' | 'text_edited' | 'redaction_applied';
   readonly annotType?: string;
   readonly label: string;
   readonly page: number | null;
@@ -277,6 +328,31 @@ export class PdfChangeTracker {
         return;
       }
       this.pagesEdit = { viewer: this.resolveViewer(transaction.origin), at: new Date().toISOString() };
+    });
+    // 글자 고치기 — 고친 조각마다 마지막 글, 되돌리면(지우면) 기록도 뺀다
+    const edits = ydoc.getMap<PdfTextEdit>(PDF_TEXT_EDITS_MAP);
+    edits.observe((event, transaction) => {
+      if (transaction.origin === PDF_SEED_ORIGIN) return;
+      const viewer = this.resolveViewer(transaction.origin);
+      const at = new Date().toISOString();
+      for (const id of event.keysChanged) {
+        const e = edits.get(id);
+        if (!isTextEdit(e)) this.entries.delete(`edit:${id}`);
+        else this.entries.set(`edit:${id}`, { kind: 'text_edited', label: '글자 고치기', page: this.pageNumberOf(e.pageKey), text: `${e.oldText.slice(0, 80)} → ${e.newText.slice(0, 80)}`, viewer, at });
+      }
+    });
+    // 가리기 — 적용한 것만
+    const redactions = ydoc.getMap<PdfRedaction>(PDF_REDACT_MAP);
+    redactions.observe((event, transaction) => {
+      if (transaction.origin === PDF_SEED_ORIGIN) return;
+      const viewer = this.resolveViewer(transaction.origin);
+      const at = new Date().toISOString();
+      for (const id of event.keysChanged) {
+        const r = redactions.get(id);
+        if (isRedaction(r) && r.applied && !this.entries.has(`redact:${id}`)) {
+          this.entries.set(`redact:${id}`, { kind: 'redaction_applied', label: '가리기', page: this.pageNumberOf(r.pageKey), viewer, at });
+        }
+      }
     });
     // 양식 값 — 칸마다 마지막 값 한 줄
     const form = ydoc.getMap<unknown>(PDF_FORM_MAP);

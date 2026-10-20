@@ -5,7 +5,7 @@
 import { randomBytes } from 'node:crypto';
 import { zipSync } from 'fflate';
 import { pdfRoomState } from '../collab/room.js';
-import { buildPdfFromRoom, extractPdf, pdfBaseFingerprint, preparePdfPart } from './pdfModel.js';
+import { appliedRedactions, buildPdfFromRoom, extractPdf, pdfBaseFingerprint, preparePdfPart, redactedBase } from './pdfModel.js';
 import type { PdfAnnot } from './annotTypes.js';
 
 export class PdfRoomError extends Error {
@@ -50,11 +50,30 @@ export async function readPdfPart(docId: string, partId: string): Promise<Uint8A
   return state?.parts.get(partId) ?? null;
 }
 
-/** 편집기가 그릴 원본 — 방이 있으면 방을 열 때의 원본(쪽 목록 열쇠의 기준), 없으면 저장본. 지문을 함께 */
+const redactedCache = new Map<string, Promise<Uint8Array>>();
+
+/**
+ * 편집기가 그릴 원본 — 방이 있으면 방을 열 때의 원본(쪽 목록 열쇠의 기준), 없으면 저장본. 지문은 원래 원본의 것.
+ * 방에서 가리기를 적용했으면 그 내용을 지운 원본을 준다(나중에 들어온 참여자에게 가린 글자가 가지 않게).
+ */
 export async function editorSourceOf(docId: string, readStored: () => Promise<Uint8Array>): Promise<{ bytes: Uint8Array; base: string }> {
   const state = await pdfRoomState(docId);
-  const bytes = state ? state.original : await readStored();
-  return { bytes, base: pdfBaseFingerprint(bytes) };
+  if (!state) {
+    const bytes = await readStored();
+    return { bytes, base: pdfBaseFingerprint(bytes) };
+  }
+  const base = pdfBaseFingerprint(state.original);
+  const applied = appliedRedactions(state.ydoc);
+  if (applied.length === 0) return { bytes: state.original, base };
+  const key = `${docId}:${base}:${applied.map((r) => r.id).sort().join(',')}`;
+  let p = redactedCache.get(key);
+  if (!p) {
+    p = redactedBase(state.original, state.ydoc);
+    redactedCache.set(key, p);
+    p.catch(() => redactedCache.delete(key));
+    while (redactedCache.size > 8) redactedCache.delete(redactedCache.keys().next().value as string);
+  }
+  return { bytes: await p, base };
 }
 
 /**
