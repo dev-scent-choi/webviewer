@@ -9,7 +9,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fontkit from '@pdf-lib/fontkit';
 import { PDFDocument, PDFHexString, PDFName, PDFRef, PDFString, StandardFonts, type PDFContext, type PDFFont, type PDFPage } from 'pdf-lib';
-import { origIndexOf, type PdfAnnot } from './annotTypes.js';
+import { isStampImage, origIndexOf, type PdfAnnot } from './annotTypes.js';
+import { STAMP_IMAGE_KEY } from './annotRead.js';
 
 /** 프로젝트 루트 assets/fonts — 이 파일 위치 기준이라 실행 cwd와 무관하다(rendering.ts와 같은 방식) */
 /** pdf-lib의 사전 리터럴 형식(패키지가 따로 내보내지 않아 flateStream의 매개변수에서 꺼낸다) */
@@ -46,7 +47,7 @@ function boundsOf(a: PdfAnnot): [number, number, number, number] {
   if (pts.length === 0) pts.push(a.rect[0], a.rect[1], a.rect[2], a.rect[3]);
   const xs = pts.filter((_, i) => i % 2 === 0);
   const ys = pts.filter((_, i) => i % 2 === 1);
-  if (a.type === 'note' || a.type === 'freetext' || a.type === 'rect' || a.type === 'ellipse') {
+  if (a.type === 'note' || a.type === 'freetext' || a.type === 'rect' || a.type === 'ellipse' || a.type === 'stamp') {
     return [a.rect[0], a.rect[1], a.rect[2], a.rect[3]];
   }
   return [Math.min(...xs) - pad, Math.min(...ys) - pad, Math.max(...xs) + pad, Math.max(...ys) + pad];
@@ -103,12 +104,12 @@ function wrapText(text: string, font: PDFFont, size: number, maxWidth: number): 
 
 const WIN_ANSI = /^[\x20-\x7e\n\r\t]*$/;
 
-interface Fonts {
+export interface Fonts {
   standard(): Promise<PDFFont>;
   korean(): Promise<PDFFont>;
 }
 
-function fontsFor(doc: PDFDocument): Fonts {
+export function fontsFor(doc: PDFDocument): Fonts {
   let std: Promise<PDFFont> | null = null;
   let ko: Promise<PDFFont> | null = null;
   return {
@@ -124,7 +125,7 @@ function fontsFor(doc: PDFDocument): Fonts {
 }
 
 /** 모양 스트림 내용과 필요한 리소스 */
-async function appearanceOf(a: PdfAnnot, fonts: Fonts): Promise<{ content: string; font?: PDFFont; multiply?: boolean }> {
+async function appearanceOf(doc: PDFDocument, a: PdfAnnot, fonts: Fonts): Promise<{ content: string; font?: PDFFont; multiply?: boolean; image?: PDFRef }> {
   const w = Math.max(0.5, a.width);
   const lines: string[] = [];
   switch (a.type) {
@@ -205,6 +206,14 @@ async function appearanceOf(a: PdfAnnot, fonts: Fonts): Promise<{ content: strin
       lines.push('ET');
       return { content: lines.join('\n'), font };
     }
+    case 'stamp': {
+      // 서명·도장 그림 — 사각형을 꽉 채워 그린다
+      if (!isStampImage(a.image)) return { content: '' };
+      const bytes = Buffer.from(a.image.slice(a.image.indexOf(',') + 1), 'base64');
+      const img = a.image.startsWith('data:image/png') ? await doc.embedPng(bytes) : await doc.embedJpg(bytes);
+      const [x1, y1, x2, y2] = a.rect;
+      return { content: `q ${f(x2 - x1)} 0 0 ${f(y2 - y1)} ${f(x1)} ${f(y1)} cm /Im0 Do Q`, image: img.ref };
+    }
     default:
       return { content: '' };
   }
@@ -221,12 +230,13 @@ const SUBTYPE: Record<PdfAnnot['type'], string> = {
   ellipse: 'Circle',
   line: 'Line',
   arrow: 'Line',
+  stamp: 'Stamp',
 };
 
 async function writeOne(doc: PDFDocument, page: PDFPage, a: PdfAnnot, fonts: Fonts): Promise<void> {
   const ctx = doc.context;
   const bounds = boundsOf(a);
-  const ap = await appearanceOf(a, fonts);
+  const ap = await appearanceOf(doc, a, fonts);
   const resources: Dict = {};
   const gs: Dict = {};
   if (a.opacity < 1) Object.assign(gs, { CA: a.opacity, ca: a.opacity });
@@ -237,6 +247,7 @@ async function writeOne(doc: PDFDocument, page: PDFPage, a: PdfAnnot, fonts: Fon
     content = `/GS0 gs\n${content}`;
   }
   if (ap.font) resources.Font = ctx.obj({ F0: ap.font.ref });
+  if (ap.image) resources.XObject = ctx.obj({ Im0: ap.image });
   const stream = ctx.flateStream(content, {
     Type: 'XObject',
     Subtype: 'Form',
@@ -288,6 +299,13 @@ async function writeOne(doc: PDFDocument, page: PDFPage, a: PdfAnnot, fonts: Fon
     case 'ellipse':
       if (a.fill) dict.IC = colorArray(a.fill);
       break;
+    case 'stamp':
+      dict.Name = 'DocviewSignature';
+      dict.C = [];
+      dict.Border = [0, 0, 0];
+      dict.BS = ctx.obj({ W: 0 });
+      if (isStampImage(a.image)) dict[STAMP_IMAGE_KEY] = PDFString.of(a.image);
+      break;
     case 'line':
     case 'arrow':
       dict.L = [...(a.line ?? [a.rect[0], a.rect[1], a.rect[2], a.rect[3]])];
@@ -299,8 +317,12 @@ async function writeOne(doc: PDFDocument, page: PDFPage, a: PdfAnnot, fonts: Fon
 }
 
 /** 모델의 주석을 쪽마다 쓴다. pageKey가 가리키는 쪽이 없으면 건너뛴다. */
-export async function writeAnnots(doc: PDFDocument, annots: readonly PdfAnnot[], pageOfKey?: (pageKey: string) => PDFPage | undefined): Promise<void> {
-  const fonts = fontsFor(doc);
+export async function writeAnnots(
+  doc: PDFDocument,
+  annots: readonly PdfAnnot[],
+  pageOfKey?: (pageKey: string) => PDFPage | undefined,
+  fonts: Fonts = fontsFor(doc),
+): Promise<void> {
   const pages = doc.getPages();
   for (const a of annots) {
     const page = pageOfKey ? pageOfKey(a.pageKey) : pages[origIndexOf(a.pageKey) ?? -1];

@@ -23,9 +23,11 @@ export interface ToolStyle {
 export const LOCAL_ORIGIN = Symbol('pdf-local-edit');
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
-const DRAW_TOOLS = new Set<ToolName>(['note', 'ink', 'freetext', 'rect', 'ellipse', 'line', 'arrow']);
+const DRAW_TOOLS = new Set<ToolName>(['note', 'ink', 'freetext', 'rect', 'ellipse', 'line', 'arrow', 'stamp']);
 const TEXT_TOOLS = new Set<ToolName>(['highlight', 'underline', 'strike']);
-const BOX_TYPES = new Set<PdfAnnotType>(['rect', 'ellipse', 'freetext']);
+const BOX_TYPES = new Set<PdfAnnotType>(['rect', 'ellipse', 'freetext', 'stamp']);
+/** 서명 그림을 그냥 눌러 놓을 때의 폭(pt) */
+const STAMP_WIDTH = 150;
 const NOTE_SIZE = 24;
 
 function svg<K extends keyof SVGElementTagNameMap>(tag: K, attrs: Record<string, string | number> = {}): SVGElementTagNameMap[K] {
@@ -55,7 +57,7 @@ function viewBox(vp: PageViewport, a: PdfAnnot): { x: number; y: number; w: numb
     xs.push(x);
     ys.push(y);
   }
-  const pad = a.type === 'note' || a.type === 'freetext' ? 0 : (a.width * vp.scale) / 2 + 2;
+  const pad = a.type === 'note' || a.type === 'freetext' || a.type === 'stamp' ? 0 : (a.width * vp.scale) / 2 + 2;
   const x = Math.min(...xs) - pad;
   const y = Math.min(...ys) - pad;
   return { x, y, w: Math.max(...xs) + pad - x, h: Math.max(...ys) + pad - y };
@@ -122,6 +124,8 @@ export class AnnotLayer {
   private readonly changeListeners: Array<() => void> = [];
   private popup: HTMLElement | null = null;
   private readonly pageChangeListeners: Array<(pages: Set<number>) => void> = [];
+  /** 서명 탭: 다음 한 번 누를 때 놓을 그림(aspect = 높이/폭) 또는 글(날짜) */
+  private pending: { kind: 'stamp'; image: string; aspect: number } | { kind: 'text'; text: string } | null = null;
 
   constructor(private readonly opts: AnnotLayerOptions) {
     for (const [type, d] of Object.entries(ANNOT_DEFAULTS) as Array<[PdfAnnotType, ToolStyle]>) this.styles.set(type, { ...d });
@@ -166,11 +170,41 @@ export class AnnotLayer {
   }
   setTool(tool: ToolName): void {
     this.tool = tool;
+    this.pending = null;
     this.closePopup();
     if (tool !== 'select') this.select(null);
     const root = this.opts.scroller;
     root.dataset.tool = tool;
     root.classList.toggle('hand', tool === 'hand');
+  }
+  /** 서명·도장 그림을 다음에 누르는(또는 끄는) 곳에 놓는다 */
+  placeStamp(image: string, aspect: number): void {
+    this.setTool('stamp');
+    this.pending = { kind: 'stamp', image, aspect: aspect > 0 ? aspect : 0.4 };
+  }
+  /** 글(날짜 등)을 다음에 누르는 곳에 글상자로 놓는다 */
+  placeText(text: string): void {
+    this.setTool('freetext');
+    this.pending = { kind: 'text', text };
+  }
+  /** 서명 칸 등 정해진 사각형 안에 비율을 지켜 가운데로 놓는다 */
+  placeStampInRect(pageKey: string, box: readonly [number, number, number, number], image: string, aspect: number): string {
+    const [bx1, by1, bx2, by2] = box;
+    const bw = Math.abs(bx2 - bx1);
+    const bh = Math.abs(by2 - by1);
+    let w = bw;
+    let h = w * aspect;
+    if (h > bh) {
+      h = bh;
+      w = h / aspect;
+    }
+    const x = Math.min(bx1, bx2) + (bw - w) / 2;
+    const y = Math.min(by1, by2) + (bh - h) / 2;
+    const annot = this.make('stamp', pageKey, { rect: [x, y, x + w, y + h], image, width: 0 });
+    this.add(annot);
+    this.setTool('select');
+    this.select(annot.id);
+    return annot.id;
   }
   styleOf(type: PdfAnnotType): ToolStyle {
     return this.styles.get(type) ?? { ...ANNOT_DEFAULTS[type] };
@@ -384,6 +418,28 @@ export class AnnotLayer {
         layer.append(btn);
         return;
       }
+      case 'stamp': {
+        const [x1, y1, x2, y2] = a.rect;
+        const [tx, ty] = pt(vp, x1, y2);
+        const div = document.createElement('div');
+        div.className = 'pdf-stamp';
+        div.dataset.id = a.id;
+        div.style.left = `${tx}px`;
+        div.style.top = `${ty}px`;
+        div.style.width = `${(x2 - x1) * s}px`;
+        div.style.height = `${(y2 - y1) * s}px`;
+        div.style.opacity = String(a.opacity);
+        div.style.transform = vp.rotation ? `rotate(${vp.rotation}deg)` : '';
+        if (a.image) {
+          const img = document.createElement('img');
+          img.src = a.image;
+          img.alt = '서명';
+          img.draggable = false;
+          div.append(img);
+        }
+        layer.append(div);
+        return;
+      }
       case 'freetext': {
         const [x1, y1, x2, y2] = a.rect;
         const [tx, ty] = pt(vp, x1, y2);
@@ -538,6 +594,14 @@ export class AnnotLayer {
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
       const p = toPdf(at.vp, Math.max(b.x + 8, last[0]), Math.max(b.y + 8, last[1]));
+      if (a.type === 'stamp') {
+        // 서명 그림은 비율을 지킨다 — 왼쪽 위를 고정하고 폭에 맞춰 높이
+        const [x1, y1, x2, y2] = a.rect;
+        const aspect = (y2 - y1) / Math.max(1, x2 - x1);
+        const w = Math.max(8, Math.abs(p[0] - x1));
+        this.update(id, { rect: [x1, y2 - w * aspect, x1 + w, y2] });
+        return;
+      }
       this.update(id, { rect: [Math.min(anchor[0], p[0]), Math.min(anchor[1], p[1]), Math.max(anchor[0], p[0]), Math.max(anchor[1], p[1])] });
     };
     window.addEventListener('pointermove', onMove);
@@ -547,6 +611,8 @@ export class AnnotLayer {
   /** 그리는 도구로 새 주석 — 끄는 동안 미리 보기 */
   private drawNew(event: PointerEvent, at: { page: number; el: HTMLElement; vp: PageViewport }): void {
     const tool = this.tool as PdfAnnotType;
+    const pending = this.pending;
+    if (tool === 'stamp' && pending?.kind !== 'stamp') return;
     const pageKey = this.opts.view.pageKeyOf(at.page);
     const start = this.local(event, at.el);
     const style = this.styleOf(tool);
@@ -560,7 +626,7 @@ export class AnnotLayer {
       shape = svg('polyline', { ...strokeAttrs, points: start.join(',') });
       preview.append(shape);
     } else if (tool !== 'note') {
-      shape = svg(tool === 'ellipse' ? 'ellipse' : tool === 'line' || tool === 'arrow' ? 'line' : 'rect', tool === 'freetext' ? { stroke: '#1a73e8', 'stroke-dasharray': '4 3', fill: 'rgba(26,115,232,0.06)' } : strokeAttrs);
+      shape = svg(tool === 'ellipse' ? 'ellipse' : tool === 'line' || tool === 'arrow' ? 'line' : 'rect', tool === 'freetext' || tool === 'stamp' ? { stroke: '#1a73e8', 'stroke-dasharray': '4 3', fill: 'rgba(26,115,232,0.06)' } : strokeAttrs);
       preview.append(shape);
     }
     let last = start;
@@ -608,6 +674,31 @@ export class AnnotLayer {
         const [x1, y1] = toPdf(vp, start[0], start[1]);
         const [x2, y2] = toPdf(vp, last[0], last[1]);
         this.add(this.make(tool, pageKey, { rect: boundsOfPoints([x1, y1, x2, y2]), line: [x1, y1, x2, y2] }));
+        return;
+      }
+      if (tool === 'stamp' && pending?.kind === 'stamp') {
+        // 누르면 그 자리(왼쪽 위)에 기본 폭, 끌면 끈 폭 — 높이는 그림 비율대로
+        const p1 = toPdf(vp, start[0], start[1]);
+        const p2 = toPdf(vp, last[0], last[1]);
+        const w = tiny ? STAMP_WIDTH : Math.max(16, Math.abs(p2[0] - p1[0]));
+        const h = w * pending.aspect;
+        const x = tiny ? p1[0] : Math.min(p1[0], p2[0]);
+        const top = tiny ? p1[1] : Math.max(p1[1], p2[1]);
+        const annot = this.make('stamp', pageKey, { rect: [x, top - h, x + w, top], image: pending.image, width: 0 });
+        this.add(annot);
+        this.setTool('select');
+        this.select(annot.id);
+        return;
+      }
+      if (tool === 'freetext' && pending?.kind === 'text') {
+        // 날짜 등 정해진 글 — 글 길이에 맞춘 상자, 편집 창은 열지 않는다
+        const [x, y] = toPdf(vp, start[0], start[1]);
+        const size = 12;
+        const w = Math.max(40, pending.text.length * size * 0.62 + 8);
+        const annot = this.make('freetext', pageKey, { rect: [x, y - size * 1.2 - 4, x + w, y], text: pending.text, fontSize: size });
+        this.add(annot);
+        this.setTool('select');
+        this.select(annot.id);
         return;
       }
       // 상자 종류: 너무 작게 끌었으면(=클릭) 글상자는 기본 크기, 도형은 만들지 않는다

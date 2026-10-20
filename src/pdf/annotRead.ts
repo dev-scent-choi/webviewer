@@ -5,7 +5,7 @@
  * 편집기는 뺀 PDF를 그리고(pdf-source) 다루는 주석은 자기 층에 그린다 — 저장할 때 모델의 주석을 다시 쓴다(annotWrite.ts).
  */
 import { PDFArray, PDFDict, PDFDocument, PDFHexString, PDFName, PDFNumber, PDFRef, PDFString, type PDFObject } from 'pdf-lib';
-import { pageKeyOf, type PdfAnnot, type PdfAnnotType } from './annotTypes.js';
+import { isStampImage, pageKeyOf, type PdfAnnot, type PdfAnnotType } from './annotTypes.js';
 
 const SUBTYPES: Record<string, PdfAnnotType> = {
   Text: 'note',
@@ -17,7 +17,10 @@ const SUBTYPES: Record<string, PdfAnnotType> = {
   Square: 'rect',
   Circle: 'ellipse',
   Line: 'line',
+  Stamp: 'stamp',
 };
+/** 편집기가 만든 서명·도장(Stamp)에만 붙는 그림 사본 — 다시 열었을 때 고칠 수 있게. 다른 Stamp는 손대지 않는다 */
+export const STAMP_IMAGE_KEY = 'DocviewImage';
 const ARROW_ENDS = new Set(['OpenArrow', 'ClosedArrow', 'ROpenArrow', 'RClosedArrow']);
 
 function lookupDict(doc: PDFDocument, obj: PDFObject | undefined): PDFDict | undefined {
@@ -94,6 +97,7 @@ function managedType(doc: PDFDocument, dict: PDFDict): PdfAnnotType | undefined 
   const sub = nameOf(doc, dict.get(PDFName.of('Subtype')));
   if (!sub || !(sub in SUBTYPES)) return undefined;
   if (dict.has(PDFName.of('IRT'))) return undefined;
+  if (sub === 'Stamp' && !dict.has(PDFName.of(STAMP_IMAGE_KEY))) return undefined;
   return SUBTYPES[sub];
 }
 
@@ -165,6 +169,10 @@ function toAnnot(doc: PDFDocument, dict: PDFDict, type: PdfAnnotType, pageIndex:
     case 'ellipse': {
       const fill = colorOf(nums(doc, dict.get(PDFName.of('IC'))));
       return { ...base, type, fill: fill ?? null, ...(contents ? { text: contents } : {}) };
+    }
+    case 'stamp': {
+      const image = text(doc, dict.get(PDFName.of(STAMP_IMAGE_KEY)));
+      return isStampImage(image) ? { ...base, type, width: 0, color: '#000000', image } : undefined;
     }
     case 'line': {
       const l = nums(doc, dict.get(PDFName.of('L')));

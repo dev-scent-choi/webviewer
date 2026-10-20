@@ -321,7 +321,7 @@
 .pdf-annot-hit { pointer-events: stroke; }
 .pdf-scroll[data-tool="eraser"] .pdf-annot:hover { opacity: 0.45 !important; }
 /* 그리는 도구 — 쪽 전체가 붓이 된다 */
-.pdf-scroll:is([data-tool="note"], [data-tool="ink"], [data-tool="freetext"], [data-tool="rect"], [data-tool="ellipse"], [data-tool="line"], [data-tool="arrow"]) .pdf-annot-layer { pointer-events: auto; cursor: crosshair; }
+.pdf-scroll:is([data-tool="note"], [data-tool="ink"], [data-tool="freetext"], [data-tool="rect"], [data-tool="ellipse"], [data-tool="line"], [data-tool="arrow"], [data-tool="stamp"]) .pdf-annot-layer { pointer-events: auto; cursor: crosshair; }
 .pdf-scroll[data-tool="note"] .pdf-annot-layer { cursor: copy; }
 .pdf-scroll[data-tool="freetext"] .pdf-annot-layer { cursor: text; }
 
@@ -442,3 +442,75 @@ body.organizing .pdf-mode-notice { top: auto; bottom: 22px; z-index: 8; }
 /* 정리하는 동안은 가운데를 넓게 — 왼쪽 도구 목록·오른쪽 정보 창을 접는다(닫으면 그대로 돌아온다) */
 body.organizing #tools-panel,
 body.organizing #inspector { display: none; }
+
+/* ---------- 양식 칸(formLayer.ts) ---------- */
+.pdf-form-layer { position: absolute; inset: 0; z-index: 3; pointer-events: none; }
+.pdf-form-field { position: absolute; box-sizing: border-box; margin: 0; padding: 0 3px; border: 1px solid transparent; border-radius: 2px; background: rgba(26, 115, 232, 0.08); color: #111; font-family: 'Pretendard', 'Malgun Gothic', sans-serif; line-height: 1.15; pointer-events: auto; transition: background-color 0.15s, border-color 0.15s; }
+.pdf-form-field:hover:not(:disabled) { border-color: rgba(26, 115, 232, 0.55); }
+.pdf-form-field:focus { outline: none; border-color: var(--pdf-accent); background: rgba(255, 255, 255, 0.9); box-shadow: 0 0 0 2px rgba(26, 115, 232, 0.18); }
+.pdf-form-field.readonly { background: transparent; color: #111; cursor: default; }
+.pdf-form-field:disabled { opacity: 1; }
+textarea.pdf-form-field { resize: none; padding-top: 2px; }
+select.pdf-form-field { padding: 0 2px; }
+input.pdf-form-field[type="checkbox"], input.pdf-form-field[type="radio"] { padding: 0; accent-color: var(--pdf-accent); cursor: pointer; }
+.pdf-form-field.flash { animation: pdf-field-flash 0.9s ease-out; }
+@keyframes pdf-field-flash { 0%, 40% { box-shadow: 0 0 0 4px rgba(255, 196, 0, 0.75); } 100% { box-shadow: 0 0 0 0 rgba(255, 196, 0, 0); } }
+.pdf-form-sig { position: absolute; display: flex; align-items: center; justify-content: center; border: 1.5px dashed #c58a00; border-radius: 4px; background: rgba(255, 214, 0, 0.12); color: #7a5600; font: 600 12px 'Pretendard', 'Malgun Gothic', sans-serif; cursor: pointer; pointer-events: auto; }
+.pdf-form-sig:hover:not(:disabled) { background: rgba(255, 214, 0, 0.24); }
+.pdf-form-sig:disabled { display: none; }
+
+/* ---------- 서명·도장(annotLayer 'stamp') ---------- */
+.pdf-stamp { position: absolute; transform-origin: 0 0; pointer-events: auto; }
+.pdf-stamp img { display: block; width: 100%; height: 100%; pointer-events: none; user-select: none; }
+.pdf-scroll[data-tool="select"] .pdf-stamp { cursor: move; }
+.pdf-thumb-annots .pdf-stamp { pointer-events: none; }
+
+/* ---------- 서명 탭 도구 줄(signUi.ts) ---------- */
+.pdf-editor-page.mode-sign #annot-tools { display: none; }
+.pdf-sign-tools[hidden] { display: none; }
+.pdf-sign-list { display: flex; flex-direction: column; gap: 4px; }
+.pdf-sign-list:empty { display: none; }
+.pdf-sign-chip { position: relative; display: block; }
+.pdf-editor-page .pdf-sign-use { display: flex; align-items: center; justify-content: center; width: 36px; height: 30px; padding: 2px; border: 1px solid var(--pdf-line); border-radius: 6px; background: #fff; cursor: pointer; }
+.pdf-sign-use:hover { border-color: var(--pdf-accent); }
+.pdf-sign-use img { max-width: 100%; max-height: 100%; }
+.pdf-editor-page .pdf-sign-del { position: absolute; top: -5px; right: -5px; display: none; width: 15px; height: 15px; padding: 0; border: none; border-radius: 50%; background: #5f5f68; color: #fff; font-size: 11px; line-height: 15px; cursor: pointer; }
+.pdf-sign-chip:hover .pdf-sign-del, .pdf-sign-chip:focus-within .pdf-sign-del { display: block; }
+
+/* ---------- 서명 만들기 창 ---------- */
+.pdf-sign-card { width: min(560px, calc(100vw - 32px)); }
+.pdf-sign-tabs { display: flex; gap: 4px; margin: 4px 0 12px; border-bottom: 1px solid var(--pdf-line); }
+.pdf-editor-page .pdf-sign-tabs button { padding: 8px 12px; border: none; border-bottom: 2px solid transparent; background: none; color: var(--pdf-dim); font-size: 13.5px; cursor: pointer; }
+.pdf-editor-page .pdf-sign-tabs button[aria-selected="true"] { border-bottom-color: var(--pdf-text); color: var(--pdf-text); font-weight: 600; }
+.pdf-sign-pane[hidden] { display: none; }
+.pdf-sign-pad { display: block; width: 100%; aspect-ratio: 3 / 1; border: 1px solid var(--pdf-line); border-radius: 8px; background: #fff linear-gradient(to top, transparent 24%, #e7e5e1 24%, #e7e5e1 calc(24% + 1px), transparent calc(24% + 1px)); touch-action: none; cursor: crosshair; }
+.pdf-sign-row { display: flex; align-items: center; justify-content: space-between; margin-top: 10px; }
+.pdf-sign-colors { display: flex; gap: 8px; }
+.pdf-editor-page .pdf-sign-colors button { width: 22px; height: 22px; padding: 0; border: 2px solid #fff; border-radius: 50%; background: var(--c); box-shadow: 0 0 0 1px var(--pdf-line); cursor: pointer; }
+.pdf-editor-page .pdf-sign-colors button[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--pdf-accent); }
+.pdf-sign-drop { position: relative; display: flex; align-items: center; justify-content: center; min-height: 96px; border: 1.5px dashed var(--pdf-line); border-radius: 8px; color: var(--pdf-dim); font-size: 13px; cursor: pointer; }
+.pdf-sign-drop input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.pdf-sign-drop:focus-within { border-color: var(--pdf-accent); }
+.pdf-sign-preview { display: block; max-width: 100%; max-height: 140px; margin: 12px auto 0; background: repeating-conic-gradient(#f1f1f3 0 25%, #fff 0 50%) 0 0 / 14px 14px; }
+.pdf-sign-check { display: flex; align-items: center; gap: 6px; margin-top: 10px; font-size: 13px; }
+.pdf-sign-text { box-sizing: border-box; width: 100%; height: 38px; padding: 0 10px; border: 1px solid var(--pdf-line); border-radius: 8px; font: inherit; font-size: 15px; }
+.pdf-sign-text:focus { outline: none; border-color: var(--pdf-accent); }
+.pdf-sign-styles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 10px; }
+.pdf-editor-page .pdf-sign-style { display: flex; align-items: center; justify-content: center; height: 64px; padding: 6px; border: 1px solid var(--pdf-line); border-radius: 8px; background: #fff; cursor: pointer; }
+.pdf-editor-page .pdf-sign-style[aria-pressed="true"] { border-color: var(--pdf-accent); box-shadow: 0 0 0 1px var(--pdf-accent); }
+.pdf-sign-style img { max-width: 100%; max-height: 100%; }
+.pdf-sign-error { margin: 10px 0 0; color: #c62828; font-size: 13px; }
+.pdf-sign-error[hidden] { display: none; }
+.pdf-editor-page .btn-mini-primary { border-color: var(--pdf-text); background: var(--pdf-text); color: #fff; }
+.pdf-editor-page .btn-mini-primary:hover { background: #3a3a42; }
+
+/* ---------- 필드 창 ---------- */
+.pdf-panel-head h2 em { margin-left: 4px; font-style: normal; font-weight: 400; color: var(--pdf-accent); font-size: 12.5px; }
+.pdf-fields { display: flex; flex-direction: column; padding: 4px 8px 16px; overflow: auto; }
+.pdf-editor-page .pdf-field-row { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; padding: 9px 10px; border: none; border-radius: 8px; background: none; text-align: left; cursor: pointer; }
+.pdf-field-row:hover:not(:disabled) { background: var(--pdf-hover); }
+.pdf-field-row:disabled { opacity: 0.5; cursor: default; }
+.pdf-field-row strong { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pdf-field-row span { grid-column: 2; grid-row: 1; color: var(--pdf-dim); font-size: 11.5px; white-space: nowrap; }
+.pdf-field-row em { grid-column: 1 / -1; font-style: normal; color: var(--pdf-dim); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pdf-form-sig.signed { border-style: dotted; border-color: rgba(197, 138, 0, 0.45); background: transparent; color: transparent; }

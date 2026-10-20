@@ -10,10 +10,12 @@ import { PageView } from './pdf/pageView.js';
 import { setupPanels, type Panels } from './pdf/panels.js';
 import { AnnotLayer } from './pdf/annotLayer.js';
 import { setupAnnotUi } from './pdf/annotUi.js';
-import { cleanPageList, PDF_ANNOTS_MAP, PDF_META_MAP, PDF_PAGES_ARRAY, type PdfAnnot, type PdfPageEntry } from '../pdf/annotTypes.js';
+import { cleanPageList, PDF_ANNOTS_MAP, PDF_FORM_MAP, PDF_META_MAP, PDF_PAGES_ARRAY, type PdfAnnot, type PdfPageEntry } from '../pdf/annotTypes.js';
 import { FindController } from './pdf/findController.js';
 import { PageOps } from './pdf/pageOps.js';
 import { setupOrganize, type OrganizeView } from './pdf/organizeView.js';
+import { FormLayer } from './pdf/formLayer.js';
+import { setupSignUi, type SignUi } from './pdf/signUi.js';
 import { pickPresenceColorForName, renderPresenceAvatars } from './presence.js';
 
 interface ViewInfo {
@@ -73,7 +75,7 @@ function showNotice(text: string): void {
   noticeTimer = window.setTimeout(() => (notice.hidden = true), 2600);
 }
 
-function setupChrome(view: PageView, find: FindController, info: ViewInfo, panels: Panels, organize: OrganizeView): void {
+function setupChrome(view: PageView, find: FindController, info: ViewInfo, panels: Panels, organize: OrganizeView, sign: SignUi): void {
   // 오른쪽 줄 — 쪽 번호·이동·배율
   const pageInput = $<HTMLInputElement>('page-input');
   const pageCount = $('page-count');
@@ -129,13 +131,16 @@ function setupChrome(view: PageView, find: FindController, info: ViewInfo, panel
   const modes = [...document.querySelectorAll<HTMLButtonElement>('.pdf-mode')];
   if (!info.permissions.canEdit) for (const m of modes) if (m.dataset.editOnly !== undefined) m.hidden = true;
   const selectMode = (mode: string) => {
-    if (mode === 'sign') {
-      showNotice('양식 채우기·서명은 다음 업데이트에서 열립니다.');
-      return;
-    }
     for (const m of modes) m.setAttribute('aria-selected', String(m.dataset.mode === mode));
     document.body.classList.toggle('mode-read', mode === 'read');
     document.body.classList.toggle('mode-edit', mode === 'edit');
+    document.body.classList.toggle('mode-sign', mode === 'sign');
+    sign.setActive(mode === 'sign');
+    // 서명 — 왼쪽 목록을 접고 오른쪽에 양식 칸 목록
+    if (mode === 'sign') {
+      setToolsOpen(false);
+      panels.show('fields');
+    }
     if (mode === 'tools') setToolsOpen(true);
     // 편집 — 왼쪽 목록을 접고 오른쪽에 메모 목록(pdfcraft의 주석 달기와 같다)
     if (mode === 'edit') {
@@ -154,6 +159,7 @@ function setupChrome(view: PageView, find: FindController, info: ViewInfo, panel
       const tool = item.dataset.tool;
       if (tool === 'download') download();
       else if (tool === 'comment') selectMode('edit');
+      else if (tool === 'fill') selectMode('sign');
       else if (tool === 'organize') organize.open();
       else if (tool === 'combine') organize.pickFiles();
       else if (tool === 'extract') organize.open('추출할 쪽을 고른 뒤 ‘고른 쪽 추출’ 또는 ‘나누기’를 누르세요.');
@@ -370,7 +376,28 @@ async function main(): Promise<void> {
     drawOverlay: (page, host, vp) => layer.drawOverlay(page, host, vp),
     notice: showNotice,
   });
-  setupChrome(view, find, info, panels, organize);
+  // 양식 칸(값은 방의 pdfForm) — 실행 취소에 함께
+  const formMap = ydoc.getMap<unknown>(PDF_FORM_MAP);
+  annotUi.undoManager.addToScope(formMap);
+  let sign: SignUi | null = null;
+  const forms = new FormLayer({
+    view,
+    map: formMap,
+    ydoc,
+    canEdit: info.permissions.canEdit,
+    onSignatureField: (page, rect) => sign?.signField(page, rect),
+    // 서명 그림의 가운데가 칸 안에 있으면 서명된 칸
+    isSigned: (pageKey, rect) =>
+      layer.all().some((a) => {
+        if (a.type !== 'stamp' || a.pageKey !== pageKey) return false;
+        const cx = (a.rect[0] + a.rect[2]) / 2;
+        const cy = (a.rect[1] + a.rect[3]) / 2;
+        return cx >= Math.min(rect[0], rect[2]) && cx <= Math.max(rect[0], rect[2]) && cy >= Math.min(rect[1], rect[3]) && cy <= Math.max(rect[1], rect[3]);
+      }),
+  });
+  layer.onChange(() => forms.refreshSignatureFields());
+  sign = setupSignUi({ view, layer, forms, doc: currentDoc, canEdit: info.permissions.canEdit, showPanel: (name) => panels.show(name), notice: showNotice });
+  setupChrome(view, find, info, panels, organize, sign);
   // 처음 배율: 폭에 맞추되 너무 크게(작은 쪽을 넓은 화면에) 키우지 않는다
   view.setScale('fit-width');
   if (view.scale > 1.25) view.setScale(1.25);
