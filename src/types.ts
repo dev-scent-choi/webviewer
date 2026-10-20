@@ -5,6 +5,10 @@ export interface Permissions {
   readonly canCopy: boolean;
   /** docx 실시간 동시편집 세션(/ws/edit/:id) 참여 허용 여부 */
   readonly canEdit: boolean;
+  /** PDF 편집기(editor-pdf.html)용으로 발급한 토큰 — 토큰 요청에 pdfEditor:true를 보낸 호출자(향기랩)에게만, pdf·내려받기 권한이
+   * 있을 때만 붙는다. PDF 편집 방은 이 표시가 있는 토큰만 받는다(8000이 마크업용으로 주는 canEdit 토큰으로 PDF 원본을
+   * 고치지 못하게). 없으면 생략돼 기존 토큰 모양은 그대로다. */
+  readonly pdfEditor?: boolean;
 }
 
 export type DocumentStatus = 'processing' | 'ready' | 'failed';

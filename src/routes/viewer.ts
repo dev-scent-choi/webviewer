@@ -1032,6 +1032,19 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
+  // PDF 편집기(editor-pdf.html)가 pdf.js로 그릴 원본. 바이트를 브라우저로 보내는 것이라 PDF 편집기용 토큰(pdfEditor —
+  // 내려받기 권한이 있을 때만 붙는다, documents.ts editorUrlFor)이어야 한다. 방이 열려 있으면 아직 저장 전인 현재 상태를 준다.
+  app.get<{ Querystring: { token?: string } }>('/api/view/pdf-source', async (request, reply) => {
+    const view = await resolveView(request.query.token, reply);
+    if (!view) return reply;
+    if (view.meta.ext !== 'pdf') return reply.code(400).send({ success: false, error: 'PDF 문서가 아닙니다.' });
+    if (view.claims.perms.pdfEditor !== true || !view.claims.perms.canDownload) {
+      return reply.code(403).send({ success: false, error: '이 문서는 PDF 편집기로 열 수 없습니다.' });
+    }
+    const data = (await getCurrentBytes(view.meta.id)) ?? (await store.readOriginal(view.meta.id, view.meta.ext));
+    return reply.type('application/pdf').header('cache-control', 'no-store').send(Buffer.from(data));
+  });
+
   app.get<{ Querystring: TokenWithMarkupQuery }>(
     '/api/view/download',
     { schema: { querystring: tokenWithMarkupQuerySchema } },

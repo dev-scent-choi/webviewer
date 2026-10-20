@@ -31,6 +31,7 @@ import { PptxChangeTracker, type PptxChangeSummary } from './pptxChangeLog.js';
 import { exportDocx } from '../docx/export.js';
 import { importDocx } from '../docx/import.js';
 import { invalidateRenderCache } from '../rendering.js';
+import { exportPdfFromRoom, pdfChangeLogOf, pdfModelIsEmpty } from '../pdf/pdfModel.js';
 import { convertToPdf } from '../routes/documents.js';
 import { invalidateViewCaches } from '../routes/viewer.js';
 import { store } from '../storage.js';
@@ -170,10 +171,11 @@ const AUTOSAVE_IDLE_MS = 8_000;
 const PING_INTERVAL_MS = 30_000;
 
 /** 룸이 다루는 문서 종류 — 시딩·저장 로직만 갈라지고 Yjs 동기화 프로토콜 자체는 공통이다. */
-type DocKind = 'docx' | 'xlsx' | 'pptx';
+type DocKind = 'docx' | 'xlsx' | 'pptx' | 'pdf';
 
 function kindOfExt(ext: string): DocKind {
   if (ext === 'xlsx') return 'xlsx';
+  if (ext === 'pdf') return 'pdf';
   if (ext === 'pptx') return 'pptx';
   return 'docx';
 }
@@ -1522,6 +1524,9 @@ async function seedRoom(room: Room): Promise<void> {
       // 중인 페이지가 하나도 없어(=Yjs에 아무 셀도 없어) 계산해 둘 곳도, 그걸 볼 사람도 없다.
       // 원본 파일에 이미 있던 수식의 최초 계산값은 그 페이지가 처음 구독되는 순간
       // reconcilePageSubscriptions가 셀 데이터와 함께 채운다.
+    } else if (kind === 'pdf') {
+      // PDF 편집기 1단계: 시딩할 것이 없다 — 편집기가 원본을 /api/view/pdf-source로 받아 pdf.js로 그리고, 바뀐 것만
+      // 이 방의 맵(src/pdf/pdfModel.ts)에 쌓는다
     } else if (kind === 'pptx') {
       const slidesArray = ydoc.getArray<SlideEntry>(PPTX_SLIDES_ARRAY);
       ydoc.transact(() => {
@@ -1716,6 +1721,20 @@ async function flushToStore(room: Room): Promise<void> {
         console.error(`동시편집 저장 후 PDF 재변환 실패 (문서 ${docId}):`, error);
       }
     }
+  } else if (kind === 'pdf') {
+    // 바뀐 것이 없으면 원본을 다시 쓰지 않는다(1단계는 늘 이 경우)
+    if (pdfModelIsEmpty(ydoc)) return;
+    const original = await store.readOriginal(docId, meta.ext);
+    await store.saveOriginal(docId, meta.ext, Buffer.from(await exportPdfFromRoom(original, ydoc)));
+    const converter = findConverter(meta.ext);
+    if (converter) {
+      try {
+        const { pageCount } = await convertToPdf(meta, converter);
+        await store.writeMeta({ ...meta, pageCount, status: 'ready', viewKind: 'pages', progress: 100 });
+      } catch (error) {
+        console.error(`PDF 편집 저장 후 보기용 pdf 갱신 실패 (문서 ${docId}):`, error);
+      }
+    }
   } else {
     const fragment = ydoc.getXmlFragment(XML_FRAGMENT_NAME);
     const pmDoc = yXmlFragmentToProseMirrorRootNode(fragment, docxSchema);
@@ -1805,6 +1824,7 @@ export async function getCurrentBytes(docId: string): Promise<Uint8Array | null>
   const meta = await store.readMeta(docId);
   if (!meta) return null;
   const original = await store.readOriginal(docId, meta.ext);
+  if (room.kind === 'pdf') return exportPdfFromRoom(original, room.ydoc);
   if (room.kind === 'xlsx') {
     if (!room.lazyGrid || !room.baselineSheetExtents) return null;
     // flushToStore와 같은 이유로 진행 중인 행/열 이동을 먼저 기다린다 — 이 경로는 사용자가 방금
@@ -2524,6 +2544,7 @@ export function getCellChangeLog(docId: string): readonly CellChangeSummary[] | 
  * 형식별 추적기 중 이 룸의 kind에 해당하는 것의 현재 누적 목록. */
 function changeLogOf(room: Room): readonly object[] {
   if (room.kind === 'xlsx') return cellChangeLogOf(room);
+  if (room.kind === 'pdf') return pdfChangeLogOf(room.ydoc);
   if (room.kind === 'docx') return room.docxChangeTracker?.list() ?? [];
   return room.pptxChangeTracker?.list() ?? [];
 }

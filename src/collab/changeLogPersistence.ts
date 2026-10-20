@@ -26,7 +26,7 @@ function changeLogPathFor(date: Date): string {
  * 문서 형식 필드를 덮어써 버려("pptx"가 아니라 "text"로 기록됨), 처음엔 실제로 이 버그가 났다. */
 export async function persistChangeLog(
   docId: string,
-  docKind: 'xlsx' | 'docx' | 'pptx',
+  docKind: 'xlsx' | 'docx' | 'pptx' | 'pdf',
   entries: readonly object[],
 ): Promise<void> {
   if (entries.length === 0 || !config.persistLogs) return;

@@ -68,7 +68,10 @@ export async function editRoutes(app: FastifyInstance): Promise<void> {
       // 으로 true인 토큰이 이 방에 잘못 들어오면 collab/room.ts가 문서를 docx로 오인해 원본을
       // 깨뜨릴 수 있어(seedRoom/flushToStore가 ext를 보지 않고 xlsx가 아니면 전부 docx로 취급) canEdit
       // 값과 무관하게 여기서 먼저 확실히 거부한다.
-      if (meta.ext !== 'docx' && meta.ext !== 'xlsx' && meta.ext !== 'pptx') {
+      // pdf: PDF 편집기 방(kind pdf) — 바뀐 것만 쌓고 저장 때 원본에 반영한다(src/pdf/pdfModel.ts). PDF 편집기용으로 발급한
+      // 토큰(perms.pdfEditor)만 받는다 — 8000이 보기 화면 마크업용으로 주는 canEdit 토큰으로 원본을 고치지 못하게.
+      const pdfAllowed = meta.ext === 'pdf' && claims.perms.pdfEditor === true;
+      if (meta.ext !== 'docx' && meta.ext !== 'xlsx' && meta.ext !== 'pptx' && !pdfAllowed) {
         socket.off('message', queueEarly);
         socket.close(4400, '이 문서 형식은 동시편집을 지원하지 않습니다.');
         return;

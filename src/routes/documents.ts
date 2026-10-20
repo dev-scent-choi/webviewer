@@ -442,7 +442,13 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
         {
           docId: meta.id,
           viewer,
-          perms: { canPrint, canDownload, canCopy, canEdit: effectiveCanEdit },
+          perms: {
+            canPrint,
+            canDownload,
+            canCopy,
+            canEdit: effectiveCanEdit,
+            ...(meta.ext === 'pdf' && pdfEditor && canDownload ? { pdfEditor: true } : {}),
+          },
         },
         config.tokenTtlSeconds,
       );
