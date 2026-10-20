@@ -10,6 +10,35 @@ export const PDF_PAGES_ARRAY = 'pdfPages';
 export const PDF_ANNOTS_MAP = 'pdfAnnots';
 /** 양식 칸 이름 → 값(4단계) */
 export const PDF_FORM_MAP = 'pdfForm';
+/** OCR(8단계) — 쪽 열쇠 → 인식한 낱말들. 저장할 때 보이지 않는 글자 층(렌더 모드 3)으로 쓴다 */
+export const PDF_OCR_MAP = 'pdfOcr';
+
+/** 인식한 낱말 하나 — 기준선 시작(x, y)·끝(ex, ey)과 글자 높이 h(PDF 좌표). 방향이 있어 회전한 쪽에도 맞는다 */
+export interface OcrWord {
+  readonly t: string;
+  readonly x: number;
+  readonly y: number;
+  readonly ex: number;
+  readonly ey: number;
+  readonly h: number;
+}
+
+export interface PdfOcrPage {
+  readonly words: readonly OcrWord[];
+  readonly author: string;
+  readonly at: string;
+}
+
+export function isOcrPage(v: unknown): v is PdfOcrPage {
+  const p = v as PdfOcrPage;
+  return (
+    !!p &&
+    Array.isArray(p.words) &&
+    p.words.length <= 20000 &&
+    p.words.every((w) => w && typeof w.t === 'string' && w.t.length <= 200 && [w.x, w.y, w.ex, w.ey, w.h].every((n) => typeof n === 'number' && Number.isFinite(n)))
+  );
+}
+
 /** 문서 속성(6단계) — title·author·subject·keywords → 글 */
 export const PDF_PROPS_MAP = 'pdfProps';
 /** 기존 글자 고치기(5단계) — id → PdfTextEdit */

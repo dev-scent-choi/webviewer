@@ -24,11 +24,14 @@ import {
   PDF_FORM_MAP,
   PDF_META_MAP,
   PDF_PAGES_ARRAY,
+  PDF_OCR_MAP,
   PDF_PROPS_MAP,
   PDF_REDACT_MAP,
   PDF_TEXT_EDITS_MAP,
+  isOcrPage,
   isRedaction,
   isTextEdit,
+  type PdfOcrPage,
   type PdfAnnot,
   type PdfPageEntry,
   type PdfRedaction,
@@ -36,8 +39,9 @@ import {
 } from './annotTypes.js';
 import { rewritePage, type RewriteTarget } from './textRewrite.js';
 import { PROP_KEYS, readProps, writeProps, type PdfProps } from './pdfProps.js';
+import { wordRect, writeOcrText } from './ocrLayer.js';
 
-export { PDF_ANNOTS_MAP, PDF_FORM_MAP, PDF_META_MAP, PDF_PAGES_ARRAY, PDF_PROPS_MAP, PDF_REDACT_MAP, PDF_TEXT_EDITS_MAP };
+export { PDF_ANNOTS_MAP, PDF_FORM_MAP, PDF_META_MAP, PDF_OCR_MAP, PDF_PAGES_ARRAY, PDF_PROPS_MAP, PDF_REDACT_MAP, PDF_TEXT_EDITS_MAP };
 
 /** 쪽 열쇠별 고치기·(적용한) 가리기 대상 */
 function rewriteTargetsOf(ydoc: Y.Doc): Map<string, RewriteTarget[]> {
@@ -151,8 +155,19 @@ export async function buildPdfFromRoom(original: Uint8Array, ydoc: Y.Doc, parts?
     const page = pageOfKey.get(key);
     if (page) await rewritePage(doc, page, list, fonts);
   }
-  // 가린 곳에 걸치는 편집기 주석은 남기지 않는다
+  // 가린 곳에 걸치는 편집기 주석·OCR 낱말은 남기지 않는다
   const redacted = appliedRedactions(ydoc);
+  // OCR — 인식한 낱말을 보이지 않는 글자 층으로(가린 영역의 낱말은 빼고)
+  for (const [key, value] of ydoc.getMap<PdfOcrPage>(PDF_OCR_MAP).entries()) {
+    const page = pageOfKey.get(key);
+    if (!page || !isOcrPage(value)) continue;
+    const rects = redacted.filter((r) => r.pageKey === key).map((r) => r.rect);
+    const words = value.words.filter((w) => {
+      const b = wordRect(w);
+      return !rects.some((r) => r[0] < b[2] && r[2] > b[0] && r[1] < b[3] && r[3] > b[1]);
+    });
+    if (words.length) writeOcrText(doc, page, words, await fonts.korean());
+  }
   const hidden = (a: PdfAnnot) =>
     redacted.some((r) => r.pageKey === a.pageKey && r.rect[0] < a.rect[2] && r.rect[2] > a.rect[0] && r.rect[1] < a.rect[3] && r.rect[3] > a.rect[1]);
   const annots = [...ydoc.getMap<PdfAnnot>(PDF_ANNOTS_MAP).values()]
@@ -295,7 +310,7 @@ export async function preparePdfPart(
 
 /** 변경 기록 한 줄 — 같은 주석은 마지막 상태로 하나만, 쪽 정리는 요약 한 줄 */
 export interface PdfChangeEntry {
-  readonly kind: 'annot_added' | 'annot_changed' | 'annot_removed' | 'pages_changed' | 'form_changed' | 'text_edited' | 'redaction_applied' | 'props_changed' | 'protection_changed' | 'compression_changed';
+  readonly kind: 'annot_added' | 'annot_changed' | 'annot_removed' | 'pages_changed' | 'form_changed' | 'text_edited' | 'redaction_applied' | 'props_changed' | 'protection_changed' | 'compression_changed' | 'ocr_added';
   readonly annotType?: string;
   readonly label: string;
   readonly page: number | null;
@@ -361,6 +376,18 @@ export class PdfChangeTracker {
         if (isRedaction(r) && r.applied && !this.entries.has(`redact:${id}`)) {
           this.entries.set(`redact:${id}`, { kind: 'redaction_applied', label: '가리기', page: this.pageNumberOf(r.pageKey), viewer, at });
         }
+      }
+    });
+    // OCR — 쪽마다 인식한 낱말 수(지우면 기록도 뺀다)
+    const ocr = ydoc.getMap<PdfOcrPage>(PDF_OCR_MAP);
+    ocr.observe((event, transaction) => {
+      if (transaction.origin === PDF_SEED_ORIGIN) return;
+      const viewer = this.resolveViewer(transaction.origin);
+      const at = new Date().toISOString();
+      for (const key of event.keysChanged) {
+        const v = ocr.get(key);
+        if (!isOcrPage(v)) this.entries.delete(`ocr:${key}`);
+        else this.entries.set(`ocr:${key}`, { kind: 'ocr_added', label: '글자 인식', page: this.pageNumberOf(key), text: `낱말 ${v.words.length}개`, viewer, at });
       }
     });
     // 문서 속성 — 항목마다 마지막 값

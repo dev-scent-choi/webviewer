@@ -51,3 +51,14 @@ mkdirSync('public/pdfjs', { recursive: true });
 cpSync('node_modules/pdfjs-dist/build/pdf.worker.min.mjs', 'public/js/pdf.worker.mjs');
 cpSync('node_modules/pdfjs-dist/cmaps', 'public/pdfjs/cmaps', { recursive: true });
 cpSync('node_modules/pdfjs-dist/standard_fonts', 'public/pdfjs/standard_fonts', { recursive: true });
+
+// PDF 편집기 OCR(8단계, src/client/pdf/ocrUi.ts) — tesseract.js의 worker·wasm 코어(브라우저 성능별 3종 중 하나를 받는다)와
+// 한국어·영어 학습 데이터(4.0.0_best_int). 외부 CDN 없이 자체 호스팅해 문서 그림이 밖으로 나가지 않게 한다.
+mkdirSync('public/ocr/lang', { recursive: true });
+cpSync('node_modules/tesseract.js/dist/worker.min.js', 'public/ocr/worker.min.js');
+for (const core of ['tesseract-core-lstm.wasm.js', 'tesseract-core-simd-lstm.wasm.js', 'tesseract-core-relaxedsimd-lstm.wasm.js']) {
+  cpSync(`node_modules/tesseract.js-core/${core}`, `public/ocr/${core}`);
+}
+for (const lang of ['kor', 'eng']) {
+  cpSync(`node_modules/@tesseract.js-data/${lang}/4.0.0_best_int/${lang}.traineddata.gz`, `public/ocr/lang/${lang}.traineddata.gz`);
+}
