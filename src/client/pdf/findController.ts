@@ -41,6 +41,10 @@ export class FindController {
     ui.next.addEventListener('click', () => this.step(1));
     ui.prev.addEventListener('click', () => this.step(-1));
     ui.close.addEventListener('click', () => this.close());
+    // 쪽 정리로 쪽 번호가 바뀌면 찾던 것을 다시 찾는다
+    view.onPagesChange(() => {
+      if (!ui.bar.hidden && ui.input.value.trim()) void this.run(ui.input.value);
+    });
   }
 
   open(initial?: string): void {

@@ -1,6 +1,7 @@
 /**
  * PDF 편집기 주석 형식 — 서버(읽기·쓰기)와 브라우저(그리기·도구)가 함께 쓴다. 좌표는 원래 쪽의 PDF 좌표(회전 전, 아래가 y=0).
- * 주석은 "원본 몇 쪽"(pageKey 'o:<0부터>')에 붙는다 — 3단계 쪽 정리에서 순서가 바뀌어도 그 쪽을 따라간다.
+ * 주석은 쪽 열쇠(pageKey)에 붙는다 — 원본 쪽 'o:<0부터>', 넣은 PDF의 쪽 'p:<부속 id>:<0부터>', 빈 쪽 'b:<무작위>'.
+ * 쪽 목록(pdfPages)도 같은 열쇠를 써서, 순서가 바뀌거나 쪽이 지워져도 주석은 그 쪽을 따라간다.
  */
 /** PDF 편집 방의 Y.Doc 이름들 — 브라우저(편집기)와 서버(pdfModel.ts)가 같이 쓴다 */
 /** 최종 쪽 순서(3단계 쪽 정리) */
@@ -9,6 +10,45 @@ export const PDF_PAGES_ARRAY = 'pdfPages';
 export const PDF_ANNOTS_MAP = 'pdfAnnots';
 /** 양식 칸 이름 → 값(4단계) */
 export const PDF_FORM_MAP = 'pdfForm';
+/** 방 정보 — base: 방을 열 때의 원본 지문(편집기가 받은 원본과 같은지 확인) */
+export const PDF_META_MAP = 'pdfMeta';
+
+/** 쪽 목록 한 항목. rotate는 쪽 자체의 /Rotate에 더하는 각도. blank면 그 크기(pt)의 빈 쪽 */
+export interface PdfPageEntry {
+  readonly key: string;
+  readonly rotate: 0 | 90 | 180 | 270;
+  readonly blank?: { readonly w: number; readonly h: number };
+}
+
+export type ParsedPageKey = { kind: 'orig'; index: number } | { kind: 'part'; partId: string; index: number } | { kind: 'blank' };
+
+export function parsePageKey(key: string): ParsedPageKey | null {
+  let m = /^o:(\d+)$/.exec(key);
+  if (m) return { kind: 'orig', index: Number(m[1]) };
+  m = /^p:([A-Za-z0-9_-]{1,40}):(\d+)$/.exec(key);
+  if (m) return { kind: 'part', partId: m[1], index: Number(m[2]) };
+  if (/^b:[A-Za-z0-9_-]{1,40}$/.test(key)) return { kind: 'blank' };
+  return null;
+}
+
+/** 같은 열쇠가 두 번 있으면(동시에 옮긴 경우 등) 첫 번째만, 형식이 틀린 항목은 뺀다 */
+export function cleanPageList(entries: readonly PdfPageEntry[]): PdfPageEntry[] {
+  const seen = new Set<string>();
+  const out: PdfPageEntry[] = [];
+  for (const e of entries) {
+    if (!e || typeof e.key !== 'string' || seen.has(e.key)) continue;
+    const parsed = parsePageKey(e.key);
+    if (!parsed) continue;
+    if (parsed.kind === 'blank' && !(e.blank && e.blank.w > 0 && e.blank.h > 0)) continue;
+    seen.add(e.key);
+    out.push(e);
+  }
+  return out;
+}
+
+export function identityPages(count: number): PdfPageEntry[] {
+  return Array.from({ length: count }, (_, i) => ({ key: `o:${i}`, rotate: 0 as const }));
+}
 
 export type PdfAnnotType = 'note' | 'highlight' | 'underline' | 'strike' | 'ink' | 'freetext' | 'rect' | 'ellipse' | 'line' | 'arrow';
 

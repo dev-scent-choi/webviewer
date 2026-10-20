@@ -44,7 +44,7 @@ export function setupPanels(opts: { doc: PDFDocumentProxy; view: PageView }): Pa
   // 좁은 화면은 처음부터 닫아 둔다(CSS도 접지만 단추 눌림 상태를 맞춘다)
   if (window.matchMedia('(max-width: 900px)').matches) current = null;
 
-  const thumbs = setupThumbs(doc, view);
+  const thumbs = setupThumbs(view);
   void setupOutline(doc, view);
   setupLayers(view);
   view.onPageChange((page) => thumbs.markCurrent(page));
@@ -60,15 +60,15 @@ export function setupPanels(opts: { doc: PDFDocumentProxy; view: PageView }): Pa
 }
 
 function setupThumbs(
-  doc: PDFDocumentProxy,
   view: PageView,
 ): { markCurrent(page: number): void; reveal(page: number): void; setOverlay(draw: ThumbOverlay): void; refreshOverlays(pages: Iterable<number>): void } {
   const host = document.getElementById('thumbs') as HTMLElement;
-  const buttons: HTMLButtonElement[] = [];
-  const drawn = new Set<number>();
+  let buttons: HTMLButtonElement[] = [];
+  let drawn = new Set<number>();
   // 썸네일마다 그린 viewport — 주석 겹침 층을 다시 그릴 때 쓴다
-  const viewports = new Map<number, Parameters<ThumbOverlay>[2]>();
+  let viewports = new Map<number, Parameters<ThumbOverlay>[2]>();
   let overlay: ThumbOverlay | null = null;
+  let generation = 0;
   const paintOverlay = (page: number) => {
     const vp = viewports.get(page);
     const box = buttons[page - 1]?.querySelector<HTMLElement>('.pdf-thumb-img');
@@ -89,8 +89,9 @@ function setupThumbs(
         const page = Number((entry.target as HTMLElement).dataset.page);
         if (drawn.has(page)) continue;
         drawn.add(page);
-        void drawThumb(doc, page, entry.target.querySelector('.pdf-thumb-img') as HTMLElement).then((vp) => {
-          if (!vp) return;
+        const gen = generation;
+        void view.drawThumbnail(page, entry.target.querySelector('.pdf-thumb-img') as HTMLElement, THUMB_WIDTH).then((vp) => {
+          if (!vp || gen !== generation) return;
           viewports.set(page, vp);
           paintOverlay(page);
         });
@@ -98,23 +99,33 @@ function setupThumbs(
     },
     { root: host, rootMargin: '200px 0px' },
   );
-  for (let page = 1; page <= doc.numPages; page += 1) {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'pdf-thumb';
-    btn.dataset.page = String(page);
-    btn.title = `${page}쪽으로 이동`;
-    const img = document.createElement('div');
-    img.className = 'pdf-thumb-img';
-    img.style.width = `${THUMB_WIDTH}px`;
-    img.style.height = `${Math.round(THUMB_WIDTH * 1.414)}px`;
-    const label = document.createElement('span');
-    label.textContent = String(page);
-    btn.append(img, label);
-    btn.addEventListener('click', () => view.goTo(page));
-    host.append(btn);
-    buttons.push(btn);
-    observer.observe(btn);
+  // 쪽 목록이 바뀌면(정리 화면) 통째로 다시 짠다 — 썸네일은 보이는 것만 다시 그린다
+  function build(): void {
+    generation += 1;
+    observer.disconnect();
+    host.replaceChildren();
+    buttons = [];
+    drawn = new Set();
+    viewports = new Map();
+    for (let page = 1; page <= view.pageCount; page += 1) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'pdf-thumb';
+      btn.dataset.page = String(page);
+      btn.title = `${page}쪽으로 이동`;
+      const img = document.createElement('div');
+      img.className = 'pdf-thumb-img';
+      img.style.width = `${THUMB_WIDTH}px`;
+      img.style.height = `${Math.round(THUMB_WIDTH * 1.414)}px`;
+      const label = document.createElement('span');
+      label.textContent = String(page);
+      btn.append(img, label);
+      btn.addEventListener('click', () => view.goTo(page));
+      host.append(btn);
+      buttons.push(btn);
+      observer.observe(btn);
+    }
+    markCurrent(view.currentPage);
   }
   function markCurrent(page: number): void {
     for (const b of buttons) b.classList.toggle('current', Number(b.dataset.page) === page);
@@ -125,7 +136,8 @@ function setupThumbs(
     const top = btn.offsetTop - host.offsetTop;
     if (top < host.scrollTop || top + btn.offsetHeight > host.scrollTop + host.clientHeight) host.scrollTop = top - 40;
   }
-  markCurrent(1);
+  build();
+  view.onPagesChange(build);
   view.onPageChange((page) => reveal(page));
   return {
     markCurrent,
@@ -138,28 +150,6 @@ function setupThumbs(
       for (const page of pages) paintOverlay(page);
     },
   };
-}
-
-async function drawThumb(doc: PDFDocumentProxy, pageNumber: number, box: HTMLElement): Promise<Parameters<ThumbOverlay>[2] | null> {
-  try {
-    const page = await doc.getPage(pageNumber);
-    const base = page.getViewport({ scale: 1 });
-    const scale = THUMB_WIDTH / base.width;
-    const viewport = page.getViewport({ scale });
-    const ratio = Math.min(2, window.devicePixelRatio || 1);
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.floor(viewport.width * ratio);
-    canvas.height = Math.floor(viewport.height * ratio);
-    box.style.height = `${Math.round(viewport.height)}px`;
-    const ctx = canvas.getContext('2d', { alpha: false });
-    if (!ctx) return null;
-    await page.render({ canvasContext: ctx, viewport, transform: ratio !== 1 ? [ratio, 0, 0, ratio, 0, 0] : undefined }).promise;
-    box.replaceChildren(canvas);
-    return viewport;
-  } catch (error) {
-    console.error(`썸네일 ${pageNumber} 실패:`, error);
-    return null;
-  }
 }
 
 async function setupOutline(doc: PDFDocumentProxy, view: PageView): Promise<void> {
@@ -190,10 +180,21 @@ async function setupOutline(doc: PDFDocumentProxy, view: PageView): Promise<void
       title.textContent = node.title;
       link.append(title);
       if (node.page !== null) {
+        // 책갈피는 원본 쪽을 가리킨다 — 쪽 정리 뒤에는 지금 몇 쪽인지로(지운 쪽이면 흐리게)
+        const origKey = `o:${node.page - 1}`;
         const pageLabel = document.createElement('em');
-        pageLabel.textContent = String(node.page);
+        const sync = () => {
+          const now = view.pageOfKey(origKey);
+          pageLabel.textContent = now === null ? '—' : String(now);
+          link.disabled = now === null;
+        };
+        sync();
+        view.onPagesChange(sync);
         link.append(pageLabel);
-        link.addEventListener('click', () => view.goTo(node.page!));
+        link.addEventListener('click', () => {
+          const now = view.pageOfKey(origKey);
+          if (now !== null) view.goTo(now);
+        });
       }
       row.append(toggle, link);
       li.append(row);

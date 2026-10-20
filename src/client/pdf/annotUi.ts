@@ -3,8 +3,9 @@
  * 그리기·고르기 자체는 annotLayer.ts가 한다.
  */
 import * as Y from 'yjs';
-import { ANNOT_LABELS, origIndexOf, type PdfAnnot, type PdfAnnotType } from '../../pdf/annotTypes.js';
+import { ANNOT_LABELS, type PdfAnnot, type PdfAnnotType, type PdfPageEntry } from '../../pdf/annotTypes.js';
 import { AnnotLayer, formatTime, LOCAL_ORIGIN, type ToolName } from './annotLayer.js';
+import type { PageView } from './pageView.js';
 
 const SWATCHES = ['#D93025', '#F29900', '#FFE600', '#1E8E3E', '#1A73E8', '#9334E6', '#1F1F23'];
 const WIDTH_TYPES = new Set<PdfAnnotType>(['ink', 'rect', 'ellipse', 'line', 'arrow']);
@@ -15,8 +16,16 @@ export interface AnnotUi {
   readonly undoManager: Y.UndoManager;
 }
 
-export function setupAnnotUi(opts: { layer: AnnotLayer; map: Y.Map<PdfAnnot>; canEdit: boolean; onShowComments: () => void }): AnnotUi {
-  const { layer, map, canEdit } = opts;
+export function setupAnnotUi(opts: {
+  layer: AnnotLayer;
+  map: Y.Map<PdfAnnot>;
+  /** 쪽 목록 — 실행 취소가 쪽 정리도 함께 되돌린다 */
+  pages: Y.Array<PdfPageEntry>;
+  view: PageView;
+  canEdit: boolean;
+  onShowComments: () => void;
+}): AnnotUi {
+  const { layer, map, canEdit, view } = opts;
   const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
   const toolsBox = $('annot-tools');
   const selectBtn = $('tool-select');
@@ -24,7 +33,7 @@ export function setupAnnotUi(opts: { layer: AnnotLayer; map: Y.Map<PdfAnnot>; ca
   const toolButtons = [...document.querySelectorAll<HTMLButtonElement>('#annot-tools [data-tool]')];
   toolsBox.hidden = !canEdit;
 
-  const undoManager = new Y.UndoManager(map, { trackedOrigins: new Set([LOCAL_ORIGIN]), captureTimeout: 300 });
+  const undoManager = new Y.UndoManager([map, opts.pages], { trackedOrigins: new Set([LOCAL_ORIGIN]), captureTimeout: 300 });
   const undoBtn = $<HTMLButtonElement>('annot-undo');
   const redoBtn = $<HTMLButtonElement>('annot-redo');
   const syncUndo = () => {
@@ -158,7 +167,12 @@ export function setupAnnotUi(opts: { layer: AnnotLayer; map: Y.Map<PdfAnnot>; ca
   const list = $('comments');
   const count = $('comments-count');
   function renderComments(): void {
-    const annots = layer.all().sort((a, b) => (origIndexOf(a.pageKey) ?? 0) - (origIndexOf(b.pageKey) ?? 0) || a.createdAt.localeCompare(b.createdAt));
+    // 지금 쪽 순서로 — 지운 쪽의 주석은 보이지 않는다(쪽을 되살리면 다시 나온다)
+    const pageOf = new Map(layer.all().map((a) => [a.id, view.pageOfKey(a.pageKey)]));
+    const annots = layer
+      .all()
+      .filter((a) => pageOf.get(a.id) !== null)
+      .sort((a, b) => pageOf.get(a.id)! - pageOf.get(b.id)! || a.createdAt.localeCompare(b.createdAt));
     count.textContent = annots.length ? String(annots.length) : '';
     list.replaceChildren();
     if (annots.length === 0) {
@@ -168,7 +182,7 @@ export function setupAnnotUi(opts: { layer: AnnotLayer; map: Y.Map<PdfAnnot>; ca
     let lastPage = -1;
     const selectedId = layer.selectedAnnot?.id;
     for (const a of annots) {
-      const page = (origIndexOf(a.pageKey) ?? 0) + 1;
+      const page = pageOf.get(a.id)!;
       if (page !== lastPage) {
         const h = document.createElement('div');
         h.className = 'pdf-comment-page';
@@ -222,6 +236,7 @@ export function setupAnnotUi(opts: { layer: AnnotLayer; map: Y.Map<PdfAnnot>; ca
     }
   }
   layer.onChange(renderComments);
+  view.onPagesChange(renderComments);
   renderComments();
 
   // ---------- 단축키 ----------
@@ -235,6 +250,9 @@ export function setupAnnotUi(opts: { layer: AnnotLayer; map: Y.Map<PdfAnnot>; ca
     } else if (mod && (event.key === 'y' || event.key === 'Y' || ((event.key === 'z' || event.key === 'Z') && event.shiftKey))) {
       event.preventDefault();
       undoManager.redo();
+    } else if (document.body.classList.contains('organizing')) {
+      // 정리 화면에서는 주석 도구 단축키를 쓰지 않는다(그 화면 단축키는 organizeView.ts)
+      return;
     } else if (!mod && !event.altKey && TOOL_KEYS[event.key.toLowerCase()]) {
       setTool(TOOL_KEYS[event.key.toLowerCase()]);
     } else if (!mod && (event.key === 'v' || event.key === 'V')) setTool('select');

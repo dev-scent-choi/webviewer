@@ -5,13 +5,15 @@
  */
 import * as Y from 'yjs';
 import { WebsocketProvider } from 'y-websocket';
-import { openPdf } from './pdf/pdfDocument.js';
+import { openPdf, openPdfData, type PDFDocumentProxy } from './pdf/pdfDocument.js';
 import { PageView } from './pdf/pageView.js';
 import { setupPanels, type Panels } from './pdf/panels.js';
 import { AnnotLayer } from './pdf/annotLayer.js';
 import { setupAnnotUi } from './pdf/annotUi.js';
-import { PDF_ANNOTS_MAP, type PdfAnnot } from '../pdf/annotTypes.js';
+import { cleanPageList, PDF_ANNOTS_MAP, PDF_META_MAP, PDF_PAGES_ARRAY, type PdfAnnot, type PdfPageEntry } from '../pdf/annotTypes.js';
 import { FindController } from './pdf/findController.js';
+import { PageOps } from './pdf/pageOps.js';
+import { setupOrganize, type OrganizeView } from './pdf/organizeView.js';
 import { pickPresenceColorForName, renderPresenceAvatars } from './presence.js';
 
 interface ViewInfo {
@@ -37,7 +39,7 @@ async function fetchViewInfo(): Promise<ViewInfo> {
   return json.data;
 }
 
-function connect(info: ViewInfo): Y.Doc {
+function connect(info: ViewInfo): { ydoc: Y.Doc; provider: WebsocketProvider } {
   const ydoc = new Y.Doc();
   const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const provider = new WebsocketProvider(`${wsProtocol}//${location.host}/ws/edit`, info.docId, ydoc, { params: { token } });
@@ -58,15 +60,29 @@ function connect(info: ViewInfo): Y.Doc {
   });
   const presence = $('presence');
   provider.awareness.on('change', () => renderPresenceAvatars(presence, provider.awareness));
-  return ydoc;
+  return { ydoc, provider };
 }
 
-function setupChrome(view: PageView, find: FindController, info: ViewInfo, panels: Panels): void {
+let noticeTimer = 0;
+/** 화면 위(정리 화면에선 아래) 잠깐 뜨는 안내 */
+function showNotice(text: string): void {
+  const notice = $('mode-notice');
+  notice.textContent = text;
+  notice.hidden = false;
+  clearTimeout(noticeTimer);
+  noticeTimer = window.setTimeout(() => (notice.hidden = true), 2600);
+}
+
+function setupChrome(view: PageView, find: FindController, info: ViewInfo, panels: Panels, organize: OrganizeView): void {
   // 오른쪽 줄 — 쪽 번호·이동·배율
   const pageInput = $<HTMLInputElement>('page-input');
   const pageCount = $('page-count');
   const zoomLevel = $('zoom-level');
   pageCount.textContent = `/ ${view.pageCount}`;
+  view.onPagesChange(() => {
+    pageCount.textContent = `/ ${view.pageCount}`;
+    pageInput.value = String(view.currentPage);
+  });
   view.onPageChange((page) => {
     if (document.activeElement !== pageInput) pageInput.value = String(page);
   });
@@ -102,14 +118,6 @@ function setupChrome(view: PageView, find: FindController, info: ViewInfo, panel
   // 모드 탭 — 모든 도구(왼쪽 목록) / 읽기(본문만) / 편집·서명(다음 단계 안내)
   const toolsPanel = $('tools-panel');
   const menuBtn = $('menu-btn');
-  const notice = $('mode-notice');
-  let noticeTimer = 0;
-  const showNotice = (text: string) => {
-    notice.textContent = text;
-    notice.hidden = false;
-    clearTimeout(noticeTimer);
-    noticeTimer = window.setTimeout(() => (notice.hidden = true), 2600);
-  };
   const setToolsOpen = (open: boolean) => {
     toolsPanel.hidden = !open;
     toolsPanel.classList.toggle('forced-open', open && window.matchMedia('(max-width: 1100px)').matches);
@@ -137,9 +145,18 @@ function setupChrome(view: PageView, find: FindController, info: ViewInfo, panel
   };
   for (const m of modes) m.addEventListener('click', () => selectMode(m.dataset.mode ?? 'tools'));
   for (const item of document.querySelectorAll<HTMLButtonElement>('.pdf-tool-item')) {
+    // 읽기 전용이면 고치는 도구는 숨기고, 추출·나누기는 내려받기 권한이 있을 때만
+    const tool = item.dataset.tool;
+    const allowed =
+      tool === 'organize' || tool === 'combine' || tool === 'comment' || tool === 'fill' ? info.permissions.canEdit : tool === 'extract' || tool === 'download' ? info.permissions.canDownload : true;
+    if (!allowed) item.closest('li')!.hidden = true;
     item.addEventListener('click', () => {
-      if (item.dataset.tool === 'download') download();
-      else if (item.dataset.tool === 'comment') selectMode('edit');
+      const tool = item.dataset.tool;
+      if (tool === 'download') download();
+      else if (tool === 'comment') selectMode('edit');
+      else if (tool === 'organize') organize.open();
+      else if (tool === 'combine') organize.pickFiles();
+      else if (tool === 'extract') organize.open('추출할 쪽을 고른 뒤 ‘고른 쪽 추출’ 또는 ‘나누기’를 누르세요.');
       else showNotice(`'${item.querySelector('span')?.textContent ?? ''}'은(는) 다음 업데이트에서 열립니다.`);
     });
   }
@@ -270,18 +287,57 @@ async function main(): Promise<void> {
   }
   $('doc-name').textContent = info.name;
   document.title = `${info.name} — PDF 편집`;
-  const ydoc = connect(info);
+  const { ydoc, provider } = connect(info);
 
+  let base = '';
   try {
-    currentDoc = await openPdf(`/api/view/pdf-source?token=${encodeURIComponent(token)}`);
+    const res = await fetch(`/api/view/pdf-source?token=${encodeURIComponent(token)}`);
+    if (!res.ok) throw new Error(`pdf-source ${res.status}`);
+    base = res.headers.get('x-pdf-base') ?? '';
+    currentDoc = await openPdfData(new Uint8Array(await res.arrayBuffer()));
   } catch (error) {
     const name = (error as { name?: string })?.name;
     showFatalError(name === 'PasswordException' ? '암호가 걸린 PDF는 아직 열 수 없습니다(다음 업데이트에서 지원).' : 'PDF를 열지 못했습니다.');
     console.error(error);
     return;
   }
-  const view = new PageView($('pdf-pages'), $('pdf-scroll'), currentDoc);
+  // 넣은 PDF(부속) — 쪽 목록에 'p:' 쪽이 있으면 받아서 연다(한 번만)
+  const parts = new Map<string, Promise<PDFDocumentProxy>>();
+  const loadPart = (partId: string): Promise<PDFDocumentProxy> => {
+    let p = parts.get(partId);
+    if (!p) {
+      p = openPdf(`/api/view/pdf-part/${encodeURIComponent(partId)}?token=${encodeURIComponent(token)}`);
+      parts.set(partId, p);
+      p.catch(() => parts.delete(partId));
+    }
+    return p;
+  };
+  const view = new PageView($('pdf-pages'), $('pdf-scroll'), currentDoc, loadPart);
   await view.init();
+  // 쪽 목록(방의 pdfPages) — 처음엔 원본 순서로 바로 그리고, 방과 맞춰지면 목록대로
+  const pagesArr = ydoc.getArray<PdfPageEntry>(PDF_PAGES_ARRAY);
+  const applyPages = () => {
+    const list = cleanPageList(pagesArr.toArray());
+    if (list.length > 0) view.setPages(list);
+  };
+  pagesArr.observe(applyPages);
+  applyPages();
+  // 받은 원본이 방을 열 때의 원본과 다르면(그 사이 다른 사람이 저장하고 방이 새로 열린 경우) 다시 연다
+  const checkBase = () => {
+    const roomBase = ydoc.getMap<string>(PDF_META_MAP).get('base');
+    if (!base || !roomBase || roomBase === base) return;
+    let reloaded = false;
+    try {
+      reloaded = sessionStorage.getItem('pdf-base-reload') === roomBase;
+      sessionStorage.setItem('pdf-base-reload', roomBase);
+    } catch {
+      // 저장소를 못 쓰면 한 번만 시도한다는 보장 없이 그냥 다시 연다
+    }
+    if (!reloaded) location.reload();
+  };
+  provider.on('sync', (synced: boolean) => {
+    if (synced) checkBase();
+  });
   const find = new FindController(view, {
     bar: $('find-bar'),
     input: $<HTMLInputElement>('find-input'),
@@ -294,11 +350,27 @@ async function main(): Promise<void> {
   // 주석 — 협업 맵(방을 열 때 서버가 파일 주석을 채운다)을 쪽마다 그리고 도구로 고친다
   const annotMap = ydoc.getMap<PdfAnnot>(PDF_ANNOTS_MAP);
   const layer = new AnnotLayer({ view, map: annotMap, ydoc, canEdit: info.permissions.canEdit, author: info.viewer, scroller: $('pdf-scroll') });
-  setupAnnotUi({ layer, map: annotMap, canEdit: info.permissions.canEdit, onShowComments: () => panels.show('comments') });
+  const annotUi = setupAnnotUi({ layer, map: annotMap, pages: pagesArr, view, canEdit: info.permissions.canEdit, onShowComments: () => panels.show('comments') });
+  view.onPagesChange(() => {
+    const sel = layer.selectedAnnot;
+    if (sel && view.pageOfKey(sel.pageKey) === null) layer.select(null);
+    layer.renderAll();
+  });
   // 썸네일에도 주석
   panels.setThumbOverlay((page, host, vp) => layer.drawOverlay(page, host, vp));
   layer.onPagesChanged((pages) => panels.refreshThumbOverlays(pages));
-  setupChrome(view, find, info, panels);
+  const organize = setupOrganize({
+    view,
+    ops: new PageOps(ydoc, pagesArr, annotMap),
+    undoManager: annotUi.undoManager,
+    token,
+    docName: info.name,
+    canEdit: info.permissions.canEdit,
+    canDownload: info.permissions.canDownload,
+    drawOverlay: (page, host, vp) => layer.drawOverlay(page, host, vp),
+    notice: showNotice,
+  });
+  setupChrome(view, find, info, panels, organize);
   // 처음 배율: 폭에 맞추되 너무 크게(작은 쪽을 넓은 화면에) 키우지 않는다
   view.setScale('fit-width');
   if (view.scale > 1.25) view.setScale(1.25);

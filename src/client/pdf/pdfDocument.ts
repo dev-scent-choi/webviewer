@@ -11,6 +11,17 @@ pdfjs.GlobalWorkerOptions.workerSrc = '/js/pdf.worker.mjs';
 export { pdfjs };
 export type { PDFDocumentProxy };
 
+/** 이미 받은 바이트로 열기(머리글도 읽어야 할 때 — 편집기 원본의 x-pdf-base) */
+export async function openPdfData(data: Uint8Array): Promise<PDFDocumentProxy> {
+  return pdfjs.getDocument({
+    data,
+    cMapUrl: '/pdfjs/cmaps/',
+    cMapPacked: true,
+    standardFontDataUrl: '/pdfjs/standard_fonts/',
+    isEvalSupported: false,
+  }).promise;
+}
+
 export async function openPdf(url: string): Promise<PDFDocumentProxy> {
   return pdfjs.getDocument({
     url,
