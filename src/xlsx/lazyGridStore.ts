@@ -117,6 +117,19 @@ interface RawWorkbookReaderInternals {
   _parseSharedStrings(entry: NodeJS.ReadableStream): AsyncIterable<unknown>;
 }
 
+/** 통합 문서 탭 순서대로, 보이는 시트의 XML 경로 — 통합 문서 정보를 못 읽으면 예전처럼 zip 안의 sheetN.xml 전부 */
+function orderedVisibleSheetPaths(raw: Pick<RawWorkbookReaderInternals, 'model' | 'workbookRels'>, byPath: ReadonlyMap<string, string>): string[] {
+  const resolve = (target: string) => (target.startsWith('/') ? target.slice(1) : `xl/${target}`);
+  const ordered = (raw.model?.sheets ?? [])
+    .filter((s) => !s.state || s.state === 'visible')
+    .map((s) => raw.workbookRels?.find((r) => r.Id === s.rId)?.Target)
+    .filter((t): t is string => typeof t === 'string')
+    .map(resolve)
+    .filter((p) => byPath.has(p));
+  if (ordered.length > 0) return ordered;
+  return [...byPath.keys()].filter((p) => /^xl\/worksheets\/sheet\d+\.xml$/.test(p));
+}
+
 async function loadWorksheetXmlsByPath(zip: JSZip): Promise<Map<string, string>> {
   const reads: Array<Promise<void>> = [];
   const byPath = new Map<string, string>();
@@ -334,10 +347,10 @@ export async function ingestXlsxLazily(docId: string, xlsxBytes: Buffer): Promis
     // 시트는 하나씩 따로 읽는다 — 한 리더로 zip 전체를 흘려 읽으면, 행 처리(디스크 기록·양보)가 느린
     // 동안 다음 시트 항목이 소비되지 않고 지나가 버려 두 번째 이후 시트가 통째로 빠졌다(실측 재현).
     // 시트 XML은 이미 메모리에 있으니 그 시트 하나만 든 작은 zip을 만들어 읽는다.
-    const sheetPaths: string[] = [];
-    zip.forEach((relPath) => {
-      if (/^xl\/worksheets\/sheet\d+\.xml$/.test(relPath)) sheetPaths.push(relPath);
-    });
+    // 시트 순서·범위는 저장(exportXlsxFromGrid)·보기 그리드(spreadsheet.ts)와 같아야 한다 — 통합 문서의 탭 순서대로,
+    // 숨긴 시트는 뺀다. 예전엔 zip 안의 sheetN.xml을 모두(숨긴 시트 포함) 읽어 시트 번호가 저장 쪽과 어긋났고,
+    // 그러면 저장이 실패해 대용량 폴백으로 넘어가 숨긴 시트가 보이게 되고 숨긴 행·열 표시가 사라졌다.
+    const sheetPaths = orderedVisibleSheetPaths(rawReader, worksheetXmlsByPath);
     for (const sheetPath of sheetPaths) {
       const single = new JSZip();
       single.file(sheetPath, worksheetXmlsByPath.get(sheetPath) ?? '');

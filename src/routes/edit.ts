@@ -4,6 +4,7 @@ import { checkRoomCapacity, joinEditSession } from '../collab/room.js';
 import { InvalidTokenError, verifyViewToken } from '../security.js';
 import { store } from '../storage.js';
 import { isOpenable } from '../conversionGate.js';
+import { isViewOnly } from '../types.js';
 
 interface EditQuery {
   readonly token?: string;
@@ -91,6 +92,12 @@ export async function editRoutes(app: FastifyInstance): Promise<void> {
       // 다만 조작은 못 하게" 보여줘야 하는 읽기 전용 뷰가 필요해졌다) — 실제 쓰기 차단은
       // joinEditSession/handleMessage가 이 연결을 읽기 전용으로 표시해 서버 쪽에서 직접 막는다
       // (클라이언트 UI가 편집을 숨기는 것과는 별개의, 신뢰할 수 있는 방어선).
+      // 열람만(편집·내려받기 둘 다 없음) 토큰은 방에 들이지 않는다 — 방은 문서 구조 전체를 보낸다(types.ts isViewOnly)
+      if (isViewOnly(claims.perms)) {
+        socket.off('message', queueEarly);
+        socket.close(4403, '열람만 허용된 토큰입니다.');
+        return;
+      }
       const readOnly = !claims.perms.canEdit;
       await recordAudit({
         type: readOnly ? 'edit_joined_readonly' : 'edit_joined',

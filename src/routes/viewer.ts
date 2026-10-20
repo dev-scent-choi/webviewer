@@ -45,10 +45,11 @@ import {
   GRID_CACHE_FORMAT_VERSION,
   saveGridDerived,
   type GridCell,
+  type GridSheet,
   type GridHeader,
 } from '../spreadsheet.js';
 import { store } from '../storage.js';
-import type { DocumentMeta, ViewClaims } from '../types.js';
+import { isViewOnly, type DocumentMeta, type ViewClaims } from '../types.js';
 import { isOpenable } from '../conversionGate.js';
 
 export interface ViewContext {
@@ -73,6 +74,16 @@ async function editorBaseOf(docId: string, bytes: Uint8Array): Promise<Uint8Arra
   editorBaseCache.set(key, base);
   while (editorBaseCache.size > 8) editorBaseCache.delete(editorBaseCache.keys().next().value as string);
   return base;
+}
+
+/** 편집기만 쓰는 데이터(원본 그림·hwp 원본·차트·링크·변경 내용) — 열람만 토큰(types.ts isViewOnly)은 거부 */
+async function resolveEditorDataView(token: string | undefined, reply: FastifyReply): Promise<ViewContext | null> {
+  const view = await resolveView(token, reply);
+  if (view && isViewOnly(view.claims.perms)) {
+    await reply.code(403).send({ success: false, error: '열람만 허용된 문서입니다.' });
+    return null;
+  }
+  return view;
 }
 
 export async function resolveView(token: string | undefined, reply: FastifyReply): Promise<ViewContext | null> {
@@ -294,14 +305,16 @@ interface GridSearchHit {
 }
 
 /** JSONL 그리드에서 부분 문자열을 검색한다. 줄 단위 1차 필터 후 매칭 줄만 파싱한다. */
-function searchGrid(grid: LoadedGrid, query: string, limit: number): { hits: GridSearchHit[]; total: number } {
+function searchGrid(grid: LoadedGrid, query: string, limit: number, skipHidden = false): { hits: GridSearchHit[]; total: number } {
   const needle = query.toLowerCase();
   const hits: GridSearchHit[] = [];
   let total = 0;
   for (let sheetIdx = 0; sheetIdx < grid.header.sheets.length; sheetIdx += 1) {
     const sheet = grid.header.sheets[sheetIdx];
     const startLine = grid.sheetStartLine[sheetIdx];
+    const hidden = skipHidden ? hiddenLookup(sheet) : null;
     for (let r = 1; r <= sheet.rowCount; r += 1) {
+      if (hidden?.row(r - 1)) continue;
       const line = startLine + r - 1;
       const begin = grid.lineOffsets[line];
       const finish =
@@ -311,7 +324,7 @@ function searchGrid(grid: LoadedGrid, query: string, limit: number): { hits: Gri
       const cells = JSON.parse(raw) as Array<GridCell | 0>;
       for (let c = 0; c < cells.length; c += 1) {
         const cell = cells[c];
-        if (cell === 0 || !cell.v.toLowerCase().includes(needle)) continue;
+        if (cell === 0 || hidden?.col(c) || !cell.v.toLowerCase().includes(needle)) continue;
         total += 1;
         if (hits.length < limit) {
           hits.push({ sheet: sheetIdx, r, c: c + 1, snippet: cell.v.slice(0, 120) });
@@ -320,6 +333,22 @@ function searchGrid(grid: LoadedGrid, query: string, limit: number): { hits: Gri
     }
   }
   return { hits, total };
+}
+
+/** 숨긴 행(높이 0)·열(폭 0)인지 — 열람만 토큰에는 그 칸 값을 보내지 않는다 */
+function hiddenLookup(sheet: Pick<GridSheet, 'rowHeights' | 'colWidths'>): { row: (r0: number) => boolean; col: (c0: number) => boolean } {
+  return {
+    row: (r0) => sheet.rowHeights.some(([start, count, px]) => px === 0 && r0 >= start && r0 < start + count),
+    col: (c0) => sheet.colWidths[c0] === 0,
+  };
+}
+
+function maskHiddenCells(sheet: Pick<GridSheet, 'rowHeights' | 'colWidths'>, from: number, rows: Array<Array<GridCell | 0>>): Array<Array<GridCell | 0>> {
+  const hidden = hiddenLookup(sheet);
+  return rows.map((cells, i) => {
+    if (hidden.row(from - 1 + i)) return cells.map(() => 0);
+    return cells.map((cell, c) => (cell !== 0 && hidden.col(c) ? 0 : cell));
+  });
 }
 
 function sliceRows(
@@ -651,7 +680,7 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
     '/api/view/xlsx-charts',
     { schema: { querystring: tokenQuerySchema } },
     async (request, reply) => {
-      const view = await resolveView(request.query.token, reply);
+      const view = await resolveEditorDataView(request.query.token, reply);
       if (!view) return reply;
       if (view.meta.ext !== 'xlsx') return { success: true, data: { charts: [] } };
       try {
@@ -685,7 +714,7 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
     '/api/view/xlsx-extras',
     { schema: { querystring: tokenQuerySchema } },
     async (request, reply) => {
-      const view = await resolveView(request.query.token, reply);
+      const view = await resolveEditorDataView(request.query.token, reply);
       if (!view) return reply;
       if (view.meta.ext !== 'xlsx') return { success: true, data: { links: [], lists: [] } };
       try {
@@ -703,7 +732,7 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
     '/api/view/changes',
     { schema: { querystring: tokenQuerySchema } },
     async (request, reply) => {
-      const view = await resolveView(request.query.token, reply);
+      const view = await resolveEditorDataView(request.query.token, reply);
       if (!view) return reply;
       return { success: true, data: { changes: getChangeLog(view.meta.id) } };
     },
@@ -778,7 +807,7 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
     '/api/view/slide-media',
     { schema: { querystring: slideMediaQuerySchema } },
     async (request, reply) => {
-      const view = await resolveView(request.query.token, reply);
+      const view = await resolveEditorDataView(request.query.token, reply);
       if (!view) return reply;
       if (view.meta.ext !== 'pptx') {
         return reply.code(400).send({ success: false, error: 'pptx 문서가 아닙니다.' });
@@ -838,7 +867,8 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
         return reply.code(404).send({ success: false, error: '시트를 찾을 수 없습니다.' });
       }
       const from = request.query.from;
-      const rows = sliceRows(grid, request.query.sheet, from, request.query.count);
+      let rows = sliceRows(grid, request.query.sheet, from, request.query.count);
+      if (isViewOnly(view.claims.perms)) rows = maskHiddenCells(grid.header.sheets[request.query.sheet], from, rows);
       return { success: true, data: { from, rows } };
     },
   );
@@ -859,7 +889,7 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
       try {
         if ((view.meta.viewKind ?? 'pages') === 'grid') {
           const grid = await loadGrid(view.meta.id);
-          const { hits, total } = searchGrid(grid, q, limit);
+          const { hits, total } = searchGrid(grid, q, limit, isViewOnly(view.claims.perms));
           return { success: true, data: { kind: 'grid', hits, total } };
         }
         const pages = await loadPdfText(view.meta.id);
@@ -1346,7 +1376,7 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
     '/api/view/hwp-source',
     { schema: { querystring: tokenQuerySchema } },
     async (request, reply) => {
-      const view = await resolveView(request.query.token, reply);
+      const view = await resolveEditorDataView(request.query.token, reply);
       if (!view) return reply;
       if (view.meta.ext !== 'hwp' && view.meta.ext !== 'hwpx') {
         return reply.code(400).send({ success: false, error: 'hwp/hwpx 문서가 아닙니다.' });

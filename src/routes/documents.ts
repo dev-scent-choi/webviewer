@@ -79,8 +79,9 @@ export function editorUrlFor(
   if (ext === 'pdf') return opts.pdfEditor && opts.canDownload ? url : undefined;
   if (!EDITABLE_EXTS.has(ext)) return undefined;
   // 문서(docx)·그리드(xlsx)·슬라이드(pptx) 편집기는 canEdit:false여도 읽기 전용으로 그대로 열 수 있다(collab/room.ts가
-  // 그 연결의 실제 쓰기를 서버에서 막는다)
-  const supportsReadOnlyEditor = ext === 'docx' || ext === 'xlsx' || ext === 'pptx';
+  // 그 연결의 실제 쓰기를 서버에서 막는다). 단 내려받기 권한도 없으면(열람만) 편집기를 주지 않는다 — 편집기는 문서 구조
+  // 전체(수식·숨긴 내용·메모·원본 그림)를 받으므로 원본을 다시 만들 수 있다. 그 경우 서버가 그린 열람 화면(viewerUrl)으로.
+  const supportsReadOnlyEditor = opts.canDownload && (ext === 'docx' || ext === 'xlsx' || ext === 'pptx');
   return opts.effectiveCanEdit || supportsReadOnlyEditor ? url : undefined;
 }
 
