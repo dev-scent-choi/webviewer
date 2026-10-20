@@ -12,6 +12,8 @@ import { AnnotLayer } from './pdf/annotLayer.js';
 import { setupAnnotUi } from './pdf/annotUi.js';
 import { cleanPageList, PDF_ANNOTS_MAP, PDF_META_MAP, PDF_PAGES_ARRAY, type PdfAnnot, type PdfPageEntry } from '../pdf/annotTypes.js';
 import { FindController } from './pdf/findController.js';
+import { PageOps } from './pdf/pageOps.js';
+import { setupOrganize, type OrganizeView } from './pdf/organizeView.js';
 import { pickPresenceColorForName, renderPresenceAvatars } from './presence.js';
 
 interface ViewInfo {
@@ -61,7 +63,17 @@ function connect(info: ViewInfo): { ydoc: Y.Doc; provider: WebsocketProvider } {
   return { ydoc, provider };
 }
 
-function setupChrome(view: PageView, find: FindController, info: ViewInfo, panels: Panels): void {
+let noticeTimer = 0;
+/** 화면 위(정리 화면에선 아래) 잠깐 뜨는 안내 */
+function showNotice(text: string): void {
+  const notice = $('mode-notice');
+  notice.textContent = text;
+  notice.hidden = false;
+  clearTimeout(noticeTimer);
+  noticeTimer = window.setTimeout(() => (notice.hidden = true), 2600);
+}
+
+function setupChrome(view: PageView, find: FindController, info: ViewInfo, panels: Panels, organize: OrganizeView): void {
   // 오른쪽 줄 — 쪽 번호·이동·배율
   const pageInput = $<HTMLInputElement>('page-input');
   const pageCount = $('page-count');
@@ -106,14 +118,6 @@ function setupChrome(view: PageView, find: FindController, info: ViewInfo, panel
   // 모드 탭 — 모든 도구(왼쪽 목록) / 읽기(본문만) / 편집·서명(다음 단계 안내)
   const toolsPanel = $('tools-panel');
   const menuBtn = $('menu-btn');
-  const notice = $('mode-notice');
-  let noticeTimer = 0;
-  const showNotice = (text: string) => {
-    notice.textContent = text;
-    notice.hidden = false;
-    clearTimeout(noticeTimer);
-    noticeTimer = window.setTimeout(() => (notice.hidden = true), 2600);
-  };
   const setToolsOpen = (open: boolean) => {
     toolsPanel.hidden = !open;
     toolsPanel.classList.toggle('forced-open', open && window.matchMedia('(max-width: 1100px)').matches);
@@ -141,9 +145,18 @@ function setupChrome(view: PageView, find: FindController, info: ViewInfo, panel
   };
   for (const m of modes) m.addEventListener('click', () => selectMode(m.dataset.mode ?? 'tools'));
   for (const item of document.querySelectorAll<HTMLButtonElement>('.pdf-tool-item')) {
+    // 읽기 전용이면 고치는 도구는 숨기고, 추출·나누기는 내려받기 권한이 있을 때만
+    const tool = item.dataset.tool;
+    const allowed =
+      tool === 'organize' || tool === 'combine' || tool === 'comment' || tool === 'fill' ? info.permissions.canEdit : tool === 'extract' || tool === 'download' ? info.permissions.canDownload : true;
+    if (!allowed) item.closest('li')!.hidden = true;
     item.addEventListener('click', () => {
-      if (item.dataset.tool === 'download') download();
-      else if (item.dataset.tool === 'comment') selectMode('edit');
+      const tool = item.dataset.tool;
+      if (tool === 'download') download();
+      else if (tool === 'comment') selectMode('edit');
+      else if (tool === 'organize') organize.open();
+      else if (tool === 'combine') organize.pickFiles();
+      else if (tool === 'extract') organize.open('추출할 쪽을 고른 뒤 ‘고른 쪽 추출’ 또는 ‘나누기’를 누르세요.');
       else showNotice(`'${item.querySelector('span')?.textContent ?? ''}'은(는) 다음 업데이트에서 열립니다.`);
     });
   }
@@ -346,7 +359,18 @@ async function main(): Promise<void> {
   // 썸네일에도 주석
   panels.setThumbOverlay((page, host, vp) => layer.drawOverlay(page, host, vp));
   layer.onPagesChanged((pages) => panels.refreshThumbOverlays(pages));
-  setupChrome(view, find, info, panels);
+  const organize = setupOrganize({
+    view,
+    ops: new PageOps(ydoc, pagesArr, annotMap),
+    undoManager: annotUi.undoManager,
+    token,
+    docName: info.name,
+    canEdit: info.permissions.canEdit,
+    canDownload: info.permissions.canDownload,
+    drawOverlay: (page, host, vp) => layer.drawOverlay(page, host, vp),
+    notice: showNotice,
+  });
+  setupChrome(view, find, info, panels, organize);
   // 처음 배율: 폭에 맞추되 너무 크게(작은 쪽을 넓은 화면에) 키우지 않는다
   view.setScale('fit-width');
   if (view.scale > 1.25) view.setScale(1.25);

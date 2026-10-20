@@ -87,9 +87,9 @@
       </div>
       <ul class="pdf-tool-list">
         <li><button class="pdf-tool-item" data-tool="comment" style="--tc:#e6a817"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M4 5h16v11H9l-5 4z"/><path d="M8 9h8M8 12h5"/></svg><span>주석 달기</span></button></li>
-        <li><button class="pdf-tool-item" data-tool="organize" style="--tc:#2e9b5f"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="4" width="7" height="7" rx="1"/><rect x="13" y="4" width="7" height="7" rx="1"/><rect x="4" y="13" width="7" height="7" rx="1"/><rect x="13" y="13" width="7" height="7" rx="1"/></svg><span>페이지 정리</span><em>다음 단계</em></button></li>
-        <li><button class="pdf-tool-item" data-tool="combine" style="--tc:#3a6fd8"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M8 4h7l3 3v10H8z"/><path d="M5 7v13h10"/></svg><span>파일 합치기</span><em>다음 단계</em></button></li>
-        <li><button class="pdf-tool-item" data-tool="extract" style="--tc:#7a52c7"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h8l4 4v14H6z"/><path d="M9 14h6M12 11v6"/></svg><span>페이지 추출</span><em>다음 단계</em></button></li>
+        <li><button class="pdf-tool-item" data-tool="organize" style="--tc:#2e9b5f"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="4" width="7" height="7" rx="1"/><rect x="13" y="4" width="7" height="7" rx="1"/><rect x="4" y="13" width="7" height="7" rx="1"/><rect x="13" y="13" width="7" height="7" rx="1"/></svg><span>페이지 정리</span></button></li>
+        <li><button class="pdf-tool-item" data-tool="combine" style="--tc:#3a6fd8"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M8 4h7l3 3v10H8z"/><path d="M5 7v13h10"/></svg><span>파일 합치기</span></button></li>
+        <li><button class="pdf-tool-item" data-tool="extract" style="--tc:#7a52c7"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h8l4 4v14H6z"/><path d="M9 14h6M12 11v6"/></svg><span>페이지 추출·나누기</span></button></li>
         <li><button class="pdf-tool-item" data-tool="fill" style="--tc:#c4302b"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13 7l4 4"/></svg><span>양식 채우기·서명</span><em>다음 단계</em></button></li>
         <li><button class="pdf-tool-item" data-tool="download" style="--tc:#3a6fd8"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 10l5 5 5-5"/><path d="M5 20h14"/></svg><span>내려받기</span></button></li>
       </ul>
@@ -170,6 +170,39 @@
         <div id="pdf-pages" class="pdf-pages"></div>
       </div>
       <div id="pdf-loading" class="pdf-loading"><span class="pdf-spinner"></span><span>PDF를 여는 중…</span></div>
+
+      <!-- 페이지 정리 화면(organizeView.ts) -->
+      <div id="organize" class="pdf-organize" hidden>
+        <div class="pdf-org-bar" role="toolbar" aria-label="페이지 정리 도구">
+          <strong class="pdf-org-title">페이지 정리</strong>
+          <span id="org-status" class="pdf-org-status"></span>
+          <span class="pdf-org-sep"></span>
+          <button id="org-rotate-left" class="pdf-org-btn" type="button" data-edit-only data-needs-selection title="왼쪽으로 돌리기"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4v6h6"/><path d="M5.5 15a7 7 0 1 0 1.6-7.3L4 10"/></svg><span>왼쪽으로</span></button>
+          <button id="org-rotate-right" class="pdf-org-btn" type="button" data-edit-only data-needs-selection title="오른쪽으로 돌리기"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 4v6h-6"/><path d="M18.5 15a7 7 0 1 1-1.6-7.3L20 10"/></svg><span>오른쪽으로</span></button>
+          <button id="org-delete" class="pdf-org-btn" type="button" data-edit-only data-needs-selection title="고른 쪽 지우기 (Delete)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 7h14M10 7V4h4v3M7 7l1 13h8l1-13"/></svg><span>지우기</span></button>
+          <button id="org-move-up" class="pdf-org-btn" type="button" data-edit-only data-needs-selection title="앞으로 옮기기"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m14 6-6 6 6 6"/></svg><span>앞으로</span></button>
+          <button id="org-move-down" class="pdf-org-btn" type="button" data-edit-only data-needs-selection title="뒤로 옮기기"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m10 6 6 6-6 6"/></svg><span>뒤로</span></button>
+          <span class="pdf-org-sep" data-edit-only></span>
+          <button id="org-blank" class="pdf-org-btn" type="button" data-edit-only title="빈 쪽 넣기(고른 쪽 뒤, 없으면 끝)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M6 3h8l4 4v14H6z"/><path d="M12 10v6M9 13h6" stroke-linecap="round"/></svg><span>빈 쪽</span></button>
+          <button id="org-insert-file" class="pdf-org-btn" type="button" data-edit-only title="다른 PDF의 쪽 넣기(고른 쪽 뒤, 없으면 끝)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M8 4h7l3 3v10H8z"/><path d="M5 7v13h10"/></svg><span>파일에서 넣기</span></button>
+          <span class="pdf-org-sep" data-download-only></span>
+          <button id="org-extract" class="pdf-org-btn" type="button" data-download-only data-needs-selection title="고른 쪽만 새 PDF로 내려받기"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h8l4 4v14H6z"/><path d="M12 10v7M9 14l3 3 3-3"/></svg><span>고른 쪽 추출</span></button>
+          <div class="pdf-org-split-wrap" data-download-only>
+            <button id="org-split-btn" class="pdf-org-btn" type="button" title="여러 PDF로 나누어 내려받기"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 12h16"/><path d="M7 4h10v5H7zM7 15h10v5H7z" stroke-linejoin="round"/></svg><span>나누기</span></button>
+            <div id="org-split" class="pdf-org-split" hidden>
+              <label><input id="org-split-every" type="radio" name="org-split-mode" checked /> <input id="org-split-n" type="number" min="1" value="1" aria-label="몇 쪽씩" />쪽씩</label>
+              <label><input id="org-split-at" type="radio" name="org-split-mode" /> 고른 쪽 앞에서 자르기</label>
+              <button id="org-split-go" class="pdf-org-primary" type="button">나누어 내려받기</button>
+            </div>
+          </div>
+          <span class="pdf-org-grow"></span>
+          <button id="org-undo" class="pdf-icon-btn" type="button" data-edit-only title="실행 취소 (Ctrl+Z)" aria-label="실행 취소"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></svg></button>
+          <button id="org-redo" class="pdf-icon-btn" type="button" data-edit-only title="다시 실행 (Ctrl+Y)" aria-label="다시 실행"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m15 14 5-5-5-5"/><path d="M20 9H10a6 6 0 0 0 0 12h3"/></svg></button>
+          <button id="org-close" class="pdf-org-primary" type="button" title="닫기 (Esc)">닫기</button>
+        </div>
+        <div id="org-grid" class="pdf-org-grid" tabindex="-1" aria-label="쪽 목록" aria-multiselectable="true"></div>
+        <input id="org-file" type="file" accept="application/pdf,.pdf" multiple hidden />
+      </div>
     </section>
 
     <!-- 오른쪽: 정보 창(페이지·책갈피·레이어) -->
