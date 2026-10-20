@@ -177,6 +177,7 @@ export async function buildPdfFromRoom(original: Uint8Array, ydoc: Y.Doc, parts?
   // 양식 값(바꾼 칸만) — 한글은 주석과 같은 Pretendard 한 벌을 쓴다
   await applyFormValues(doc, ydoc.getMap<unknown>(PDF_FORM_MAP).entries(), () => fonts.korean());
   writeProps(doc, ydoc.getMap<string>(PDF_PROPS_MAP).toJSON() as PdfProps, (ydoc.getMap<unknown>(PDF_META_MAP).get('propsSeed') as PdfProps | undefined) ?? {});
+  await fonts.finish();
   return { bytes: await doc.save(), keys: [...pageOfKey.keys()] };
 }
 

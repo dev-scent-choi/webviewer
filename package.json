@@ -36,7 +36,8 @@
     "verify:pdf-forms": "node scripts/verify-pdf-forms-e2e.mjs",
     "verify:pdf-textedit": "node scripts/verify-pdf-textedit-e2e.mjs",
     "verify:pdf-security": "node scripts/verify-pdf-security-e2e.mjs",
-    "verify:pdf-convert": "node scripts/verify-pdf-convert-e2e.mjs"
+    "verify:pdf-convert": "node scripts/verify-pdf-convert-e2e.mjs",
+    "verify:pdf-ocr": "node scripts/verify-pdf-ocr-e2e.mjs"
   },
   "dependencies": {
     "@cantoo/pdf-lib": "^2.11.1",

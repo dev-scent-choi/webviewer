@@ -588,3 +588,9 @@ input.pdf-form-field[type="checkbox"], input.pdf-form-field[type="radio"] { padd
 .pdf-convert-other { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--pdf-line); }
 .pdf-convert-other .pdf-dialog-sub { margin-top: 0; }
 .pdf-convert-other .pdf-dialog-note { margin: 0 0 10px; }
+
+/* ---------- OCR 낱말 층(pageView.appendOcrWords) ---------- */
+.pdf-ocr-layer { position: absolute; inset: 0; z-index: 2; overflow: hidden; line-height: 1; pointer-events: none; }
+.pdf-ocr-layer span { position: absolute; color: transparent; white-space: pre; transform-origin: 0 0; font-family: sans-serif; cursor: text; pointer-events: auto; }
+.pdf-ocr-layer span::selection { background: rgba(26, 115, 232, 0.28); }
+.pdf-scroll.hand .pdf-ocr-layer span { cursor: inherit; }
