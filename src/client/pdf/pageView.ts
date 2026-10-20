@@ -4,22 +4,29 @@
  * 쪽마다 자리(div.pdf-page)는 처음부터 다 만들어 스크롤 길이를 잡되, 그림(canvas)과 글자 층은 보이는 쪽과 그 앞뒤 한 화면
  * (IntersectionObserver rootMargin)만 그린다 — 수백 쪽 문서도 처음 여는 데 시간이 들지 않고, 멀어진 쪽의 canvas는 비워
  * 메모리를 돌려준다. 쪽 크기는 처음엔 1쪽 크기로 잡아 두고 그 쪽을 실제로 읽을 때 맞춘다(pdf.js 기본 뷰어와 같은 방식).
+ *
+ * 3단계(쪽 정리): 무엇을 어떤 순서로 보여 줄지는 쪽 목록(PdfPageEntry — 방의 pdfPages)이 정한다. 원본 쪽('o:'), 넣은 PDF의 쪽('p:'),
+ * 빈 쪽('b:')을 그리고, 목록의 회전을 쪽 자체 회전에 더한다. 목록이 바뀌면(setPages) 같은 열쇠의 자리는 그대로 옮겨 쓴다.
+ * 쪽 번호(1부터)는 언제나 지금 목록에서의 자리다.
  */
 import { pdfjs, type OptionalContentConfig, type PDFDocumentProxy } from './pdfDocument.js';
 import type { FindMatch } from './findText.js';
+import { identityPages, parsePageKey, type PdfPageEntry } from '../../pdf/annotTypes.js';
 
 type PDFPageProxy = Awaited<ReturnType<PDFDocumentProxy['getPage']>>;
 type RenderTask = ReturnType<PDFPageProxy['render']>;
 export type PageViewport = ReturnType<PDFPageProxy['getViewport']>;
 
 interface Slot {
-  readonly page: number;
+  page: number;
+  entry: PdfPageEntry;
   readonly el: HTMLDivElement;
   canvas: HTMLCanvasElement;
   readonly textLayer: HTMLDivElement;
   readonly hitLayer: HTMLDivElement;
   /** 주석 층(annotLayer.ts가 채운다) — 글자 층 위 */
   readonly annotLayer: HTMLDivElement;
+  readonly label: HTMLSpanElement;
   /** 지금 그려진 상태의 viewport(주석 좌표 변환용) */
   viewport: PageViewport | null;
   /** 배율 1·회전 0에서의 크기(pt). 아직 그 쪽을 읽지 않았으면 1쪽 크기 */
@@ -43,32 +50,41 @@ const PAGE_GAP = 16;
 
 export type ScaleMode = number | 'fit-width' | 'fit-page';
 
+/** 넣은 PDF(부속)를 연다 — 편집기가 /api/view/pdf-part에서 받아 캐시한다 */
+export type PartLoader = (partId: string) => Promise<PDFDocumentProxy>;
+
 export class PageView {
-  private readonly slots: Slot[] = [];
+  private slots: Slot[] = [];
+  private readonly slotOfEl = new WeakMap<Element, Slot>();
   private scaleValue = 1;
   private viewRotation = 0;
   private current = 1;
   private readonly pageListeners: Array<(page: number) => void> = [];
   private readonly scaleListeners: Array<(scale: number) => void> = [];
   private readonly renderListeners: Array<(page: number, layer: HTMLDivElement, viewport: PageViewport) => void> = [];
+  private readonly pagesListeners: Array<() => void> = [];
   private observer: IntersectionObserver | null = null;
-  private readonly visible = new Set<number>();
+  private readonly visible = new Set<Slot>();
   private ocConfig: OptionalContentConfig | null = null;
   private ocVersion = 0;
   private matchesByPage = new Map<number, FindMatch[]>();
   private currentMatch: FindMatch | null = null;
-  private readonly textCache = new Map<number, Promise<string[]>>();
-  private renderQueue: Promise<void> = Promise.resolve();
+  private readonly textCache = new Map<string, Promise<string[]>>();
   private scrollRaf = 0;
+  private defaultW = 612;
+  private defaultH = 792;
+  /** pdf.js PageViewport 생성자 — 4.2는 클래스를 내보내지 않아 첫 쪽 viewport에서 빌린다(빈 쪽 좌표 변환용) */
+  private viewportCtor: (new (params: { viewBox: number[]; scale: number; rotation: number; offsetX: number; offsetY: number; dontFlip: boolean }) => PageViewport) | null = null;
 
   constructor(
     private readonly host: HTMLElement,
     private readonly scroller: HTMLElement,
     private readonly doc: PDFDocumentProxy,
+    private readonly loadPart: PartLoader = () => Promise.reject(new Error('넣은 파일을 열 수 없습니다.')),
   ) {}
 
   get pageCount(): number {
-    return this.doc.numPages;
+    return this.slots.length;
   }
   get scale(): number {
     return this.scaleValue;
@@ -78,6 +94,10 @@ export class PageView {
   }
   get layers(): OptionalContentConfig | null {
     return this.ocConfig;
+  }
+  /** 지금 쪽 목록(보이는 순서) */
+  get entries(): PdfPageEntry[] {
+    return this.slots.map((s) => s.entry);
   }
 
   onPageChange(cb: (page: number) => void): void {
@@ -90,6 +110,10 @@ export class PageView {
   onPageRendered(cb: (page: number, layer: HTMLDivElement, viewport: PageViewport) => void): void {
     this.renderListeners.push(cb);
   }
+  /** 쪽 목록이 바뀐 뒤(순서·회전·넣기·지우기) */
+  onPagesChange(cb: () => void): void {
+    this.pagesListeners.push(cb);
+  }
   viewportOf(page: number): PageViewport | null {
     return this.slots[page - 1]?.viewport ?? null;
   }
@@ -100,71 +124,51 @@ export class PageView {
   renderedPages(): number[] {
     return this.slots.filter((s) => s.viewport && s.renderedKey !== null).map((s) => s.page);
   }
-  /** 주석이 붙는 열쇠 — 지금은 원본 쪽 순서 그대로(3단계 쪽 정리에서 바뀐다) */
+  /** 주석이 붙는 쪽 열쇠 */
   pageKeyOf(page: number): string {
-    return `o:${page - 1}`;
+    return this.slots[page - 1]?.entry.key ?? '';
   }
+  /** 열쇠 → 지금 몇 쪽인지(목록에 없으면 null) */
   pageOfKey(pageKey: string): number | null {
-    const m = /^o:(\d+)$/.exec(pageKey);
-    return m ? Number(m[1]) + 1 : null;
+    const slot = this.slots.find((s) => s.entry.key === pageKey);
+    return slot ? slot.page : null;
+  }
+  /** 쪽의 기본 크기(pt, 쪽 자체 회전 반영 전) — 빈 쪽을 넣을 때 옆 쪽 크기를 따른다 */
+  sizeOf(page: number): { w: number; h: number } {
+    const slot = this.slots[page - 1];
+    return slot ? { w: slot.baseW, h: slot.baseH } : { w: this.defaultW, h: this.defaultH };
   }
 
   async init(): Promise<void> {
     const first = await this.doc.getPage(1);
     const vp = first.getViewport({ scale: 1, rotation: 0 });
+    this.viewportCtor = vp.constructor as NonNullable<PageView['viewportCtor']>;
     const userUnit = (first as unknown as { userUnit?: number }).userUnit ?? 1;
+    this.defaultW = vp.width * userUnit;
+    this.defaultH = vp.height * userUnit;
     this.ocConfig = await this.doc.getOptionalContentConfig();
-    for (let page = 1; page <= this.doc.numPages; page += 1) {
-      const el = document.createElement('div');
-      el.className = 'pdf-page';
-      el.dataset.page = String(page);
-      const canvas = document.createElement('canvas');
-      const textLayer = document.createElement('div');
-      textLayer.className = 'pdf-text-layer';
-      const hitLayer = document.createElement('div');
-      hitLayer.className = 'pdf-hit-layer';
-      const annotLayer = document.createElement('div');
-      annotLayer.className = 'pdf-annot-layer';
-      const label = document.createElement('span');
-      label.className = 'pdf-page-label';
-      label.textContent = String(page);
-      el.append(canvas, textLayer, hitLayer, annotLayer, label);
-      this.host.append(el);
-      this.slots.push({
-        page,
-        el,
-        canvas,
-        textLayer,
-        hitLayer,
-        annotLayer,
-        viewport: null,
-        baseW: vp.width * userUnit,
-        baseH: vp.height * userUnit,
-        pageRotate: page === 1 ? first.rotate : 0,
-        sized: page === 1,
-        renderedKey: null,
-        renderTask: null,
-        rendering: null,
-        textDivs: [],
-        textStrs: [],
-      });
-    }
-    this.layoutAll();
     this.observer = new IntersectionObserver(
       (entries) => {
         for (const entry of entries) {
-          const page = Number((entry.target as HTMLElement).dataset.page);
-          if (entry.isIntersecting) this.visible.add(page);
+          const slot = this.slotOfEl.get(entry.target);
+          if (!slot) continue;
+          if (entry.isIntersecting) this.visible.add(slot);
           else {
-            this.visible.delete(page);
-            this.release(this.slots[page - 1]);
+            this.visible.delete(slot);
+            this.release(slot);
           }
         }
         this.renderVisible();
       },
       { root: this.scroller, rootMargin: '100% 0px' },
     );
-    for (const slot of this.slots) this.observer.observe(slot.el);
+    this.slots = identityPages(this.doc.numPages).map((entry, i) => this.createSlot(entry, i + 1));
+    const firstSlot = this.slots[0];
+    if (firstSlot) {
+      firstSlot.pageRotate = first.rotate;
+      firstSlot.sized = true;
+    }
+    this.layoutAll();
     this.scroller.addEventListener('scroll', () => {
       if (this.scrollRaf) return;
       this.scrollRaf = requestAnimationFrame(() => {
@@ -174,9 +178,100 @@ export class PageView {
     });
   }
 
+  private createSlot(entry: PdfPageEntry, page: number): Slot {
+    const el = document.createElement('div');
+    el.className = 'pdf-page';
+    el.dataset.page = String(page);
+    el.dataset.key = entry.key;
+    const canvas = document.createElement('canvas');
+    const textLayer = document.createElement('div');
+    textLayer.className = 'pdf-text-layer';
+    const hitLayer = document.createElement('div');
+    hitLayer.className = 'pdf-hit-layer';
+    const annotLayer = document.createElement('div');
+    annotLayer.className = 'pdf-annot-layer';
+    const label = document.createElement('span');
+    label.className = 'pdf-page-label';
+    label.textContent = String(page);
+    el.append(canvas, textLayer, hitLayer, annotLayer, label);
+    this.host.append(el);
+    const blank = parsePageKey(entry.key)?.kind === 'blank' ? entry.blank : undefined;
+    const slot: Slot = {
+      page,
+      entry,
+      el,
+      canvas,
+      textLayer,
+      hitLayer,
+      annotLayer,
+      label,
+      viewport: null,
+      baseW: blank?.w ?? this.defaultW,
+      baseH: blank?.h ?? this.defaultH,
+      pageRotate: 0,
+      sized: !!blank,
+      renderedKey: null,
+      renderTask: null,
+      rendering: null,
+      textDivs: [],
+      textStrs: [],
+    };
+    this.slotOfEl.set(el, slot);
+    this.observer?.observe(el);
+    return slot;
+  }
+
+  /**
+   * 쪽 목록을 바꾼다. 같은 열쇠의 쪽은 자리(그림 포함)를 옮겨 쓰고, 목록의 회전이 바뀐 쪽만 다시 그린다.
+   * 지금 보던 쪽(열쇠)이 남아 있으면 그 쪽을 계속 본다.
+   */
+  setPages(next: readonly PdfPageEntry[]): void {
+    if (next.length === 0) return;
+    const same = next.length === this.slots.length && next.every((e, i) => e.key === this.slots[i].entry.key && e.rotate === this.slots[i].entry.rotate);
+    if (same) return;
+    const anchorKey = this.slots[this.current - 1]?.entry.key;
+    const anchorOffset = this.slots[this.current - 1] ? this.scroller.scrollTop - this.slots[this.current - 1].el.offsetTop : 0;
+    const old = new Map(this.slots.map((s) => [s.entry.key, s]));
+    const slots: Slot[] = [];
+    next.forEach((entry, i) => {
+      let slot = old.get(entry.key);
+      if (slot) {
+        old.delete(entry.key);
+        if (slot.entry.rotate !== entry.rotate && slot.renderedKey !== null) slot.renderedKey = 'stale';
+        slot.entry = entry;
+      } else {
+        slot = this.createSlot(entry, i + 1);
+      }
+      slot.page = i + 1;
+      slot.el.dataset.page = String(i + 1);
+      slot.label.textContent = String(i + 1);
+      slots.push(slot);
+    });
+    for (const gone of old.values()) {
+      this.observer?.unobserve(gone.el);
+      this.visible.delete(gone);
+      this.release(gone);
+      gone.el.remove();
+    }
+    // 순서대로 다시 붙인다(append는 옮기기)
+    for (const slot of slots) this.host.append(slot.el);
+    this.slots = slots;
+    this.layoutAll();
+    const anchor = anchorKey ? slots.find((s) => s.entry.key === anchorKey) : undefined;
+    if (anchor) {
+      this.scroller.scrollTop = anchor.el.offsetTop + anchorOffset;
+      this.current = anchor.page;
+    } else {
+      this.current = Math.min(this.current, slots.length);
+    }
+    for (const cb of this.pageListeners) cb(this.current);
+    for (const cb of this.pagesListeners) cb();
+    this.renderVisible();
+  }
+
   // ---------- 크기·배율·회전 ----------
   private rotationOf(slot: Slot): number {
-    return (slot.pageRotate + this.viewRotation) % 360;
+    return (slot.pageRotate + slot.entry.rotate + this.viewRotation) % 360;
   }
   private cssSize(slot: Slot): { w: number; h: number } {
     const turned = this.rotationOf(slot) % 180 !== 0;
@@ -286,11 +381,21 @@ export class PageView {
     slot.renderedKey = null;
   }
   private renderVisible(): void {
-    const pages = [...this.visible].sort((a, b) => Math.abs(a - this.current) - Math.abs(b - this.current));
-    for (const page of pages) {
-      const slot = this.slots[page - 1];
-      if (slot && slot.renderedKey !== this.keyOf()) void this.renderSlot(slot);
-    }
+    const slots = [...this.visible].sort((a, b) => Math.abs(a.page - this.current) - Math.abs(b.page - this.current));
+    for (const slot of slots) if (slot.renderedKey !== this.keyOf()) void this.renderSlot(slot);
+  }
+
+  /** 열쇠의 pdf.js 쪽 — 빈 쪽이면 null */
+  private async proxyOf(entry: PdfPageEntry): Promise<PDFPageProxy | null> {
+    const parsed = parsePageKey(entry.key);
+    if (parsed?.kind === 'orig') return this.doc.getPage(parsed.index + 1);
+    if (parsed?.kind === 'part') return (await this.loadPart(parsed.partId)).getPage(parsed.index + 1);
+    return null;
+  }
+
+  /** 빈 쪽의 viewport — pdf.js 쪽과 같은 좌표 변환(주석 층이 쓴다) */
+  private blankViewport(slot: Slot, scale: number, rotation: number): PageViewport {
+    return new this.viewportCtor!({ viewBox: [0, 0, slot.baseW, slot.baseH], scale, rotation, offsetX: 0, offsetY: 0, dontFlip: false });
   }
 
   /** 한 쪽을 그린다(같은 쪽을 동시에 두 번 그리지 않는다). 끝나면 그 쪽의 찾기 강조도 다시 그린다. */
@@ -299,8 +404,8 @@ export class PageView {
     const key = this.keyOf();
     slot.rendering = (async () => {
       try {
-        const page = await this.doc.getPage(slot.page);
-        if (!slot.sized) {
+        const page = await this.proxyOf(slot.entry);
+        if (page && !slot.sized) {
           const vp1 = page.getViewport({ scale: 1, rotation: 0 });
           const userUnit = (page as unknown as { userUnit?: number }).userUnit ?? 1;
           slot.baseW = vp1.width * userUnit;
@@ -309,7 +414,9 @@ export class PageView {
           slot.sized = true;
           this.layout(slot);
         }
-        const viewport = page.getViewport({ scale: this.scaleValue, rotation: this.rotationOf(slot) });
+        const viewport = page
+          ? page.getViewport({ scale: this.scaleValue, rotation: this.rotationOf(slot) })
+          : this.blankViewport(slot, this.scaleValue, this.rotationOf(slot));
         let ratio = window.devicePixelRatio || 1;
         if (viewport.width * viewport.height * ratio * ratio > MAX_CANVAS_PIXELS) {
           ratio = Math.sqrt(MAX_CANVAS_PIXELS / (viewport.width * viewport.height));
@@ -320,17 +427,23 @@ export class PageView {
         const ctx = canvas.getContext('2d', { alpha: false });
         if (!ctx) return;
         slot.renderTask?.cancel();
-        const task = page.render({
-          canvasContext: ctx,
-          viewport,
-          transform: ratio !== 1 ? [ratio, 0, 0, ratio, 0, 0] : undefined,
-          annotationMode: pdfjs.AnnotationMode.ENABLE_FORMS,
-          optionalContentConfigPromise: this.ocConfig ? Promise.resolve(this.ocConfig) : undefined,
-        });
-        slot.renderTask = task;
-        await task.promise;
-        if (slot.renderTask !== task) return;
-        slot.renderTask = null;
+        if (page) {
+          const task = page.render({
+            canvasContext: ctx,
+            viewport,
+            transform: ratio !== 1 ? [ratio, 0, 0, ratio, 0, 0] : undefined,
+            annotationMode: pdfjs.AnnotationMode.ENABLE_FORMS,
+            // 레이어 설정은 원본 문서 것 — 넣은 PDF의 쪽은 그 파일 기본값으로
+            optionalContentConfigPromise: this.ocConfig && parsePageKey(slot.entry.key)?.kind === 'orig' ? Promise.resolve(this.ocConfig) : undefined,
+          });
+          slot.renderTask = task;
+          await task.promise;
+          if (slot.renderTask !== task) return;
+          slot.renderTask = null;
+        } else {
+          ctx.fillStyle = '#fff';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+        }
         // 다 그린 canvas로 한 번에 바꿔 끼운다(그리는 동안 빈 쪽이 보이지 않게)
         slot.canvas.replaceWith(canvas);
         slot.canvas = canvas;
@@ -338,14 +451,16 @@ export class PageView {
         const textDivs: HTMLElement[] = [];
         const textStrs: string[] = [];
         slot.textLayer.replaceChildren();
-        const textTask = pdfjs.renderTextLayer({
-          textContentSource: page.streamTextContent(),
-          container: slot.textLayer,
-          viewport,
-          textDivs,
-          textContentItemsStr: textStrs,
-        });
-        await textTask.promise;
+        if (page) {
+          const textTask = pdfjs.renderTextLayer({
+            textContentSource: page.streamTextContent(),
+            container: slot.textLayer,
+            viewport,
+            textDivs,
+            textContentItemsStr: textStrs,
+          });
+          await textTask.promise;
+        }
         slot.textDivs = textDivs;
         slot.textStrs = textStrs;
         slot.renderedKey = key;
@@ -357,7 +472,7 @@ export class PageView {
       } finally {
         slot.rendering = null;
         // 그리는 동안 배율 등이 바뀌었으면 새 열쇠로 다시
-        if (this.visible.has(slot.page) && slot.renderedKey !== this.keyOf()) queueMicrotask(() => void this.renderSlot(slot));
+        if (this.visible.has(slot) && this.slots.includes(slot) && slot.renderedKey !== this.keyOf()) queueMicrotask(() => void this.renderSlot(slot));
       }
     })();
     return slot.rendering;
@@ -367,6 +482,40 @@ export class PageView {
   async firstPaint(): Promise<void> {
     const slot = this.slots[0];
     if (slot) await this.renderSlot(slot);
+  }
+
+  /**
+   * 작은 그림(썸네일·정리 화면 카드) — 폭 width(px)에 맞춰 box 안에 그린다. 목록의 회전 반영(보기 회전은 빼고).
+   * 그린 viewport(주석 겹침용)를 돌려준다.
+   */
+  async drawThumbnail(page: number, box: HTMLElement, width: number): Promise<PageViewport | null> {
+    const slot = this.slots[page - 1];
+    if (!slot) return null;
+    try {
+      const proxy = await this.proxyOf(slot.entry);
+      const rotation = ((proxy?.rotate ?? 0) + slot.entry.rotate) % 360;
+      const base = proxy ? proxy.getViewport({ scale: 1, rotation }) : this.blankViewport(slot, 1, rotation);
+      const scale = width / base.width;
+      const viewport = proxy ? proxy.getViewport({ scale, rotation }) : this.blankViewport(slot, scale, rotation);
+      const ratio = Math.min(2, window.devicePixelRatio || 1);
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.floor(viewport.width * ratio);
+      canvas.height = Math.floor(viewport.height * ratio);
+      box.style.height = `${Math.round(viewport.height)}px`;
+      const ctx = canvas.getContext('2d', { alpha: false });
+      if (!ctx) return null;
+      if (proxy) {
+        await proxy.render({ canvasContext: ctx, viewport, transform: ratio !== 1 ? [ratio, 0, 0, ratio, 0, 0] : undefined }).promise;
+      } else {
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+      }
+      box.replaceChildren(canvas);
+      return viewport;
+    } catch (error) {
+      console.error(`썸네일 ${page} 실패:`, error);
+      return null;
+    }
   }
 
   // ---------- 레이어 ----------
@@ -380,13 +529,16 @@ export class PageView {
   // ---------- 찾기 ----------
   /** 찾기용 쪽 글자 조각 — 글자 층과 같은 순서(pdf.js가 조각마다 span 하나) */
   textItems(page: number): Promise<string[]> {
-    let cached = this.textCache.get(page);
+    const slot = this.slots[page - 1];
+    if (!slot) return Promise.resolve([]);
+    let cached = this.textCache.get(slot.entry.key);
     if (!cached) {
-      cached = this.doc
-        .getPage(page)
-        .then((p) => p.getTextContent())
-        .then((content) => content.items.map((item) => ('str' in item ? item.str : '')));
-      this.textCache.set(page, cached);
+      cached = this.proxyOf(slot.entry).then(async (p) => {
+        if (!p) return [];
+        const content = await p.getTextContent();
+        return content.items.map((item) => ('str' in item ? item.str : ''));
+      });
+      this.textCache.set(slot.entry.key, cached);
     }
     return cached;
   }
@@ -446,7 +598,7 @@ export class PageView {
     if (!slot) return;
     if (slot.renderedKey !== this.keyOf()) {
       this.scroller.scrollTop = slot.el.offsetTop - 12;
-      this.visible.add(slot.page);
+      this.visible.add(slot);
       await this.renderSlot(slot);
     }
     const rects = this.rectsOf(slot, m);
