@@ -51,6 +51,7 @@ export function verifyViewToken(token: string): ViewClaims {
     canDownload: raw.canDownload === true,
     canCopy: raw.canCopy === true,
     canEdit: raw.canEdit === true,
+    ...(raw.pdfEditor === true ? { pdfEditor: true } : {}),
   };
   return { docId, viewer, perms: permissions };
 }

@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DocView — PDF 편집</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='5' y='3' width='19' height='26' rx='3' fill='%23c4302b'/%3E%3Cpath d='M18 3v6a2 2 0 0 0 2 2h6z' fill='%23f6a7a3'/%3E%3Crect x='9' y='16' width='11' height='2' rx='1' fill='%23fff' fill-opacity='.9'/%3E%3Crect x='9' y='21' width='8' height='2' rx='1' fill='%23fff' fill-opacity='.9'/%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="/css/style.css" />
+  <link rel="stylesheet" href="/css/pdf-editor.css" />
+</head>
+<body class="editor-body pdf-editor-page">
+  <script>
+    // editor-slides.html과 같은 임베드 옵션 — home=hidden: webviewer 자체 홈 링크 숨김, back=parent: ← 를 "그 서비스로 돌아가기"로
+    if (new URLSearchParams(location.search).get('home') === 'hidden') {
+      document.body.classList.add('home-hidden');
+    }
+    if (new URLSearchParams(location.search).get('back') === 'parent' && window.parent !== window) {
+      document.body.classList.remove('home-hidden');
+      document.addEventListener('click', function (event) {
+        var link = event.target && event.target.closest && event.target.closest('.doclist-link');
+        if (!link) return;
+        event.preventDefault();
+        event.stopPropagation();
+        window.parent.postMessage({ type: 'docview:back' }, '*');
+      }, true);
+      document.addEventListener('DOMContentLoaded', function () {
+        document.querySelectorAll('.doclist-link').forEach(function (link) {
+          link.title = '다른 파일 열기';
+          link.setAttribute('aria-label', '다른 파일 열기');
+        });
+      });
+    }
+  </script>
+
+  <!-- 제목 줄: ← · 문서 탭 · 연결 상태 · 참여자 -->
+  <header class="pdf-titlebar">
+    <a href="/" class="pdf-icon-btn doclist-link" title="문서 목록으로" aria-label="문서 목록으로 돌아가기">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="m12 19-7-7 7-7"/></svg>
+    </a>
+    <div class="pdf-doc-tab" role="tab" aria-selected="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/></svg>
+      <span id="doc-name">PDF</span>
+      <span id="save-dot" class="pdf-save-dot" title="저장됨" hidden></span>
+    </div>
+    <span class="pdf-spacer"></span>
+    <span id="conn-status" class="pdf-conn" data-state="connecting">연결 중</span>
+    <div id="presence" class="presence-list pdf-presence" aria-label="함께 보는 사람"></div>
+  </header>
+
+  <!-- 위 줄: 메뉴 · 모드 탭 · 찾기 · 정보/내려받기/인쇄 -->
+  <nav class="pdf-topbar" aria-label="PDF 도구">
+    <button id="menu-btn" class="pdf-menu-btn" type="button" aria-pressed="true" title="도구 목록 열기/닫기">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M9 4.5v15"/></svg>
+      <span>메뉴</span>
+    </button>
+    <div class="pdf-modes" role="tablist">
+      <button class="pdf-mode" role="tab" data-mode="tools" aria-selected="true">모든 도구</button>
+      <button class="pdf-mode" role="tab" data-mode="read" aria-selected="false">읽기</button>
+      <button class="pdf-mode" role="tab" data-mode="edit" aria-selected="false" data-edit-only>편집</button>
+      <button class="pdf-mode" role="tab" data-mode="sign" aria-selected="false" data-edit-only>서명</button>
+    </div>
+    <span class="pdf-spacer"></span>
+    <label class="pdf-search">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input id="top-find" type="search" placeholder="문서에서 찾기" autocomplete="off" aria-label="문서에서 찾기" />
+      <kbd>Ctrl+F</kbd>
+    </label>
+    <button id="info-btn" class="pdf-icon-btn" type="button" title="문서 정보" aria-label="문서 정보">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/></svg>
+    </button>
+    <button id="download-btn" class="pdf-icon-btn" type="button" title="내려받기" aria-label="내려받기">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h11l3 3v12a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Z"/><path d="M8 4v5h7V4M8 20v-6h8v6"/></svg>
+    </button>
+    <button id="print-btn" class="pdf-icon-btn" type="button" title="인쇄 (Ctrl+P)" aria-label="인쇄">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M7 9V3h10v6"/><rect x="3" y="9" width="18" height="8" rx="2"/><path d="M7 14h10v7H7z"/></svg>
+    </button>
+  </nav>
+
+  <div class="pdf-main">
+    <!-- 왼쪽: 모든 도구 -->
+    <aside id="tools-panel" class="pdf-tools-panel" aria-label="모든 도구">
+      <div class="pdf-panel-head">
+        <h2>모든 도구</h2>
+        <button id="tools-close" class="pdf-icon-btn pdf-panel-close" type="button" title="닫기" aria-label="도구 목록 닫기">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
+        </button>
+      </div>
+      <ul class="pdf-tool-list">
+        <li><button class="pdf-tool-item" data-tool="comment" style="--tc:#e6a817"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M4 5h16v11H9l-5 4z"/><path d="M8 9h8M8 12h5"/></svg><span>주석 달기</span><em>다음 단계</em></button></li>
+        <li><button class="pdf-tool-item" data-tool="organize" style="--tc:#2e9b5f"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="4" width="7" height="7" rx="1"/><rect x="13" y="4" width="7" height="7" rx="1"/><rect x="4" y="13" width="7" height="7" rx="1"/><rect x="13" y="13" width="7" height="7" rx="1"/></svg><span>페이지 정리</span><em>다음 단계</em></button></li>
+        <li><button class="pdf-tool-item" data-tool="combine" style="--tc:#3a6fd8"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M8 4h7l3 3v10H8z"/><path d="M5 7v13h10"/></svg><span>파일 합치기</span><em>다음 단계</em></button></li>
+        <li><button class="pdf-tool-item" data-tool="extract" style="--tc:#7a52c7"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h8l4 4v14H6z"/><path d="M9 14h6M12 11v6"/></svg><span>페이지 추출</span><em>다음 단계</em></button></li>
+        <li><button class="pdf-tool-item" data-tool="fill" style="--tc:#c4302b"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13 7l4 4"/></svg><span>양식 채우기·서명</span><em>다음 단계</em></button></li>
+        <li><button class="pdf-tool-item" data-tool="download" style="--tc:#3a6fd8"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 10l5 5 5-5"/><path d="M5 20h14"/></svg><span>내려받기</span></button></li>
+      </ul>
+    </aside>
+
+    <!-- 가운데: 쪽들 -->
+    <section class="pdf-stage">
+      <div class="pdf-floating-tools" role="toolbar" aria-label="보기 도구">
+        <button id="tool-select" class="pdf-float-btn" type="button" aria-pressed="true" title="선택 (V)" aria-label="선택">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M5 3l13 8-6 1.5L9 19z"/></svg>
+        </button>
+        <button id="tool-hand" class="pdf-float-btn" type="button" aria-pressed="false" title="손 — 끌어서 이동 (H)" aria-label="손">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 13V5.5a1.5 1.5 0 0 1 3 0V12M11 11V4.5a1.5 1.5 0 0 1 3 0V12M14 11.5V6a1.5 1.5 0 0 1 3 0v8c0 4-2.5 7-6 7-2.5 0-4-1.3-5.5-3.5L3.8 14a1.5 1.5 0 0 1 2.4-1.8L8 14"/></svg>
+        </button>
+      </div>
+      <div id="find-bar" class="pdf-find-bar" hidden role="search">
+        <input id="find-input" type="search" placeholder="찾을 내용" autocomplete="off" aria-label="찾을 내용" />
+        <span id="find-count" class="pdf-find-count"></span>
+        <button id="find-prev" class="pdf-icon-btn" type="button" title="이전 (Shift+Enter)" aria-label="이전 결과"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 15 6-6 6 6"/></svg></button>
+        <button id="find-next" class="pdf-icon-btn" type="button" title="다음 (Enter)" aria-label="다음 결과"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 9 6 6 6-6"/></svg></button>
+        <button id="find-close" class="pdf-icon-btn" type="button" title="닫기 (Esc)" aria-label="찾기 닫기"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+      </div>
+      <div id="mode-notice" class="pdf-mode-notice" hidden></div>
+      <div id="pdf-scroll" class="pdf-scroll" tabindex="0">
+        <div id="pdf-pages" class="pdf-pages"></div>
+      </div>
+      <div id="pdf-loading" class="pdf-loading"><span class="pdf-spinner"></span><span>PDF를 여는 중…</span></div>
+    </section>
+
+    <!-- 오른쪽: 정보 창(페이지·책갈피·레이어) -->
+    <aside id="inspector" class="pdf-inspector" aria-label="정보 창">
+      <section id="panel-thumbs" class="pdf-panel" data-panel="thumbs">
+        <div class="pdf-panel-head"><h2>페이지</h2><button class="pdf-icon-btn pdf-panel-close" type="button" data-close-panel title="닫기" aria-label="닫기"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+        <div id="thumbs" class="pdf-thumbs"></div>
+      </section>
+      <section id="panel-outline" class="pdf-panel" data-panel="outline" hidden>
+        <div class="pdf-panel-head"><h2>책갈피</h2><button class="pdf-icon-btn pdf-panel-close" type="button" data-close-panel title="닫기" aria-label="닫기"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+        <div id="outline" class="pdf-outline"></div>
+      </section>
+      <section id="panel-layers" class="pdf-panel" data-panel="layers" hidden>
+        <div class="pdf-panel-head"><h2>레이어</h2><button class="pdf-icon-btn pdf-panel-close" type="button" data-close-panel title="닫기" aria-label="닫기"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+        <div id="layers" class="pdf-layers"></div>
+      </section>
+    </aside>
+
+    <!-- 맨 오른쪽 줄 -->
+    <nav class="pdf-rail" aria-label="보기">
+      <button id="rail-thumbs" class="pdf-rail-btn" type="button" data-panel="thumbs" aria-pressed="true" title="페이지" aria-label="페이지">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><rect x="5" y="3" width="10" height="13" rx="1"/><path d="M9 20h10V7"/></svg>
+      </button>
+      <button id="rail-outline" class="pdf-rail-btn" type="button" data-panel="outline" aria-pressed="false" title="책갈피" aria-label="책갈피">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M7 3h10v18l-5-4-5 4z"/></svg>
+      </button>
+      <button id="rail-layers" class="pdf-rail-btn" type="button" data-panel="layers" aria-pressed="false" title="레이어" aria-label="레이어">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13 9 5 9-5"/></svg>
+      </button>
+      <span class="pdf-spacer"></span>
+      <div class="pdf-page-box">
+        <input id="page-input" type="text" inputmode="numeric" value="1" aria-label="쪽 번호" />
+        <span id="page-count">/ 1</span>
+      </div>
+      <button id="page-prev" class="pdf-rail-btn" type="button" title="이전 쪽" aria-label="이전 쪽"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 15 6-6 6 6"/></svg></button>
+      <button id="page-next" class="pdf-rail-btn" type="button" title="다음 쪽" aria-label="다음 쪽"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 9 6 6 6-6"/></svg></button>
+      <span id="zoom-level" class="pdf-zoom-level">100%</span>
+      <button id="fit-btn" class="pdf-rail-btn" type="button" title="폭에 맞춤 / 쪽에 맞춤 (Ctrl+0)" aria-label="맞춤"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+      <button id="rotate-btn" class="pdf-rail-btn" type="button" title="보기 회전" aria-label="보기 회전"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.3-5.7"/><path d="M20 4v5h-5"/></svg></button>
+      <button id="zoom-in" class="pdf-rail-btn" type="button" title="확대 (Ctrl+=)" aria-label="확대"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5M8 11h6M11 8v6"/></svg></button>
+      <button id="zoom-out" class="pdf-rail-btn" type="button" title="축소 (Ctrl+-)" aria-label="축소"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5M8 11h6"/></svg></button>
+    </nav>
+  </div>
+
+  <div id="info-dialog" class="office-dialog" hidden role="dialog" aria-labelledby="info-dialog-title">
+    <div class="office-dialog-card">
+      <h2 id="info-dialog-title">문서 정보</h2>
+      <dl id="info-list" class="office-dialog-stats"></dl>
+      <div class="office-dialog-actions"><button id="info-close" class="btn-mini">닫기</button></div>
+    </div>
+  </div>
+
+  <div id="pdf-error" class="pdf-error" hidden></div>
+  <script type="module" src="/js/editor-pdf.bundle.js"></script>
+</body>
+</html>

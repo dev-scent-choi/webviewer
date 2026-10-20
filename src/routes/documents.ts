@@ -29,6 +29,8 @@ const tokenBodySchema = {
     canDownload: { type: 'boolean', default: false },
     canCopy: { type: 'boolean', default: false },
     canEdit: { type: 'boolean', default: false },
+    // PDF를 PDF 편집기(editor-pdf.html)로 열지 — 향기랩만 true를 보낸다. 없으면 pdf는 지금처럼 보기 화면만(editorUrlFor 참고)
+    pdfEditor: { type: 'boolean', default: false },
   },
 } as const;
 
@@ -38,6 +40,7 @@ interface TokenBody {
   readonly canDownload: boolean;
   readonly canCopy: boolean;
   readonly canEdit: boolean;
+  readonly pdfEditor: boolean;
 }
 
 /** LibreOffice가 중간 진행률을 제공하지 않으므로 단계 완료 시점마다 진행률을 기록한다. */
@@ -53,10 +56,31 @@ const GRID_VIEW_EXTS = new Set(['xlsx', 'csv']);
  * 확장자·바이트를 그대로 유지한 채 편집하기 위해서다(README 참고). */
 export const EDITABLE_EXTS = new Set(['docx', 'xlsx', 'pptx', 'hwp', 'hwpx']);
 export function editorPathFor(ext: string): string {
+  if (ext === 'pdf') return '/editor-pdf.html';
   if (ext === 'xlsx') return '/editor-grid.html';
   if (ext === 'pptx') return '/editor-slides.html';
   if (ext === 'hwp' || ext === 'hwpx') return '/editor-hwp.html';
   return '/editor.html';
+}
+
+/**
+ * 토큰 응답의 editorUrl. 기존 형식(docx/xlsx/pptx/hwp/hwpx)은 예전 규칙 그대로다. pdf는 호출자가 `pdfEditor: true`를
+ * 보낼 때만(향기랩) 그리고 내려받기 권한이 있을 때만 준다 — 8000 유지보수 시스템은 editorUrl이 있으면 그걸 우선 여는데
+ * (WebviewerClient.java), 그쪽 PDF는 보기 화면(마크업)을 계속 써야 하고, 편집기는 원본 바이트를 브라우저로 보내므로
+ * 내려받기 금지 문서에 열어 주면 안 된다.
+ */
+export function editorUrlFor(
+  ext: string,
+  opts: { effectiveCanEdit: boolean; canDownload: boolean; pdfEditor: boolean },
+  token: string,
+): string | undefined {
+  const url = `${editorPathFor(ext)}?token=${encodeURIComponent(token)}`;
+  if (ext === 'pdf') return opts.pdfEditor && opts.canDownload ? url : undefined;
+  if (!EDITABLE_EXTS.has(ext)) return undefined;
+  // 문서(docx)·그리드(xlsx)·슬라이드(pptx) 편집기는 canEdit:false여도 읽기 전용으로 그대로 열 수 있다(collab/room.ts가
+  // 그 연결의 실제 쓰기를 서버에서 막는다)
+  const supportsReadOnlyEditor = ext === 'docx' || ext === 'xlsx' || ext === 'pptx';
+  return opts.effectiveCanEdit || supportsReadOnlyEditor ? url : undefined;
 }
 
 async function buildGrid(meta: DocumentMeta): Promise<GridDocument> {
@@ -250,7 +274,8 @@ async function ingestUpload(
       // 워드는 편집기가 원본만으로 열리므로 변환을 기다리지 않게 한다(편집기 여는 시간 3초 남짓 단축).
       // 엑셀도 편집기는 원본만 읽는다 — 다만 보기 화면(그리드)을 쓰는 곳(디스크 저장, 8000)은 그리드가 먼저
       // 필요하므로, 편집기로만 여는 메모리 저장 모드(향기랩)에서만 기다리지 않게 한다.
-      ...(ext === 'docx' || (ext === 'xlsx' && config.storageMode === 'memory') ? { editReady: true } : {}),
+      // PDF도 편집기는 원본만 읽는다 — 다만 보기 화면(8000)은 변환된 pdf가 있어야 하므로 엑셀처럼 메모리 모드(향기랩)에서만.
+      ...(ext === 'docx' || ((ext === 'xlsx' || ext === 'pdf') && config.storageMode === 'memory') ? { editReady: true } : {}),
     };
     await store.writeMeta(meta);
     await recordAudit({
@@ -404,7 +429,7 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
       if (!isOpenable(meta)) {
         return reply.code(404).send({ success: false, error: '문서를 찾을 수 없습니다.' });
       }
-      const { viewer, canPrint, canDownload, canCopy, canEdit } = request.body;
+      const { viewer, canPrint, canDownload, canCopy, canEdit, pdfEditor } = request.body;
       const isEditableExt = EDITABLE_EXTS.has(meta.ext);
       // canEdit은 두 가지 용도로 쓰인다: (1) docx/xlsx 실시간 동시편집 참여 허용 — 이 경우 해당
       // 확장자용 변환기가 실제로 있어야 한다(편집 UI는 있는데 저장이 막히는 상황을 막기 위함).
@@ -417,7 +442,13 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
         {
           docId: meta.id,
           viewer,
-          perms: { canPrint, canDownload, canCopy, canEdit: effectiveCanEdit },
+          perms: {
+            canPrint,
+            canDownload,
+            canCopy,
+            canEdit: effectiveCanEdit,
+            ...(meta.ext === 'pdf' && pdfEditor && canDownload ? { pdfEditor: true } : {}),
+          },
         },
         config.tokenTtlSeconds,
       );
@@ -431,17 +462,14 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
       // 열 수 있다(collab/room.ts가 그 연결의 실제 쓰기를 서버에서 막는다) — 과거 연도 접속현황처럼
       // "현재 연도와 같은 화면인데 손은 못 대는" 문서가 이 편집기를 그대로 재사용할 수 있게, 편집
       // 권한과 무관하게 항상 editorUrl을 내려준다.
-      // (isEditableExt로 한 번 더 감싸는 이유: effectiveCanEdit이 이제 pdf 등에서도 true일 수 있는데,
-      // 그런 문서는 editor.html/editor-grid.html이 아니라 markup 기능이 있는 viewer.html로만 열려야 한다.)
-      const supportsReadOnlyEditor = meta.ext === 'docx' || meta.ext === 'xlsx' || meta.ext === 'pptx';
+      // (effectiveCanEdit이 pdf 등에서도 true일 수 있는데, 그런 문서는 markup 기능이 있는 viewer.html로 열려야 한다 —
+      // pdf만 호출자가 pdfEditor를 보낼 때 PDF 편집기로. 규칙 전체는 editorUrlFor.)
       return {
         success: true,
         data: {
           token,
           viewerUrl: `/viewer.html?token=${encodeURIComponent(token)}`,
-          editorUrl: isEditableExt && (effectiveCanEdit || supportsReadOnlyEditor)
-            ? `${editorPathFor(meta.ext)}?token=${encodeURIComponent(token)}`
-            : undefined,
+          editorUrl: editorUrlFor(meta.ext, { effectiveCanEdit, canDownload, pdfEditor }, token),
           expiresInSeconds: config.tokenTtlSeconds,
         },
       };
