@@ -17,7 +17,7 @@
 - PDF 원본 바이트는 `canDownload` 권한이 있는 토큰에만 준다. PDF 편집기 주소도 `canDownload`가 있을 때만 준다.
 - pdf.js 보안: `isEvalSupported: false`, `enableScripting` 쓰지 않음, worker는 자체 호스팅(`/js/pdf.worker.mjs`).
 - 기존 편집기·보기 화면이 그대로여야 한다: `npm test`, `npm run verify:xlsx`, `npm run verify:pptx`, 워드 리본 e2e가 고치지 않고 통과.
-- 반영 절차: 브랜치 `feature/room-formula-fix-and-ppt-ribbon`(worktree `C:\Users\OpenMinds\projects\webviewer-wt`) 커밋 → `C:\Users\OpenMinds\projects\webviewer`(master)에서 merge → `node scripts/build-editor.mjs` → 서버 코드가 바뀌었으면 8010을 PID 체인으로 재시작 → `git push origin master:main`. calc-site는 `npx wrangler pages deploy public --project-name hyanggilab --branch main` 후 `git push origin master:main`. 커밋 전 diff에 비밀 문자열(`jZd-spcFtb`, `078213b5bc`)이 없는지 확인.
+- 반영 절차: 브랜치 `feature/room-formula-fix-and-ppt-ribbon`(worktree `C:\Users\OpenMinds\projects\webviewer-wt`) 커밋 → `C:\Users\OpenMinds\projects\webviewer`(master)에서 merge → `node scripts/build-editor.mjs` → 서버 코드가 바뀌었으면 8010을 PID 체인으로 재시작 → `git push origin master:main`. calc-site는 `npx wrangler pages deploy public --project-name hyanggilab --branch main` 후 `git push origin master:main`. 커밋 전 diff에 운영 비밀 값(키·시크릿 — 저장소 밖 실행 파일에만 있음)이 섞이지 않았는지 확인.
 - 시험 서버: `DOCVIEW_PORT=8124 DOCVIEW_HOST=127.0.0.1 DOCVIEW_DATA_DIR="$S/e2e-data3" DOCVIEW_SECRET=e2e-test-secret npx tsx src/server.ts`(S = 세션 scratchpad). 끌 때는 PID로만(node 일괄 종료 금지).
 
 ---
