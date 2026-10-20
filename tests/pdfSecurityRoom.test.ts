@@ -138,6 +138,33 @@ describe('PDF 방: 암호·압축·속성(6단계)', () => {
     expect(await textOf(saved)).toBe('Confidential report');
   });
 
+  test('인증서 서명 — 암호를 걸도록 해 둔 문서는 거부, 풀면 지금 편집 상태(주석 포함)를 지정한 쪽에 서명', async () => {
+    const forge = (await import('node-forge')).default;
+    const keys = forge.pki.rsa.generateKeyPair(2048);
+    const cert = forge.pki.createCertificate();
+    cert.publicKey = keys.publicKey;
+    cert.serialNumber = '01';
+    cert.validity.notBefore = new Date(Date.now() - 86400000);
+    cert.validity.notAfter = new Date(Date.now() + 86400000);
+    cert.setSubject([{ name: 'commonName', value: 'Signer' }]);
+    cert.setIssuer([{ name: 'commonName', value: 'Signer' }]);
+    cert.sign(keys.privateKey, forge.md.sha256.create());
+    const p12 = new Uint8Array(Buffer.from(forge.asn1.toDer(forge.pkcs12.toPkcs12Asn1(keys.privateKey, [cert], 'pw', { algorithm: 'aes256' })).getBytes(), 'binary'));
+    const { ops, model, docId, ydoc, read } = await open(await plainPdf());
+    const at = '2026-10-20T01:00:00.000Z';
+    ydoc.transact(() => ydoc.getMap(model.PDF_ANNOTS_MAP).set('a', { id: 'a', pageKey: 'o:0', type: 'rect', rect: [10, 10, 60, 60], color: '#D93025', opacity: 1, width: 2, author: '가', createdAt: at, modifiedAt: at }), 'u');
+    await ops.protectPdf(docId, { mode: 'set', userPassword: 'x' }, 'a', '가');
+    await expect(ops.signRoomPdf(docId, read, 'a', { p12, password: 'pw' })).rejects.toMatchObject({ status: 409 });
+    await ops.protectPdf(docId, { mode: 'remove' }, 'a', '가');
+    const out = await ops.signRoomPdf(docId, read, 'a', { p12, password: 'pw', pageKey: 'o:0', rect: [250, 20, 380, 70] });
+    expect(out.cert.name).toBe('Signer');
+    const pdf = await getDocument({ data: new Uint8Array(out.bytes), isEvalSupported: false }).promise;
+    const subtypes = (await (await pdf.getPage(1)).getAnnotations()).map((x) => `${x.subtype}${x.fieldType ? `:${x.fieldType}` : ''}`);
+    await pdf.destroy();
+    expect(subtypes).toEqual(expect.arrayContaining(['Square', 'Widget:Sig']));
+    expect(Buffer.from(out.bytes).toString('latin1')).toMatch(/\/ByteRange \[0 \d+ \d+ \d+\]/);
+  }, 60_000);
+
   test('문서 정보 — 버전·쪽 크기·글꼴(포함 여부)', async () => {
     const { ops, docId, read } = await open(await plainPdf());
     const info = await ops.pdfInfoOf(docId, read, 'a');
