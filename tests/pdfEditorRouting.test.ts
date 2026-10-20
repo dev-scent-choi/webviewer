@@ -11,8 +11,12 @@ describe('PDF 편집기 연결', () => {
     expect(editorUrlFor('pdf', { effectiveCanEdit: true, canDownload: true, pdfEditor: true }, t)).toBe('/editor-pdf.html?token=tok');
   });
   test('기존 형식은 예전과 같다', () => {
-    expect(editorUrlFor('docx', { effectiveCanEdit: false, canDownload: false, pdfEditor: false }, t)).toBe('/editor.html?token=tok');
-    expect(editorUrlFor('xlsx', { effectiveCanEdit: false, canDownload: false, pdfEditor: false }, t)).toBe('/editor-grid.html?token=tok');
+    expect(editorUrlFor('docx', { effectiveCanEdit: false, canDownload: true, pdfEditor: false }, t)).toBe('/editor.html?token=tok');
+    expect(editorUrlFor('xlsx', { effectiveCanEdit: false, canDownload: true, pdfEditor: false }, t)).toBe('/editor-grid.html?token=tok');
+    // 열람만(편집·내려받기 둘 다 없음)은 편집기를 주지 않는다 — 서버가 그린 열람 화면(viewerUrl)으로
+    for (const ext of ['docx', 'xlsx', 'pptx', 'hwp']) expect(editorUrlFor(ext, { effectiveCanEdit: false, canDownload: false, pdfEditor: false }, t)).toBeUndefined();
+    // 편집 권한이 있으면 내려받기가 없어도 편집기(편집에는 문서 구조가 필요)
+    expect(editorUrlFor('docx', { effectiveCanEdit: true, canDownload: false, pdfEditor: false }, t)).toBe('/editor.html?token=tok');
     expect(editorUrlFor('hwp', { effectiveCanEdit: false, canDownload: true, pdfEditor: true }, t)).toBeUndefined();
     expect(editorUrlFor('hwp', { effectiveCanEdit: true, canDownload: false, pdfEditor: false }, t)).toBe('/editor-hwp.html?token=tok');
     expect(editorUrlFor('png', { effectiveCanEdit: true, canDownload: true, pdfEditor: true }, t)).toBeUndefined();

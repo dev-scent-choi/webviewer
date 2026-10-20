@@ -1374,6 +1374,9 @@ async function applyGridStructureOp(room: Room, op: GridStructureOp): Promise<vo
   // 이 연산을 기록한다 — 내보내기(exportXlsxFromGrid)가 원본을 다시 로드한 워크북에 같은 순서로
   // 재생하기 위한 로그다.
   room.structuralOps.push({ sheet: op.sheet, kind: op.kind, at: op.at, count: op.count });
+  // 행/열 삽입·삭제는 Yjs 쓰기가 없을 수도 있다(병합·채워진 페이지가 없으면) — 직접 편집으로 표시한다
+  room.editedSinceSave = true;
+  scheduleAutosave(room);
 
   // 1) 병합 — canonical 쪽은 바로 위에서 이미 보정했고, 클라이언트가 렌더링에 쓰는 Yjs 맵도
   //    같은 값으로 맞춘다(이 맵은 윈도잉 대상이 아니라 항상 전체가 들어 있다).
@@ -1603,6 +1606,8 @@ async function flushToStore(room: Room): Promise<void> {
   const { docId, kind, ydoc } = room;
   const meta = await store.readMeta(docId);
   if (!meta) return;
+  // 이 시점 이후에 도착하는 편집은 다시 true로 만든다(update 핸들러). 저장이 실패하면 queueFlush가 되돌린다.
+  if (kind === 'xlsx' || kind === 'docx') room.editedSinceSave = false;
 
   if (kind === 'xlsx') {
     // 디스크의 현재 파일이 아니라 룸을 열 때의 원본을 쓴다 — 이유는 Room.originalXlsxBytes 주석 참고
@@ -2017,7 +2022,15 @@ function getOrCreateRoom(docId: string, ext: string): Room {
     pendingSlideSeeds: new Map(),
     connSlideSeedsInFlight: new Map(),
   };
-  room.ready = seedRoom(room);
+  // 시딩(파일을 방에 처음 올리는 쓰기)은 편집이 아니다 — 끝나면 "편집됨"을 지운다. 안 그러면 아무도 고치지 않은 문서를
+  // 열었다 닫기만 해도(읽기 전용 포함) 파일을 다시 저장했다. 참여자는 시딩이 끝난 뒤에야 문서를 받으므로 그 전의 편집은 없다.
+  room.ready = seedRoom(room).then(() => {
+    room.editedSinceSave = false;
+    if (room.autosaveTimer) {
+      clearTimeout(room.autosaveTimer);
+      room.autosaveTimer = null;
+    }
+  });
   rooms.set(docId, room);
 
   ydoc.on('update', (update: Uint8Array, origin: unknown) => {
@@ -2105,7 +2118,8 @@ function closeConn(room: Room, conn: WebSocket): void {
       void persistChangeLog(room.docId, room.kind, changeLogOf(room));
       if (room.lazyGrid) void closeLazyGridStore(room.lazyGrid);
       void room.ready
-        .then(() => ((room.kind === 'pptx' || room.kind === 'pdf') && !room.editedSinceSave ? undefined : queueFlush(room)))
+        // 편집이 없었으면 다시 저장하지 않는다(모든 형식) — 읽기만 해도 파일이 바뀌지 않게
+        .then(() => (!room.editedSinceSave ? undefined : queueFlush(room)))
         .catch((error) => console.error(`동시편집 종료 저장 실패 (문서 ${room.docId}):`, error))
         .finally(() => room.ydoc.destroy());
     } else if (subscription !== undefined && before !== null) {

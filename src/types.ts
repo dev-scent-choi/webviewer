@@ -11,6 +11,14 @@ export interface Permissions {
   readonly pdfEditor?: boolean;
 }
 
+/**
+ * 열람만(편집도 내려받기도 없음) — 원본 파일·문서 구조(수식·숨긴 내용·메모·원본 그림)를 주지 않는다.
+ * 서버가 그린 열람 화면(쪽 그림·보이는 칸 값)만 볼 수 있다. 편집 권한이 있으면 편집에 문서 구조가 필요하므로 여기에 들지 않는다.
+ */
+export function isViewOnly(perms: Permissions): boolean {
+  return !perms.canEdit && !perms.canDownload;
+}
+
 export type DocumentStatus = 'processing' | 'ready' | 'failed';
 
 /** pages: PDF 페이지 이미지 뷰 / grid: 스프레드시트 그리드 뷰 / svg: 도면(dxf/dwg) 벡터 뷰 */
