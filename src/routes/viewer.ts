@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { basePdfForEditor } from '../pdf/pdfModel.js';
-import { addPdfPart, compressRoomPdf, currentPlainBytes, editorSourceOf, extractPdfGroups, PdfRoomError, pdfInfoOf, protectPdf, readPdfPart, tokenKey, unlockPdf, type ProtectRequest } from '../pdf/pdfRoomOps.js';
+import { addPdfPart, compressRoomPdf, currentPlainBytes, editorSourceOf, signRoomPdf, extractPdfGroups, PdfRoomError, pdfInfoOf, protectPdf, readPdfPart, tokenKey, unlockPdf, type ProtectRequest } from '../pdf/pdfRoomOps.js';
 import { isCompressLevel } from '../pdf/pdfCompress.js';
 import { convertPdf, isConvertTarget } from '../pdf/pdfConvert.js';
 import { fileToPdf, FileToPdfError } from '../pdf/fileToPdf.js';
@@ -1180,6 +1180,33 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
     } catch (error) {
       if (error instanceof FileToPdfError) return reply.code(error.status).send({ success: false, error: error.message });
       throw error;
+    }
+  });
+
+  // 9단계 — 인증서 전자서명. 본문: { p12(base64), password, reason?, location?, pageKey?, rect? } — 인증서·비밀번호는 기록하지 않는다
+  const signOnly = pdfRoute((p) => p.canEdit && p.canDownload, '이 문서에 서명할 권한이 없습니다.');
+  app.post<{ Querystring: { token?: string }; Body: Record<string, unknown> }>('/api/view/pdf-sign', async (request, reply) => {
+    const view = await signOnly(request.query.token, reply);
+    if (!view) return reply;
+    const body = request.body ?? {};
+    const p12b64 = typeof body.p12 === 'string' ? body.p12 : '';
+    const password = typeof body.password === 'string' ? body.password.slice(0, 256) : '';
+    if (!p12b64 || p12b64.length > 200_000 || !/^[A-Za-z0-9+/=]+$/.test(p12b64)) return reply.code(400).send({ success: false, error: '인증서 파일(.pfx·.p12)을 보내 주세요.' });
+    const rect = Array.isArray(body.rect) && body.rect.length === 4 && body.rect.every((v) => typeof v === 'number' && Number.isFinite(v)) ? (body.rect as [number, number, number, number]) : undefined;
+    const meta = view.meta;
+    try {
+      const out = await signRoomPdf(meta.id, () => store.readOriginal(meta.id, meta.ext), tokenKey(request.query.token!), {
+        p12: new Uint8Array(Buffer.from(p12b64, 'base64')),
+        password,
+        reason: typeof body.reason === 'string' ? body.reason : undefined,
+        location: typeof body.location === 'string' ? body.location : undefined,
+        pageKey: typeof body.pageKey === 'string' ? body.pageKey : undefined,
+        rect,
+      });
+      await recordAudit({ type: 'pdf_signed', docId: meta.id, viewer: view.claims.viewer });
+      return attachment(reply, out.bytes, `${meta.name.replace(/\.pdf$/i, '') || 'document'}-서명.pdf`, 'application/pdf');
+    } catch (error) {
+      return pdfFail(reply, error);
     }
   });
 

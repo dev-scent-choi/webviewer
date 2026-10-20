@@ -13,6 +13,8 @@ import { decryptPdf, isEncryptedPdf, readPermissions, summarize, ALL_PERMISSIONS
 import { pdfInfo, type PdfInfo } from './pdfProps.js';
 import type { PdfAnnot } from './annotTypes.js';
 import { fileToPdf, FileToPdfError } from './fileToPdf.js';
+import { signPdf, PdfSignError, type CertInfo } from './pdfSign.js';
+import { finalizePdf } from './pdfFinalize.js';
 
 export class PdfRoomError extends Error {
   constructor(
@@ -155,6 +157,44 @@ export async function currentPlainBytes(docId: string, readStored: () => Promise
   const bytes = await readStored();
   if (await isEncryptedPdf(bytes)) throw LOCKED();
   return bytes;
+}
+
+/**
+ * 인증서 전자서명(9단계) — 지금 편집 상태(압축 설정 포함)를 서명한 PDF로. 문서는 그대로(서명한 파일은 내려받기만).
+ * 암호를 걸도록 해 둔 문서는 서명하지 않는다(서명 뒤 암호를 걸면 서명이 깨진다).
+ */
+export async function signRoomPdf(
+  docId: string,
+  readStored: () => Promise<Uint8Array>,
+  key: string,
+  req: { p12: Uint8Array; password: string; reason?: string; location?: string; pageKey?: string; rect?: readonly [number, number, number, number] },
+): Promise<{ bytes: Uint8Array; cert: CertInfo }> {
+  const state = await pdfRoomState(docId);
+  let bytes: Uint8Array;
+  let keys: string[] = [];
+  if (state) {
+    await assertUnlocked(state, key);
+    if (state.protection) throw new PdfRoomError(409, '암호를 걸도록 해 둔 문서는 서명할 수 없습니다. 암호·권한에서 암호를 풀고 서명하세요.');
+    const built = await buildPdfFromRoom(state.original, state.ydoc, (id) => state.parts.get(id));
+    keys = built.keys;
+    bytes = await finalizePdf(built.bytes, state.compress, null);
+  } else {
+    bytes = await readStored();
+    if (await isEncryptedPdf(bytes)) throw LOCKED();
+  }
+  const pageIndex = req.pageKey ? (state ? keys.indexOf(req.pageKey) : Number(/^o:(\d+)$/.exec(req.pageKey)?.[1] ?? -1)) : -1;
+  try {
+    return await signPdf(bytes, {
+      p12: req.p12,
+      password: req.password,
+      reason: req.reason,
+      location: req.location,
+      visible: pageIndex >= 0 && req.rect ? { pageIndex, rect: req.rect } : undefined,
+    });
+  } catch (error) {
+    if (error instanceof PdfSignError) throw new PdfRoomError(error.status, error.message);
+    throw error;
+  }
 }
 
 // ---------- 6단계: 암호 풀기·걸기, 압축, 정보 ----------
