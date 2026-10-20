@@ -7,6 +7,7 @@ import type * as Y from 'yjs';
 import type { PdfAnnot, PdfPageEntry } from '../../pdf/annotTypes.js';
 import type { PageOps } from './pageOps.js';
 import type { PageView, PageViewport } from './pageView.js';
+import { CONVERTIBLE_ACCEPT } from './convertUi.js';
 
 const CARD_WIDTH = 150;
 
@@ -54,6 +55,7 @@ export function setupOrganize(opts: OrganizeOptions): OrganizeView {
   const grid = $('org-grid');
   const status = $('org-status');
   const fileInput = $<HTMLInputElement>('org-file');
+  fileInput.accept = CONVERTIBLE_ACCEPT;
   const splitPop = $('org-split');
   const dropLine = document.createElement('div');
   dropLine.className = 'pdf-org-drop';
@@ -338,9 +340,11 @@ export function setupOrganize(opts: OrganizeOptions): OrganizeView {
     let pos = at;
     const inserted: string[] = [];
     for (const [n, file] of files.entries()) {
-      opts.notice(files.length > 1 ? `넣는 중… (${n + 1}/${files.length}) ${file.name}` : `넣는 중… ${file.name}`);
+      const converting = !/\.pdf$/i.test(file.name);
+      opts.notice(`${converting ? 'PDF로 바꿔 ' : ''}넣는 중… ${files.length > 1 ? `(${n + 1}/${files.length}) ` : ''}${file.name}`);
       try {
-        const res = await fetch(`/api/view/pdf-part?token=${encodeURIComponent(opts.token)}`, {
+        // PDF가 아니면(워드·한글·그림…) 서버가 PDF로 바꿔 넣는다
+        const res = await fetch(`/api/view/pdf-part?token=${encodeURIComponent(opts.token)}&name=${encodeURIComponent(file.name)}`, {
           method: 'POST',
           headers: { 'content-type': 'application/octet-stream' },
           body: file,
