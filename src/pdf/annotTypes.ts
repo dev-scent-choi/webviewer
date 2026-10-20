@@ -10,6 +10,8 @@ export const PDF_PAGES_ARRAY = 'pdfPages';
 export const PDF_ANNOTS_MAP = 'pdfAnnots';
 /** 양식 칸 이름 → 값(4단계) */
 export const PDF_FORM_MAP = 'pdfForm';
+/** 문서 속성(6단계) — title·author·subject·keywords → 글 */
+export const PDF_PROPS_MAP = 'pdfProps';
 /** 기존 글자 고치기(5단계) — id → PdfTextEdit */
 export const PDF_TEXT_EDITS_MAP = 'pdfTextEdits';
 /** 가리기(5단계) — id → PdfRedaction. applied가 true인 것만 저장 때 실제로 지운다 */

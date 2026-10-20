@@ -10,7 +10,6 @@
  *    뺀다), 인라인 그림은 뺀다. 마지막에 검은 상자를 그린다. 걸치는 주석·링크·양식 칸은 쪽에서 뺀다.
  * 원래 내용은 `q … Q`로 감싸 뒤에 덧붙이는 그림이 원래 좌표계의 영향을 받지 않게 한다.
  */
-import sharp from 'sharp';
 import {
   decodePDFRawStream,
   PDFArray,
@@ -27,6 +26,7 @@ import {
 } from 'pdf-lib';
 import { apply, hexOf, IDENTITY, invert, mul, nameOf, num, opToString, parseContent, type ContentOp, type Matrix, type Operand } from './contentStream.js';
 import { fontInfoOf, type FontInfo } from './pdfFonts.js';
+import { decodeImage } from './pdfImages.js';
 import type { Fonts } from './annotWrite.js';
 import { dropFieldsOnRemovedPages } from './pdfForm.js';
 
@@ -417,87 +417,15 @@ function rewriteStream(rc: RunContext, bytes: Uint8Array, res: PDFDict | undefin
 }
 
 // ---------- 그림 검게 칠하기 ----------
-function pngUnpredict(data: Uint8Array, columns: number, bpp: number): Uint8Array | null {
-  const rowLen = columns * bpp;
-  const rows = Math.floor(data.length / (rowLen + 1));
-  const out = new Uint8Array(rows * rowLen);
-  for (let y = 0; y < rows; y += 1) {
-    const type = data[y * (rowLen + 1)];
-    const src = data.subarray(y * (rowLen + 1) + 1, (y + 1) * (rowLen + 1));
-    const cur = out.subarray(y * rowLen, (y + 1) * rowLen);
-    const prev = y > 0 ? out.subarray((y - 1) * rowLen, y * rowLen) : new Uint8Array(rowLen);
-    for (let i = 0; i < rowLen; i += 1) {
-      const left = i >= bpp ? cur[i - bpp] : 0;
-      const up = prev[i];
-      const ul = i >= bpp ? prev[i - bpp] : 0;
-      let v = src[i];
-      if (type === 1) v += left;
-      else if (type === 2) v += up;
-      else if (type === 3) v += (left + up) >> 1;
-      else if (type === 4) {
-        const p = left + up - ul;
-        const pa = Math.abs(p - left);
-        const pb = Math.abs(p - up);
-        const pc = Math.abs(p - ul);
-        v += pa <= pb && pa <= pc ? left : pb <= pc ? up : ul;
-      } else if (type !== 0) return null;
-      cur[i] = v & 0xff;
-    }
-  }
-  return out;
-}
-
 /** 그림의 걸친 부분을 검게 칠한 사본 — 다룰 수 없는 형식이면 null(그림을 뺀다) */
 async function blackoutImage(ctx: PDFContext, image: ImageHit): Promise<PDFRef | null> {
   const stream = ctx.lookup(image.ref);
-  if (!(stream instanceof PDFRawStream)) return null;
+  const decoded = await decodeImage(ctx, stream);
+  if (!decoded || !(stream instanceof PDFRawStream)) return null;
   const d = stream.dict;
-  const n = (k: string) => {
-    const v = lookup(ctx, d.get(PDFName.of(k)));
-    return v instanceof PDFNumber ? v.asNumber() : undefined;
-  };
-  const W = n('Width') ?? 0;
-  const H = n('Height') ?? 0;
-  if (!W || !H || d.get(PDFName.of('ImageMask')) || d.has(PDFName.of('Decode'))) return null;
-  const filterObj = lookup(ctx, d.get(PDFName.of('Filter')));
-  const filters = filterObj instanceof PDFArray ? filterObj.asArray().map((f) => (lookup(ctx, f) as PDFName)?.decodeText?.() ?? '') : filterObj instanceof PDFName ? [filterObj.decodeText()] : [];
-  let raw: Uint8Array;
-  let channels: number;
-  let colorSpace: PDFObject;
-  if (filters.length === 1 && filters[0] === 'DCTDecode') {
-    const { data, info } = await sharp(Buffer.from(stream.getContents())).raw().toBuffer({ resolveWithObject: true });
-    if (info.width !== W || info.height !== H) return null;
-    raw = new Uint8Array(data);
-    channels = info.channels;
-    if (channels !== 1 && channels !== 3) return null;
-    colorSpace = PDFName.of(channels === 1 ? 'DeviceGray' : 'DeviceRGB');
-  } else if (filters.length === 0 || (filters.length === 1 && filters[0] === 'FlateDecode')) {
-    if ((n('BitsPerComponent') ?? 8) !== 8) return null;
-    const cs = lookup(ctx, d.get(PDFName.of('ColorSpace')));
-    const csName = cs instanceof PDFName ? cs.decodeText() : cs instanceof PDFArray ? (lookup(ctx, cs.get(0)) as PDFName)?.decodeText?.() : undefined;
-    if (csName === 'DeviceGray' || csName === 'CalGray') channels = 1;
-    else if (csName === 'DeviceRGB' || csName === 'CalRGB') channels = 3;
-    else if (csName === 'DeviceCMYK') channels = 4;
-    else if (csName === 'ICCBased' && cs instanceof PDFArray) {
-      const icc = lookup(ctx, cs.get(1));
-      const nn = icc instanceof PDFRawStream ? lookup(ctx, icc.dict.get(PDFName.of('N'))) : undefined;
-      channels = nn instanceof PDFNumber ? nn.asNumber() : 0;
-    } else return null;
-    if (![1, 3, 4].includes(channels)) return null;
-    colorSpace = d.get(PDFName.of('ColorSpace'))!;
-    let data = filters.length ? decodePDFRawStream(stream).decode() : stream.getContents();
-    const parms = dictOf(ctx, d.get(PDFName.of('DecodeParms')));
-    const predictor = parms ? lookup(ctx, parms.get(PDFName.of('Predictor'))) : undefined;
-    const pred = predictor instanceof PDFNumber ? predictor.asNumber() : 1;
-    if (pred >= 10) {
-      const un = pngUnpredict(data, W, channels);
-      if (!un) return null;
-      data = un;
-    } else if (pred !== 1) return null;
-    if (data.length < W * H * channels) return null;
-    raw = new Uint8Array(data.subarray(0, W * H * channels));
-  } else return null;
-
+  const { raw, channels, colorSpace } = decoded;
+  const W = decoded.width;
+  const H = decoded.height;
   const black = channels === 4 ? [0, 0, 0, 255] : new Array(channels).fill(0);
   for (const { ctm, rect } of image.hits) {
     const inv = invert(ctm);

@@ -31,7 +31,10 @@ import { PptxChangeTracker, type PptxChangeSummary } from './pptxChangeLog.js';
 import { exportDocx } from '../docx/export.js';
 import { importDocx } from '../docx/import.js';
 import { invalidateRenderCache } from '../rendering.js';
-import { exportPdfFromRoom, pdfChangeLogOf, PdfChangeTracker, PDF_SEED_ORIGIN, seedPdfModel } from '../pdf/pdfModel.js';
+import { exportPdfFromRoom, pdfChangeLogOf, PdfChangeTracker, PDF_META_MAP, PDF_SEED_ORIGIN, seedPdfModel } from '../pdf/pdfModel.js';
+import { finalizePdf } from '../pdf/pdfFinalize.js';
+import { isEncryptedPdf, type PdfProtection } from '../pdf/pdfSecurity.js';
+import type { CompressLevel } from '../pdf/pdfCompress.js';
 import { convertToPdf } from '../routes/documents.js';
 import { invalidateViewCaches } from '../routes/viewer.js';
 import { store } from '../storage.js';
@@ -246,6 +249,15 @@ interface Room {
   originalPdfBytes?: Uint8Array;
   /** pdf 룸 — 편집 중 넣은 PDF(부속 id → 다루는 주석을 뺀 바이트). 방이 사는 동안만 두고, 저장하면 원본에 들어간다 */
   pdfParts?: Map<string, Uint8Array>;
+  /** pdf 룸 — 저장할 때 걸 암호(null이면 풀어서 저장, undefined면 처음 그대로). 비밀번호는 서버 메모리에만 */
+  pdfProtection?: PdfProtection | null;
+  /** pdf 룸 — 저장할 때 압축 단계(없으면 압축 안 함) */
+  pdfCompress?: CompressLevel | null;
+  /** pdf 룸 — 올린 파일에 암호가 있었는지, 아직 아무도 풀지 않았는지, 푼 토큰들(해시) */
+  pdfEncryptedFile?: Uint8Array;
+  pdfLocked?: boolean;
+  pdfUnlocked?: Set<string>;
+  pdfUnlockFails?: number;
   /**
    * xlsx 룸에서만 쓰인다 — 룸이 사는 동안 진짜로 상주하는 지연(lazy) 그리드 저장소(Task 3-7).
    * 값·서식 편집은 전부 `dirtyOverlay`에만 반영되고, 편집되지 않은 원본 셀은 필요할 때만
@@ -1532,9 +1544,17 @@ async function seedRoom(room: Room): Promise<void> {
       // reconcilePageSubscriptions가 셀 데이터와 함께 채운다.
     } else if (kind === 'pdf') {
       // 파일의 (편집기가 다루는) 주석을 맵에 넣는다 — 편집기는 그 주석을 뺀 PDF(/api/view/pdf-source)를 그리고 주석은 맵에서 그린다
-      await seedPdfModel(original, ydoc);
-      room.originalPdfBytes = new Uint8Array(original);
       room.pdfParts = new Map();
+      room.pdfUnlocked = new Set();
+      if (await isEncryptedPdf(original)) {
+        // 암호 걸린 파일 — 누군가 비밀번호로 풀 때까지(pdfRoomOps.unlockPdf) 모델을 채우지 않는다
+        room.pdfEncryptedFile = new Uint8Array(original);
+        room.pdfLocked = true;
+        ydoc.transact(() => ydoc.getMap<unknown>(PDF_META_MAP).set('locked', true), PDF_SEED_ORIGIN);
+      } else {
+        await seedPdfModel(original, ydoc);
+      }
+      room.originalPdfBytes = new Uint8Array(original);
       room.pdfChangeTracker = new PdfChangeTracker(ydoc, (origin) => room.viewerByConn.get(origin as WebSocket) ?? null);
     } else if (kind === 'pptx') {
       const slidesArray = ydoc.getArray<SlideEntry>(PPTX_SLIDES_ARRAY);
@@ -1732,10 +1752,12 @@ async function flushToStore(room: Room): Promise<void> {
     }
   } else if (kind === 'pdf') {
     // 바뀐 것이 없으면 원본을 다시 쓰지 않는다(열기만 한 방). 저장이 실패하면 queueFlush가 다시 true로 돌린다.
-    if (!room.editedSinceSave) return;
+    // 아직 비밀번호로 풀지 않은 암호 파일은 손대지 않는다.
+    if (!room.editedSinceSave || room.pdfLocked) return;
     room.editedSinceSave = false;
     const original = room.originalPdfBytes ?? (await store.readOriginal(docId, meta.ext));
-    await store.saveOriginal(docId, meta.ext, Buffer.from(await exportPdfFromRoom(original, ydoc, true, (id) => room.pdfParts?.get(id))));
+    const built = await exportPdfFromRoom(original, ydoc, true, (id) => room.pdfParts?.get(id));
+    await store.saveOriginal(docId, meta.ext, Buffer.from(await finalizePdf(built, room.pdfCompress, room.pdfProtection)));
     const converter = findConverter(meta.ext);
     if (converter) {
       try {
@@ -1828,14 +1850,65 @@ export async function flushNow(docId: string): Promise<boolean> {
  * store.readOriginal을 그대로 쓰면 된다.
  */
 /** 열려 있는 pdf 방의 원본·Y.Doc·부속(src/pdf/pdfRoomOps.ts가 쓴다). 방이 없거나 아직 준비 중이면 null */
-export async function pdfRoomState(
-  docId: string,
-): Promise<{ original: Uint8Array; ydoc: Y.Doc; parts: Map<string, Uint8Array> } | null> {
+export interface PdfRoomControl {
+  readonly original: Uint8Array;
+  readonly ydoc: Y.Doc;
+  readonly parts: Map<string, Uint8Array>;
+  /** 올린 파일의 암호 걸린 원래 바이트(암호 파일일 때만) */
+  readonly encryptedFile: Uint8Array | undefined;
+  readonly locked: boolean;
+  readonly unlocked: Set<string>;
+  readonly protection: PdfProtection | null | undefined;
+  readonly compress: CompressLevel | null | undefined;
+  readonly tracker: PdfChangeTracker | undefined;
+  /** 비밀번호로 푼 원본으로 바꾸고 모델을 채운다 */
+  unlock(decrypted: Uint8Array, protection: PdfProtection): Promise<void>;
+  setProtection(p: PdfProtection | null): void;
+  setCompress(level: CompressLevel | null): void;
+  /** 틀린 비밀번호 수(늘리고 돌려준다) */
+  failUnlock(): number;
+}
+
+export async function pdfRoomState(docId: string): Promise<PdfRoomControl | null> {
   const room = rooms.get(docId);
   if (!room || room.kind !== 'pdf') return null;
   await room.ready;
-  if (!room.originalPdfBytes || !room.pdfParts) return null;
-  return { original: room.originalPdfBytes, ydoc: room.ydoc, parts: room.pdfParts };
+  if (!room.originalPdfBytes || !room.pdfParts || !room.pdfUnlocked) return null;
+  const markEdited = () => {
+    room.editedSinceSave = true;
+    scheduleAutosave(room);
+  };
+  return {
+    original: room.originalPdfBytes,
+    ydoc: room.ydoc,
+    parts: room.pdfParts,
+    encryptedFile: room.pdfEncryptedFile,
+    locked: room.pdfLocked === true,
+    unlocked: room.pdfUnlocked,
+    protection: room.pdfProtection,
+    compress: room.pdfCompress,
+    tracker: room.pdfChangeTracker,
+    async unlock(decrypted, protection) {
+      if (!room.pdfLocked) return;
+      room.originalPdfBytes = new Uint8Array(decrypted);
+      room.pdfLocked = false;
+      room.pdfProtection = protection;
+      await seedPdfModel(decrypted, room.ydoc);
+      room.ydoc.transact(() => room.ydoc.getMap<unknown>(PDF_META_MAP).set('locked', false), PDF_SEED_ORIGIN);
+    },
+    setProtection(p) {
+      room.pdfProtection = p;
+      markEdited();
+    },
+    setCompress(level) {
+      room.pdfCompress = level;
+      markEdited();
+    },
+    failUnlock() {
+      room.pdfUnlockFails = (room.pdfUnlockFails ?? 0) + 1;
+      return room.pdfUnlockFails;
+    },
+  };
 }
 
 export async function getCurrentBytes(docId: string): Promise<Uint8Array | null> {
@@ -1847,8 +1920,9 @@ export async function getCurrentBytes(docId: string): Promise<Uint8Array | null>
   const original = await store.readOriginal(docId, meta.ext);
   if (room.kind === 'pdf') {
     // 바꾼 것이 없으면 저장본이 곧 최신, 있으면 방을 열 때의 원본에서 다시 만든다
-    if (!room.editedSinceSave || !room.originalPdfBytes) return original;
-    return exportPdfFromRoom(room.originalPdfBytes, room.ydoc, true, (id) => room.pdfParts?.get(id));
+    if (!room.editedSinceSave || !room.originalPdfBytes || room.pdfLocked) return original;
+    const built = await exportPdfFromRoom(room.originalPdfBytes, room.ydoc, true, (id) => room.pdfParts?.get(id));
+    return finalizePdf(built, room.pdfCompress, room.pdfProtection);
   }
   if (room.kind === 'xlsx') {
     if (!room.lazyGrid || !room.baselineSheetExtents) return null;
