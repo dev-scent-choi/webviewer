@@ -24,6 +24,7 @@ import {
   PDF_FORM_MAP,
   PDF_META_MAP,
   PDF_PAGES_ARRAY,
+  PDF_PROPS_MAP,
   PDF_REDACT_MAP,
   PDF_TEXT_EDITS_MAP,
   isRedaction,
@@ -34,8 +35,9 @@ import {
   type PdfTextEdit,
 } from './annotTypes.js';
 import { rewritePage, type RewriteTarget } from './textRewrite.js';
+import { PROP_KEYS, readProps, writeProps, type PdfProps } from './pdfProps.js';
 
-export { PDF_ANNOTS_MAP, PDF_FORM_MAP, PDF_META_MAP, PDF_PAGES_ARRAY, PDF_REDACT_MAP, PDF_TEXT_EDITS_MAP };
+export { PDF_ANNOTS_MAP, PDF_FORM_MAP, PDF_META_MAP, PDF_PAGES_ARRAY, PDF_PROPS_MAP, PDF_REDACT_MAP, PDF_TEXT_EDITS_MAP };
 
 /** 쪽 열쇠별 고치기·(적용한) 가리기 대상 */
 function rewriteTargetsOf(ydoc: Y.Doc): Map<string, RewriteTarget[]> {
@@ -94,10 +96,12 @@ export async function seedPdfModel(original: Uint8Array, ydoc: Y.Doc): Promise<v
   const meta = ydoc.getMap<unknown>(PDF_META_MAP);
   let annots: PdfAnnot[] = [];
   let pageCount = 0;
+  let props: PdfProps = {};
   try {
     const doc = await loadPdf(original);
     annots = readManagedAnnots(doc);
     pageCount = doc.getPageCount();
+    props = readProps(doc);
   } catch (error) {
     console.error('PDF 읽기 실패(주석·쪽 정리 없이 연다):', error);
   }
@@ -105,6 +109,10 @@ export async function seedPdfModel(original: Uint8Array, ydoc: Y.Doc): Promise<v
   const pages = ydoc.getArray<PdfPageEntry>(PDF_PAGES_ARRAY);
   ydoc.transact(() => {
     meta.set('base', pdfBaseFingerprint(original));
+    // 문서 속성 — 처음 값은 저장 때 바뀐 것만 쓰려고 따로 둔다
+    meta.set('propsSeed', props);
+    const propsMap = ydoc.getMap<string>(PDF_PROPS_MAP);
+    for (const key of PROP_KEYS) propsMap.set(key, props[key] ?? '');
     if (pages.length === 0 && pageCount > 0) pages.push(identityPages(pageCount));
     for (const a of annots) map.set(a.id, a);
   }, PDF_SEED_ORIGIN);
@@ -153,6 +161,7 @@ export async function buildPdfFromRoom(original: Uint8Array, ydoc: Y.Doc, parts?
   await writeAnnots(doc, annots, (key) => pageOfKey.get(key), fonts);
   // 양식 값(바꾼 칸만) — 한글은 주석과 같은 Pretendard 한 벌을 쓴다
   await applyFormValues(doc, ydoc.getMap<unknown>(PDF_FORM_MAP).entries(), () => fonts.korean());
+  writeProps(doc, ydoc.getMap<string>(PDF_PROPS_MAP).toJSON() as PdfProps, (ydoc.getMap<unknown>(PDF_META_MAP).get('propsSeed') as PdfProps | undefined) ?? {});
   return { bytes: await doc.save(), keys: [...pageOfKey.keys()] };
 }
 
@@ -286,7 +295,7 @@ export async function preparePdfPart(
 
 /** 변경 기록 한 줄 — 같은 주석은 마지막 상태로 하나만, 쪽 정리는 요약 한 줄 */
 export interface PdfChangeEntry {
-  readonly kind: 'annot_added' | 'annot_changed' | 'annot_removed' | 'pages_changed' | 'form_changed' | 'text_edited' | 'redaction_applied';
+  readonly kind: 'annot_added' | 'annot_changed' | 'annot_removed' | 'pages_changed' | 'form_changed' | 'text_edited' | 'redaction_applied' | 'props_changed' | 'protection_changed' | 'compression_changed';
   readonly annotType?: string;
   readonly label: string;
   readonly page: number | null;
@@ -354,6 +363,17 @@ export class PdfChangeTracker {
         }
       }
     });
+    // 문서 속성 — 항목마다 마지막 값
+    const propsMap = ydoc.getMap<string>(PDF_PROPS_MAP);
+    const PROP_LABELS: Record<string, string> = { title: '제목', author: '작성자', subject: '주제', keywords: '키워드' };
+    propsMap.observe((event, transaction) => {
+      if (transaction.origin === PDF_SEED_ORIGIN) return;
+      const viewer = this.resolveViewer(transaction.origin);
+      const at = new Date().toISOString();
+      for (const key of event.keysChanged) {
+        this.entries.set(`prop:${key}`, { kind: 'props_changed', label: '문서 속성', page: null, text: `${PROP_LABELS[key] ?? key}: ${String(propsMap.get(key) ?? '').slice(0, 200)}`, viewer, at });
+      }
+    });
     // 양식 값 — 칸마다 마지막 값 한 줄
     const form = ydoc.getMap<unknown>(PDF_FORM_MAP);
     form.observe((event, transaction) => {
@@ -399,6 +419,11 @@ export class PdfChangeTracker {
     }
     const i = pages.findIndex((e) => e.key === pageKey);
     return i < 0 ? null : i + 1;
+  }
+
+  /** 서버가 직접 바꾼 설정(암호·압축) — 같은 열쇠는 마지막 것만 */
+  record(key: string, entry: PdfChangeEntry): void {
+    this.entries.set(key, entry);
   }
 
   list(): readonly PdfChangeEntry[] {

@@ -65,7 +65,7 @@
       <input id="top-find" type="search" placeholder="문서에서 찾기" autocomplete="off" aria-label="문서에서 찾기" />
       <kbd>Ctrl+F</kbd>
     </label>
-    <button id="info-btn" class="pdf-icon-btn" type="button" title="문서 정보" aria-label="문서 정보">
+    <button id="info-btn" class="pdf-icon-btn" type="button" title="문서 속성" aria-label="문서 속성">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/></svg>
     </button>
     <button id="download-btn" class="pdf-icon-btn" type="button" title="내려받기" aria-label="내려받기">
@@ -91,6 +91,9 @@
         <li><button class="pdf-tool-item" data-tool="combine" style="--tc:#3a6fd8"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M8 4h7l3 3v10H8z"/><path d="M5 7v13h10"/></svg><span>파일 합치기</span></button></li>
         <li><button class="pdf-tool-item" data-tool="extract" style="--tc:#7a52c7"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h8l4 4v14H6z"/><path d="M9 14h6M12 11v6"/></svg><span>페이지 추출·나누기</span></button></li>
         <li><button class="pdf-tool-item" data-tool="fill" style="--tc:#c4302b"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13 7l4 4"/></svg><span>양식 채우기·서명</span></button></li>
+        <li><button class="pdf-tool-item" data-tool="protect" style="--tc:#b26a00"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg><span>암호·권한</span></button></li>
+        <li><button class="pdf-tool-item" data-tool="compress" style="--tc:#2e9b5f"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v5H3M16 3v5h5M8 21v-5H3M16 21v-5h5"/></svg><span>압축</span></button></li>
+        <li><button class="pdf-tool-item" data-tool="props" style="--tc:#5f5f68"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/></svg><span>문서 속성</span></button></li>
         <li><button class="pdf-tool-item" data-tool="download" style="--tc:#3a6fd8"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 10l5 5 5-5"/><path d="M5 20h14"/></svg><span>내려받기</span></button></li>
       </ul>
     </aside>
@@ -298,11 +301,54 @@
     </nav>
   </div>
 
-  <div id="info-dialog" class="office-dialog" hidden role="dialog" aria-labelledby="info-dialog-title">
-    <div class="office-dialog-card">
-      <h2 id="info-dialog-title">문서 정보</h2>
-      <dl id="info-list" class="office-dialog-stats"></dl>
-      <div class="office-dialog-actions"><button id="info-close" class="btn-mini">닫기</button></div>
+  <div id="pw-dialog" class="office-dialog" hidden role="dialog" aria-labelledby="pw-dialog-title">
+    <div class="office-dialog-card pdf-small-card">
+      <h2 id="pw-dialog-title">암호가 걸린 PDF</h2>
+      <p class="pdf-dialog-text">이 문서를 열려면 비밀번호가 필요합니다.</p>
+      <input id="pw-input" class="pdf-dialog-input" type="password" autocomplete="off" aria-label="비밀번호" />
+      <p id="pw-error" class="pdf-dialog-error" hidden></p>
+      <div class="office-dialog-actions"><button id="pw-ok" class="btn-mini btn-mini-primary" type="button">열기</button></div>
+    </div>
+  </div>
+
+  <div id="protect-dialog" class="office-dialog" hidden role="dialog" aria-labelledby="protect-dialog-title">
+    <div class="office-dialog-card pdf-small-card">
+      <h2 id="protect-dialog-title">암호·권한</h2>
+      <p id="protect-status" class="pdf-dialog-text"></p>
+      <label class="pdf-prop-row"><span>열기 비밀번호</span><input id="protect-user" type="password" autocomplete="new-password" maxlength="128" placeholder="비우면 누구나 열 수 있음" /></label>
+      <label class="pdf-prop-row"><span>권한 비밀번호</span><input id="protect-owner" type="password" autocomplete="new-password" maxlength="128" placeholder="권한을 바꿀 때 필요" /></label>
+      <p class="pdf-dialog-sub">허용할 것</p>
+      <div id="protect-perms" class="pdf-check-grid"></div>
+      <p class="pdf-dialog-note">저장할 때 AES-256으로 잠급니다. 비밀번호는 저장되지 않으니 잊지 않게 따로 적어 두세요.</p>
+      <p id="protect-error" class="pdf-dialog-error" hidden></p>
+      <div class="office-dialog-actions">
+        <button class="btn-mini" type="button" data-close>취소</button>
+        <button id="protect-remove" class="btn-mini" type="button" hidden>암호 풀기</button>
+        <button id="protect-apply" class="btn-mini btn-mini-primary" type="button">암호 걸기</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="compress-dialog" class="office-dialog" hidden role="dialog" aria-labelledby="compress-dialog-title">
+    <div class="office-dialog-card pdf-small-card">
+      <h2 id="compress-dialog-title">압축</h2>
+      <p class="pdf-dialog-text">그림을 쪽에 보이는 크기에 맞는 해상도로 줄여 파일을 작게 합니다. 글자·선은 그대로입니다.</p>
+      <div id="compress-levels" class="pdf-check-list"></div>
+      <p id="compress-result" class="pdf-dialog-result" aria-live="polite"></p>
+      <div class="office-dialog-actions">
+        <button class="btn-mini" type="button" data-close>취소</button>
+        <button id="compress-preview" class="btn-mini" type="button">크기 미리 보기</button>
+        <button id="compress-apply" class="btn-mini btn-mini-primary" type="button">적용</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="props-dialog" class="office-dialog" hidden role="dialog" aria-labelledby="props-dialog-title">
+    <div class="office-dialog-card pdf-props-card">
+      <h2 id="props-dialog-title">문서 속성</h2>
+      <div id="props-fields"></div>
+      <div id="props-info" class="pdf-props-info"></div>
+      <div class="office-dialog-actions"><button class="btn-mini" type="button" data-close>닫기</button></div>
     </div>
   </div>
 
