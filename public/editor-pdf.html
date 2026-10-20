@@ -142,6 +142,14 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m7 21-4.3-4.3a2 2 0 0 1 0-2.8l9.6-9.6a2 2 0 0 1 2.8 0l5.6 5.6a2 2 0 0 1 0 2.8L13 21"/><path d="M22 21H7M5 11l9 9"/></svg>
           </button>
           <span class="pdf-float-sep"></span>
+          <button class="pdf-float-btn" type="button" data-tool="textedit" aria-pressed="false" title="글자 고치기 — 본문 글을 눌러 바로 고치기" aria-label="글자 고치기">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7V5h12v2M10 5v14M7 19h6"/><path d="m15 15 4-4 2 2-4 4h-2z"/></svg>
+          </button>
+          <button class="pdf-float-btn" type="button" data-tool="redact" aria-pressed="false" title="가리기 — 끌어서 영역 표시, ‘가리기 적용’으로 내용을 지움" aria-label="가리기">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="14" rx="1.5"/><rect x="6.5" y="9" width="11" height="6" fill="currentColor"/></svg>
+          </button>
+          <button id="redact-apply" class="pdf-redact-apply" type="button" hidden title="표시한 영역의 내용을 지웁니다">적용 <em id="redact-count">0</em></button>
+          <span class="pdf-float-sep"></span>
           <button id="annot-style-btn" class="pdf-float-btn" type="button" title="색·굵기·투명도" aria-label="색·굵기·투명도"><span class="pdf-style-dot"></span></button>
           <button id="annot-undo" class="pdf-float-btn" type="button" title="실행 취소 (Ctrl+Z)" aria-label="실행 취소" disabled>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-3"/></svg>
@@ -295,6 +303,18 @@
       <h2 id="info-dialog-title">문서 정보</h2>
       <dl id="info-list" class="office-dialog-stats"></dl>
       <div class="office-dialog-actions"><button id="info-close" class="btn-mini">닫기</button></div>
+    </div>
+  </div>
+
+  <div id="redact-dialog" class="office-dialog" hidden role="dialog" aria-labelledby="redact-dialog-title">
+    <div class="office-dialog-card pdf-redact-card">
+      <h2 id="redact-dialog-title">가리기 적용</h2>
+      <p id="redact-dialog-text"></p>
+      <p class="pdf-redact-warn">적용하면 그 영역의 글자·그림·링크가 저장 파일에서 <strong>지워지고 되돌릴 수 없습니다.</strong></p>
+      <div class="office-dialog-actions">
+        <button id="redact-cancel" class="btn-mini" type="button">취소</button>
+        <button id="redact-confirm" class="btn-mini btn-mini-danger" type="button">가리기 적용</button>
+      </div>
     </div>
   </div>
 

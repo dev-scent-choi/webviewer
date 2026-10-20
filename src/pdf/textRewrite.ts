@@ -569,8 +569,10 @@ export async function rewritePage(doc: PDFDocument, page: PDFPage, targets: read
 
   // 덧그리기: 고친 글 · 검은 상자
   const extra: string[] = [];
+  const redactAreas = targets.filter((t) => t.mode === 'redact').map((t) => t.rect);
   for (const t of targets) {
-    if (t.mode === 'edit' && t.newText) {
+    // 가린 곳과 겹치는 고친 글은 쓰지 않는다(검은 상자 밑에 글이 남지 않게)
+    if (t.mode === 'edit' && t.newText && !redactAreas.some((r) => intersects(r, t.rect))) {
       const run = rc.runs.get(t.id);
       extra.push(await drawEditText(ctx, res, owned, t, run, fonts));
     }

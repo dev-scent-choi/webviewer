@@ -33,7 +33,8 @@
     "verify:pdf": "node scripts/verify-pdf-editor-e2e.mjs",
     "verify:pdf-annots": "node scripts/verify-pdf-annots-e2e.mjs",
     "verify:pdf-organize": "node scripts/verify-pdf-organize-e2e.mjs",
-    "verify:pdf-forms": "node scripts/verify-pdf-forms-e2e.mjs"
+    "verify:pdf-forms": "node scripts/verify-pdf-forms-e2e.mjs",
+    "verify:pdf-textedit": "node scripts/verify-pdf-textedit-e2e.mjs"
   },
   "dependencies": {
     "@fastify/multipart": "^9.0.0",

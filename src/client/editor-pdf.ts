@@ -10,11 +10,12 @@ import { PageView } from './pdf/pageView.js';
 import { setupPanels, type Panels } from './pdf/panels.js';
 import { AnnotLayer } from './pdf/annotLayer.js';
 import { setupAnnotUi } from './pdf/annotUi.js';
-import { cleanPageList, PDF_ANNOTS_MAP, PDF_FORM_MAP, PDF_META_MAP, PDF_PAGES_ARRAY, type PdfAnnot, type PdfPageEntry } from '../pdf/annotTypes.js';
+import { cleanPageList, PDF_ANNOTS_MAP, PDF_FORM_MAP, PDF_META_MAP, PDF_PAGES_ARRAY, PDF_REDACT_MAP, PDF_TEXT_EDITS_MAP, type PdfRedaction, type PdfTextEdit, type PdfAnnot, type PdfPageEntry } from '../pdf/annotTypes.js';
 import { FindController } from './pdf/findController.js';
 import { PageOps } from './pdf/pageOps.js';
 import { setupOrganize, type OrganizeView } from './pdf/organizeView.js';
 import { FormLayer } from './pdf/formLayer.js';
+import { EditLayer } from './pdf/editLayer.js';
 import { setupSignUi, type SignUi } from './pdf/signUi.js';
 import { pickPresenceColorForName, renderPresenceAvatars } from './presence.js';
 
@@ -396,6 +397,43 @@ async function main(): Promise<void> {
       }),
   });
   layer.onChange(() => forms.refreshSignatureFields());
+  // 기존 글자 고치기·가리기 — 고치기는 실행 취소 대상, 가리기 적용은 되돌릴 수 없다
+  const editsMap = ydoc.getMap<PdfTextEdit>(PDF_TEXT_EDITS_MAP);
+  const redactMap = ydoc.getMap<PdfRedaction>(PDF_REDACT_MAP);
+  annotUi.undoManager.addToScope([editsMap, redactMap]);
+  const edits = new EditLayer({
+    view,
+    ydoc,
+    edits: editsMap,
+    redactions: redactMap,
+    canEdit: info.permissions.canEdit,
+    author: info.viewer,
+    scroller: $('pdf-scroll'),
+    undoManager: annotUi.undoManager,
+    notice: showNotice,
+  });
+  const applyBtn = $<HTMLButtonElement>('redact-apply');
+  const syncApply = (n: number) => {
+    applyBtn.hidden = n === 0 || !info.permissions.canEdit;
+    $('redact-count').textContent = String(n);
+  };
+  edits.onPendingChange(syncApply);
+  syncApply(edits.pendingCount());
+  const redactDialog = $('redact-dialog');
+  applyBtn.addEventListener('click', () => {
+    $('redact-dialog-text').textContent = `표시한 ${edits.pendingCount()}곳을 가립니다.`;
+    redactDialog.hidden = false;
+    $<HTMLButtonElement>('redact-cancel').focus();
+  });
+  $('redact-cancel').addEventListener('click', () => (redactDialog.hidden = true));
+  redactDialog.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') redactDialog.hidden = true;
+  });
+  $('redact-confirm').addEventListener('click', () => {
+    redactDialog.hidden = true;
+    const n = edits.applyRedactions();
+    if (n) showNotice(`${n}곳을 가렸습니다 — 저장 파일에서 그 내용이 지워집니다.`);
+  });
   sign = setupSignUi({ view, layer, forms, doc: currentDoc, canEdit: info.permissions.canEdit, showPanel: (name) => panels.show(name), notice: showNotice });
   setupChrome(view, find, info, panels, organize, sign);
   // 처음 배율: 폭에 맞추되 너무 크게(작은 쪽을 넓은 화면에) 키우지 않는다

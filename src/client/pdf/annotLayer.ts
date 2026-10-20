@@ -12,7 +12,7 @@ import type * as Y from 'yjs';
 import { ANNOT_DEFAULTS, ANNOT_LABELS, type PdfAnnot, type PdfAnnotType } from '../../pdf/annotTypes.js';
 import type { PageView, PageViewport } from './pageView.js';
 
-export type ToolName = 'select' | 'hand' | 'eraser' | PdfAnnotType;
+export type ToolName = 'select' | 'hand' | 'eraser' | 'textedit' | 'redact' | PdfAnnotType;
 
 export interface ToolStyle {
   color: string;
