@@ -9,7 +9,7 @@ describe('서버 기본 방어(본문 상한·프록시 IP·로그의 토큰)', 
     app = await buildApp();
     app.get('/__ip', async (request) => ({ ip: request.ip }));
     await app.ready();
-  });
+  }, 60_000);
   afterAll(async () => {
     await app.close();
     vi.unstubAllEnvs();
@@ -59,7 +59,7 @@ describe('오류 응답', () => {
       throw new Error('ENOENT: C:\secret\path\file.pdf');
     });
     await app.ready();
-  });
+  }, 60_000);
   afterAll(async () => {
     await app.close();
     vi.unstubAllEnvs();

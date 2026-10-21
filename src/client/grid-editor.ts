@@ -1536,6 +1536,16 @@ async function main(): Promise<void> {
     if (!hit) return;
     const { td, row: r, col: c, key } = hit;
     if (editingKey === key) return;
+    if (event.shiftKey && !editingKey) {
+      // Shift+클릭 — 지금 칸(기준)은 그대로, 범위 끝만 누른 칸으로(엑셀과 같다). 포커스를 옮기지 않아야
+      // focusin이 범위를 한 칸으로 접지 않는다. 누른 채 끌면 이어서 넓힌다.
+      event.preventDefault();
+      extendSelectionTo(r, c);
+      isRangeDragging = true;
+      document.addEventListener('mousemove', onRangeDragMove);
+      document.addEventListener('mouseup', onRangeDragEnd);
+      return;
+    }
     // 기본 동작을 그대로 두면 브라우저가 "텍스트 드래그 선택"도 같이 시작해버린다 — 그건 사각형이
     // 아니라 문서(행) 순서로 훑어서, 계산한 범위보다 훨씬 넓게(중간 행의 다른 칸까지) 파랗게/회색으로
     // 잡혀 보인다. preventDefault로 그 기본 동작을 끄고, 그때 같이 꺼지는 포커스만 아래에서 직접
@@ -2010,6 +2020,48 @@ async function main(): Promise<void> {
     }
   }
 
+  /** 선택 범위의 끝(selFocus)만 옮긴다 — 기준 칸(selAnchor, 지금 칸)과 포커스는 그대로. 끝 칸이 화면 밖이면 그쪽으로 스크롤. */
+  function extendSelectionTo(row: number, col: number): void {
+    const { rows: rowCount, cols: colCount } = renderCountsFor(currentStructure());
+    selFocusRow = Math.min(Math.max(row, 0), rowCount - 1);
+    selFocusCol = Math.min(Math.max(col, 0), colCount - 1);
+    clearHeaderSelection();
+    renderRangeHighlight();
+    const td = tableEl.querySelector<HTMLElement>(`td[data-row="${selFocusRow}"][data-col="${selFocusCol}"]`);
+    if (td) scrollCellIntoView(td);
+  }
+
+  /** Shift+방향키(한 칸씩), Ctrl+Shift+방향키(데이터 끝까지) — 범위 끝에서부터 넓히거나 줄인다 */
+  function extendSelectionBy(dRow: number, dCol: number, toDataEdge: boolean): void {
+    if (!toDataEdge) {
+      extendSelectionTo(selFocusRow + dRow, selFocusCol + dCol);
+      return;
+    }
+    const { rows: rowCount, cols: colCount } = renderCountsFor(currentStructure());
+    const inBounds = (r: number, c: number) => r >= 0 && c >= 0 && r < rowCount && c < colCount;
+    const isEmpty = (r: number, c: number) => {
+      if (!inBounds(r, c)) return true;
+      const v = cells.get(gridCellKey(activeSheet, r, c));
+      return v === undefined || v === '';
+    };
+    let r = selFocusRow;
+    let c = selFocusCol;
+    if (isEmpty(r, c) || isEmpty(r + dRow, c + dCol)) {
+      r += dRow;
+      c += dCol;
+      while (inBounds(r, c) && isEmpty(r, c)) {
+        r += dRow;
+        c += dCol;
+      }
+    } else {
+      while (inBounds(r + dRow, c + dCol) && !isEmpty(r + dRow, c + dCol)) {
+        r += dRow;
+        c += dCol;
+      }
+    }
+    extendSelectionTo(r, c);
+  }
+
   /** 엑셀의 Ctrl+방향키(End 모드) — 빈 칸이거나 바로 다음 칸이 비어 있으면 다음 데이터(또는
    * 시트 끝)까지 건너뛰고, 데이터가 연속돼 있으면 그 블록이 끝나는 칸까지 단번에 이동한다. */
   function moveSelectionToDataEdge(fromRow: number, fromCol: number, dRow: number, dCol: number): void {
@@ -2097,22 +2149,26 @@ async function main(): Promise<void> {
         break;
       case 'ArrowUp':
         event.preventDefault();
-        if (event.ctrlKey || event.metaKey) moveSelectionToDataEdge(row, col, -1, 0);
+        if (event.shiftKey) extendSelectionBy(-1, 0, event.ctrlKey || event.metaKey);
+        else if (event.ctrlKey || event.metaKey) moveSelectionToDataEdge(row, col, -1, 0);
         else moveSelection(row, col, -1, 0);
         break;
       case 'ArrowDown':
         event.preventDefault();
-        if (event.ctrlKey || event.metaKey) moveSelectionToDataEdge(row, col, 1, 0);
+        if (event.shiftKey) extendSelectionBy(1, 0, event.ctrlKey || event.metaKey);
+        else if (event.ctrlKey || event.metaKey) moveSelectionToDataEdge(row, col, 1, 0);
         else moveSelection(row, col, 1, 0);
         break;
       case 'ArrowLeft':
         event.preventDefault();
-        if (event.ctrlKey || event.metaKey) moveSelectionToDataEdge(row, col, 0, -1);
+        if (event.shiftKey) extendSelectionBy(0, -1, event.ctrlKey || event.metaKey);
+        else if (event.ctrlKey || event.metaKey) moveSelectionToDataEdge(row, col, 0, -1);
         else moveSelection(row, col, 0, -1);
         break;
       case 'ArrowRight':
         event.preventDefault();
-        if (event.ctrlKey || event.metaKey) moveSelectionToDataEdge(row, col, 0, 1);
+        if (event.shiftKey) extendSelectionBy(0, 1, event.ctrlKey || event.metaKey);
+        else if (event.ctrlKey || event.metaKey) moveSelectionToDataEdge(row, col, 0, 1);
         else moveSelection(row, col, 0, 1);
         break;
       case 'Delete':
@@ -2858,6 +2914,38 @@ async function main(): Promise<void> {
       const v = cells.get(gridCellKey(activeSheet, r, c));
       return v !== undefined && v !== '' && (NUMERIC_VALUE.test(v.trim()) || v.startsWith('='));
     };
+    // 여러 칸을 고른 경우(엑셀과 같다) — 고른 범위의 각 열 바로 아래 칸에 함수를 넣는다. 고른 범위의 마지막 행이
+    // 비어 있으면 그 행에 넣는다.
+    const range = rangeBounds();
+    if (range.r1 > range.r0 || range.c1 > range.c0) {
+      const lastRowEmpty = (() => {
+        for (let c = range.c0; c <= range.c1; c += 1) if ((cells.get(gridCellKey(activeSheet, range.r1, c)) ?? '') !== '') return false;
+        return range.r1 > range.r0;
+      })();
+      const target = lastRowEmpty ? range.r1 : range.r1 + 1;
+      const end = target - 1;
+      const writes: Array<[number, string]> = [];
+      for (let c = range.c0; c <= range.c1; c += 1) {
+        let hasNumber = false;
+        for (let r = range.r0; r <= end && !hasNumber; r += 1) hasNumber = isNumericCell(r, c);
+        if (!hasNumber) continue;
+        const key = gridCellKey(activeSheet, target, c);
+        if (styles.get(key)?.lk === 1) continue; // 잠긴 칸
+        writes.push([c, `=${fn}(${cellRefLabel(range.r0, c)}:${cellRefLabel(end, c)})`]);
+      }
+      if (writes.length === 0) return;
+      ydoc.transact(() => {
+        for (const [c, formula] of writes) cells.set(gridCellKey(activeSheet, target, c), formula);
+        const s = currentStructure();
+        if (target >= s.rowCount) structure.set(String(activeSheet), { ...s, rowCount: target + 1 });
+      });
+      for (const [c] of writes) {
+        const td = tdFor(target, c);
+        if (td) renderCellDisplay(td, gridCellKey(activeSheet, target, c));
+      }
+      recalcFormulaCells();
+      return;
+    }
     let formula = '';
     let r = row - 1;
     while (r >= 0 && isNumericCell(r, col)) r -= 1;
@@ -3638,18 +3726,22 @@ async function main(): Promise<void> {
   /** 첫 행이 머리글로 보이는지(Excel처럼): 모든 칸이 차 있고 글자가 섞여 있으며, 아래 행과 모양이 다르다 */
   function looksLikeHeader(region: CellRangeRef): boolean {
     if (region.r2 <= region.r1) return false;
+    // 엑셀과 같은 판단: 첫 행이 모두 채워진 글자이고, 바로 아래 행과 자료 종류가 다르거나(글자 위 숫자) 첫 행만 굵으면 머리글.
+    // (예전엔 마지막 조건이 늘 참이라 글자가 든 첫 행은 무조건 머리글로 잡혀 정렬에서 빠졌다)
+    const isNum = (v: string) => v !== '' && Number.isFinite(Number(v.replace(/,/g, '')));
     let allFilled = true;
-    let hasText = false;
-    let belowAllText = true;
+    let allText = true;
+    let typeDiffers = false;
     for (let c = region.c1; c <= region.c2; c += 1) {
       const head = displayAt(region.r1, c).trim();
-      if (!head) allFilled = false;
-      if (head && !Number.isFinite(Number(head))) hasText = true;
       const below = displayAt(region.r1 + 1, c).trim();
-      if (below && Number.isFinite(Number(below))) belowAllText = false;
+      if (!head) allFilled = false;
+      else if (isNum(head)) allText = false;
+      else if (isNum(below)) typeDiffers = true;
     }
-    const boldHead = Boolean(styles.get(gridCellKey(activeSheet, region.r1, region.c1))?.b);
-    return allFilled && hasText && (!belowAllText || boldHead || region.r2 - region.r1 >= 1);
+    const boldAt = (r: number) => Boolean(styles.get(gridCellKey(activeSheet, r, region.c1))?.b);
+    const boldHead = boldAt(region.r1) && !boldAt(region.r1 + 1);
+    return allFilled && allText && (typeDiffers || boldHead);
   }
 
   /** 범위의 행을 keyCol 기준으로 다시 쓴다 — 값·서식이 행째 움직이고, 수식의 상대 행 참조도 따라 옮긴다. */
@@ -3695,7 +3787,7 @@ async function main(): Promise<void> {
       window.alert('정렬할 데이터를 선택하세요.');
       return;
     }
-    const keyCol = Math.min(Math.max(selFocusCol, region.c1), region.c2);
+    const keyCol = Math.min(Math.max(selAnchorCol, region.c1), region.c2);
     const filter = filtersMap.get(String(activeSheet));
     const inFilter = filter && region.r1 >= filter.r1 && region.r2 <= filter.r2;
     sortRegion(inFilter ? filter : region, keyCol, descending, inFilter ? true : looksLikeHeader(region));
@@ -3730,7 +3822,7 @@ async function main(): Promise<void> {
     }
     sortHeaderCheck.checked = looksLikeHeader(sortDialogRegion);
     fillSortColumns();
-    sortColumnSelect.value = String(Math.min(Math.max(selFocusCol, sortDialogRegion.c1), sortDialogRegion.c2));
+    sortColumnSelect.value = String(Math.min(Math.max(selAnchorCol, sortDialogRegion.c1), sortDialogRegion.c2));
     (document.getElementById('sort-dialog-range') as HTMLElement).textContent =
       `범위 ${colLetter(sortDialogRegion.c1)}${sortDialogRegion.r1 + 1}:${colLetter(sortDialogRegion.c2)}${sortDialogRegion.r2 + 1}`;
     sortDialog.hidden = false;
