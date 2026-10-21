@@ -129,6 +129,7 @@ import {
   type SheetStructure,
 } from './gridShared.js';
 import { runSerialized } from './saveSerializer.js';
+import { isLargeXlsx, saveGridFile, serializeGridFromLazyStore } from '../xlsx/viewerGrid.js';
 
 /**
  * y-websocket이 제공하는 참조 서버 유틸(bin/utils.cjs)을 그대로 쓰지 않고 같은 프로토콜을
@@ -1618,15 +1619,32 @@ async function flushToStore(room: Room): Promise<void> {
     } else {
       // 진행 중인 행/열 이동이 끝난 뒤에 읽는다 — 반쪽 상태를 저장하지 않기 위해(리뷰 지적 I-1,
       // drainCanonicalGrowth 주석 참고).
+      const tStart = Date.now();
       await drainCanonicalGrowth(room);
       const newXlsxBytes = await exportXlsxWithFallback(room, original);
+      const tExport = Date.now();
       await store.saveOriginal(docId, meta.ext, Buffer.from(newXlsxBytes));
       try {
-        const grid = await reparseGridForViewer(newXlsxBytes);
-        await saveGridDerived(store, docId, grid);
+        // 큰 파일은 저장한 파일을 다시 통째로 읽지 않고 편집 방이 이미 가진 데이터(lazyGrid, 지금 편집 상태)로 만든다 —
+        // 저장마다 통째로 다시 읽으면 수 GB를 써서 서버가 메모리 부족으로 죽을 수 있었다
+        let sheetCount: number;
+        if (isLargeXlsx(newXlsxBytes)) {
+          const built = await serializeGridFromLazyStore(room.lazyGrid);
+          await saveGridFile(store, docId, built.buffer);
+          sheetCount = built.sheetCount;
+        } else {
+          const grid = await reparseGridForViewer(newXlsxBytes);
+          await saveGridDerived(store, docId, grid);
+          sheetCount = grid.sheets.length;
+        }
+        const tDone = Date.now();
+        // 오래 걸린 저장만 단계별 시간을 남긴다(큰 파일 저장이 느릴 때 원인 찾기)
+        if (tDone - tStart > 5000) {
+          console.warn(`엑셀 저장 ${((tDone - tStart) / 1000).toFixed(1)}초 (문서 ${docId}): 파일 만들기 ${((tExport - tStart) / 1000).toFixed(1)}초, 보기용 표 ${((tDone - tExport) / 1000).toFixed(1)}초`);
+        }
         await store.writeMeta({
           ...meta,
-          pageCount: grid.sheets.length,
+          pageCount: sheetCount,
           status: 'ready',
           viewKind: 'grid',
           progress: 100,
@@ -1748,6 +1766,8 @@ async function flushToStore(room: Room): Promise<void> {
 
     const converter = findConverter(meta.ext);
     if (converter) {
+      // 업로드 직후 첫 변환이 아직 돌고 있으면 끝나길 기다린다 — 그게 나중에 끝나 새 PDF를 덮지 않게(docx와 같다)
+      await waitForInitialConversion(docId);
       try {
         const { pageCount } = await convertToPdf(meta, converter);
         await store.writeMeta({ ...meta, pageCount, status: 'ready', viewKind: 'pages', progress: 100 });

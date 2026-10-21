@@ -51,7 +51,8 @@ import {
 } from '../spreadsheet.js';
 import { store } from '../storage.js';
 import { isViewOnly, type DocumentMeta, type ViewClaims } from '../types.js';
-import { isOpenable } from '../conversionGate.js';
+import { isOpenable, waitForInitialConversion } from '../conversionGate.js';
+import { buildViewerGridFile, saveGridFile } from '../xlsx/viewerGrid.js';
 
 export interface ViewContext {
   readonly claims: ViewClaims;
@@ -220,8 +221,14 @@ async function regenerateStaleGridCache(docId: string): Promise<boolean> {
   const meta = await store.readMeta(docId);
   if (!meta) return false;
   try {
-    const grid = await buildGridFromOriginal(store, meta);
-    await saveGridDerived(store, docId, grid);
+    if (meta.ext === 'xlsx') {
+      // 큰 파일은 스트리밍 읽기(xlsx/viewerGrid.ts)
+      const built = await buildViewerGridFile(await store.readOriginal(docId, meta.ext));
+      await saveGridFile(store, docId, built.buffer);
+    } else {
+      const grid = await buildGridFromOriginal(store, meta);
+      await saveGridDerived(store, docId, grid);
+    }
     return true;
   } catch (error) {
     console.error(`낡은 grid 캐시 재생성 실패(기존 캐시를 그대로 서빙): 문서 ${docId}:`, error);
@@ -764,6 +771,8 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
     async (request, reply) => {
       const view = await resolveView(request.query.token, reply);
       if (!view) return reply;
+      // 변환 전에 연 편집기(editReady — pptx 등)의 쪽 그림 요청은 첫 변환이 끝날 때까지 기다렸다 준다
+      await waitForInitialConversion(view.meta.id);
       try {
         const png = await renderPage(
           view.meta.id,

@@ -534,6 +534,17 @@ async function main(): Promise<void> {
     return String(Math.round(value * 1e10) / 1e10);
   }
 
+  /** 소수 자릿수별 숫자 서식기 — toLocaleString은 칸마다 서식기를 새로 만들어 스크롤이 느려진다 */
+  const numberFormatters = new Map<number, Intl.NumberFormat>();
+  function numberFormatter(decimals: number): Intl.NumberFormat {
+    let fmt = numberFormatters.get(decimals);
+    if (!fmt) {
+      fmt = new Intl.NumberFormat('ko-KR', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+      numberFormatters.set(decimals, fmt);
+    }
+    return fmt;
+  }
+
   /** 원본 값(또는 수식 계산 결과)에 셀의 숫자 표시 형식(쉼표/통화/백분율)을 입힌다 — 저장된 값
    * 자체는 절대 안 바꾸고 "화면에 어떻게 보일지"만 바꾼다(수식 계산 결과 표시와 같은 원리). */
   function formatNumberForDisplay(text: string, style: CellStyleAttrs | undefined): string {
@@ -544,15 +555,14 @@ async function main(): Promise<void> {
     const num = Number(text);
     if (!Number.isFinite(num)) return text;
     if (num === 0) return ''; // 값 없음(0)은 화면을 어지럽히지 않게 빈 칸으로 보여준다
-    const decimals = style.nd ?? 0;
-    const opts = { minimumFractionDigits: decimals, maximumFractionDigits: decimals };
+    const fmt = numberFormatter(style.nd ?? 0);
     switch (style.nf) {
       case 'percent':
-        return `${(num * 100).toLocaleString('ko-KR', opts)}%`;
+        return `${fmt.format(num * 100)}%`;
       case 'currency':
-        return `₩${num.toLocaleString('ko-KR', opts)}`;
+        return `₩${fmt.format(num)}`;
       case 'number':
-        return num.toLocaleString('ko-KR', opts);
+        return fmt.format(num);
       default:
         return text;
     }
