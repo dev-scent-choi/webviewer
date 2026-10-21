@@ -132,6 +132,8 @@ interface ViewInfo {
   readonly pageSetup: PageSetup | null;
   readonly defaultFontSizePt: number | null;
   readonly defaultFontFamily: ScriptFontFamily | null;
+  /** 직접 간격이 없는 문단의 간격(twip, line은 lineRule 'auto'면 240 = 1줄) — 서버가 styles.xml에서 계산 */
+  readonly defaultParagraphSpacing?: { line: number | null; lineRule: 'auto' | 'exact' | 'atLeast' | null; before: number | null; after: number | null } | null;
 }
 
 const params = new URLSearchParams(location.search);
@@ -192,6 +194,41 @@ function applyPageSetup(pageSetup: PageSetup | null): void {
 function applyDefaultFontSize(pt: number | null): void {
   if (!pt) return;
   editorHost.style.fontSize = `${(pt * 4) / 3}px`; // 1pt = 96/72px = 4/3px
+}
+
+/**
+ * 직접 간격을 지정하지 않은 문단의 줄 간격·앞뒤 간격을 문서 값으로 — 문단마다 지정한 간격(schema.ts의 인라인 style)은 그대로
+ * 이 값을 덮어쓴다. 값이 없으면(서버가 못 읽음) 편집기 기존 값(CSS 기본)을 쓴다. 1twip = 1/15px, 'auto' 1줄 = 글자 크기의 1.2배.
+ */
+function applyDefaultParagraphSpacing(spacing: ViewInfo['defaultParagraphSpacing'] | null): void {
+  if (!spacing) return;
+  const twipsPerPx = 15;
+  if (spacing.before !== null) editorHost.style.setProperty('--doc-p-before', `${spacing.before / twipsPerPx}px`);
+  if (spacing.after !== null) editorHost.style.setProperty('--doc-p-after', `${spacing.after / twipsPerPx}px`);
+  if (spacing.line) {
+    editorHost.style.setProperty(
+      '--doc-line-height',
+      spacing.lineRule === 'exact' || spacing.lineRule === 'atLeast'
+        ? `${spacing.line / twipsPerPx}px`
+        : `calc(var(--doc-single-line, 1.2) * ${Number((spacing.line / 240).toFixed(3))})`,
+    );
+  }
+}
+
+/**
+ * Word의 "1줄"은 글꼴마다 다르다(글꼴이 가진 위·아래 높이) — 맑은 고딕은 글자 크기의 약 1.33배, 바탕·굴림은 1.15배.
+ * 문서 기본 글꼴로 줄 높이를 재어 --doc-single-line에 둔다(줄 간격 '배수'는 전부 이 값을 곱한다). 예전엔 모든 글꼴에
+ * 1.2배를 써서 맑은 고딕 문서가 워드보다 촘촘하게 보였다.
+ */
+function measureSingleLineRatio(): void {
+  const probe = document.createElement('span');
+  probe.textContent = '가Ag';
+  probe.style.cssText = 'position:absolute;visibility:hidden;display:inline-block;font-size:100px;line-height:normal;white-space:nowrap';
+  probe.style.fontFamily = getComputedStyle(editorHost.querySelector('.ProseMirror') ?? editorHost).fontFamily;
+  document.body.append(probe);
+  const ratio = probe.getBoundingClientRect().height / 100;
+  probe.remove();
+  if (ratio >= 1 && ratio <= 2) editorHost.style.setProperty('--doc-single-line', ratio.toFixed(3));
 }
 
 function escapeXmlText(value: string): string {
@@ -580,6 +617,7 @@ async function main(): Promise<void> {
   applyPageSetup(info.pageSetup);
   applyDefaultFontSize(info.defaultFontSizePt);
   applyDefaultFontFamily(info.defaultFontFamily);
+  applyDefaultParagraphSpacing(info.defaultParagraphSpacing ?? null);
   applyWatermark(info.viewer);
 
   const ydoc = new Y.Doc();
@@ -651,6 +689,7 @@ async function main(): Promise<void> {
   // 클릭 핸들러)는 우회한다 — 그래서 이 옵션만으로는 부족하고, 툴바(.toolbar-format) 자체를
   // 위에서 이미 숨겨 그 우회로를 원천 차단했다.
   const view = new EditorView(editorHost, { state, editable: () => canEdit });
+  measureSingleLineRatio(); // 문서 기본 글꼴의 "1줄" 높이 — .ProseMirror가 생긴 뒤에 잰다
   let syncLayoutFields: (state: EditorState) => void = () => undefined;
   let syncReview: (state: EditorState) => void = () => undefined;
   const shell = initOfficeShell({

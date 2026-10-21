@@ -65,7 +65,8 @@ export const GALLERY_STYLE_NAMES: Readonly<Record<GalleryStyleId, string>> = {
 };
 
 const TWIPS_PER_PX = 15;
-/** Word의 "한 줄"(240) 간격이 화면 글꼴에서 차지하는 높이 비율 — 맑은 고딕 기준 근삿값. */
+/** Word의 "한 줄"(240) 간격이 글자 크기에서 차지하는 비율 — 편집기가 문서 기본 글꼴의 실제 줄 높이를 재어
+ * --doc-single-line으로 넘긴다(editor.ts). 못 재면 이 값. */
 const WORD_SINGLE_LINE_HEIGHT = 1.2;
 
 function parseJsonAttr<T>(dom: HTMLElement, name: string): T | null {
@@ -100,7 +101,7 @@ function paragraphDOMAttrs(attrs: Record<string, unknown>): Record<string, strin
       styles.push(
         spacing.lineRule === 'exact' || spacing.lineRule === 'atLeast'
           ? `line-height: ${spacing.line / TWIPS_PER_PX}px`
-          : `line-height: ${Number(((spacing.line / 240) * WORD_SINGLE_LINE_HEIGHT).toFixed(3))}`,
+          : `line-height: calc(var(--doc-single-line, ${WORD_SINGLE_LINE_HEIGHT}) * ${Number((spacing.line / 240).toFixed(3))})`,
       );
     }
     out['data-spacing'] = JSON.stringify(spacing);
