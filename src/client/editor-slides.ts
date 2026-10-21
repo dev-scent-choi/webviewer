@@ -588,14 +588,26 @@ function renderCanvasForSlideInner(entryId: string): void {
     box.style.top = `${emuToPx(meta.y ?? SLIDE_H_EMU * 0.4)}px`;
     box.style.width = `${emuToPx(meta.w ?? SLIDE_W_EMU * NEW_TEXTBOX_WIDTH_RATIO)}px`;
     box.style.height = `${emuToPx(meta.h ?? SLIDE_H_EMU * NEW_TEXTBOX_HEIGHT_RATIO)}px`;
+    if (meta.fill && /^#[0-9A-Fa-f]{6}$/.test(meta.fill)) box.style.background = meta.fill;
     if (meta.geom) {
       // 리본 "도형"으로 넣은 도형 — 저장 파일의 prstGeom/solidFill과 같은 모양으로 그린다.
       box.classList.add('slide-shape', `slide-shape-${meta.geom}`);
-      if (meta.fill && /^#[0-9A-Fa-f]{6}$/.test(meta.fill)) box.style.background = meta.fill;
       // 저장 파일의 roundRect 기본 조정값(16667) — 짧은 변의 1/6 반지름(가로세로 비율로 찌그러지지 않게)
       if (meta.geom === 'roundRect' && meta.w && meta.h) box.style.borderRadius = `${emuToPx(Math.min(meta.w, meta.h) / 6)}px`;
     }
     canvasEl.append(box);
+    // 리본 "도형 채우기"로 이 도형의 색이 바뀌면(다른 참여자 포함) 바로 칠한다
+    const onShapeMetaChange = (event: Y.YMapEvent<unknown>) => {
+      if (!event.keysChanged.has('meta')) return;
+      const next = shapeMap.get('meta') as SlideShapeMeta;
+      if (next.fill && /^#[0-9A-Fa-f]{6}$/.test(next.fill)) box.style.background = next.fill;
+    };
+    shapeMap.observe(onShapeMetaChange);
+    const previousUnobserve = activePerSlideUnobserve;
+    activePerSlideUnobserve = () => {
+      previousUnobserve?.();
+      shapeMap.unobserve(onShapeMetaChange);
+    };
 
     if (canEdit) {
       // 호버 시에만 보이는 작은 × 삭제 버튼(CSS: .slide-textbox-delete). perSlide.delete는
@@ -1176,6 +1188,15 @@ function setupFormatToolbar(): void {
   const fillBtn = document.getElementById('shape-fill-btn') as HTMLElement | null;
   fillBtn?.style.setProperty('--btn-color', fillInput?.value ?? '#4472c4');
   fillInput?.addEventListener('input', () => fillBtn?.style.setProperty('--btn-color', fillInput.value));
+  // 도형(텍스트 상자 포함)을 클릭해 둔 상태면 그 도형의 채우기를 바꾼다(파워포인트와 같다). 고른 도형이 없으면
+  // 이 색은 다음에 넣을 도형의 색으로만 쓴다.
+  fillInput?.addEventListener('change', () => {
+    if (!canEdit || !activeSlideId || !lastFocusedShapeId) return;
+    const shapeMap = slideContents.get(activeSlideId)?.get(lastFocusedShapeId);
+    const meta = shapeMap?.get('meta') as SlideShapeMeta | undefined;
+    if (!shapeMap || !meta) return;
+    shapeMap.set('meta', { ...meta, fill: fillInput.value });
+  });
 
   // 슬라이드 단위 단축키 — 텍스트 편집 중이 아닐 때의 Ctrl+D(복제)는 브라우저 북마크 대신
   // 슬라이드 복제로, Ctrl+M은 어디서든 새 슬라이드로 쓴다(프레젠테이션 프로그램과 같은 키).

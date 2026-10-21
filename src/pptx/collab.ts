@@ -12,6 +12,7 @@ import {
   removeShape,
   serializeTxBodyXml,
   spliceShapeTxBody,
+  setShapeSolidFill,
 } from './slideContent.js';
 import type { ParsedShape } from './slideContent.js';
 import { pptxTextSchema } from './textSchema.js';
@@ -595,7 +596,12 @@ export function exportPptxFromSlides(
         if (baselineShapes) {
           const baselineShape = baselineShapes.get(shapeId);
           if (baselineShape && serializeTxBodyXml(baselineShape.doc) === txBodyXml) {
-            continue; // 편집 안 됨 — 이 도형은 원본 그대로 둔다(병합 자체를 하지 않는다)
+            // 글자는 그대로 — 리본 "도형 채우기"로 색만 바꿨으면 그 채우기만 반영하고, 아니면 원본 그대로 둔다
+            const fillOnly = (shapeMap.get('meta') as SlideShapeMeta | undefined)?.fill;
+            if (typeof fillOnly === 'string' && /^#[0-9A-Fa-f]{6}$/.test(fillOnly) && hasShape(slideXml, shapeId)) {
+              slideXml = setShapeSolidFill(slideXml, shapeId, fillOnly);
+            }
+            continue; // 글자 편집 안 됨 — 글자 부분은 원본 그대로 둔다
           }
         }
 
@@ -610,6 +616,9 @@ export function exportPptxFromSlides(
           // meta와 무관한 이 분기까지 함께 건너뛰어 이미 슬라이드에 있던 실제 사용자 편집이(단지
           // 같은 도형의 meta가 손상됐다는 이유만으로) 조용히 영구 유실되는 회귀가 있었다.
           slideXml = spliceShapeTxBody(slideXml, shapeId, txBodyXml);
+          // 리본 "도형 채우기"로 바꾼 원본 도형 — 시딩된 meta엔 fill이 없으므로 값이 있으면 사용자가 바꾼 것
+          const editedFill = (shapeMap.get('meta') as SlideShapeMeta | undefined)?.fill;
+          if (typeof editedFill === 'string' && /^#[0-9A-Fa-f]{6}$/.test(editedFill)) slideXml = setShapeSolidFill(slideXml, shapeId, editedFill);
         } else {
           // shapeId 자체도 perSlide Y.Map의 키라 클라이언트가 쓸 수 있는 데이터다(FINAL REVIEW I4)
           // — appendNewShape는 이 값을 검증 없이 XML 속성(id="...")에 그대로 문자열 접합하므로,

@@ -6,6 +6,7 @@
  */
 import type * as Y from 'yjs';
 import { GRID_CHARTS_MAP, cellsOf, seriesFromRange, type CellRangeRef, type ChartKind, type GridChart } from '../xlsx/chartModel.js';
+import { officeAlert } from './officeDialog.js';
 
 export interface GridChartHost {
   readonly ydoc: Y.Doc;
@@ -412,12 +413,12 @@ export function setupGridCharts(host: GridChartHost): { render(): void; insert(k
       ? currentRegion({ row: sel.r1, col: sel.c1 }, (r, c) => host.valueText(sheetName, r, c).trim() !== '', host.extent())
       : sel;
     if (!range) {
-      window.alert('차트로 만들 데이터를 선택하세요(머리글과 숫자가 있는 범위).');
+      void officeAlert('차트로 만들 데이터를 선택하세요(머리글과 숫자가 있는 범위).');
       return;
     }
     const { categories, series } = seriesFromRange(range, (r, c) => host.valueText(sheetName, r, c));
     if (series.length === 0) {
-      window.alert('차트로 그릴 숫자 열이 없습니다.');
+      void officeAlert('차트로 그릴 숫자 열이 없습니다.');
       return;
     }
     const id = newId();

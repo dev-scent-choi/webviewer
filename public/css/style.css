@@ -3833,3 +3833,13 @@ body.review-pane-open #editor-zoom-host { margin-right: 320px; }
 .word-editor-page .review-pane { font-family: var(--office-font); }
 /* 큰 단추 — 고정 폭(52px)이면 12px 이름이 옆 단추·구분선과 겹친다: 이름 폭에 맞추고 좌우 여백 */
 :is(.grid-editor-page, .word-editor-page, .slides-editor-page) .icon-btn-big { width: auto; min-width: 48px; padding: 0 6px; }
+/* 앱 안 대화상자(officeDialog.ts — alert·confirm·prompt 대신) — 모든 편집기에서 같은 모양 */
+.office-dialog-runtime { z-index: 1000; }
+.office-dialog-runtime .office-dialog-card { width: min(440px, calc(100vw - 32px)); box-sizing: border-box; padding: 24px; border-radius: 8px; font: 400 14px/20px "Segoe UI", "맑은 고딕", "Malgun Gothic", system-ui, sans-serif; color: #242424; }
+.office-dialog-runtime .office-dialog-card h2 { margin: 0 0 8px; font-size: 20px; line-height: 28px; font-weight: 600; }
+.office-dialog-runtime .office-dialog-message { margin: 0; white-space: pre-line; }
+.office-dialog-runtime .office-dialog-input { width: 100%; height: 32px; margin-top: 12px; box-sizing: border-box; padding: 0 8px; border: 1px solid #d1d1d1; border-bottom-color: #616161; border-radius: 4px; font: inherit; }
+.office-dialog-runtime .office-dialog-actions { gap: 8px; margin-top: 24px; }
+.office-dialog-runtime .office-dialog-actions .btn-mini { min-width: 96px; height: 32px; padding: 0 12px; border: 1px solid #d1d1d1; border-radius: 4px; background: #fff; font: 600 14px "Segoe UI", "맑은 고딕", "Malgun Gothic", system-ui, sans-serif; color: #242424; cursor: pointer; }
+.office-dialog-runtime .office-dialog-actions .btn-mini-primary { border-color: transparent; background: var(--app-accent, #0f6cbd); color: #fff; }
+.office-dialog-runtime .office-dialog-actions .btn-mini:focus-visible { outline: 2px solid #000; outline-offset: 2px; }

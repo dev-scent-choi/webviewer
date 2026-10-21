@@ -64,6 +64,7 @@ import {
   type CaseMode,
   type CopiedFormat,
 } from './wordCommands.js';
+import { officeAlert } from './officeDialog.js';
 
 /** 레이아웃 탭 용지 크기(dxa, 세로 기준) */
 const PAPER_SIZES = {
@@ -709,7 +710,7 @@ async function main(): Promise<void> {
       const text = await navigator.clipboard.readText();
       if (text) view.pasteText(text);
     } catch {
-      window.alert('브라우저가 클립보드 읽기를 허용하지 않았습니다. Ctrl+V로 붙여넣으세요.');
+      void officeAlert('브라우저가 클립보드 읽기를 허용하지 않았습니다. Ctrl+V로 붙여넣으세요.');
     }
   });
   on('btn-copy', () => {

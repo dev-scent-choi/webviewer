@@ -1,5 +1,42 @@
-import { cpSync, mkdirSync } from 'node:fs';
+import { closeSync, cpSync, mkdirSync, openSync, rmSync, statSync } from 'node:fs';
 import { build } from 'esbuild';
+
+/**
+ * 같은 폴더에서 두 서버(8000 run-webviewer.bat의 npm run dev, 8010 향기랩 bat의 npm start)가 로그온 때 동시에
+ * 시작하면 이 빌드가 같은 public/js 파일을 동시에 쓰다 윈도 파일 잠금으로 한쪽이 실패했고, 실패한 쪽 서버는 뜨지
+ * 않은 채 멈췄다(10-21 두 번 — 8010만 502). 잠금 파일로 한 번에 하나만 빌드하고, 나중 것은 앞 빌드가 끝나길 기다린다.
+ * 잠금이 2분 넘게 남아 있으면(빌드 도중 죽은 경우) 지우고 진행한다.
+ */
+mkdirSync('public/js', { recursive: true });
+const LOCK = 'public/js/.build.lock';
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+for (let waited = 0; ; waited += 250) {
+  try {
+    closeSync(openSync(LOCK, 'wx'));
+    break;
+  } catch {
+    let stale = false;
+    try {
+      stale = Date.now() - statSync(LOCK).mtimeMs > 120_000;
+    } catch {
+      continue; // 그 사이 풀렸다 — 바로 다시 시도
+    }
+    if (stale || waited > 180_000) rmSync(LOCK, { force: true });
+    else await sleep(250);
+  }
+}
+process.on('exit', () => rmSync(LOCK, { force: true }));
+
+/** 잠금이 있어도 백신 검사 등으로 파일이 잠깐 잠길 수 있다 — 한 번 쉬었다 다시 */
+async function retry(fn) {
+  try {
+    return await fn();
+  } catch (error) {
+    console.warn('빌드 실패 — 2초 뒤 한 번 더:', error?.message ?? error);
+    await sleep(2000);
+    return fn();
+  }
+}
 
 /**
  * 편집기 4개(docx: editor.ts, xlsx: grid-editor.ts, pptx: editor-slides.ts, hwp: editor-hwp.ts)를
@@ -20,7 +57,7 @@ import { build } from 'esbuild';
  * entryNames를 '[name].bundle'로 지정해 기존 outfile 이름 그대로(editor.bundle.js 등) 유지한다 —
  * public/*.html이 그 경로를 하드코딩하고 있어 바꾸면 전부 고쳐야 한다.
  */
-await build({
+await retry(() => build({
   bundle: true,
   splitting: true,
   format: 'esm',
@@ -43,7 +80,7 @@ await build({
   outdir: 'public/js',
   entryNames: '[name].bundle',
   chunkNames: 'chunks/[name]-[hash]',
-});
+}));
 
 // PDF 편집기(editor-pdf.ts)가 쓰는 pdf.js 부속 — worker(별도 스레드에서 PDF 해석), cMap(글꼴이 안 들어 있는 한글·중국어·
 // 일본어 PDF), 표준 글꼴. 외부 CDN 없이 자체 호스팅한다.

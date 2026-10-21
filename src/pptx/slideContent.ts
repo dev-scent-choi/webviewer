@@ -344,6 +344,41 @@ function carryOverBodyProps(originalTxBody: string, newTxBody: string): string {
   return out;
 }
 
+/**
+ * 기존 도형(<p:sp>)의 채우기를 단색으로 바꾼다 — <p:spPr> 바로 아래의 채우기(noFill·solidFill·gradFill·blipFill·
+ * pattFill·grpFill)만 갈아 끼우고, 선(<a:ln>) 안의 색 등 나머지는 그대로 둔다. 스키마 순서(xfrm → 모양 → 채우기 → 선 …)대로
+ * 모양 뒤(없으면 xfrm 뒤, 그것도 없으면 맨 앞)에 넣는다. 도형을 못 찾거나 spPr이 없으면 원본 그대로 돌려준다(저장을 막지 않는다).
+ */
+export function setShapeSolidFill(slideXml: string, shapeId: string, hex: string): string {
+  if (!/^#[0-9A-Fa-f]{6}$/.test(hex)) return slideXml;
+  const fillXml = `<a:solidFill><a:srgbClr val="${hex.slice(1).toUpperCase()}"/></a:solidFill>`;
+  const spBlockRe = /<p:sp\b(?:(?!<\/p:sp>)[\s\S])*?<\/p:sp>/g;
+  return slideXml.replace(spBlockRe, (spBlock) => {
+    const idMatch = /<p:cNvPr\b[^>]*\bid="([^"]+)"/.exec(spBlock);
+    if (!idMatch || idMatch[1] !== shapeId) return spBlock;
+    // 빈 <p:spPr/> — 채우기만 넣는다
+    if (/<p:spPr\b[^>]*\/>/.test(spBlock)) return spBlock.replace(/<p:spPr\b([^>]*)\/>/, (_m, attrs: string) => `<p:spPr${attrs}>${fillXml}</p:spPr>`);
+    const spPr = /<p:spPr\b[^>]*>[\s\S]*?<\/p:spPr>/.exec(spBlock);
+    if (!spPr) return spBlock;
+    const open = /^<p:spPr\b[^>]*>/.exec(spPr[0])![0];
+    let inner = spPr[0].slice(open.length, -'</p:spPr>'.length);
+    // 선·효과 등 안쪽의 색은 건드리지 않도록, 바로 아래 채우기 요소만 지운다(선 블록은 잠시 떼어 둔다)
+    const kept: string[] = [];
+    inner = inner.replace(/<a:(ln|effectLst|effectDag|scene3d|sp3d)\b(?:[^>]*\/>|[\s\S]*?<\/a:\1>)/g, (m) => {
+      kept.push(m);
+      return `\u0000${kept.length - 1}\u0000`;
+    });
+    inner = inner
+      .replace(/<a:(noFill|grpFill)\b[^>]*\/>/g, '')
+      .replace(/<a:(solidFill|gradFill|blipFill|pattFill)\b(?:[^>]*\/>|[\s\S]*?<\/a:\1>)/g, '')
+      .replace(/<a:noFill\b[^>]*>\s*<\/a:noFill>/g, '');
+    const anchor = /<a:(prstGeom|custGeom)\b(?:[^>]*\/>|[\s\S]*?<\/a:\1>)/.exec(inner) ?? /<a:xfrm\b(?:[^>]*\/>|[\s\S]*?<\/a:xfrm>)/.exec(inner);
+    inner = anchor ? inner.slice(0, anchor.index + anchor[0].length) + fillXml + inner.slice(anchor.index + anchor[0].length) : fillXml + inner;
+    inner = inner.replace(/\u0000(\d+)\u0000/g, (_m, i: string) => kept[Number(i)]);
+    return spBlock.replace(spPr[0], () => `${open}${inner}</p:spPr>`);
+  });
+}
+
 export function spliceShapeTxBody(slideXml: string, shapeId: string, txBodyXml: string): string {
   const spBlockRe = /<p:sp\b(?:(?!<\/p:sp>)[\s\S])*?<\/p:sp>/g;
   let replaced = false;

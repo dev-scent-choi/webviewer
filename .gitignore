@@ -55,3 +55,4 @@ start.local.bat
 
 # npm 배포용 서버 컴파일 산출물(scripts/build-server.mjs → package.json의 prepack이 생성) — 소스 아님.
 dist/
+public/js/.build.lock
