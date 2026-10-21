@@ -3776,60 +3776,60 @@ body.review-pane-open #editor-zoom-host { margin-right: 320px; }
 .filter-loading .grid-spinner { width: 14px; height: 14px; }
 .filter-note { padding: 0.3rem 0.6rem; font-size: 0.75rem; color: #a4262c; }
 
-/* ==================== 엑셀·워드 편집기 — Microsoft 365 웹(Fluent 2) 기준 화면 틀 ====================
+/* ==================== 엑셀·워드·파워포인트 편집기 — Microsoft 365 웹(Fluent 2) 기준 화면 틀 ====================
    글꼴: Segoe UI + 맑은 고딕(윈도 기본 — 파일을 따로 싣지 않는다, 맥은 시스템 글꼴로).
    글자: 탭·명령·입력 14px(Fluent Body1), 그룹 이름·큰 단추 이름·상태 줄 12px(Caption1).
    높이: 작은 단추·입력 28px(두 줄 32px 간격), 큰 단추 아이콘 24px. 칸(셀) 크기는 계산과 엮여 있어 그대로 둔다. */
-:is(.grid-editor-page, .word-editor-page) {
+:is(.grid-editor-page, .word-editor-page, .slides-editor-page) {
   --office-font: "Segoe UI", "Segoe UI Web (West European)", "맑은 고딕", "Malgun Gothic", -apple-system, "Apple SD Gothic Neo", system-ui, sans-serif;
   --office-text: #242424;
   --office-text-dim: #616161;
   --office-stroke: #d1d1d1;
 }
-:is(.grid-editor-page, .word-editor-page) .office-shell,
-:is(.grid-editor-page, .word-editor-page) .ribbon-tabs,
-:is(.grid-editor-page, .word-editor-page) .ribbon-panel,
-:is(.grid-editor-page, .word-editor-page) .grid-formula-bar,
-:is(.grid-editor-page, .word-editor-page) .grid-status-bar,
-:is(.grid-editor-page, .word-editor-page) .dropdown-menu-floating,
-:is(.grid-editor-page, .word-editor-page) .office-dialog { font-family: var(--office-font); }
-:is(.grid-editor-page, .word-editor-page) .ribbon-tab { font: 400 14px/20px var(--office-font); color: var(--office-text); padding: 6px 10px 8px; }
-:is(.grid-editor-page, .word-editor-page) .ribbon-tab[aria-selected="true"] { font-weight: 600; color: var(--office-text); }
-:is(.grid-editor-page, .word-editor-page) .ribbon-tab[aria-selected="true"]::after { left: 10px; right: 10px; bottom: 3px; }
-:is(.grid-editor-page, .word-editor-page) .ribbon-tab-contextual { color: var(--app-accent); }
-:is(.grid-editor-page, .word-editor-page) .ribbon-group-label { font-size: 12px; line-height: 16px; color: var(--office-text-dim); letter-spacing: 0; }
-:is(.grid-editor-page, .word-editor-page) .ribbon-row { min-height: 32px; gap: 2px; }
-:is(.grid-editor-page, .word-editor-page) .ribbon-row:has(.ribbon-btn-labeled) { min-height: 28px; }
-:is(.grid-editor-page, .word-editor-page) .ribbon-panel .icon-btn:not(.icon-btn-big) { height: 28px; min-width: 28px; border-radius: 4px; }
-:is(.grid-editor-page, .word-editor-page) .ribbon-btn-labeled { height: 28px; padding: 0 6px; gap: 6px; }
-:is(.grid-editor-page, .word-editor-page) .ribbon-btn-label { font-size: 14px; line-height: 20px; color: var(--office-text); }
-:is(.grid-editor-page, .word-editor-page) .icon-btn-big { font-size: 12px; line-height: 16px; color: var(--office-text); gap: 4px; }
-:is(.grid-editor-page, .word-editor-page) .icon-btn-big svg { width: 24px; height: 24px; }
-:is(.grid-editor-page, .word-editor-page) .toolbar-select,
-:is(.grid-editor-page, .word-editor-page) .toolbar-number { height: 28px; font: 400 14px var(--office-font); color: var(--office-text); border-color: var(--office-stroke); border-radius: 4px; }
-:is(.grid-editor-page, .word-editor-page) .cell-ref-box { font: 400 14px var(--office-font); color: var(--office-text); }
-:is(.grid-editor-page, .word-editor-page) .grid-formula-bar input,
-:is(.grid-editor-page, .word-editor-page) .grid-formula-bar textarea { font-family: "맑은 고딕", "Malgun Gothic", var(--office-font); font-size: 14px; }
-:is(.grid-editor-page, .word-editor-page) .grid-edit-table thead th,
-:is(.grid-editor-page, .word-editor-page) .grid-edit-table .g-edit-rownum { font-family: var(--office-font); font-size: 12px; font-weight: 400; color: #424242; }
-:is(.grid-editor-page, .word-editor-page) .grid-status-bar { font-size: 12px; color: var(--office-text-dim); }
-:is(.grid-editor-page, .word-editor-page) .grid-sheet-tabs { font: 400 14px var(--office-font); }
-:is(.grid-editor-page, .word-editor-page) .dropdown-menu-floating button { font: 400 14px/20px var(--office-font); }
+:is(.grid-editor-page, .word-editor-page, .slides-editor-page) .office-shell,
+:is(.grid-editor-page, .word-editor-page, .slides-editor-page) .ribbon-tabs,
+:is(.grid-editor-page, .word-editor-page, .slides-editor-page) .ribbon-panel,
+:is(.grid-editor-page, .word-editor-page, .slides-editor-page) .grid-formula-bar,
+:is(.grid-editor-page, .word-editor-page, .slides-editor-page) .grid-status-bar,
+:is(.grid-editor-page, .word-editor-page, .slides-editor-page) .dropdown-menu-floating,
+:is(.grid-editor-page, .word-editor-page, .slides-editor-page) .office-dialog { font-family: var(--office-font); }
+:is(.grid-editor-page, .word-editor-page, .slides-editor-page) .ribbon-tab { font: 400 14px/20px var(--office-font); color: var(--office-text); padding: 6px 10px 8px; }
+:is(.grid-editor-page, .word-editor-page, .slides-editor-page) .ribbon-tab[aria-selected="true"] { font-weight: 600; color: var(--office-text); }
+:is(.grid-editor-page, .word-editor-page, .slides-editor-page) .ribbon-tab[aria-selected="true"]::after { left: 10px; right: 10px; bottom: 3px; }
+:is(.grid-editor-page, .word-editor-page, .slides-editor-page) .ribbon-tab-contextual { color: var(--app-accent); }
+:is(.grid-editor-page, .word-editor-page, .slides-editor-page) .ribbon-group-label { font-size: 12px; line-height: 16px; color: var(--office-text-dim); letter-spacing: 0; }
+:is(.grid-editor-page, .word-editor-page, .slides-editor-page) .ribbon-row { min-height: 32px; gap: 2px; }
+:is(.grid-editor-page, .word-editor-page, .slides-editor-page) .ribbon-row:has(.ribbon-btn-labeled) { min-height: 28px; }
+:is(.grid-editor-page, .word-editor-page, .slides-editor-page) .ribbon-panel .icon-btn:not(.icon-btn-big) { height: 28px; min-width: 28px; border-radius: 4px; }
+:is(.grid-editor-page, .word-editor-page, .slides-editor-page) .ribbon-btn-labeled { height: 28px; padding: 0 6px; gap: 6px; }
+:is(.grid-editor-page, .word-editor-page, .slides-editor-page) .ribbon-btn-label { font-size: 14px; line-height: 20px; color: var(--office-text); }
+:is(.grid-editor-page, .word-editor-page, .slides-editor-page) .icon-btn-big { font-size: 12px; line-height: 16px; color: var(--office-text); gap: 4px; }
+:is(.grid-editor-page, .word-editor-page, .slides-editor-page) .icon-btn-big svg { width: 24px; height: 24px; }
+:is(.grid-editor-page, .word-editor-page, .slides-editor-page) .toolbar-select,
+:is(.grid-editor-page, .word-editor-page, .slides-editor-page) .toolbar-number { height: 28px; font: 400 14px var(--office-font); color: var(--office-text); border-color: var(--office-stroke); border-radius: 4px; }
+:is(.grid-editor-page, .word-editor-page, .slides-editor-page) .cell-ref-box { font: 400 14px var(--office-font); color: var(--office-text); }
+:is(.grid-editor-page, .word-editor-page, .slides-editor-page) .grid-formula-bar input,
+:is(.grid-editor-page, .word-editor-page, .slides-editor-page) .grid-formula-bar textarea { font-family: "맑은 고딕", "Malgun Gothic", var(--office-font); font-size: 14px; }
+:is(.grid-editor-page, .word-editor-page, .slides-editor-page) .grid-edit-table thead th,
+:is(.grid-editor-page, .word-editor-page, .slides-editor-page) .grid-edit-table .g-edit-rownum { font-family: var(--office-font); font-size: 12px; font-weight: 400; color: #424242; }
+:is(.grid-editor-page, .word-editor-page, .slides-editor-page) .grid-status-bar { font-size: 12px; color: var(--office-text-dim); }
+:is(.grid-editor-page, .word-editor-page, .slides-editor-page) .grid-sheet-tabs { font: 400 14px var(--office-font); }
+:is(.grid-editor-page, .word-editor-page, .slides-editor-page) .dropdown-menu-floating button { font: 400 14px/20px var(--office-font); }
 /* 대화상자 — Fluent 2 Dialog: 제목 20px 반굵게, 본문 14px, 단추 32px(첫 단추 = 주 단추, 앱 색) */
-:is(.grid-editor-page, .word-editor-page) .office-dialog-card { padding: 24px; border-radius: 8px; font-size: 14px; line-height: 20px; color: var(--office-text); box-shadow: 0 24px 48px rgba(0, 0, 0, 0.18), 0 0 8px rgba(0, 0, 0, 0.12); }
-:is(.grid-editor-page, .word-editor-page) .office-dialog-card h2 { margin: 0 0 8px; font-size: 20px; line-height: 28px; font-weight: 600; }
-:is(.grid-editor-page, .word-editor-page) .office-dialog-sub { color: var(--office-text-dim); font-size: 12px; }
-:is(.grid-editor-page, .word-editor-page) .office-dialog-card select,
-:is(.grid-editor-page, .word-editor-page) .office-dialog-card input:not([type="checkbox"]):not([type="radio"]):not([type="color"]) { height: 32px; font: 400 14px var(--office-font); border: 1px solid var(--office-stroke); border-bottom-color: #616161; border-radius: 4px; padding: 0 8px; box-sizing: border-box; }
-:is(.grid-editor-page, .word-editor-page) .office-dialog-actions { gap: 8px; margin-top: 24px; }
-:is(.grid-editor-page, .word-editor-page) .office-dialog-actions .btn-mini { min-width: 96px; height: 32px; padding: 0 12px; border: 1px solid var(--office-stroke); border-radius: 4px; background: #fff; font: 600 14px var(--office-font); color: var(--office-text); }
-:is(.grid-editor-page, .word-editor-page) .office-dialog-actions .btn-mini:hover { background: #f5f5f5; border-color: #c7c7c7; }
-:is(.grid-editor-page, .word-editor-page) .office-dialog-actions .btn-mini:first-child { background: var(--app-accent); border-color: transparent; color: #fff; }
-:is(.grid-editor-page, .word-editor-page) .office-dialog-actions .btn-mini:first-child:hover { filter: brightness(0.92); }
-:is(.grid-editor-page, .word-editor-page) .zoom-level { font: 400 12px var(--office-font); }
+:is(.grid-editor-page, .word-editor-page, .slides-editor-page) .office-dialog-card { padding: 24px; border-radius: 8px; font-size: 14px; line-height: 20px; color: var(--office-text); box-shadow: 0 24px 48px rgba(0, 0, 0, 0.18), 0 0 8px rgba(0, 0, 0, 0.12); }
+:is(.grid-editor-page, .word-editor-page, .slides-editor-page) .office-dialog-card h2 { margin: 0 0 8px; font-size: 20px; line-height: 28px; font-weight: 600; }
+:is(.grid-editor-page, .word-editor-page, .slides-editor-page) .office-dialog-sub { color: var(--office-text-dim); font-size: 12px; }
+:is(.grid-editor-page, .word-editor-page, .slides-editor-page) .office-dialog-card select,
+:is(.grid-editor-page, .word-editor-page, .slides-editor-page) .office-dialog-card input:not([type="checkbox"]):not([type="radio"]):not([type="color"]) { height: 32px; font: 400 14px var(--office-font); border: 1px solid var(--office-stroke); border-bottom-color: #616161; border-radius: 4px; padding: 0 8px; box-sizing: border-box; }
+:is(.grid-editor-page, .word-editor-page, .slides-editor-page) .office-dialog-actions { gap: 8px; margin-top: 24px; }
+:is(.grid-editor-page, .word-editor-page, .slides-editor-page) .office-dialog-actions .btn-mini { min-width: 96px; height: 32px; padding: 0 12px; border: 1px solid var(--office-stroke); border-radius: 4px; background: #fff; font: 600 14px var(--office-font); color: var(--office-text); }
+:is(.grid-editor-page, .word-editor-page, .slides-editor-page) .office-dialog-actions .btn-mini:hover { background: #f5f5f5; border-color: #c7c7c7; }
+:is(.grid-editor-page, .word-editor-page, .slides-editor-page) .office-dialog-actions .btn-mini:first-child { background: var(--app-accent); border-color: transparent; color: #fff; }
+:is(.grid-editor-page, .word-editor-page, .slides-editor-page) .office-dialog-actions .btn-mini:first-child:hover { filter: brightness(0.92); }
+:is(.grid-editor-page, .word-editor-page, .slides-editor-page) .zoom-level { font: 400 12px var(--office-font); }
 /* 워드 — 쪽은 각진 모서리·옅은 그림자(워드처럼), 상태 줄·메모 창도 같은 글꼴 */
 .word-editor-page .editor-surface { border-radius: 0; border-color: #e0e0e0; box-shadow: 0 1.6px 3.6px rgba(0, 0, 0, 0.13), 0 0.3px 0.9px rgba(0, 0, 0, 0.11); }
-.word-editor-page .office-statusbar { font: 400 12px var(--office-font); color: var(--office-text-dim); }
+:is(.word-editor-page, .slides-editor-page) .office-statusbar { font: 400 12px var(--office-font); color: var(--office-text-dim); }
 .word-editor-page .review-pane { font-family: var(--office-font); }
 /* 큰 단추 — 고정 폭(52px)이면 12px 이름이 옆 단추·구분선과 겹친다: 이름 폭에 맞추고 좌우 여백 */
-:is(.grid-editor-page, .word-editor-page) .icon-btn-big { width: auto; min-width: 48px; padding: 0 6px; }
+:is(.grid-editor-page, .word-editor-page, .slides-editor-page) .icon-btn-big { width: auto; min-width: 48px; padding: 0 6px; }
