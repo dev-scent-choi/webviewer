@@ -33,6 +33,7 @@ import { detectNearbyTextStyle } from '../textStyle.js';
 import {
   docxHasUnsupportedContent,
   getDocxDefaultFontFamily,
+  getDocxDefaultParagraphSpacing,
   getDocxDefaultFontSizePt,
   getDocxPageSetup,
 } from '../docx/import.js';
@@ -605,7 +606,7 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
       // catch로 감싼 채 병렬로 돌린다.
       const docxBytes =
         view.meta.ext === 'docx' ? await store.readOriginal(view.meta.id, view.meta.ext).catch(() => null) : null;
-      const [editHasUnsupportedContent, pageSetup, defaultFontSizePt, defaultFontFamily] = await Promise.all([
+      const [editHasUnsupportedContent, pageSetup, defaultFontSizePt, defaultFontFamily, defaultParagraphSpacing] = await Promise.all([
         // "저장하면 이미지가 사라집니다" 경고를 띄우기 위한 사전 검사 — canEdit 토큰일 때만 계산한다
         // (파일은 이미 읽었지만, 이 함수 자체를 돌리는 CPU 비용은 필요할 때만 쓴다).
         docxBytes && view.claims.perms.canEdit
@@ -623,6 +624,10 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
         // 문서 기본 서체(word/theme/theme1.xml로 해석) — 없으면 null(에디터가 기존 폰트를 그대로 씀).
         docxBytes
           ? Promise.resolve().then(() => getDocxDefaultFontFamily(docxBytes)).catch(() => null)
+          : Promise.resolve(null),
+        // 직접 간격이 없는 문단의 줄 간격·앞뒤 간격(문서 기본값 + 표준 스타일) — 없으면 편집기 기존 값
+        docxBytes
+          ? Promise.resolve().then(() => getDocxDefaultParagraphSpacing(docxBytes)).catch(() => null)
           : Promise.resolve(null),
       ]);
       // pptx 편집기가 슬라이드를 실제 크기(4:3 등) 좌표계로 그리기 위한 값. presentation.xml 하나만
@@ -651,6 +656,7 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
           pageSetup,
           defaultFontSizePt,
           defaultFontFamily,
+          defaultParagraphSpacing,
           slideSize,
         },
       };

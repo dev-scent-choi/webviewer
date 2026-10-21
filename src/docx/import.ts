@@ -890,6 +890,34 @@ export function getDocxDefaultFontSizePt(docxBytes: Uint8Array): number {
   return styleSizePt ?? defaultFontSizePtOf(findFirst(stylesChildren, 'w:docDefaults'));
 }
 
+/**
+ * 직접 간격을 지정하지 않은 문단이 실제로 쓰는 문단 간격 — Word의 상속 순서(문서 기본값 w:docDefaults/w:pPrDefault →
+ * 기본 문단 스타일 "표준"의 w:pPr/w:spacing)를 속성마다 따라간다. 어디에도 없으면 Word처럼 앞 0·뒤 0·1줄.
+ * 예전엔 이걸 읽지 않아, 워드 기본 서식(뒤 8pt·1.08줄 등)으로 만든 거의 모든 문서가 편집기 고정값(1.75줄)으로 보였다.
+ */
+export function getDocxDefaultParagraphSpacing(docxBytes: Uint8Array): ParagraphSpacing {
+  const fallback: ParagraphSpacing = { line: 240, lineRule: 'auto', before: 0, after: 0 };
+  const entries = guardedUnzipSync(docxBytes, 'getDocxDefaultParagraphSpacing', { filter: (f) => f.name === 'word/styles.xml' });
+  const stylesXmlBytes = entries['word/styles.xml'];
+  if (!stylesXmlBytes) return fallback;
+  const stylesChildren = stylesChildrenOf(strFromU8(stylesXmlBytes));
+  const docDefaults = findFirst(stylesChildren, 'w:docDefaults');
+  const pPrDefault = docDefaults && findFirst(childrenOf(docDefaults), 'w:pPrDefault');
+  const defaultPPr = pPrDefault && findFirst(childrenOf(pPrDefault), 'w:pPr');
+  const fromDefaults = defaultPPr ? spacingOf(childrenOf(defaultPPr)) : null;
+  const style = findDefaultParagraphStyle(stylesChildren);
+  const stylePPr = style && findFirst(childrenOf(style), 'w:pPr');
+  const fromStyle = stylePPr ? spacingOf(childrenOf(stylePPr)) : null;
+  // 줄 간격은 값과 규칙(auto·exact·atLeast)을 같은 곳에서 함께 가져온다
+  const lineFrom = fromStyle?.line != null ? fromStyle : fromDefaults?.line != null ? fromDefaults : fallback;
+  return {
+    line: lineFrom.line,
+    lineRule: lineFrom.lineRule ?? 'auto',
+    before: fromStyle?.before ?? fromDefaults?.before ?? fallback.before,
+    after: fromStyle?.after ?? fromDefaults?.after ?? fallback.after,
+  };
+}
+
 /** a:fontScheme/a:minorFont(또는 a:majorFont) 안에서 라틴 기본 서체와 한글(Hang) 서체를 뽑는다. */
 function themeTypefaceOf(themeXml: string, slot: 'minorFont' | 'majorFont'): { latin: string | null; hang: string | null } {
   const slotMatch = new RegExp(`<a:${slot}>([\\s\\S]*?)</a:${slot}>`).exec(themeXml);

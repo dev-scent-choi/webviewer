@@ -2942,7 +2942,8 @@ body.home-hidden .doclist-link { display: none !important; }
      이 자리에서 그냥 var(--font-sans)로 고정하면) 상위 요소의 inline font-family는 상속되지
      않으므로(이 요소 자신에게 이미 값이 있으므로) 반드시 변수를 거쳐야 한다. */
   font-family: var(--doc-font-family, var(--font-sans));
-  line-height: 1.75;
+  /* 문서의 기본 줄 간격(editor.ts applyDefaultParagraphSpacing) — 못 읽었으면 예전 값 */
+  line-height: var(--doc-line-height, 1.75);
   max-width: 65ch;
   /* 기본값 normal은 연속된 공백 문자를 화면에서 한 칸으로 합쳐 보여준다 — 원본 docx의 텍스트런과
      내보낸 파일 양쪽 다 공백 개수는 그대로 남아 있는데(예: "인계자 :" 뒤 서명란처럼 자리를 맞추려
@@ -2970,7 +2971,9 @@ body.home-hidden .doclist-link { display: none !important; }
 }
 .editor-surface .ProseMirror table td {
   border: 1px solid var(--color-line);
-  padding: 0.4rem 0.6rem;
+  /* 표에 칸 여백(w:tblCellMar)이 없으면 Word 기본값 — 위아래 0, 좌우 0.19cm(108twip = 7.2px). 여백이 있으면 schema.ts가
+     인라인 padding으로 덮어쓴다 */
+  padding: 0 7.2px;
   min-width: 2em;
   /* 브라우저의 <td> 기본값은 vertical-align:middle이지만, Word는 w:tcPr/w:vAlign이 없는 칸을
      top으로 그린다 — schema.ts의 verticalAlign 셀 속성이 명시된 칸만 인라인 style로 이 기본을
@@ -3843,3 +3846,6 @@ body.review-pane-open #editor-zoom-host { margin-right: 320px; }
 .office-dialog-runtime .office-dialog-actions .btn-mini { min-width: 96px; height: 32px; padding: 0 12px; border: 1px solid #d1d1d1; border-radius: 4px; background: #fff; font: 600 14px "Segoe UI", "맑은 고딕", "Malgun Gothic", system-ui, sans-serif; color: #242424; cursor: pointer; }
 .office-dialog-runtime .office-dialog-actions .btn-mini-primary { border-color: transparent; background: var(--app-accent, #0f6cbd); color: #fff; }
 .office-dialog-runtime .office-dialog-actions .btn-mini:focus-visible { outline: 2px solid #000; outline-offset: 2px; }
+
+/* 워드 — 직접 간격이 없는 문단은 문서의 기본 앞뒤 간격(editor.ts applyDefaultParagraphSpacing), 못 읽었으면 브라우저 기본(1em) */
+.editor-surface .ProseMirror p { margin-top: var(--doc-p-before, 1em); margin-bottom: var(--doc-p-after, 1em); }
