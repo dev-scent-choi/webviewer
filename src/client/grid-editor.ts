@@ -41,6 +41,7 @@ import {
 import type { CellRangeRef, ChartKind } from '../xlsx/chartModel.js';
 import { RowLayout } from '../xlsx/sheetGeometry.js';
 import { compareCells, filteredRows, GRID_FILTERS_MAP, shiftFormulaRows, sortOrder, type SheetFilter } from './gridSort.js';
+import { officeAlert, officeConfirm } from './officeDialog.js';
 
 interface Permissions {
   readonly canPrint: boolean;
@@ -878,14 +879,15 @@ async function main(): Promise<void> {
 
   /** 엑셀 시트 탭 우클릭 "삭제" — 마지막 남은 시트는 지울 수 없고, 지금 보고 있던 시트를 지우면
    * 그 자리에 있던(원래 바로 뒤였던) 시트로 자동 전환한다. */
-  function deleteSheet(idx: number): void {
+  async function deleteSheet(idx: number): Promise<void> {
     const indices = sortedSheetIndices();
     if (indices.length <= 1) {
-      alert('마지막 남은 시트는 삭제할 수 없습니다.');
+      await officeAlert('마지막 남은 시트는 삭제할 수 없습니다.');
       return;
     }
     const sheet = structure.get(String(idx));
-    if (!confirm(`"${sheet?.name ?? ''}" 시트를 삭제하시겠습니까? 이 시트의 모든 내용이 사라집니다.`)) return;
+    if (!(await officeConfirm(`"${sheet?.name ?? ''}" 시트를 삭제하시겠습니까? 이 시트의 모든 내용이 사라집니다.`, { title: '시트 삭제', okLabel: '삭제', danger: true }))) return;
+    if (!sortedSheetIndices().includes(idx)) return; // 기다리는 동안 다른 사람이 이미 지웠다
     const pos = indices.indexOf(idx);
     const remaining = indices.filter((i) => i !== idx);
     if (activeSheet === idx) {
@@ -993,7 +995,7 @@ async function main(): Promise<void> {
     menu.className = 'sheet-context-menu';
     const items: Array<[string, () => void]> = [
       ['삽입', () => addSheet(idx)],
-      ['삭제', () => deleteSheet(idx)],
+      ['삭제', () => void deleteSheet(idx)],
       ['이름 바꾸기', () => startSheetRename(idx)],
       ['이동', () => openMoveMenu(idx, tabElFor(idx) ?? menu)],
     ];
@@ -2863,10 +2865,10 @@ async function main(): Promise<void> {
     }
     return false;
   }
-  function confirmSpanDelete(axis: 'row' | 'col', at: number, count: number): boolean {
+  async function confirmSpanDelete(axis: 'row' | 'col', at: number, count: number): Promise<boolean> {
     if (!spanHasValues(axis, at, count)) return true;
     const what = axis === 'row' ? '행' : '열';
-    return window.confirm(`선택한 ${count}개 ${what}을 삭제할까요?\n삭제한 ${what}은 실행 취소(Ctrl+Z)로 되돌릴 수 없습니다.`);
+    return officeConfirm(`선택한 ${count}개 ${what}을 삭제할까요? 삭제한 ${what}은 실행 취소(Ctrl+Z)로 되돌릴 수 없습니다.`, { title: `${what} 삭제`, okLabel: '삭제', danger: true });
   }
   document.getElementById('btn-add-row')?.addEventListener('click', () => {
     const span = selectedSpan('row');
@@ -2877,12 +2879,12 @@ async function main(): Promise<void> {
     }
     sendGridStructureOp('insertRows', span.at, span.count);
   });
-  document.getElementById('btn-del-row')?.addEventListener('click', () => {
+  document.getElementById('btn-del-row')?.addEventListener('click', async () => {
     const s = currentStructure();
     const span = selectedSpan('row');
     if (!span || span.at >= s.rowCount) return;
     const count = Math.min(span.count, s.rowCount - span.at);
-    if (s.rowCount - count < 1 || !confirmSpanDelete('row', span.at, count)) return;
+    if (s.rowCount - count < 1 || !(await confirmSpanDelete('row', span.at, count))) return;
     sendGridStructureOp('deleteRows', span.at, count);
   });
   document.getElementById('btn-add-col')?.addEventListener('click', () => {
@@ -2894,12 +2896,12 @@ async function main(): Promise<void> {
     }
     sendGridStructureOp('insertCols', span.at, span.count);
   });
-  document.getElementById('btn-del-col')?.addEventListener('click', () => {
+  document.getElementById('btn-del-col')?.addEventListener('click', async () => {
     const s = currentStructure();
     const span = selectedSpan('col');
     if (!span || span.at >= s.colCount) return;
     const count = Math.min(span.count, s.colCount - span.at);
-    if (s.colCount - count < 1 || !confirmSpanDelete('col', span.at, count)) return;
+    if (s.colCount - count < 1 || !(await confirmSpanDelete('col', span.at, count))) return;
     sendGridStructureOp('deleteCols', span.at, count);
   });
 
@@ -3151,7 +3153,7 @@ async function main(): Promise<void> {
     });
     syncCellToolbarState(activeCellKey);
   }
-  function applyMerge(mode: 'center' | 'merge' | 'across'): void {
+  async function applyMerge(mode: 'center' | 'merge' | 'across'): Promise<void> {
     if (!canEdit || !activeCellKey) return;
     const list = sheetMergeList();
     const sel = rangeBounds();
@@ -3190,7 +3192,7 @@ async function main(): Promise<void> {
       return;
     }
     if ((box.r1 - box.r0 + 1) * (box.c1 - box.c0 + 1) > 200_000) {
-      window.alert('범위가 너무 넓어 병합할 수 없습니다.');
+      void officeAlert('범위가 너무 넓어 병합할 수 없습니다.');
       return;
     }
     const drop: string[] = [];
@@ -3199,14 +3201,14 @@ async function main(): Promise<void> {
         for (let c = rect.c0; c <= rect.c1; c += 1) {
           const key = gridCellKey(activeSheet, r, c);
           if (styles.get(key)?.lk === 1) {
-            window.alert('잠긴 칸이 있어 병합할 수 없습니다.');
+            void officeAlert('잠긴 칸이 있어 병합할 수 없습니다.');
             return;
           }
           if ((r !== rect.r0 || c !== rect.c0) && (cells.get(key) ?? '') !== '') drop.push(key);
         }
       }
     }
-    if (drop.length > 0 && !window.confirm('셀을 병합하면 왼쪽 위의 값만 남고 나머지 값은 지워집니다. 계속할까요?')) return;
+    if (drop.length > 0 && !(await officeConfirm('셀을 병합하면 왼쪽 위의 값만 남고 나머지 값은 지워집니다. 계속할까요?', { title: '셀 병합' }))) return;
     ydoc.transact(() => {
       for (const key of drop) cells.delete(key);
       const kept = list.filter((m) => !targets.some((t) => rectsIntersect(mergeRect(m), t)));
@@ -3642,7 +3644,7 @@ async function main(): Promise<void> {
         ? currentRegion({ row: sel.r0, col: sel.c0 }, (r, c) => valueText(sheetName, r, c).trim() !== '', { rows: sheet?.rowCount ?? 1, cols: sheet?.colCount ?? 1 })
         : { r1: sel.r0, c1: sel.c0, r2: sel.r1, c2: sel.c1 };
     if (!region) {
-      window.alert('표 서식을 입힐 데이터 범위를 선택하세요.');
+      void officeAlert('표 서식을 입힐 데이터 범위를 선택하세요.');
       return;
     }
     ydoc.transact(() => {
@@ -3692,7 +3694,7 @@ async function main(): Promise<void> {
     try {
       text = await navigator.clipboard.readText();
     } catch {
-      window.alert('브라우저가 클립보드 읽기를 허용하지 않았습니다. Ctrl+V로 붙여넣으세요.');
+      void officeAlert('브라우저가 클립보드 읽기를 허용하지 않았습니다. Ctrl+V로 붙여넣으세요.');
       return;
     }
     if (text) pasteTextAt(text, r0, c0);
@@ -3750,7 +3752,7 @@ async function main(): Promise<void> {
     const first = region.r1 + (hasHeader ? 1 : 0);
     if (first >= region.r2) return;
     if (!rowsLoaded(region.r1, region.r2)) {
-      window.alert(`정렬할 범위가 너무 큽니다(${region.r2 - region.r1 + 1}행). 화면 근처 ${PAGE_SIZE_ROWS}행 단위 범위 안에서만 정렬할 수 있습니다.`);
+      void officeAlert(`정렬할 범위가 너무 큽니다(${region.r2 - region.r1 + 1}행). 화면 근처 ${PAGE_SIZE_ROWS}행 단위 범위 안에서만 정렬할 수 있습니다.`);
       return;
     }
     const keys: string[] = [];
@@ -3784,7 +3786,7 @@ async function main(): Promise<void> {
   function sortActiveColumn(descending: boolean): void {
     const region = dataRegion();
     if (!region) {
-      window.alert('정렬할 데이터를 선택하세요.');
+      void officeAlert('정렬할 데이터를 선택하세요.');
       return;
     }
     const keyCol = Math.min(Math.max(selAnchorCol, region.c1), region.c2);
@@ -3817,7 +3819,7 @@ async function main(): Promise<void> {
   document.getElementById('btn-sort-custom')?.addEventListener('click', () => {
     sortDialogRegion = dataRegion();
     if (!sortDialogRegion || !sortDialog || !sortHeaderCheck || !sortColumnSelect) {
-      window.alert('정렬할 데이터를 선택하세요.');
+      void officeAlert('정렬할 데이터를 선택하세요.');
       return;
     }
     sortHeaderCheck.checked = looksLikeHeader(sortDialogRegion);
@@ -4026,7 +4028,7 @@ async function main(): Promise<void> {
     }
     const region = dataRegion();
     if (!region || region.r2 <= region.r1) {
-      window.alert('필터를 걸 데이터 범위(머리글 + 데이터)를 선택하세요.');
+      void officeAlert('필터를 걸 데이터 범위(머리글 + 데이터)를 선택하세요.');
       return;
     }
     filtersMap.set(key, { r1: region.r1, c1: region.c1, r2: region.r2, c2: region.c2, criteria: {} });

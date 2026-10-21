@@ -18,6 +18,7 @@ import {
   type TransitionKind,
   type TransitionSpeed,
 } from '../pptx/slideDesign.js';
+import { officeAlert } from './officeDialog.js';
 
 export interface SlideDesignHost {
   readonly ydoc: Y.Doc;
@@ -130,7 +131,7 @@ export function setupSlideDesign(host: SlideDesignHost): { onCanvasRendered(): v
       const shapeId = host.selectedShapeId();
       if (!entry || !host.canEdit) return;
       if (!shapeId) {
-        window.alert('애니메이션을 줄 텍스트 상자나 도형을 먼저 클릭하세요.');
+        void officeAlert('애니메이션을 줄 텍스트 상자나 도형을 먼저 클릭하세요.');
         return;
       }
       const effect = button.dataset.animation as AnimationEffect | 'none';

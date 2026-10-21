@@ -1,4 +1,5 @@
 import { createEditor, type RhwpEditor } from '@rhwp/editor';
+import { officeAlert } from './officeDialog.js';
 
 interface Permissions {
   readonly canPrint: boolean;
@@ -81,7 +82,7 @@ async function saveToServer(editor: RhwpEditor, ext: string): Promise<void> {
   } catch (error) {
     saveStatusEl.textContent = '저장 실패';
     console.error('hwp 저장 실패:', error);
-    window.alert(error instanceof Error ? error.message : '저장에 실패했습니다.');
+    void officeAlert(error instanceof Error ? error.message : '저장에 실패했습니다.');
   }
 }
 

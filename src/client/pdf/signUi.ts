@@ -8,6 +8,7 @@ import { isStampImage } from '../../pdf/annotTypes.js';
 import type { AnnotLayer } from './annotLayer.js';
 import { FormLayer, type FieldInfo, type FormValue } from './formLayer.js';
 import type { PageView } from './pageView.js';
+import { officePrompt } from '../officeDialog.js';
 
 const STORE_KEY = 'docview-pdf-signatures';
 const MAX_SAVED = 6;
@@ -381,10 +382,10 @@ export function setupSignUi(opts: SignUiOptions): SignUi {
     if (!(event.target as HTMLElement).closest('[data-group="seal"]')) sealMenu.hidden = true;
   });
   for (const b of sealMenu.querySelectorAll<HTMLButtonElement>('[data-seal]')) {
-    b.addEventListener('click', () => {
+    b.addEventListener('click', async () => {
       sealMenu.hidden = true;
       let text = b.dataset.seal ?? '';
-      if (!text) text = (window.prompt('도장 글자(10자 이내)', sealText) ?? '').trim().slice(0, 10);
+      if (!text) text = ((await officePrompt('도장에 넣을 글자(10자 이내)', sealText, { title: '글자 도장', maxLength: 10 })) ?? '').trim().slice(0, 10);
       if (text) useSeal(text);
     });
   }

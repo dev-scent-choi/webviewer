@@ -8,6 +8,7 @@ import { TextSelection, type Command, type EditorState } from 'prosemirror-state
 import type { EditorView } from 'prosemirror-view';
 import type * as Y from 'yjs';
 import { docxSchema, type DocxComment } from '../docx/schema.js';
+import { officeAlert } from './officeDialog.js';
 
 export interface CommentRange {
   readonly id: string;
@@ -285,7 +286,7 @@ export function setupWordReview(options: ReviewOptions): (state: EditorState) =>
     if (!canEdit) return;
     const target = commentTarget(view.state);
     if (!target) {
-      window.alert('메모를 달 글자를 선택하세요.');
+      void officeAlert('메모를 달 글자를 선택하세요.');
       return;
     }
     const id = newCommentId();
