@@ -20,8 +20,8 @@
     "!public/rhwp"
   ],
   "scripts": {
-    "dev": "npm run build:editor && tsx watch src/server.ts",
-    "start": "npm run build:editor && tsx src/server.ts",
+    "dev": "npm run build:editor && tsx watch --max-old-space-size=12288 src/server.ts",
+    "start": "npm run build:editor && tsx --max-old-space-size=12288 src/server.ts",
     "build:editor": "node scripts/build-editor.mjs",
     "build:server": "node scripts/build-server.mjs",
     "prepare": "npm run build:editor && npm run build:server",

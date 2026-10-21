@@ -130,6 +130,20 @@ function orderedVisibleSheetPaths(raw: Pick<RawWorkbookReaderInternals, 'model' 
   return [...byPath.keys()].filter((p) => /^xl\/worksheets\/sheet\d+\.xml$/.test(p));
 }
 
+/**
+ * 큰 버퍼를 64KB 조각으로 나눠 흘려보낸다 — ExcelJS 스트리밍 리더는 받은 조각 하나를 끝까지 해석한 뒤에야 행을 내주므로,
+ * Readable.from(버퍼)처럼 한 덩어리로 넘기면 시트 전체의 해석 결과(행·칸 이벤트)가 한꺼번에 메모리에 쌓였다
+ * (30만 행 24MB 파일에서 4.9GB → 서버가 메모리 부족으로 죽음). 조각으로 나누면 조각마다 처리하고 버린다.
+ */
+function chunkedReadable(buf: Buffer, size = 64 * 1024): Readable {
+  return Readable.from(
+    (function* () {
+      for (let i = 0; i < buf.length; i += size) yield buf.subarray(i, Math.min(i + size, buf.length));
+    })(),
+    { objectMode: false },
+  );
+}
+
 async function loadWorksheetXmlsByPath(zip: JSZip): Promise<Map<string, string>> {
   const reads: Array<Promise<void>> = [];
   const byPath = new Map<string, string>();
@@ -203,7 +217,7 @@ async function preSeedWorkbookReaderState(
     // 'cache' 모드에서는 아무것도 yield하지 않는 async generator다 — 끝까지 돌려서(for await) 부수
     // 효과(this.sharedStrings 채우기)만 얻으면 된다.
     for await (const _unused of rawReader._parseSharedStrings(
-      Readable.from(await sharedStringsEntry.async('nodebuffer')),
+      chunkedReadable(await sharedStringsEntry.async('nodebuffer')),
     )) {
       // 'cache' 모드에서는 절대 오지 않는 분기 — 안전망으로만 존재.
       void _unused;
@@ -330,6 +344,19 @@ export async function ingestXlsxLazily(docId: string, xlsxBytes: Buffer): Promis
   const rowIndex: Array<Array<LazyRowIndexEntry | undefined>> = [];
   const palette = new StylePalette();
   let byteOffset = 0;
+  // 행마다 파일 쓰기를 한 번씩 기다리면(15만 행 = 15만 번) 대부분이 대기 시간이었다 — 1MB씩 모아 한 번에 쓴다.
+  // 각 행의 위치(byteOffset)는 모으는 순간 정해지므로 색인은 그대로다.
+  let pending: Buffer[] = [];
+  let pendingBytes = 0;
+  let pendingStart = 0;
+  const flushPending = async () => {
+    if (pendingBytes === 0) return;
+    const chunk = pending.length === 1 ? pending[0] : Buffer.concat(pending, pendingBytes);
+    await writeHandle.write(chunk, 0, chunk.length, pendingStart);
+    pendingStart += pendingBytes;
+    pending = [];
+    pendingBytes = 0;
+  };
 
   try {
     const readerOptions = {
@@ -355,7 +382,7 @@ export async function ingestXlsxLazily(docId: string, xlsxBytes: Buffer): Promis
       const single = new JSZip();
       single.file(sheetPath, worksheetXmlsByPath.get(sheetPath) ?? '');
       const singleBytes = await single.generateAsync({ type: 'nodebuffer', compression: 'STORE' });
-      const reader = new ExcelJS.stream.xlsx.WorkbookReader(Readable.from(singleBytes), readerOptions);
+      const reader = new ExcelJS.stream.xlsx.WorkbookReader(chunkedReadable(singleBytes), readerOptions);
       for (const key of ['workbookRels', 'properties', 'model', 'sharedStrings', 'styles'] as const) {
         (reader as unknown as Record<string, unknown>)[key] = (seedReader as unknown as Record<string, unknown>)[key];
       }
@@ -452,7 +479,9 @@ export async function ingestXlsxLazily(docId: string, xlsxBytes: Buffer): Promis
 
           const json = JSON.stringify(cells);
           const buf = Buffer.from(json, 'utf8');
-          await writeHandle.write(buf, 0, buf.length, byteOffset);
+          pending.push(buf);
+          pendingBytes += buf.length;
+          if (pendingBytes >= 1024 * 1024) await flushPending();
           thisSheetIndex[originalRow] = { byteOffset, byteLength: buf.length };
           byteOffset += buf.length;
 
@@ -508,6 +537,7 @@ export async function ingestXlsxLazily(docId: string, xlsxBytes: Buffer): Promis
         });
       }
     }
+    await flushPending();
   } finally {
     await writeHandle.close();
   }

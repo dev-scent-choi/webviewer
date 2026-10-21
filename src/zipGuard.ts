@@ -68,6 +68,15 @@ export function unzipXmlParts(data: Uint8Array, contextLabel: string): Unzipped 
  * 못하면 null. fflate는 이 선언 크기만큼의 출력 버퍼에 풀기 때문에, 이 합이 상한 안이면 풀기에 드는 메모리도 그 안이다.
  */
 export function declaredUnzippedSize(data: Uint8Array): number | null {
+  const entries = declaredEntrySizes(data);
+  if (!entries) return null;
+  let total = 0;
+  for (const size of entries.values()) total += size;
+  return total;
+}
+
+/** 항목 이름 → 풀린 크기(중앙 디렉터리 선언값). zip이 아니거나 못 읽으면 null */
+export function declaredEntrySizes(data: Uint8Array): Map<string, number> | null {
   if (data.length < 22 || data[0] !== 0x50 || data[1] !== 0x4b) return null;
   const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
   const u16 = (o: number) => view.getUint16(o, true);
@@ -89,7 +98,8 @@ export function declaredUnzippedSize(data: Uint8Array): number | null {
     count = u64(z64 + 32);
     offset = u64(z64 + 48);
   }
-  let total = 0;
+  const sizes = new Map<string, number>();
+  const nameDecoder = new TextDecoder();
   let p = offset;
   for (let n = 0; n < count; n += 1) {
     if (p + 46 > data.length || u32(p) !== 0x02014b50) return null;
@@ -113,10 +123,11 @@ export function declaredUnzippedSize(data: Uint8Array): number | null {
       }
       if (size < 0) return null;
     }
-    total += size;
+    if (p + 46 + nameLen > data.length) return null;
+    sizes.set(nameDecoder.decode(data.subarray(p + 46, p + 46 + nameLen)), size);
     p += 46 + nameLen + extraLen + commentLen;
   }
-  return total;
+  return sizes;
 }
 
 /** 선언된 풀린 크기가 상한을 넘으면 오류 — 업로드·저장 때 미리, 그리고 풀기 직전에 부른다 */

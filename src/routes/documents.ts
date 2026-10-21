@@ -19,6 +19,7 @@ import type { DocumentMeta } from '../types.js';
 import { invalidateViewCaches } from './viewer.js';
 import { isOpenable, trackInitialConversion } from '../conversionGate.js';
 import { assertZipNotTooLarge, ZipTooLargeError } from '../zipGuard.js';
+import { buildViewerGridFile, isLargeXlsx, saveGridFile, serializeGridFromLazyStore } from '../xlsx/viewerGrid.js';
 
 const tokenBodySchema = {
   type: 'object',
@@ -96,19 +97,31 @@ async function buildGrid(meta: DocumentMeta): Promise<GridDocument> {
 async function runGridExtraction(app: FastifyInstance, meta: DocumentMeta): Promise<void> {
   try {
     await store.writeMeta({ ...meta, progress: PROGRESS_CONVERTING });
-    const grid = await buildGrid(meta);
-    if (grid.sheets.length === 0) {
-      throw new ConversionError('표시할 시트가 없습니다. 파일이 비어 있거나 지원되지 않는 내용입니다.');
+    // xlsx는 크기에 따라 통째 읽기/스트리밍 읽기를 고른다(xlsx/viewerGrid.ts) — 큰 파일을 통째로 읽으면 서버가 메모리 부족으로 죽었다
+    let sheetCount: number;
+    if (meta.ext === 'xlsx') {
+      const xlsxBytes = await store.readOriginal(meta.id, meta.ext);
+      // 큰 파일은 편집기용 스트리밍 읽기를 한 번만 한다 — 그 결과로 보기용 표를 만들고, 편집기를 열면 같은 결과를
+      // 그대로 이어받는다(prewarmXlsxRoom, 3분 안에 안 열면 버림). 예전엔 업로드 때 한 번, 편집기 열 때 또 한 번 읽었다.
+      const prewarmed = isLargeXlsx(xlsxBytes) ? await prewarmXlsxRoom(meta.id, xlsxBytes) : null;
+      const built = prewarmed ? await serializeGridFromLazyStore(prewarmed) : await buildViewerGridFile(xlsxBytes);
+      sheetCount = built.sheetCount;
+      if (sheetCount === 0) throw new ConversionError('표시할 시트가 없습니다. 파일이 비어 있거나 지원되지 않는 내용입니다.');
+      await saveGridFile(store, meta.id, built.buffer);
+    } else {
+      const grid = await buildGrid(meta);
+      sheetCount = grid.sheets.length;
+      if (sheetCount === 0) throw new ConversionError('표시할 시트가 없습니다. 파일이 비어 있거나 지원되지 않는 내용입니다.');
+      await saveGridDerived(store, meta.id, grid);
     }
-    await saveGridDerived(store, meta.id, grid);
     await store.writeMeta({
       ...meta,
       status: 'ready',
       viewKind: 'grid',
-      pageCount: grid.sheets.length,
+      pageCount: sheetCount,
       progress: 100,
     });
-    await recordAudit({ type: 'converted', docId: meta.id, detail: `${grid.sheets.length} sheets (grid)` });
+    await recordAudit({ type: 'converted', docId: meta.id, detail: `${sheetCount} sheets (grid)` });
   } catch (error) {
     app.log.error(error, 'grid extraction failed');
     const userMessage =
@@ -284,7 +297,9 @@ async function ingestUpload(
       // 엑셀도 편집기는 원본만 읽는다 — 다만 보기 화면(그리드)을 쓰는 곳(디스크 저장, 8000)은 그리드가 먼저
       // 필요하므로, 편집기로만 여는 메모리 저장 모드(향기랩)에서만 기다리지 않게 한다.
       // PDF도 편집기는 원본만 읽는다 — 다만 보기 화면(8000)은 변환된 pdf가 있어야 하므로 엑셀처럼 메모리 모드(향기랩)에서만.
-      ...(ext === 'docx' || ((ext === 'xlsx' || ext === 'pdf') && config.storageMode === 'memory') ? { editReady: true } : {}),
+      // pptx도 변환(LibreOffice PDF)을 기다리지 않고 연다 — 편집기는 글자·도형을 원본에서 바로 그리고, 쪽 그림(복잡한 도형·
+      // 썸네일)만 변환이 끝나는 대로 채운다(/api/view/pages가 첫 변환을 기다려 준다). 예전엔 85MB 파일이 21초 동안 안 열렸다.
+      ...(ext === 'docx' || ext === 'pptx' || ((ext === 'xlsx' || ext === 'pdf') && config.storageMode === 'memory') ? { editReady: true } : {}),
     };
     await store.writeMeta(meta);
     await recordAudit({
