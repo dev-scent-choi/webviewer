@@ -2049,63 +2049,52 @@ async function main(): Promise<void> {
       extendSelectionTo(selFocusRow + dRow, selFocusCol + dCol);
       return;
     }
-    const { rows: rowCount, cols: colCount } = renderCountsFor(currentStructure());
-    const inBounds = (r: number, c: number) => r >= 0 && c >= 0 && r < rowCount && c < colCount;
-    const isEmpty = (r: number, c: number) => {
-      if (!inBounds(r, c)) return true;
-      const v = cells.get(gridCellKey(activeSheet, r, c));
-      return v === undefined || v === '';
-    };
-    let r = selFocusRow;
-    let c = selFocusCol;
-    if (isEmpty(r, c) || isEmpty(r + dRow, c + dCol)) {
-      r += dRow;
-      c += dCol;
-      while (inBounds(r, c) && isEmpty(r, c)) {
-        r += dRow;
-        c += dCol;
-      }
-    } else {
-      while (inBounds(r + dRow, c + dCol) && !isEmpty(r + dRow, c + dCol)) {
-        r += dRow;
-        c += dCol;
-      }
-    }
-    extendSelectionTo(r, c);
+    const [r, c] = findDataEdge(selFocusRow, selFocusCol, dRow, dCol);
+    extendSelectionTo(r, dCol === 0 ? selFocusCol : c);
   }
 
   /** 엑셀의 Ctrl+방향키(End 모드) — 빈 칸이거나 바로 다음 칸이 비어 있으면 다음 데이터(또는
    * 시트 끝)까지 건너뛰고, 데이터가 연속돼 있으면 그 블록이 끝나는 칸까지 단번에 이동한다. */
-  function moveSelectionToDataEdge(fromRow: number, fromCol: number, dRow: number, dCol: number): void {
+  /**
+   * 엑셀의 Ctrl+방향키가 멈출 칸 — 빈 칸이거나 바로 다음 칸이 비어 있으면 다음 데이터(또는 시트 끝)까지, 데이터가
+   * 이어지면 그 블록 끝까지. 큰 시트는 화면 근처 페이지만 받아 두므로, 아직 받지 않은 행에 닿으면 알 수 없어 데이터의
+   * 처음·끝 행으로 간다(예전엔 받은 페이지 끝인 500행에서 멈췄다 — 100만 행 파일에서 Ctrl+↓가 A500).
+   */
+  function findDataEdge(fromRow: number, fromCol: number, dRow: number, dCol: number): [number, number] {
     const sheet = currentStructure();
     const { rows: rowCount, cols: colCount } = renderCountsFor(sheet);
+    const lastDataRow = Math.max(0, sheet.rowCount - 1);
     const inBounds = (r: number, c: number) => r >= 0 && c >= 0 && r < rowCount && c < colCount;
+    const unknown = (r: number) => dRow !== 0 && r >= 0 && r <= lastDataRow && !rowArrived(r);
     const isEmpty = (r: number, c: number): boolean => {
       if (!inBounds(r, c)) return true;
       const v = cells.get(gridCellKey(activeSheet, r, c));
       return v === undefined || v === '';
     };
-    let row = fromRow;
-    let col = fromCol;
-    if (isEmpty(row, col) || isEmpty(row + dRow, col + dCol)) {
-      let r = row + dRow;
-      let c = col + dCol;
+    const jumpPastUnknown = (): [number, number] => [dRow > 0 ? lastDataRow : 0, fromCol];
+    let r = fromRow;
+    let c = fromCol;
+    if (isEmpty(r, c) || (!unknown(r + dRow) && isEmpty(r + dRow, c + dCol))) {
+      r += dRow;
+      c += dCol;
       while (inBounds(r, c) && isEmpty(r, c)) {
+        if (unknown(r)) return jumpPastUnknown();
         r += dRow;
         c += dCol;
       }
-      row = Math.min(Math.max(r, 0), rowCount - 1);
-      col = Math.min(Math.max(c, 0), colCount - 1);
-    } else {
-      let r = row;
-      let c = col;
-      while (inBounds(r + dRow, c + dCol) && !isEmpty(r + dRow, c + dCol)) {
-        r += dRow;
-        c += dCol;
-      }
-      row = r;
-      col = c;
+      return [Math.min(Math.max(r, 0), rowCount - 1), Math.min(Math.max(c, 0), colCount - 1)];
     }
+    while (inBounds(r + dRow, c + dCol) && (unknown(r + dRow) || !isEmpty(r + dRow, c + dCol))) {
+      if (unknown(r + dRow)) return jumpPastUnknown();
+      r += dRow;
+      c += dCol;
+    }
+    return [r, c];
+  }
+
+  function moveSelectionToDataEdge(fromRow: number, fromCol: number, dRow: number, dCol: number): void {
+    const { rows: rowCount, cols: colCount } = renderCountsFor(currentStructure());
+    let [row, col] = findDataEdge(fromRow, fromCol, dRow, dCol);
     // 병합에 덮인 칸이라 실제 <td>가 없으면(moveSelection과 동일한 보정) 같은 방향으로 한 칸 더 간다.
     for (let attempt = 0; attempt < 30; attempt += 1) {
       const targetTd = tdForEnsureRendered(row, col);
@@ -2521,9 +2510,16 @@ async function main(): Promise<void> {
     clearRangeHighlight();
     const { r0, r1, c0, c1 } = rangeBounds();
     if (r0 === r1 && c0 === c1) return;
-    for (let r = r0; r <= r1; r += 1) {
-      for (let c = c0; c <= c1; c += 1) {
-        tdFor(r, c)?.classList.add('g-range-selected');
+    // 지금 그려진 행(vwRowEls)만 칠한다 — 범위의 칸마다 DOM을 찾으면 100만 행 선택(Ctrl+Shift+↓)에 30초가 걸렸다.
+    // 창 밖 행은 스크롤로 들어올 때 repaintScrollWindowSelection이 칠한다.
+    for (const [r, tr] of vwRowEls) {
+      if (r < r0 || r > r1) continue;
+      for (let i = 0; i < tr.children.length; i += 1) {
+        const cell = tr.children[i] as HTMLElement;
+        const col = cell.dataset.col;
+        if (col === undefined) continue;
+        const c = Number(col);
+        if (c >= c0 && c <= c1) cell.classList.add('g-range-selected');
       }
     }
   }

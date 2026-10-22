@@ -20,6 +20,7 @@ import { invalidateViewCaches } from './viewer.js';
 import { isOpenable, trackInitialConversion } from '../conversionGate.js';
 import { assertZipNotTooLarge, ZipTooLargeError } from '../zipGuard.js';
 import { buildViewerGridFile, isLargeXlsx, saveGridFile, serializeGridFromLazyStore } from '../xlsx/viewerGrid.js';
+import { acceptChunk, ChunkUploadError } from '../chunkedUpload.js';
 
 const tokenBodySchema = {
   type: 'object',
@@ -369,7 +370,7 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
-  app.post<{ Querystring: { filename: string } }>(
+  app.post<{ Querystring: { filename: string; uploadId?: string; index?: number; total?: number } }>(
     '/api/documents/stream',
     {
       bodyLimit: config.maxUploadBytes,
@@ -379,7 +380,13 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
         querystring: {
           type: 'object',
           required: ['filename'],
-          properties: { filename: { type: 'string', minLength: 1, maxLength: 300 } },
+          properties: {
+            filename: { type: 'string', minLength: 1, maxLength: 300 },
+            // 조각 업로드(chunkedUpload.ts) — 셋 다 있으면 이 요청 본문은 파일의 index번째 조각
+            uploadId: { type: 'string', maxLength: 64 },
+            index: { type: 'integer', minimum: 0 },
+            total: { type: 'integer', minimum: 1 },
+          },
         },
       },
     },
@@ -389,9 +396,23 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
       // 파서). multipart 경계를 만들 필요 없이 파일 바이트를 요청 본문에 그대로 실어 보내는
       // 쪽을 위한 경로 — 같은 서버에 파일이 이미 있는 다른 프로젝트가 그 바이트를 파이프로
       // 그대로 흘려보낼 때 특히 유용하다(디스크에 다시 쓰지 않고 스트리밍).
-      const data = request.body as Buffer;
+      let data = request.body as Buffer;
       if (!data || data.length === 0) {
         return reply.code(400).send({ success: false, error: '업로드된 파일이 없습니다.' });
+      }
+      const { uploadId, index, total } = request.query;
+      if (uploadId !== undefined || index !== undefined || total !== undefined) {
+        if (uploadId === undefined || index === undefined || total === undefined) {
+          return reply.code(400).send({ success: false, error: '조각 업로드에는 uploadId·index·total이 모두 필요합니다.' });
+        }
+        try {
+          const chunk = await acceptChunk(uploadId, index, total, data, config.maxUploadBytes);
+          if (!chunk.done) return await reply.code(202).send({ success: true, data: { received: chunk.received, total } });
+          data = chunk.bytes;
+        } catch (error) {
+          if (error instanceof ChunkUploadError) return reply.code(error.status).send({ success: false, error: error.message });
+          throw error;
+        }
       }
       const result = await ingestUpload(app, request.query.filename, data, callerProject);
       return await reply.code(result.code).send(result.body);

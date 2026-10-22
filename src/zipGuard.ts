@@ -15,6 +15,14 @@ import { unzipSync, type UnzipOptions, type Unzipped } from 'fflate';
  */
 export const DEFAULT_MAX_UNCOMPRESSED_BYTES = 1024 * 1024 * 1024; // 1GB
 
+/**
+ * 파일 크기에 맞춘 상한 — 압축 파일 크기의 20배(최소 1GB, 최대 8GB). 실무 엑셀은 보통 7~10배로 풀린다(54MB → 약 0.4GB).
+ * 고정 1GB면 수백 MB짜리 정상 파일까지 막고, 압축 폭탄은 대개 수백~수천 배라 20배에서 걸린다.
+ */
+export function uncompressedLimitFor(data: Uint8Array): number {
+  return Math.min(8 * 1024 * 1024 * 1024, Math.max(DEFAULT_MAX_UNCOMPRESSED_BYTES, data.length * 20));
+}
+
 export class ZipTooLargeError extends Error {
   constructor(contextLabel: string, totalBytes: number, maxBytes: number) {
     super(
@@ -33,7 +41,7 @@ export function guardedUnzipSync(
   data: Uint8Array,
   contextLabel: string,
   opts?: UnzipOptions,
-  maxBytes: number = DEFAULT_MAX_UNCOMPRESSED_BYTES,
+  maxBytes: number = uncompressedLimitFor(data),
 ): Unzipped {
   assertZipNotTooLarge(data, contextLabel, maxBytes);
   const entries = opts ? unzipSync(data, opts) : unzipSync(data);
@@ -131,7 +139,7 @@ export function declaredEntrySizes(data: Uint8Array): Map<string, number> | null
 }
 
 /** 선언된 풀린 크기가 상한을 넘으면 오류 — 업로드·저장 때 미리, 그리고 풀기 직전에 부른다 */
-export function assertZipNotTooLarge(data: Uint8Array, contextLabel: string, maxBytes: number = DEFAULT_MAX_UNCOMPRESSED_BYTES): void {
+export function assertZipNotTooLarge(data: Uint8Array, contextLabel: string, maxBytes: number = uncompressedLimitFor(data)): void {
   const declared = declaredUnzippedSize(data);
   if (declared !== null && declared > maxBytes) throw new ZipTooLargeError(contextLabel, declared, maxBytes);
 }
