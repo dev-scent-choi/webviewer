@@ -2846,6 +2846,10 @@ async function reconcilePageSubscriptions(
   // 2) 새로 구독된 페이지를 채운다.
   for (const page of after) {
     if (before.has(page)) continue;
+    // 빨리 스크롤하면 구독이 120ms마다 바뀐다 — 앞 페이지를 채우는 사이 이미 지나간 페이지는 건너뛴다. 안 그러면 서버가
+    // 조금만 느려도 지나간 페이지가 줄줄이 밀려 지금 보는 페이지가 그 뒤에 서서 '불러오는 중'이 몇 초씩 남았다.
+    // (다시 돌아오면 그때의 구독 메시지가 before에 없는 페이지로 보고 다시 채운다.)
+    if (!getSubscribedPageUnion(room, sheet).has(page)) continue;
     await seedGridPageFromXlsx(room.ydoc, lazyStore, sheet, page);
     await recomputeFormulasForPage(room, sheet, page);
     loadedPagesOf(room, sheet).add(page);
