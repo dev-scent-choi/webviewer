@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isApiKeyAuthEnabled } from './apiKeyAuth.js';
@@ -23,6 +24,17 @@ async function main(): Promise<void> {
   await ensureDataDirs();
   await sweepOrphanedLazyGridFiles();
   const app = await buildApp();
+  // 작업 스케줄러로 띄우면 우선순위가 '낮음 이하'(작업 기본값 7)라, 같은 PC의 다른 일이 CPU를 쓰면 큰 엑셀 첫 화면·스크롤이
+  // 두 배 넘게 느려졌다(실측: 같은 코드·같은 데이터가 보통 우선순위에서는 정상). 보통보다 낮으면 보통으로 올린다.
+  // (자식인 LibreOffice도 이걸 물려받는다. 디스크·메모리 우선순위는 작업 설정의 Priority를 4로 바꿔야 함께 오른다.)
+  try {
+    if (os.getPriority() > os.constants.priority.PRIORITY_NORMAL) {
+      os.setPriority(os.constants.priority.PRIORITY_NORMAL);
+      app.log.info('프로세스 우선순위를 보통으로 올렸습니다(낮음 이하로 시작됨)');
+    }
+  } catch (error) {
+    app.log.warn(error, '프로세스 우선순위를 올리지 못했습니다');
+  }
   if (isEphemeralSecret) {
     app.log.warn(
       'DOCVIEW_SECRET 환경변수가 없어 임시 시크릿을 생성했습니다. 서버 재시작 시 발급된 열람 토큰이 모두 무효화됩니다.',
