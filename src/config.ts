@@ -4,9 +4,11 @@ const dataRoot = process.env.DOCVIEW_DATA_DIR ?? path.resolve(process.cwd(), 'da
 
 const DEFAULT_PORT = 8000;
 const DEFAULT_TOKEN_TTL_SECONDS = 60 * 60;
-const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
+// 업로드 상한 — 기본 500MB(DOCVIEW_MAX_UPLOAD_MB). 요청 하나에 100MB까지만 받는 앞단(Cloudflare)을 거치는 곳은 조각 업로드로 올린다
+const MAX_UPLOAD_BYTES = Math.max(1, Number(process.env.DOCVIEW_MAX_UPLOAD_MB) || 500) * 1024 * 1024;
 const RENDER_SCALE = 2;
-const DEFAULT_MEMORY_BUDGET_MB = 1024;
+// 메모리 저장 모드(향기랩)의 문서 보관 예산 — 업로드 상한(500MB) 파일이 들어와도 다른 사람의 문서를 밀어내지 않게 4GB
+const DEFAULT_MEMORY_BUDGET_MB = 4096;
 const DEFAULT_CACHE_BUDGET_MB = 512;
 
 export type StorageMode = 'disk' | 'memory';

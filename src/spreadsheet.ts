@@ -230,7 +230,8 @@ export async function buildGridFromOriginal(
  * 조작된 소켓 메시지 하나로 파일에서는 있을 수 없는 크기의 배열을 서버에 할당시킬 수 있다
  * (YIELD_EVERY_N_ROWS를 여기서 export해 서버/클라이언트가 공유하는 것과 같은 이유).
  */
-export const MAX_ROWS = 300_000;
+// 엑셀 자체 한도(1,048,576행) — SAP에서 뽑은 87만 행 같은 실무 파일이 있다. 예전 30만 행 한도는 그 뒤 행이 보이지도 저장되지도 않았다
+export const MAX_ROWS = 1_048_576;
 export const MAX_COLS = 120;
 
 function argbToCss(argb?: string): string | undefined {
