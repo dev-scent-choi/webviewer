@@ -96,7 +96,7 @@ export function decodeXmlAttr(value: string): string {
 }
 
 /** 시트 이름 → 시트 파트 경로(xl/workbook.xml + 관계) */
-export function sheetPathsByName(entries: Record<string, Uint8Array>): Map<string, string> {
+export function sheetPathsByName(entries: Readonly<Record<string, Uint8Array>>): Map<string, string> {
   const result = new Map<string, string>();
   const workbook = entries['xl/workbook.xml'];
   const rels = entries['xl/_rels/workbook.xml.rels'];
@@ -288,7 +288,11 @@ export function restoreDrawings(xlsx: Uint8Array, stash: DrawingStash): Uint8Arr
 
 /** 파일의 시트별 차트 — 편집기가 같은 자리에 SVG로 그린다(파일 쪽 차트는 저장 때 원본 그대로 보존). */
 export function readSheetCharts(xlsx: Uint8Array): GridChart[] {
-  const entries: Record<string, Uint8Array> = unzipSync(xlsx);
+  return readSheetChartsFromEntries(unzipSync(xlsx));
+}
+
+/** 이미 푼 파트 모음에서 — 큰 파일은 데이터를 뺀 뼈대(zipSkeleton.ts readXlsxSkeleton)를 넘긴다 */
+export function readSheetChartsFromEntries(entries: Readonly<Record<string, Uint8Array>>): GridChart[] {
   const charts: GridChart[] = [];
   for (const [sheetName, sheetPath] of sheetPathsByName(entries)) {
     const sheetBytes = entries[sheetPath];
@@ -339,7 +343,11 @@ const MAX_IMAGE_BYTES_TOTAL = 12 * 1024 * 1024;
 
 /** 파일에 있는 그림들(시트 이름·위치·내용). 브라우저가 못 그리는 형식(EMF/WMF 등)은 뺀다. */
 export function readSheetImages(xlsx: Uint8Array): GridImage[] {
-  const entries: Record<string, Uint8Array> = unzipSync(xlsx);
+  return readSheetImagesFromEntries(unzipSync(xlsx));
+}
+
+/** 이미 푼 파트 모음에서 — readSheetChartsFromEntries와 같다 */
+export function readSheetImagesFromEntries(entries: Readonly<Record<string, Uint8Array>>): GridImage[] {
   const images: GridImage[] = [];
   let total = 0;
   for (const [sheetName, sheetPath] of sheetPathsByName(entries)) {

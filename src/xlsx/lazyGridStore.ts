@@ -59,6 +59,10 @@ export interface LazyGridSheetMeta {
   condFormatFilePriorities?: readonly number[];
   freezeRows: number;
   freezeCols: number;
+  /** 편집기에서 끌어 바꾼 열 폭(0부터 센 열 → px, 0 = 숨김) — 저장할 때 이 열만 파일에 다시 쓴다(collab.ts applyEditedSizes) */
+  colSizeEdits?: Map<number, number>;
+  /** 편집기에서 끌어 바꾼 행 높이 묶음 [시작 행, 행 수, px](기본 높이로 되돌린 것도 남는다) — 저장할 때 이 행들만 다시 쓴다 */
+  rowSizeEdits?: RowHeightRuns;
 }
 
 export interface LazyRowIndexEntry {

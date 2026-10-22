@@ -51,9 +51,10 @@ import {
 } from '../spreadsheet.js';
 import { exportXlsxFromGridStreaming } from '../xlsx/exportStreaming.js';
 import { GRID_CHARTS_MAP, type GridChart } from '../xlsx/chartModel.js';
-import { readSheetCharts, readSheetImages, type GridImage } from '../xlsx/drawingPassthrough.js';
+import { readSheetChartsFromEntries, readSheetImagesFromEntries, type GridImage } from '../xlsx/drawingPassthrough.js';
+import { readXlsxSkeleton } from '../xlsx/zipSkeleton.js';
 import { readAutoFilters } from '../xlsx/autoFilter.js';
-import { readSheetExtras, type SheetExtras } from '../xlsx/sheetExtras.js';
+import { readSheetExtrasFromEntries, type SheetExtras } from '../xlsx/sheetExtras.js';
 import { PPTX_SLIDE_DESIGN_MAP, PPTX_SLIDE_DESIGN_ORIGINAL_MAP, readSlideDesign, type SlideDesign } from '../pptx/slideDesign.js';
 import { GRID_FILTERS_MAP, type SheetFilter } from '../xlsx/filterModel.js';
 import {
@@ -76,6 +77,7 @@ import {
   EXCEL_DEFAULT_ROW_HEIGHT_PT,
   defaultColWidthPx,
   rowHeightPtToPx,
+  setRowHeightRange,
   shiftRowHeightRuns,
 } from '../xlsx/sheetGeometry.js';
 import {
@@ -937,18 +939,45 @@ function exportOptionsFor(room: Room) {
 /** 편집기가 그릴 파일 차트 — 룸이 열려 있으면 룸을 연 시점의 원본 기준(저장 후 디스크 파일에는 편집기에서
  * 넣은 차트까지 들어가 있어, 그걸 "파일 차트"로 또 그리면 같은 차트가 둘로 보인다). */
 export async function getFileCharts(docId: string): Promise<GridChart[]> {
+  return readSheetChartsFromEntries(await fileSkeletonOf(docId));
+}
+
+/**
+ * 차트·그림·링크 읽기가 함께 쓰는 원본 파트 모음 — 편집기가 열리며 세 요청이 동시에 오므로 한 번만 푼다.
+ * 열린 룸은 룸을 연 시점의 원본 바이트(그 객체가 바뀌지 않는다)에 묶어 두고, 룸이 없으면(보기 화면) 잠깐만 둔다.
+ */
+const skeletonByBytes = new WeakMap<Uint8Array, Promise<Record<string, Uint8Array>>>();
+const skeletonByDoc = new Map<string, { bytes: Promise<Record<string, Uint8Array>>; timer: NodeJS.Timeout }>();
+const SKELETON_IDLE_TTL_MS = 30_000;
+async function fileSkeletonOf(docId: string): Promise<Record<string, Uint8Array>> {
   const room = rooms.get(docId);
   if (room) await room.ready;
-  const bytes = room?.originalXlsxBytes ?? (await store.readOriginal(docId, 'xlsx'));
-  return readSheetCharts(bytes);
+  const roomBytes = room?.originalXlsxBytes;
+  if (roomBytes) {
+    let cached = skeletonByBytes.get(roomBytes);
+    if (!cached) {
+      cached = readXlsxSkeleton(roomBytes);
+      skeletonByBytes.set(roomBytes, cached);
+      cached.catch(() => skeletonByBytes.delete(roomBytes));
+    }
+    return cached;
+  }
+  const hit = skeletonByDoc.get(docId);
+  if (hit) return hit.bytes;
+  const bytes = store.readOriginal(docId, 'xlsx').then((original) => readXlsxSkeleton(original));
+  const timer = setTimeout(() => skeletonByDoc.delete(docId), SKELETON_IDLE_TTL_MS);
+  timer.unref();
+  skeletonByDoc.set(docId, { bytes, timer });
+  bytes.catch(() => {
+    clearTimeout(timer);
+    skeletonByDoc.delete(docId);
+  });
+  return bytes;
 }
 
 /** 파일에 있는 그림(로고 등) — 보기·편집 화면이 칸 위치에 맞춰 얹는다. 열린 룸이 있으면 그 원본 기준. */
 export async function getFileImages(docId: string): Promise<GridImage[]> {
-  const room = rooms.get(docId);
-  if (room) await room.ready;
-  const bytes = room?.originalXlsxBytes ?? (await store.readOriginal(docId, 'xlsx'));
-  return readSheetImages(bytes);
+  return readSheetImagesFromEntries(await fileSkeletonOf(docId));
 }
 
 /**
@@ -987,10 +1016,7 @@ export function discardPrewarmedXlsx(docId: string): void {
 
 /** 파일의 하이퍼링크(바로가기)·목록 상자 — 편집 화면이 링크 이동·목록 고르기에 쓴다. 열린 룸이 있으면 그 원본 기준. */
 export async function getFileExtras(docId: string): Promise<SheetExtras> {
-  const room = rooms.get(docId);
-  if (room) await room.ready;
-  const bytes = room?.originalXlsxBytes ?? (await store.readOriginal(docId, 'xlsx'));
-  return readSheetExtras(bytes);
+  return readSheetExtrasFromEntries(await fileSkeletonOf(docId));
 }
 
 /**
@@ -1215,6 +1241,62 @@ const MAX_STRUCTURE_OP_COUNT = 500;
  * 줄을 서므로(enqueueCanonicalGrowth) 메시지가 도착한 시점의 rowCount로 검사해 두면 앞선
  * 연산이 그 값을 바꿔 놓은 뒤에 적용될 수 있다.
  */
+/** 열 폭·행 높이 바꾸기 — 같은 MESSAGE_GRID_STRUCTURE_OP 통로로 오지만 행/열을 옮기지 않으므로 structuralOps에 남기지 않는다.
+ * size는 px(0 = 숨김). 행은 시트 전체(Ctrl+A 후 높이 바꾸기)까지 한 번에 올 수 있어 count 상한이 행 수 상한이다 —
+ * 행 높이는 묶음(setRowHeightRange)으로만 다뤄 count만큼 메모리를 쓰지 않는다. */
+interface GridResizeOp {
+  readonly sheet: number;
+  readonly kind: 'resizeCols' | 'resizeRows';
+  readonly at: number;
+  readonly count: number;
+  readonly size: number;
+}
+const MAX_RESIZE_COL_PX = 2000;
+const MAX_RESIZE_ROW_PX = 1000;
+
+function isValidGridResizeOp(parsed: unknown): parsed is GridResizeOp {
+  if (!parsed || typeof parsed !== 'object') return false;
+  const { sheet, kind, at, count, size } = parsed as { sheet?: unknown; kind?: unknown; at?: unknown; count?: unknown; size?: unknown };
+  if (kind !== 'resizeCols' && kind !== 'resizeRows') return false;
+  if (!Number.isInteger(sheet) || (sheet as number) < 0 || (sheet as number) >= MAX_CANONICAL_SHEETS) return false;
+  const limit = kind === 'resizeCols' ? MAX_CANONICAL_COLS : MAX_CANONICAL_ROWS;
+  if (!Number.isInteger(at) || (at as number) < 0) return false;
+  if (!Number.isInteger(count) || (count as number) < 1 || (at as number) + (count as number) > limit) return false;
+  if (!Number.isInteger(size) || (size as number) < 0 || (size as number) > (kind === 'resizeCols' ? MAX_RESIZE_COL_PX : MAX_RESIZE_ROW_PX)) return false;
+  return true;
+}
+
+/** 열 폭·행 높이를 바꾸고 구조 맵으로 알린다 — 저장 때 바뀐 열·행만 파일에 쓰도록 기록도 남긴다(colSizeEdits/rowSizeEdits). */
+function applyGridResizeOp(room: Room, op: GridResizeOp): void {
+  if (rooms.get(room.docId) !== room) return;
+  const meta = room.lazyGrid?.sheetMeta[op.sheet];
+  if (!meta || room.removedSheetIndices.has(op.sheet)) return;
+  if (op.kind === 'resizeCols') {
+    const widths = [...meta.colWidths];
+    while (widths.length < op.at + op.count) widths.push(meta.defaultColWidth);
+    const edits = meta.colSizeEdits ?? new Map<number, number>();
+    for (let c = op.at; c < op.at + op.count; c += 1) {
+      widths[c] = op.size;
+      edits.set(c, op.size);
+    }
+    meta.colWidths = widths;
+    meta.colSizeEdits = edits;
+  } else {
+    meta.rowHeights = setRowHeightRange(meta.rowHeights, op.at, op.count, op.size, meta.defaultRowHeight);
+    // 기본 높이로 되돌린 것도 "바꿨다"로 남겨야 저장 때 파일의 원래 높이를 지운다 — 기본값과 겹치지 않는 -1을 기본으로 넘긴다
+    meta.rowSizeEdits = setRowHeightRange(meta.rowSizeEdits ?? [], op.at, op.count, op.size, -1);
+  }
+  room.editedSinceSave = true;
+  scheduleAutosave(room);
+  const structure = room.ydoc.getMap<SheetStructure>(GRID_STRUCTURE_MAP);
+  const key = String(op.sheet);
+  const previous = structure.get(key);
+  if (!previous) return;
+  room.ydoc.transact(() => {
+    structure.set(key, { ...previous, colWidths: meta.colWidths, rowHeights: meta.rowHeights });
+  }, GRID_STRUCTURE_SHIFT_ORIGIN);
+}
+
 function isValidGridStructureOp(parsed: unknown): parsed is GridStructureOp {
   if (!parsed || typeof parsed !== 'object') return false;
   const { sheet, kind, at, count } = parsed as { sheet?: unknown; kind?: unknown; at?: unknown; count?: unknown };
@@ -1359,6 +1441,17 @@ async function applyGridStructureOp(room: Room, op: GridStructureOp): Promise<vo
     meta.condFormatsEdited = true;
   }
   if (onRows) meta.rowHeights = shiftRowHeightRuns(meta.rowHeights, op.at, op.count, insert);
+  if (onRows && meta.rowSizeEdits) meta.rowSizeEdits = shiftRowHeightRuns(meta.rowSizeEdits, op.at, op.count, insert);
+  if (!onRows && meta.colSizeEdits) {
+    // 끌어 바꾼 열 폭 기록도 같은 자리로 옮긴다(지운 열의 기록은 버린다)
+    const moved = new Map<number, number>();
+    for (const [c, px] of meta.colSizeEdits) {
+      if (c < op.at) moved.set(c, px);
+      else if (insert) moved.set(c + op.count, px);
+      else if (c >= op.at + op.count) moved.set(c - op.count, px);
+    }
+    meta.colSizeEdits = moved;
+  }
   if (!onRows) {
     // 열 너비도 gridShift.ts의 옛 insertCanonicalCols/deleteCanonicalCols와 같은 규칙으로 직접
     // 보정한다 — 새로 끼워지는 열은 밀려나는 그 열의 너비를 그대로 물려받는다(엑셀과 같은 동작).
@@ -2417,7 +2510,10 @@ function handleMessage(room: Room, conn: WebSocket, message: Uint8Array): void {
             console.error('행/열 구조 변경 메시지 거부(읽기 전용 연결)');
           } else {
             const parsed: unknown = JSON.parse(payload);
-            if (!isValidGridStructureOp(parsed)) {
+            if (isValidGridResizeOp(parsed)) {
+              // 행/열 삽입·삭제와 같은 체인에 줄 세운다 — 앞선 삽입이 끝난 뒤의 자리 번호로 적용돼야 한다
+              enqueueCanonicalGrowth(room, async () => applyGridResizeOp(room, parsed));
+            } else if (!isValidGridStructureOp(parsed)) {
               // 구독 메시지와 같은 원칙 — 형식이 어긋나면 통째로 버린다(보정하지 않는다).
               console.error('행/열 구조 변경 메시지 거부(형식/범위 오류):', payload.slice(0, 200));
             } else {
