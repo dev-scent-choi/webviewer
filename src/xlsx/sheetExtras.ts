@@ -122,7 +122,11 @@ export function parseSheetExtras(sheetName: string, sheetXml: string, sheetRelsX
 
 /** 원본 xlsx의 모든 시트 */
 export function readSheetExtras(xlsx: Uint8Array): SheetExtras {
-  const entries: Record<string, Uint8Array> = unzipSync(xlsx);
+  return readSheetExtrasFromEntries(unzipSync(xlsx));
+}
+
+/** 이미 푼 파트 모음에서 — 큰 파일은 데이터를 뺀 뼈대(zipSkeleton.ts readXlsxSkeleton)를 넘긴다 */
+export function readSheetExtrasFromEntries(entries: Readonly<Record<string, Uint8Array>>): SheetExtras {
   const out: SheetExtras = { links: [], lists: [] };
   for (const [sheetName, sheetPath] of sheetPathsByName(entries)) {
     const sheet = entries[sheetPath];

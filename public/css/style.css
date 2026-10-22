@@ -3849,3 +3849,29 @@ body.review-pane-open #editor-zoom-host { margin-right: 320px; }
 
 /* 워드 — 직접 간격이 없는 문단은 문서의 기본 앞뒤 간격(editor.ts applyDefaultParagraphSpacing), 못 읽었으면 브라우저 기본(1em) */
 .editor-surface .ProseMirror p { margin-top: var(--doc-p-before, 1em); margin-bottom: var(--doc-p-after, 1em); }
+
+/* 엑셀 편집기 — 머리글 경계에서 열 폭·행 높이 바꾸기(grid-editor.ts resizeTargetAt) */
+.grid-edit-table.g-resize-col thead th,
+.grid-edit-table.g-resize-col .g-edit-rownum { cursor: col-resize; }
+.grid-edit-table.g-resize-row .g-edit-rownum,
+.grid-edit-table.g-resize-row thead th { cursor: row-resize; }
+.g-resize-guide {
+  position: fixed;
+  z-index: 60;
+  pointer-events: none;
+  border: 0 dashed #217346;
+}
+.g-resize-guide.is-col { width: 0; border-left-width: 1px; }
+.g-resize-guide.is-row { height: 0; border-top-width: 1px; }
+.g-resize-tip {
+  position: fixed;
+  z-index: 61;
+  pointer-events: none;
+  padding: 2px 6px;
+  border: 1px solid #c8c8c8;
+  background: #fff;
+  color: #242424;
+  font: 12px var(--office-font, var(--font-sans));
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+  white-space: nowrap;
+}

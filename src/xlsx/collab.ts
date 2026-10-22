@@ -4,7 +4,9 @@ import { cellsOf, type GridChart } from './chartModel.js';
 import { writeFilterCriteria } from './autoFilter.js';
 import { filteredRows, type SheetFilter } from './filterModel.js';
 import ExcelJS from 'exceljs';
+import { strFromU8, unzipSync } from 'fflate';
 import * as Y from 'yjs';
+import { defaultFontOfStylesXml, maxDigitWidthPx, pxToExcelColWidth } from './sheetGeometry.js';
 import {
   GRID_BASELINE_MAP,
   GRID_CELLS_MAP,
@@ -696,6 +698,54 @@ const EMPTY_REMOVED_SHEETS: ReadonlySet<number> = new Set<number>();
  * 확장/축소는 `structuralOps`에 기록되지 않으므로 현재 값에서 역산할 수도 없다). 그래서 이 인자는
  * `room.baselineSheetExtents`(seedRoom이 `ingestXlsxLazily` 직후 한 번 스냅샷)로 그대로 유지한다.
  */
+/**
+ * 편집기에서 끌어 바꾼 열 폭·행 높이(colSizeEdits/rowSizeEdits)만 파일에 다시 쓴다 — 건드리지 않은 열·행은 원본 그대로.
+ * 0은 숨김. 열 폭 단위(문자)는 통합 문서 기본 글꼴의 숫자 폭(mdw)에 달려 있어 원본 styles.xml에서 구한다.
+ */
+export function applyEditedSizes(
+  store: Pick<LazyGridStore, 'sheetMeta'>,
+  sheets: ReadonlyArray<ExcelJS.Worksheet | undefined>,
+  removedSheets: ReadonlySet<number>,
+  originalXlsxBytes: Uint8Array,
+): void {
+  const edited = store.sheetMeta.some((meta, i) => !removedSheets.has(i) && ((meta.colSizeEdits?.size ?? 0) > 0 || (meta.rowSizeEdits?.length ?? 0) > 0));
+  if (!edited) return;
+  let mdw: number;
+  try {
+    const styles = unzipSync(originalXlsxBytes, { filter: (f) => f.name === 'xl/styles.xml' })['xl/styles.xml'];
+    const font = defaultFontOfStylesXml(styles ? strFromU8(styles) : undefined);
+    mdw = maxDigitWidthPx(font.name, font.size);
+  } catch {
+    mdw = maxDigitWidthPx(undefined, undefined);
+  }
+  store.sheetMeta.forEach((meta, sheetIdx) => {
+    const sheet = sheets[sheetIdx];
+    if (!sheet || removedSheets.has(sheetIdx)) return;
+    for (const [c, px] of meta.colSizeEdits ?? []) {
+      const column = sheet.getColumn(c + 1);
+      if (px === 0) {
+        column.hidden = true;
+      } else {
+        column.hidden = false;
+        column.width = pxToExcelColWidth(px, mdw);
+      }
+    }
+    for (const [start, len, px] of meta.rowSizeEdits ?? []) {
+      // 시트 전체를 골라 바꾼 경우(Ctrl+A) 묶음이 104만 행까지 갈 수 있다 — 실제 행 수 밖은 쓸 행이 없다
+      for (let r = start; r < Math.min(start + len, meta.rowCount); r += 1) {
+        const row = sheet.getRow(r + 1);
+        if (px === 0) {
+          row.hidden = true;
+        } else {
+          row.hidden = false;
+          // 기본 높이로 되돌렸으면 지정 높이를 지운다(엑셀이 기본/자동 맞춤으로 그린다)
+          (row as { height?: number }).height = px === meta.defaultRowHeight ? undefined : Math.round(px * 0.75 * 100) / 100;
+        }
+      }
+    }
+  });
+}
+
 /** exportXlsxFromGrid 참고 — mergesEdited 시트의 병합을 모두 풀고 sheetMeta.merges(1부터 센 좌표)로 다시 건다. */
 export function applyEditedMerges(
   store: Pick<LazyGridStore, 'sheetMeta'>,
@@ -895,6 +945,7 @@ export async function exportXlsxFromGrid(
   // 건드리지 않은 시트는 예전과 똑같이 원본(과 구조 연산 재생) 그대로 둔다. 값 쓰기가 다 끝난 **뒤에** 한다: ExcelJS는
   // 병합된 칸에 값을 쓰면 왼쪽 위 칸으로 넘겨 쓰므로, 먼저 병합하면 지운 칸의 빈 값이 왼쪽 위 값을 덮는다.
   applyEditedMerges(store, visibleSheets, removedSheets);
+  applyEditedSizes(store, visibleSheets, removedSheets, originalXlsxBytes);
   // 조건부 서식 — 편집·이동한 시트만 규칙 목록을 다시 쓰고, 모든 시트에서 ExcelJS가 못 쓰는 규칙을 수식 규칙으로 보존한다
   applyEditedCondFormats(store.sheetMeta, visibleSheets, removedSheets);
   visibleSheets.forEach((sheet, i) => {

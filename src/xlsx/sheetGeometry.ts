@@ -15,6 +15,17 @@ export function excelColWidthToPx(width: number, mdw = EXCEL_MAX_DIGIT_WIDTH_PX)
   return Math.trunc(((256 * width + Math.trunc(128 / mdw)) / 256) * mdw);
 }
 
+/** excelColWidthToPx의 역 — 편집기에서 끌어 바꾼 열 폭(px)을 파일에 쓸 너비(문자 단위, 1/256 단위로 맞춤)로.
+ * 다시 px로 바꾸면 같은 값이 나오는 가장 작은 너비를 고른다. */
+export function pxToExcelColWidth(px: number, mdw = EXCEL_MAX_DIGIT_WIDTH_PX): number {
+  if (px <= 0) return 0;
+  const pad = Math.trunc(128 / mdw);
+  let units = Math.max(0, Math.floor((px / mdw) * 256) - pad);
+  while (excelColWidthToPx(units / 256, mdw) < px) units += 1;
+  while (units > 0 && excelColWidthToPx((units - 1) / 256, mdw) >= px) units -= 1;
+  return units / 256;
+}
+
 /** 너비를 따로 정하지 않은 열의 폭 — sheetFormatPr의 defaultColWidth가 있으면 그것, 없으면
  * baseColWidth(기본 8자)에 여백 5px을 더해 8px 단위로 올린 값(Calibri 기본 64px). */
 export function defaultColWidthPx(defaultColWidth?: number, baseColWidth = 8, mdw = EXCEL_MAX_DIGIT_WIDTH_PX): number {
@@ -142,6 +153,40 @@ export function shiftRowHeightRuns(runs: RowHeightRuns, at: number, count: numbe
       }
     }
   }
+  return out;
+}
+
+/** [at, at+count) 행의 높이를 px로 바꾼 묶음 — 편집기에서 행 높이를 끌어 바꿀 때. 기본 높이와 같으면 묶음에서 뺀다. */
+export function setRowHeightRange(runs: RowHeightRuns, at: number, count: number, px: number, defaultPx: number): RowHeightRuns {
+  const end = at + count;
+  const out: Array<[number, number, number]> = [];
+  const push = (start: number, len: number, h: number) => {
+    if (len <= 0 || h === defaultPx) return;
+    const last = out[out.length - 1];
+    if (last && last[0] + last[1] === start && last[2] === h) last[1] += len;
+    else out.push([start, len, h]);
+  };
+  let placed = false;
+  const place = () => {
+    if (!placed) push(at, count, px);
+    placed = true;
+  };
+  for (const [start, len, h] of runs) {
+    const runEnd = start + len;
+    if (runEnd <= at) {
+      push(start, len, h);
+      continue;
+    }
+    if (start >= end) {
+      place();
+      push(start, len, h);
+      continue;
+    }
+    push(start, Math.max(0, at - start), h);
+    place();
+    if (runEnd > end) push(end, runEnd - end, h);
+  }
+  place();
   return out;
 }
 

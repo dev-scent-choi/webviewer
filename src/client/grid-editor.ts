@@ -702,6 +702,7 @@ async function main(): Promise<void> {
     const parsed = parseGridCellKey(key);
     if (!parsed) return;
     const { sheetIdx, row, col } = parsed;
+    if (vwValid && !vwRowEls.has(row)) return; // 그려지지 않은 행 — 다시 그릴 칸이 없다
     const { covered } = buildMergeLookup(sheetIdx);
     for (let cc = col - 1; cc >= 0; cc -= 1) {
       if (covered.has(`${row}:${cc}`)) continue;
@@ -1301,6 +1302,11 @@ async function main(): Promise<void> {
    * 행번호 열 폭은 여전히 CSS(min-width)가 정한다. 정확히 안 맞아도 상관없다: 테이블에 "auto가
    * 아닌" width를 준다는 사실 자체가 중요하지, 합계가 1px이라도 틀리면 안 되는 게 아니다. */
   const ROWNUM_COL_WIDTH_PX = 28;
+  /** 행 번호 열 폭 — 엑셀처럼 마지막 행 번호의 자릿수만큼 넓힌다(28px 고정이면 6자리 행 번호가 옆 칸 선을 넘었다).
+   * 12px 고정폭 숫자 한 자리 ≈ 7px + 좌우 여백. */
+  function rownumWidthFor(rowCount: number): number {
+    return Math.max(ROWNUM_COL_WIDTH_PX, String(Math.max(1, rowCount)).length * 7 + 10);
+  }
   /** 가상 스크롤(윈도잉 렌더링)이 화면 위아래로 실제 뷰포트보다 더 그려두는 여유 행 수 — 스크롤이
    * 살짝만 움직여도 매 프레임 다시 그릴 필요 없게 완충 역할을 한다(너무 작으면 빠르게 스크롤할 때
    * 빈 줄이 잠깐 보이고, 너무 크면 DOM 노드가 늘어나 다시 느려진다). */
@@ -1314,7 +1320,7 @@ async function main(): Promise<void> {
   function renderCountsFor(sheet: SheetStructure): { rows: number; cols: number } {
     const availWidth = scrollHostEl.clientWidth;
     const availHeight = scrollHostEl.clientHeight;
-    let usedWidth = ROWNUM_COL_WIDTH_PX;
+    let usedWidth = rownumWidthFor(sheet.rowCount + GRID_ROW_PADDING);
     let fillCols = 0;
     while (usedWidth < availWidth && fillCols < 1000) {
       usedWidth += sheet.colWidths?.[fillCols] ?? sheet.defaultColWidth ?? DEFAULT_COL_WIDTH_PX;
@@ -1426,7 +1432,7 @@ async function main(): Promise<void> {
     rowHead.className = 'g-edit-rownum';
     rowHead.textContent = String(r + 1);
     rowHead.dataset.row = String(r);
-    rowHead.addEventListener('click', () => selectRow(r));
+    rowHead.addEventListener('click', (event) => selectRow(r, event.shiftKey));
     if (canEdit) {
       rowHead.addEventListener('contextmenu', (event) => {
         event.preventDefault();
@@ -1700,11 +1706,13 @@ async function main(): Promise<void> {
 
     // table-layout:fixed에서 열 너비를 정확히 고정하려면 <colgroup>이 가장 확실하다(그 전까진
     // 첫 번째 행 셀 너비에 의존해 왔음 — 실제 엑셀 열 너비 정보가 없던 시절의 임시 방편이었다).
-    // 행번호 열은 폭을 지정하지 않아 기존 CSS(.g-edit-rownum min-width)가 그대로 정한다 — 실제
-    // 엑셀 열이 아니라 에디터가 그리는 것이라 colWidths에 대응하는 값이 없다.
+    // 행번호 열은 엑셀 열이 아니라 편집기가 그리는 것이라 colWidths에 대응하는 값이 없다 — 행 수 자릿수로 정한다(rownumWidthFor).
     const colgroup = document.createElement('colgroup');
-    colgroup.appendChild(document.createElement('col'));
-    let totalColWidthPx = ROWNUM_COL_WIDTH_PX;
+    const rownumWidth = rownumWidthFor(renderRowCount);
+    const rownumCol = document.createElement('col');
+    rownumCol.style.width = `${rownumWidth}px`;
+    colgroup.appendChild(rownumCol);
+    let totalColWidthPx = rownumWidth;
     for (let c = 0; c < renderColCount; c += 1) {
       const width = sheet.colWidths?.[c] ?? sheet.defaultColWidth ?? DEFAULT_COL_WIDTH_PX;
       const col = document.createElement('col');
@@ -1728,12 +1736,13 @@ async function main(): Promise<void> {
     // 너비(.g-edit-rownum)를 적용하려면 헤더 행의 이 모서리 칸도 같은 클래스를 받아야 한다. 이걸
     // 빼먹으면 이 칸이 일반 칸 min-width(100px)를 그대로 물려받아 행번호 열 전체가 넓어져 버린다.
     cornerTh.className = 'g-edit-rownum';
+    cornerTh.style.width = cornerTh.style.minWidth = `${rownumWidth}px`;
     headRow.appendChild(cornerTh);
     for (let c = 0; c < renderColCount; c += 1) {
       const th = document.createElement('th');
       th.textContent = colLetter(c);
       th.dataset.col = String(c);
-      th.addEventListener('click', () => selectColumn(c));
+      th.addEventListener('click', (event) => selectColumn(c, event.shiftKey));
       if (canEdit) {
         th.addEventListener('contextmenu', (event) => {
           event.preventDefault();
@@ -1805,7 +1814,19 @@ async function main(): Promise<void> {
       // 실제 DOM 포커스를 같은 칸의 새 <td>로 되돌린다 — focus 이벤트가 setActiveHeaders/채우기
       // 핸들 위치 재계산까지 같이 해 준다. 재렌더로 그 칸이 더 이상 없으면(시트 전환, 또는 가상
       // 스크롤 범위 밖으로 밀려남 등) 그냥 둔다.
-      if (parsed && parsed.sheetIdx === activeSheet) tdFor(parsed.row, parsed.col)?.focus({ preventScroll: true });
+      if (parsed && parsed.sheetIdx === activeSheet) {
+        // focus()가 선택을 그 한 칸으로 접고 머리글 선택도 푼다 — 다시 그리기는 선택을 바꾸는 동작이 아니므로
+        // (열 폭을 끌어 바꾼 뒤에도 고른 열이 그대로 있어야 한다) restoreScrollWindowFocus처럼 되돌린다
+        const snapshot = { ar: selAnchorRow, ac: selAnchorCol, fr: selFocusRow, fc: selFocusCol, header: headerSelection };
+        tdFor(parsed.row, parsed.col)?.focus({ preventScroll: true });
+        selAnchorRow = snapshot.ar;
+        selAnchorCol = snapshot.ac;
+        selFocusRow = snapshot.fr;
+        selFocusCol = snapshot.fc;
+        headerSelection = snapshot.header;
+        renderRangeHighlight();
+        paintHeaderSelection();
+      }
     }
     updateHScrollbar();
     document
@@ -2410,7 +2431,8 @@ async function main(): Promise<void> {
    * 해당 <tr>이 가상 스크롤 창 밖으로 나가면 그 행과 함께 사라져 버려서, 화면만으로는 "원래
    * 무엇이 선택돼 있었는지"를 복구할 수 없다. 스크롤로 행이 다시 들어왔을 때 표시를 되살리려면
    * 클래스와 별개로 이 상태를 들고 있어야 한다. */
-  let headerSelection: { kind: 'col' | 'row'; index: number } | null = null;
+  /** 고른 열/행 머리글 — Shift+클릭으로 index~to 범위까지 넓힌다(to가 없으면 하나) */
+  let headerSelection: { kind: 'col' | 'row'; index: number; to?: number } | null = null;
   function clearHeaderSelection(): void {
     headerSelection = null;
     tableEl.querySelectorAll('.g-col-selected, .g-row-selected').forEach((el) => {
@@ -2421,39 +2443,54 @@ async function main(): Promise<void> {
    * 그 행이 다시 그려진 뒤 양쪽에서 같은 코드를 쓴다. */
   function paintHeaderSelection(): void {
     if (!headerSelection) return;
-    const { kind, index } = headerSelection;
+    const { kind, index, to = index } = headerSelection;
     const attr = kind === 'col' ? 'data-col' : 'data-row';
     const cls = kind === 'col' ? 'g-col-selected' : 'g-row-selected';
-    tableEl.querySelectorAll(`[${attr}="${index}"]`).forEach((el) => el.classList.add(cls));
+    const lo = Math.min(index, to);
+    const hi = Math.max(index, to);
+    if (kind === 'row') {
+      // 행 범위는 수십만 행일 수 있다 — 지금 그려진 행만 칠한다
+      for (const [r, tr] of vwRowEls) {
+        if (r >= lo && r <= hi) tr.querySelectorAll(`[${attr}="${r}"]`).forEach((el) => el.classList.add(cls));
+      }
+      return;
+    }
+    for (let i = lo; i <= hi; i += 1) {
+      tableEl.querySelectorAll(`[${attr}="${i}"]`).forEach((el) => el.classList.add(cls));
+    }
   }
   // 열/행 머리글을 클릭하면 시각적 표시만 하는 게 아니라, 서식 툴바가 실제로 적용할 범위
   // (selAnchor~selFocus)도 그 열/행 전체로 잡아야 한다 — 안 그러면 rangeBounds()가 여전히
   // 마지막으로 포커스했던 칸 하나만 가리켜, 열/행을 선택한 채 서식을 바꿔도 그 칸에만 적용되고
   // 나머지는 그대로인 것처럼 보였다(실제로는 "적용이 안 되는" 게 아니라 "한 칸에만 적용되는" 버그).
-  function selectColumn(col: number): void {
+  function selectColumn(col: number, extend = false): void {
+    const anchor = extend && headerSelection?.kind === 'col' ? headerSelection.index : col;
     clearActiveHeaders();
     clearHeaderSelection();
     const { rowCount } = currentStructure();
     selAnchorRow = 0;
     selFocusRow = Math.max(0, rowCount - 1);
-    selAnchorCol = col;
+    selAnchorCol = anchor;
     selFocusCol = col;
-    activeCellKey = gridCellKey(activeSheet, selAnchorRow, col);
+    activeCellKey = gridCellKey(activeSheet, selAnchorRow, anchor);
+    cellRefBoxEl.textContent = cellRefLabel(selAnchorRow, anchor);
     renderRangeHighlight();
-    headerSelection = { kind: 'col', index: col };
+    headerSelection = { kind: 'col', index: anchor, to: col };
     paintHeaderSelection();
   }
-  function selectRow(row: number): void {
+  function selectRow(row: number, extend = false): void {
+    const anchor = extend && headerSelection?.kind === 'row' ? headerSelection.index : row;
     clearActiveHeaders();
     clearHeaderSelection();
     const { colCount } = currentStructure();
-    selAnchorRow = row;
+    selAnchorRow = anchor;
     selFocusRow = row;
     selAnchorCol = 0;
     selFocusCol = Math.max(0, colCount - 1);
-    activeCellKey = gridCellKey(activeSheet, row, selAnchorCol);
+    activeCellKey = gridCellKey(activeSheet, anchor, selAnchorCol);
+    cellRefBoxEl.textContent = cellRefLabel(anchor, selAnchorCol);
     renderRangeHighlight();
-    headerSelection = { kind: 'row', index: row };
+    headerSelection = { kind: 'row', index: anchor, to: row };
     paintHeaderSelection();
   }
   // 잠긴 칸은 focus 리스너 자체가 안 붙으므로(편집 불가) setActiveHeaders를 못 거친다 — 어떤 칸을
@@ -2686,8 +2723,13 @@ async function main(): Promise<void> {
     }
   });
 
+  /** 그려진 행(vwRowEls) 안에서만 찾는다 — 큰 시트에서 페이지 하나(500행×열 수)가 도착하면 바뀐 칸 수만 번
+   * 불리는데, 표 전체를 querySelector로 뒤지면 한 번 스크롤에 2~8초가 걸렸다(화면 밖 행은 바로 null). */
   function tdFor(row: number, col: number): HTMLTableCellElement | null {
-    return tableEl.querySelector<HTMLTableCellElement>(`td[data-row="${row}"][data-col="${col}"]`);
+    if (!vwValid) return tableEl.querySelector<HTMLTableCellElement>(`td[data-row="${row}"][data-col="${col}"]`);
+    const tr = vwRowEls.get(row);
+    if (!tr || !tr.isConnected) return null;
+    return tr.querySelector<HTMLTableCellElement>(`td[data-col="${col}"]`);
   }
 
   /** 가상 스크롤 때문에 지금 화면 창(뷰포트+여유분) 밖의 행은 <td>가 DOM에 없을 수 있다 — 키보드로
@@ -4096,6 +4138,144 @@ async function main(): Promise<void> {
     scheduleViewportRefit();
   }
   window.addEventListener('resize', scheduleViewportRefit);
+
+  // ---------- 열 폭·행 높이 바꾸기 — 머리글 경계를 끌거나(엑셀처럼) 두 번 눌러 맞춘다 ----------
+  // 표는 스크롤·구조 변경마다 다시 그려지므로 칸마다 붙이지 않고 표에 한 번만 위임한다. 값은 서버가 적용해
+  // 구조 맵으로 모두에게 알리고(applyGridResizeOp), 저장할 때 바꾼 열·행만 파일에 쓴다.
+  const RESIZE_EDGE_PX = 5;
+  const MIN_COL_PX = 8;
+  const MIN_ROW_PX = 6;
+  function sendGridResizeOp(kind: 'resizeCols' | 'resizeRows', at: number, count: number, size: number): void {
+    if (!canEdit || !provider.ws || provider.ws.readyState !== WebSocket.OPEN) return;
+    const encoder = encoding.createEncoder();
+    encoding.writeVarUint(encoder, MESSAGE_GRID_STRUCTURE_OP);
+    encoding.writeVarString(encoder, JSON.stringify({ sheet: activeSheet, kind, at, count, size: Math.round(size) }));
+    provider.ws.send(encoding.toUint8Array(encoder));
+  }
+  type ResizeTarget = { axis: 'col' | 'row'; index: number; edge: HTMLElement };
+  /** 커서가 머리글 경계 위면 어느 열(그 경계 왼쪽)·행(경계 위쪽)을 바꿀지 */
+  function resizeTargetAt(event: MouseEvent): ResizeTarget | null {
+    if (!canEdit) return null;
+    const el = (event.target as HTMLElement | null)?.closest<HTMLElement>('thead th[data-col], tbody .g-edit-rownum[data-row]');
+    if (!el || !tableEl.contains(el)) return null;
+    const rect = el.getBoundingClientRect();
+    if (el.dataset.col !== undefined) {
+      const col = Number(el.dataset.col);
+      if (rect.right - event.clientX <= RESIZE_EDGE_PX) return { axis: 'col', index: col, edge: el };
+      if (event.clientX - rect.left <= RESIZE_EDGE_PX && col > 0) return { axis: 'col', index: col - 1, edge: el };
+      return null;
+    }
+    const row = Number(el.dataset.row);
+    if (rect.bottom - event.clientY <= RESIZE_EDGE_PX) return { axis: 'row', index: row, edge: el };
+    if (event.clientY - rect.top <= RESIZE_EDGE_PX && row > 0) return { axis: 'row', index: row - 1, edge: el };
+    return null;
+  }
+  function colWidthPx(c: number): number {
+    const s = currentStructure();
+    return s.colWidths?.[c] ?? s.defaultColWidth ?? DEFAULT_COL_WIDTH_PX;
+  }
+  function rowHeightPx(r: number): number {
+    return rowLayout.top(r + 1) - rowLayout.top(r);
+  }
+  /** 열(행) 전체를 여러 개 골라 둔 채 그중 하나의 경계를 바꾸면 고른 것 모두 같은 크기로(엑셀과 같다) */
+  function resizeSpan(axis: 'col' | 'row', index: number): { at: number; count: number } {
+    const s = currentStructure();
+    const r1 = Math.min(selAnchorRow, selFocusRow);
+    const r2 = Math.max(selAnchorRow, selFocusRow);
+    const c1 = Math.min(selAnchorCol, selFocusCol);
+    const c2 = Math.max(selAnchorCol, selFocusCol);
+    if (axis === 'col' && r1 === 0 && r2 >= s.rowCount - 1 && index >= c1 && index <= c2) return { at: c1, count: c2 - c1 + 1 };
+    if (axis === 'row' && c1 === 0 && c2 >= s.colCount - 1 && index >= r1 && index <= r2) return { at: r1, count: r2 - r1 + 1 };
+    return { at: index, count: 1 };
+  }
+  let resizeDrag: { target: ResizeTarget; start: number; startSize: number; size: number; guide: HTMLElement; tip: HTMLElement } | null = null;
+  let suppressHeaderClick = false;
+  tableEl.addEventListener('mousemove', (event) => {
+    if (resizeDrag) return;
+    const target = resizeTargetAt(event);
+    tableEl.classList.toggle('g-resize-col', target?.axis === 'col');
+    tableEl.classList.toggle('g-resize-row', target?.axis === 'row');
+  });
+  tableEl.addEventListener('mouseleave', () => {
+    if (!resizeDrag) tableEl.classList.remove('g-resize-col', 'g-resize-row');
+  });
+  tableEl.addEventListener('mousedown', (event) => {
+    if (event.button !== 0 || event.detail > 1) return;
+    const target = resizeTargetAt(event);
+    if (!target) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const isCol = target.axis === 'col';
+    const startSize = isCol ? colWidthPx(target.index) : rowHeightPx(target.index);
+    const host = scrollHostEl.getBoundingClientRect();
+    const guide = document.createElement('div');
+    guide.className = `g-resize-guide ${isCol ? 'is-col' : 'is-row'}`;
+    const tip = document.createElement('div');
+    tip.className = 'g-resize-tip';
+    document.body.append(guide, tip);
+    resizeDrag = { target, start: isCol ? event.clientX : event.clientY, startSize, size: startSize, guide, tip };
+    const place = (clientX: number, clientY: number) => {
+      if (!resizeDrag) return;
+      const delta = ((isCol ? clientX : clientY) - resizeDrag.start) / (zoom || 1);
+      resizeDrag.size = Math.max(isCol ? MIN_COL_PX : MIN_ROW_PX, Math.round(startSize + delta));
+      const at = resizeDrag.start + (resizeDrag.size - startSize) * (zoom || 1);
+      if (isCol) Object.assign(guide.style, { left: `${at}px`, top: `${host.top}px`, height: `${host.height}px` });
+      else Object.assign(guide.style, { top: `${at}px`, left: `${host.left}px`, width: `${host.width}px` });
+      tip.textContent = isCol ? `너비: ${resizeDrag.size}픽셀` : `높이: ${resizeDrag.size}픽셀`;
+      Object.assign(tip.style, { left: `${clientX + 12}px`, top: `${clientY - 28}px` });
+    };
+    place(event.clientX, event.clientY);
+    const onMove = (e: MouseEvent) => place(e.clientX, e.clientY);
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp, true);
+      const drag = resizeDrag;
+      resizeDrag = null;
+      guide.remove();
+      tip.remove();
+      tableEl.classList.remove('g-resize-col', 'g-resize-row');
+      // 끈 뒤 따라오는 click이 열/행 선택으로 바뀌지 않게
+      suppressHeaderClick = true;
+      setTimeout(() => (suppressHeaderClick = false), 0);
+      if (!drag || drag.size === drag.startSize) return;
+      const { at, count } = resizeSpan(drag.target.axis, drag.target.index);
+      sendGridResizeOp(drag.target.axis === 'col' ? 'resizeCols' : 'resizeRows', at, count, drag.size);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp, true);
+  }, true);
+  tableEl.addEventListener('click', (event) => {
+    if (!suppressHeaderClick) return;
+    event.preventDefault();
+    event.stopPropagation();
+  }, true);
+  // 경계를 두 번 누르면 맞춤 — 열은 지금 그려진 칸 중 가장 긴 내용에, 행은 기본 높이로
+  const measureCanvas = document.createElement('canvas').getContext('2d');
+  tableEl.addEventListener('dblclick', (event) => {
+    const target = resizeTargetAt(event);
+    if (!target) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const { at, count } = resizeSpan(target.axis, target.index);
+    if (target.axis === 'row') {
+      sendGridResizeOp('resizeRows', at, count, currentStructure().defaultRowHeight ?? rowHeightPx(target.index));
+      return;
+    }
+    for (let c = at; c < at + count; c += 1) {
+      let widest = 0;
+      for (const tr of vwRowEls.values()) {
+        const td = tr.querySelector<HTMLTableCellElement>(`td[data-col="${c}"]`);
+        const text = td?.textContent ?? '';
+        if (!td || text.trim() === '' || td.colSpan > 1 || !measureCanvas) continue;
+        const cs = getComputedStyle(td);
+        measureCanvas.font = cs.font;
+        const lines = text.split('\n');
+        const textWidth = Math.max(...lines.map((line) => measureCanvas.measureText(line).width));
+        widest = Math.max(widest, Math.ceil(textWidth + parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight) + 2));
+      }
+      if (widest > 0) sendGridResizeOp('resizeCols', c, 1, Math.min(widest, 2000));
+    }
+  }, true);
   function setZoomFromRatio(ratio: number): void {
     const clamped = Math.max(0, Math.min(1, ratio));
     zoom = Math.round((ZOOM_MIN + clamped * (ZOOM_MAX - ZOOM_MIN)) * 20) / 20; // 5%p 단위로 스냅
@@ -4186,11 +4366,13 @@ async function main(): Promise<void> {
   }
 
   /** 지금 스크롤 위치(+여유분) 기준으로 필요한 페이지 번호를 계산해 서버에 알린다. 스크롤 중
-   * 매 프레임 보낼 필요는 없으므로(서버가 그때마다 페이지를 채우고 비우는 건 낭비다) 200ms
-   * 디바운스한다 — renderTableVirtualized()가 호출되는 모든 경로(스크롤, 시트 전환, 구조 변경,
+   * 매 프레임 보낼 필요는 없으므로(서버가 그때마다 페이지를 채우고 비우는 건 낭비다) 120ms마다
+   * 한 번씩만 보낸다 — renderTableVirtualized()가 호출되는 모든 경로(스크롤, 시트 전환, 구조 변경,
    * 최초 동기화)에서 공통으로 이 함수가 불린다. */
+  // 디바운스가 아니라 스로틀이다 — 스크롤이 이어지는 동안 타이머를 계속 미루면 멈출 때까지 요청이 한 번도
+  // 안 나가서, 계속 내리는 내내 빈 칸('불러오는 중')만 보였다. 이미 예약돼 있으면 그대로 두고, 그때의 위치로 보낸다.
   function scheduleSubscriptionUpdate(): void {
-    if (subscriptionDebounceTimer) clearTimeout(subscriptionDebounceTimer);
+    if (subscriptionDebounceTimer) return;
     subscriptionDebounceTimer = setTimeout(() => {
       subscriptionDebounceTimer = null;
       const scrollTop = scrollHostEl.scrollTop;
@@ -4216,7 +4398,7 @@ async function main(): Promise<void> {
       lastSubscribedPages = pages;
       sendPageSubscription(activeSheet, [...pages].sort((a, b) => a - b));
       updateLoadingIndicator();
-    }, 200);
+    }, 120);
   }
 
   // 세로 스크롤 때마다 화면에 보이는 범위만 다시 그린다(rAF로 묶어 스크롤 중 매 프레임 다시
