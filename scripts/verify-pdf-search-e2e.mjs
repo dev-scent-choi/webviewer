@@ -1,4 +1,4 @@
-// PDF 편집기 찾기 패널 — 3단 검색(이 페이지·전체 문서·결과 안에서), 제목만, 결과 목록·이동, 문단 테두리, 미리보기, 스캔 안내.
+// PDF 편집기 찾기 패널 — 3단 검색(이 페이지·전체 문서·결과 안에서 = 절 단위), 찾을 곳(전체·제목·본문), 결과 목록·이동, 문단 테두리, 미리보기, 스캔 안내.
 // 사용: node scripts/verify-pdf-search-e2e.mjs [서버주소] [스크린샷 폴더]
 import fs from 'node:fs';
 import os from 'node:os';
@@ -37,7 +37,7 @@ async function manualPdf() {
     body.forEach((line, i) => page.drawText(line, { x: 60, y: 690 - i * 17, size: 11, font }));
     // 5쪽: 본문 크기지만 굵은 짧은 줄(제목이어야 한다) / 3쪽: 큰 글자 도면 치수(제목이 아니어야 한다)
     if (k === 4) {
-      page.drawText('주의 사항', { x: 60, y: 620, size: 11, font: bold });
+      page.drawText('작업 준비', { x: 60, y: 620, size: 11, font: bold });
       page.drawText('작업 전 차단기를 내리고 검전기로 확인합니다.', { x: 60, y: 600, size: 11, font });
     }
     if (k === 2) page.drawText('300', { x: 300, y: 560, size: 20, font });
@@ -110,7 +110,7 @@ check(s.count === '1/8' && s.pages === '4쪽' && s.total === '8', '"펌프" 전�
 check(s.groups.join(',') === '1쪽,2쪽,4쪽,6쪽', '결과를 쪽별로 묶음', s.groups.join(','));
 check(s.heads[0].includes('개요') || s.heads[0].includes('설비 운전 지침'), '결과마다 속한 제목', s.heads.join(' | '));
 check(s.hits >= 1 && s.current === 1 && s.block === 1, '본문 노란 표시·현재 결과·문단 테두리', `hits ${s.hits} current ${s.current} block ${s.block}`);
-check(/1쪽/.test(s.previewHeading) && s.previewBody.includes('펌프'), '미리보기에 그 문단', `${s.previewHeading} / ${s.previewBody.slice(0, 40)}`);
+check(/1쪽/.test(s.previewHeading) && s.previewHeading.includes('1. 개요') && s.previewBody.startsWith('1. 개요') && s.previewBody.includes('펌프'), '미리보기에 결과가 속한 절(제목 "1. 개요"부터)', `${s.previewHeading} / ${s.previewBody.slice(0, 40)}`);
 await page.screenshot({ path: path.join(shotDir, '1-doc.png') });
 
 await page.keyboard.press('Enter');
@@ -123,19 +123,32 @@ s = await state();
 check(s.count === '5/8' && s.pageInput === '4', '목록에서 누르면 그 쪽으로 이동', `${s.count} 쪽 ${s.pageInput}`);
 await page.keyboard.press('Shift+Enter').catch(() => {});
 
-// 제목만
-await page.check('#sx-headings');
+// 찾을 곳: 제목 / 본문
+await page.click('[data-target="headings"]');
 await settle();
 s = await state();
-check(s.count === '1/3' && s.heads.every((h) => h.includes('제목')), '제목만 → 제목 3건(펌프 점검, 2. 원심펌프, 4. 예비 펌프 전환)', `${s.count} ${s.heads.join('|')}`);
-await page.uncheck('#sx-headings');
+check(s.count === '1/3' && s.heads.every((h) => h.includes('제목')), '제목 → 제목 3건(펌프 점검, 2. 원심펌프, 4. 예비 펌프 전환)', `${s.count} ${s.heads.join('|')}`);
+await page.click('[data-target="body"]');
+await settle();
+s = await state();
+check(
+  s.count === '1/5' && s.heads.every((h) => h && !/^(소)?제목$/.test(h)) && (await page.getAttribute('[data-target="body"]', 'aria-checked')) === 'true',
+  '본문 → 제목 3건을 뺀 5건(결과마다 속한 제목 표시)',
+  `${s.count} ${s.heads.join('|')}`,
+);
+await page.fill('#find-input', '점검 주기');
+await settle();
+s = await state();
+check(s.count === '결과 없음' && /본문에서는 찾지 못했습니다/.test(s.empty), '본문에 없고 제목에만 있는 말 → 본문 안내', `${s.count} / ${s.empty.slice(0, 30)}`);
+await page.click('[data-target="all"]');
+await page.fill('#find-input', '펌프');
 await settle();
 
 // 붙여 받은 기준: 굵은 짧은 줄은 소제목, 큰 글자 치수는 제목 아님
-await page.fill('#find-input', '주의');
+await page.fill('#find-input', '준비');
 await settle();
 s = await state();
-check(s.count === '1/1' && s.heads[0] === '소제목', '굵은 본문 크기 줄 "주의 사항" → 소제목', `${s.count} ${s.heads.join('|')}`);
+check(s.count === '1/1' && s.heads[0] === '소제목', '굵은 본문 크기 줄 "작업 준비" → 소제목', `${s.count} ${s.heads.join('|')}`);
 await page.fill('#find-input', '300');
 await settle();
 s = await state();
@@ -162,7 +175,7 @@ check((await page.inputValue('#find-input')) === '' && (await page.getAttribute(
 await page.type('#find-input', '배관');
 await settle();
 s = await state();
-check(s.groups.join(',') === '2쪽,4쪽', '"펌프" 결과 문단 안의 "배관"만 → 2·4쪽 (3쪽은 빠짐)', `${s.groups} ${s.count}`);
+check(s.groups.join(',') === '2쪽,4쪽', '"펌프" 결과가 속한 절 안의 "배관"만 → 2·4쪽 (펌프 없는 3쪽 "3. 배관 압력" 절은 빠짐)', `${s.groups} ${s.count}`);
 check(s.trail.includes('펌프') && s.trail.includes('배관'), '단계 표시 "펌프 8 › 배관"', s.trail);
 await page.screenshot({ path: path.join(shotDir, '3-within.png') });
 await page.click('#sx-trail [data-stage="0"]');

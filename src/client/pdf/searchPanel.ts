@@ -1,13 +1,13 @@
 /**
- * PDF 편집기 오른쪽 '찾기' 패널 — 3단 검색(① 이 페이지 ② 전체 문서 ③ 결과 안에서), 찾을 곳(모든 글/제목만),
- * 쪽별로 묶은 결과 목록(속한 제목 + 앞뒤 문장), 고른 결과의 문단 테두리, 문단·쪽 전체 글 미리보기.
+ * PDF 편집기 오른쪽 '찾기' 패널 — 3단 검색(① 이 페이지 ② 전체 문서 ③ 결과 안에서 = 앞 결과가 속한 절 안에서),
+ * 찾을 곳(전체/제목/본문), 쪽별로 묶은 결과 목록(속한 제목 + 앞뒤 문장), 고른 결과의 덩어리 테두리, 절·쪽 전체 글 미리보기.
  * 줄·문단·제목 나누기는 textStructure.ts, 찾기는 searchEngine.ts(둘 다 순수 함수).
  */
 import { normalizeForFind } from './findText.js';
 import { readOutline, type OutlineNode, type PDFDocumentProxy } from './pdfDocument.js';
 import type { PageView, TextItemInfo } from './pageView.js';
-import { blocksOf, groupByPage, searchPage, type SearchResult, type SearchScope, type SearchTarget } from './searchEngine.js';
-import { analyzePage, type PageStructure, type StructItem } from './textStructure.js';
+import { groupByPage, searchPage, sectionsOf, sectionText, type SearchResult, type SearchScope, type SearchTarget } from './searchEngine.js';
+import { analyzePage, buildProfile, type DocProfile, type PageStructure, type StructItem } from './textStructure.js';
 
 interface Stage {
   readonly query: string;
@@ -22,6 +22,12 @@ export interface SearchPanel {
 }
 
 const MAX_LIST = 400;
+/** 문서 기준(본문 서식·머리말)을 구할 때 고루 뽑아 보는 쪽 수 */
+const PROFILE_PAGES = 30;
+/** '이 페이지'만 찾을 때 이어받을 제목을 찾아 거슬러 보는 쪽 수 */
+const LOOKBACK = 8;
+/** 절 미리보기가 따라가는 최대 쪽 수 */
+const SECTION_PAGES = 20;
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
 
@@ -46,7 +52,7 @@ export function setupSearchPanel(opts: {
   const pager = $('sx-pager');
   const pageNum = $('sx-page-num');
   const scopeButtons = [...section.querySelectorAll<HTMLButtonElement>('[data-scope]')];
-  const headingsOnly = $<HTMLInputElement>('sx-headings');
+  const targetButtons = [...section.querySelectorAll<HTMLButtonElement>('[data-target]')];
   const totalBadge = $('sx-total');
   const tabButtons = [...section.querySelectorAll<HTMLButtonElement>('[data-view]')];
 
@@ -63,8 +69,15 @@ export function setupSearchPanel(opts: {
   let previewPage = 1;
   let listLimit = MAX_LIST;
 
-  // 쪽 구조는 글 조각 배열이 같을 때만 다시 쓴다(문자 인식으로 글이 더해지면 새 배열이 온다)
-  const structures = new Map<number, { items: readonly TextItemInfo[]; structure: PageStructure }>();
+  // 쪽 구조는 글 조각 배열·이어받은 제목이 같을 때만 다시 쓴다(문자 인식으로 글이 더해지면 새 배열이 온다)
+  interface Entry {
+    items: readonly TextItemInfo[];
+    structure: PageStructure;
+    /** 만들 때 앞 쪽에서 이어받은 제목·절 */
+    carried: string;
+  }
+  const structures = new Map<number, Entry>();
+  let profile: Promise<DocProfile> | null = null;
   let outlineTitles: Set<string> = new Set();
   void readOutline(doc)
     .then((nodes) => {
@@ -74,22 +87,64 @@ export function setupSearchPanel(opts: {
     })
     .catch(() => undefined);
 
-  async function structureOf(page: number): Promise<{ items: readonly TextItemInfo[]; structure: PageStructure }> {
-    const items = await view.textItemInfos(page);
-    const hit = structures.get(page);
-    if (hit && hit.items === items) return hit;
-    // 쪽 앞에서 이어지는 제목 — 앞 쪽 구조가 있으면 그 마지막 제목
-    const prev = page > 1 ? structures.get(page - 1)?.structure.lastHeading ?? '' : '';
-    // 글꼴 굵기·태그 구조 역할을 조각에 붙여 제목 점수에 쓴다(못 받으면 크기·번호 같은 단서로만)
+  /** 글꼴 굵기·태그 구조 역할을 조각에 붙인다(못 받으면 크기·번호 같은 단서로만 가린다) */
+  async function styledItems(page: number, items: readonly TextItemInfo[]): Promise<StructItem[]> {
     const meta = await view.textMeta(page);
-    const styled: StructItem[] = items.map((it, i) => ({
-      ...it,
-      bold: it.fontName ? meta.fonts[it.fontName]?.bold ?? false : false,
-      role: meta.roles[i] ?? null,
-    }));
-    const entry = { items, structure: analyzePage(page, styled, prev, outlineTitles, { pageHeight: view.sizeOf(page).h }) };
+    return items.map((it, i) => ({ ...it, bold: it.fontName ? meta.fonts[it.fontName]?.bold ?? false : false, role: meta.roles[i] ?? null }));
+  }
+
+  /** 문서 기준 — 쪽 하나만 보면 조문 상자·해설이 섞인 쪽에서 본문 서식이 흔들려 여러 쪽에서 한 번 구한다 */
+  function profileOf(): Promise<DocProfile> {
+    profile ??= (async () => {
+      const total = view.pageCount;
+      const n = Math.min(PROFILE_PAGES, total);
+      const pages = [...new Set(Array.from({ length: n }, (_, k) => 1 + Math.floor((k * total) / n)))];
+      const sample = await Promise.all(
+        pages.map(async (p) => ({ items: await styledItems(p, await view.textItemInfos(p)), pageHeight: view.sizeOf(p).h })),
+      );
+      const found = buildProfile(sample);
+      // 글이 하나도 없던 스캔 문서는 문자 인식 뒤에 다시 구한다
+      if (!found.bodyStyle) profile = null;
+      return found;
+    })();
+    return profile;
+  }
+
+  /** 쪽 구조 — 앞 쪽 끝의 제목·절을 이어받는다(앞 쪽이 아직 없으면 몇 쪽 거슬러 올라가 만들어 둔다) */
+  async function structureOf(page: number): Promise<Entry> {
+    const items = await view.textItemInfos(page);
+    let prevHeading = '';
+    let prevSection = '';
+    if (page > 1) {
+      if (!structures.has(page - 1)) {
+        // 그보다 앞은 '전체 문서'로 찾을 때 차례로 채워진다
+        let from = page - 1;
+        while (from > 1 && page - from < LOOKBACK && !structures.has(from - 1)) from -= 1;
+        for (let p = from; p < page; p += 1) await structureOf(p);
+      }
+      const prev = structures.get(page - 1)!.structure;
+      prevHeading = prev.lastHeading;
+      prevSection = prev.lastSection;
+    }
+    const carried = `${prevHeading}\u0000${prevSection}`;
+    const hit = structures.get(page);
+    if (hit && hit.items === items && hit.carried === carried) return hit;
+    const [styled, docProfile] = await Promise.all([styledItems(page, items), profileOf()]);
+    const structure = analyzePage(page, styled, prevHeading, outlineTitles, { pageHeight: view.sizeOf(page).h, profile: docProfile }, prevSection);
+    const entry = { items, structure, carried };
     structures.set(page, entry);
     return entry;
+  }
+
+  /** 절 하나의 글 — 절이 다음 쪽으로 이어지면 그 쪽 구조도 만들어 따라간다 */
+  async function sectionOf(key: string): Promise<{ heading: string; text: string; pages: number[] }> {
+    const start = Number(key.replace(/^b:/, '').split(':')[0]);
+    for (let upto = start; ; upto += 1) {
+      await structureOf(upto);
+      const found = sectionText(key, new Map([...structures].map(([p, e]) => [p, e.structure])));
+      const last = found.pages[found.pages.length - 1] ?? start;
+      if (key.startsWith('b:') || last < upto || upto >= view.pageCount || upto - start >= SECTION_PAGES) return found;
+    }
   }
 
   // ---------- 상태 그리기 ----------
@@ -99,7 +154,7 @@ export function setupSearchPanel(opts: {
 
   function renderControls(): void {
     setChecked(scopeButtons, 'scope', scope);
-    headingsOnly.checked = target === 'headings';
+    setChecked(targetButtons, 'target', target);
     const within = scopeButtons.find((b) => b.dataset.scope === 'within')!;
     within.disabled = scope !== 'within' && results.length === 0;
     input.placeholder = scope === 'within' ? '결과 안에서 찾을 내용' : scope === 'page' ? '이 페이지에서 찾을 내용' : '찾을 내용';
@@ -188,10 +243,14 @@ export function setupSearchPanel(opts: {
     for (const t of tabButtons) t.setAttribute('aria-selected', String(t.dataset.view === previewMode));
     const q = input.value.trim();
     if (previewMode === 'block' && current) {
-      const { structure } = await structureOf(current.page);
-      const block = structure.blocks[current.block];
-      previewHeading.textContent = block.isHeading ? `${current.page}쪽 · ${block.level === 1 ? '제목' : '소제목'}` : `${current.page}쪽${block.heading ? ` · ${block.heading}` : ''}`;
-      previewBody.innerHTML = markHtml(block.text, q).replace(/\n/g, '<br>');
+      const sec = await sectionOf(current.section);
+      if (results[index] !== current) return;
+      const span = sec.pages.length > 1 ? `${sec.pages[0]}~${sec.pages[sec.pages.length - 1]}쪽` : `${sec.pages[0] ?? current.page}쪽`;
+      previewHeading.textContent = sec.heading ? `${span} · ${sec.heading}` : `${span} · 첫 제목 앞의 글`;
+      previewBody.innerHTML = sec.text
+        .split('\n\n')
+        .map((t, k) => `<p class="${k === 0 && sec.heading && !current.section.startsWith('b:') ? 'is-heading' : ''}">${markHtml(t.replace(/\n/g, ' '), q)}</p>`)
+        .join('');
       pager.hidden = true;
     } else {
       const total = view.pageCount;
@@ -199,7 +258,11 @@ export function setupSearchPanel(opts: {
       const { structure } = await structureOf(previewPage);
       previewHeading.textContent = `${previewPage}쪽 전체 글`;
       previewBody.innerHTML = structure.text
-        ? structure.blocks.map((b) => `<p class="${b.isHeading ? 'is-heading' : ''}">${markHtml(b.text, q).replace(/\n/g, '<br>')}</p>`).join('')
+        ? structure.blocks
+            .filter((b) => !b.furniture)
+            // PDF 줄바꿈은 지면 폭 때문이라 미리보기에선 한 칸으로 잇는다(줄을 넘은 검색어도 표시된다)
+            .map((b) => `<p class="${b.isHeading ? 'is-heading' : ''}">${markHtml(b.text.replace(/\n/g, ' '), q)}</p>`)
+            .join('')
         : '<p class="none">이 쪽에는 글자 정보가 없습니다.</p>';
       pager.hidden = false;
       pageNum.textContent = `${previewPage} / ${total}쪽`;
@@ -250,13 +313,13 @@ export function setupSearchPanel(opts: {
       preview.hidden = previewMode === 'block';
       return;
     }
-    const allowed = scope === 'within' && stages.length ? blocksOf(stages[stages.length - 1].results) : null;
+    // '결과 안에서'는 앞 단계 결과가 속한 절(제목부터 다음 제목 전까지) 안에서만 찾는다
+    const allowed = scope === 'within' && stages.length ? sectionsOf(stages[stages.length - 1].results) : null;
     const pages = scope === 'page' ? [view.currentPage] : Array.from({ length: view.pageCount }, (_, k) => k + 1);
     let chars = 0;
     let lastPaint = 0;
     for (const page of pages) {
-      // 제목 이어받기가 맞도록 앞 쪽 구조부터 차례로 만든다(이 페이지만 찾을 때도 바로 앞 쪽은 본다)
-      if (scope === 'page' && page > 1 && !structures.has(page - 1)) await structureOf(page - 1);
+      // 제목·절 이어받기가 맞도록 앞 쪽부터 차례로(이 페이지만 찾을 때는 structureOf 가 앞 몇 쪽을 거슬러 본다)
       const { items, structure } = await structureOf(page);
       if (gen !== generation) return;
       chars += items.reduce((n, it) => n + it.str.trim().length, 0);
@@ -283,7 +346,18 @@ export function setupSearchPanel(opts: {
     paintHits();
     if (results.length === 0) {
       if (chars === 0) renderEmpty(scope === 'page' ? '이 쪽에는 글자 정보가 없습니다. 스캔한 쪽이면 문자 인식을 하면 찾을 수 있습니다.' : '이 문서에는 글자 정보가 없습니다(스캔 문서). 문자 인식을 하면 글자를 찾을 수 있습니다.', true);
-      else renderEmpty(scope === 'within' ? '앞 단계 결과 안에는 없습니다. 위 단계를 눌러 돌아갈 수 있습니다.' : target === 'headings' ? '제목에서는 찾지 못했습니다. ‘모든 글’로 바꿔 보세요.' : scope === 'page' ? '이 페이지에는 없습니다. ‘전체 문서’로 넓혀 보세요.' : '찾는 내용이 없습니다.');
+      else
+        renderEmpty(
+          scope === 'within'
+            ? '앞 단계 결과가 속한 절 안에는 없습니다. 위 단계를 눌러 돌아갈 수 있습니다.'
+            : target === 'headings'
+              ? '제목에서는 찾지 못했습니다. 찾을 곳을 ‘전체’로 바꿔 보세요.'
+              : target === 'body'
+                ? '본문에서는 찾지 못했습니다(제목·머리말·쪽 번호는 빼고 찾았습니다). 찾을 곳을 ‘전체’로 바꿔 보세요.'
+                : scope === 'page'
+                  ? '이 페이지에는 없습니다. ‘전체 문서’로 넓혀 보세요.'
+                  : '찾는 내용이 없습니다.',
+        );
       if (previewMode === 'block') preview.hidden = true;
     }
   }
@@ -340,11 +414,13 @@ export function setupSearchPanel(opts: {
       input.focus();
     });
   }
-  headingsOnly.addEventListener('change', () => {
-    target = headingsOnly.checked ? 'headings' : 'all';
-    renderControls();
-    void run();
-  });
+  for (const b of targetButtons) {
+    b.addEventListener('click', () => {
+      target = b.dataset.target as SearchTarget;
+      renderControls();
+      void run();
+    });
+  }
   trail.addEventListener('click', (event) => {
     const chip = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-stage]');
     if (!chip) return;
@@ -408,6 +484,7 @@ export function setupSearchPanel(opts: {
   // 쪽 정리로 쪽이 바뀌면 구조를 버리고 다시 찾는다
   view.onPagesChange(() => {
     structures.clear();
+    profile = null;
     stages = [];
     if (scope === 'within') scope = baseScope;
     if (!section.hidden && input.value.trim()) void run();
