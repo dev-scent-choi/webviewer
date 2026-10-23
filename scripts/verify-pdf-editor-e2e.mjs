@@ -223,7 +223,7 @@ await page.screenshot({ path: path.join(shotDir, '2-outline.png') });
 
 // 찾기
 await page.keyboard.press('Control+f');
-check(await page.isVisible('#find-bar'), 'Ctrl+F → 찾기 줄');
+check(await page.isVisible('#panel-search'), 'Ctrl+F → 찾기 패널');
 await page.fill('#find-input', '가동률');
 await page.waitForFunction(() => /\d+\/3$/.test(document.querySelector('#find-count')?.textContent ?? ''), null, { timeout: 8000 }).catch(() => {});
 const count = await page.textContent('#find-count');
@@ -235,7 +235,7 @@ const count2 = await page.textContent('#find-count');
 check(count2 !== count, 'Enter → 다음 결과', `${count} → ${count2}`);
 await page.screenshot({ path: path.join(shotDir, '3-find.png') });
 await page.keyboard.press('Escape');
-check(!(await page.isVisible('#find-bar')) && (await page.$$('.pdf-find-hit')).length === 0, 'Esc → 찾기 닫고 강조 지움');
+check(!(await page.isVisible('#panel-search')) && (await page.$$('.pdf-find-hit')).length === 0, 'Esc → 찾기 닫고 강조 지움');
 
 // 읽기 모드
 await page.click('.pdf-mode[data-mode="read"]');

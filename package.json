@@ -38,6 +38,7 @@
     "verify:pdf-security": "node scripts/verify-pdf-security-e2e.mjs",
     "verify:pdf-convert": "node scripts/verify-pdf-convert-e2e.mjs",
     "verify:pdf-ocr": "node scripts/verify-pdf-ocr-e2e.mjs",
+    "verify:pdf-search": "node scripts/verify-pdf-search-e2e.mjs",
     "verify:pdf-sign": "node scripts/verify-pdf-sign-e2e.mjs",
     "verify:view-only": "node scripts/verify-view-only-e2e.mjs"
   },

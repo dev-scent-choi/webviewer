@@ -7,11 +7,11 @@ import * as Y from 'yjs';
 import { WebsocketProvider } from 'y-websocket';
 import { openPdf, openPdfData, type PDFDocumentProxy } from './pdf/pdfDocument.js';
 import { PageView } from './pdf/pageView.js';
-import { setupPanels, type Panels } from './pdf/panels.js';
+import { type PanelName, setupPanels, type Panels } from './pdf/panels.js';
 import { AnnotLayer } from './pdf/annotLayer.js';
 import { setupAnnotUi } from './pdf/annotUi.js';
 import { cleanPageList, PDF_ANNOTS_MAP, PDF_FORM_MAP, PDF_META_MAP, PDF_OCR_MAP, PDF_PAGES_ARRAY, PDF_REDACT_MAP, PDF_TEXT_EDITS_MAP, type PdfOcrPage, type PdfRedaction, type PdfTextEdit, type PdfAnnot, type PdfPageEntry } from '../pdf/annotTypes.js';
-import { FindController } from './pdf/findController.js';
+import { setupSearchPanel, type SearchPanel } from './pdf/searchPanel.js';
 import { PageOps } from './pdf/pageOps.js';
 import { setupOrganize, type OrganizeView } from './pdf/organizeView.js';
 import { FormLayer } from './pdf/formLayer.js';
@@ -80,7 +80,7 @@ function showNotice(text: string): void {
   noticeTimer = window.setTimeout(() => (notice.hidden = true), 2600);
 }
 
-function setupChrome(view: PageView, find: FindController, info: ViewInfo, panels: Panels, organize: OrganizeView, sign: SignUi, docTools: DocTools, convert: ConvertUi, ocr: OcrUi, certSign: CertSignUi): void {
+function setupChrome(view: PageView, find: SearchPanel, info: ViewInfo, panels: Panels, organize: OrganizeView, sign: SignUi, docTools: DocTools, convert: ConvertUi, ocr: OcrUi, certSign: CertSignUi): void {
   // 오른쪽 줄 — 쪽 번호·이동·배율
   const pageInput = $<HTMLInputElement>('page-input');
   const pageCount = $('page-count');
@@ -338,15 +338,23 @@ async function main(): Promise<void> {
   provider.on('sync', (synced: boolean) => {
     if (synced) checkBase();
   });
-  const find = new FindController(view, {
-    bar: $('find-bar'),
-    input: $<HTMLInputElement>('find-input'),
-    count: $('find-count'),
-    prev: $<HTMLButtonElement>('find-prev'),
-    next: $<HTMLButtonElement>('find-next'),
-    close: $<HTMLButtonElement>('find-close'),
-  });
   const panels = setupPanels({ doc: currentDoc, view });
+  // 찾기 패널 — 닫으면 그 전에 보던 패널로 돌아간다(좁은 화면은 그대로 닫는다)
+  let panelBeforeSearch: PanelName | null = panels.current === 'search' ? null : panels.current;
+  let ocrRef: { open(): void } | null = null;
+  const find = setupSearchPanel({
+    view,
+    doc: currentDoc,
+    showPanel: (open) => {
+      if (open) {
+        if (panels.current !== 'search') panelBeforeSearch = panels.current;
+        panels.show('search');
+      } else {
+        panels.show(window.matchMedia('(max-width: 900px)').matches ? null : panelBeforeSearch);
+      }
+    },
+    onRunOcr: () => ocrRef?.open(),
+  });
   // 주석 — 협업 맵(방을 열 때 서버가 파일 주석을 채운다)을 쪽마다 그리고 도구로 고친다
   const annotMap = ydoc.getMap<PdfAnnot>(PDF_ANNOTS_MAP);
   const layer = new AnnotLayer({ view, map: annotMap, ydoc, canEdit: info.permissions.canEdit, author: info.viewer, scroller: $('pdf-scroll') });
@@ -439,6 +447,7 @@ async function main(): Promise<void> {
   });
   for (const key of ocrMap.keys()) view.refreshText(key);
   const ocr = setupOcr({ view, ydoc, map: ocrMap, author: info.viewer, notice: showNotice });
+  ocrRef = ocr;
   const certSign = setupCertSign({
     token,
     docName: info.name,

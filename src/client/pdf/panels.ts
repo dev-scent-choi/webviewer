@@ -5,7 +5,7 @@
 import { readLayers, readOutline, type OutlineNode, type PDFDocumentProxy } from './pdfDocument.js';
 import type { PageView } from './pageView.js';
 
-export type PanelName = 'thumbs' | 'outline' | 'layers' | 'comments' | 'fields';
+export type PanelName = 'thumbs' | 'outline' | 'layers' | 'comments' | 'fields' | 'search';
 
 const THUMB_WIDTH = 140;
 
