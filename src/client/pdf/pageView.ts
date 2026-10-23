@@ -78,6 +78,8 @@ export class PageView {
   private ocVersion = 0;
   private matchesByPage = new Map<number, FindMatch[]>();
   private currentMatch: FindMatch | null = null;
+  /** 찾기 패널에서 고른 결과가 든 문단 — PDF 좌표 상자 [x0, y0, x1, y1] */
+  private focusBlock: { page: number; bbox: readonly [number, number, number, number] } | null = null;
   private readonly textCache = new Map<string, Promise<TextItemInfo[]>>();
   private scrollRaf = 0;
   private defaultW = 612;
@@ -698,8 +700,26 @@ export class PageView {
     for (const slot of this.slots) if (slot.renderedKey !== null) this.drawHits(slot);
   }
 
+  /** 찾기 결과가 든 문단에 테두리 — null 이면 지운다 */
+  setFocusBlock(page: number | null, bbox: readonly [number, number, number, number] | null = null): void {
+    this.focusBlock = page !== null && bbox ? { page, bbox } : null;
+    for (const slot of this.slots) if (slot.renderedKey !== null) this.drawHits(slot);
+  }
+
   private drawHits(slot: Slot): void {
     slot.hitLayer.replaceChildren();
+    if (this.focusBlock && this.focusBlock.page === slot.page && slot.viewport) {
+      const [x0, y0, x1, y1] = this.focusBlock.bbox;
+      const [a, b, c, d] = slot.viewport.convertToViewportRectangle([x0, y0, x1, y1]);
+      const pad = 4;
+      const box = document.createElement('div');
+      box.className = 'pdf-find-block';
+      box.style.left = `${Math.min(a, c) - pad}px`;
+      box.style.top = `${Math.min(b, d) - pad}px`;
+      box.style.width = `${Math.abs(c - a) + pad * 2}px`;
+      box.style.height = `${Math.abs(d - b) + pad * 2}px`;
+      slot.hitLayer.append(box);
+    }
     const matches = this.matchesByPage.get(slot.page);
     if (!matches?.length || slot.textDivs.length === 0) return;
     const base = slot.el.getBoundingClientRect();

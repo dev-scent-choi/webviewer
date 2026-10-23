@@ -204,13 +204,6 @@
         <label class="pdf-style-row" data-for="fontsize" hidden><span>글자 크기</span><input id="annot-fontsize" type="range" min="6" max="48" step="1" value="14" /><em id="annot-fontsize-val">14pt</em></label>
         <label class="pdf-style-row"><span>투명도</span><input id="annot-opacity" type="range" min="10" max="100" step="5" value="100" /><em id="annot-opacity-val">100%</em></label>
       </div>
-      <div id="find-bar" class="pdf-find-bar" hidden role="search">
-        <input id="find-input" type="search" placeholder="찾을 내용" autocomplete="off" aria-label="찾을 내용" />
-        <span id="find-count" class="pdf-find-count"></span>
-        <button id="find-prev" class="pdf-icon-btn" type="button" title="이전 (Shift+Enter)" aria-label="이전 결과"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 15 6-6 6 6"/></svg></button>
-        <button id="find-next" class="pdf-icon-btn" type="button" title="다음 (Enter)" aria-label="다음 결과"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 9 6 6 6-6"/></svg></button>
-        <button id="find-close" class="pdf-icon-btn" type="button" title="닫기 (Esc)" aria-label="찾기 닫기"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
-      </div>
       <div id="mode-notice" class="pdf-mode-notice" hidden></div>
       <div id="pdf-scroll" class="pdf-scroll" tabindex="0">
         <div id="pdf-pages" class="pdf-pages"></div>
@@ -253,6 +246,48 @@
 
     <!-- 오른쪽: 정보 창(페이지·책갈피·레이어) -->
     <aside id="inspector" class="pdf-inspector" aria-label="정보 창">
+      <section id="panel-search" class="pdf-panel pdf-sx" data-panel="search" hidden role="search" aria-label="문서에서 찾기">
+        <div class="pdf-panel-head"><h2>찾기</h2><button class="pdf-icon-btn pdf-panel-close" type="button" data-close-panel title="닫기" aria-label="닫기"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+        <div class="pdf-sx-top">
+          <label class="pdf-sx-box">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+            <input id="find-input" type="search" placeholder="찾을 내용" autocomplete="off" aria-label="찾을 내용" aria-controls="sx-results" />
+          </label>
+          <div class="pdf-sx-scope" role="radiogroup" aria-label="찾는 범위">
+            <button type="button" role="radio" data-scope="page" aria-checked="false"><b>1</b>이 페이지</button>
+            <button type="button" role="radio" data-scope="doc" aria-checked="true"><b>2</b>전체 문서</button>
+            <button type="button" role="radio" data-scope="within" aria-checked="false" disabled title="먼저 찾은 결과가 있어야 합니다"><b>3</b>결과 안에서</button>
+          </div>
+          <div class="pdf-sx-target" role="radiogroup" aria-label="찾을 곳">
+            <button type="button" role="radio" data-target="all" aria-checked="true">모든 글</button>
+            <button type="button" role="radio" data-target="headings" aria-checked="false">제목만</button>
+          </div>
+          <nav id="sx-trail" class="pdf-sx-trail" aria-label="검색 단계" hidden></nav>
+          <div class="pdf-sx-summary">
+            <span id="find-count" class="pdf-sx-count" aria-live="polite"></span>
+            <button id="find-prev" class="pdf-icon-btn" type="button" title="이전 결과 (Shift+Enter)" aria-label="이전 결과"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 15 6-6 6 6"/></svg></button>
+            <button id="find-next" class="pdf-icon-btn" type="button" title="다음 결과 (Enter)" aria-label="다음 결과"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 9 6 6 6-6"/></svg></button>
+          </div>
+        </div>
+        <div id="sx-results" class="pdf-sx-results" role="listbox" aria-label="찾은 결과" tabindex="-1"></div>
+        <div id="sx-empty" class="pdf-sx-empty" hidden></div>
+        <div id="sx-preview" class="pdf-sx-preview" hidden>
+          <div class="pdf-sx-preview-head">
+            <div class="pdf-sx-tabs" role="tablist" aria-label="미리보기">
+              <button type="button" role="tab" data-view="block" aria-selected="true">문단</button>
+              <button type="button" role="tab" data-view="page" aria-selected="false">쪽 전체 글</button>
+            </div>
+            <button id="sx-copy" class="pdf-icon-btn" type="button" title="글 복사" aria-label="글 복사"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/></svg></button>
+          </div>
+          <p id="sx-preview-heading" class="pdf-sx-preview-heading"></p>
+          <div id="sx-preview-body" class="pdf-sx-preview-body" tabindex="0"></div>
+          <div id="sx-pager" class="pdf-sx-pager" hidden>
+            <button id="sx-page-prev" type="button">‹ 이전 쪽</button>
+            <span id="sx-page-num"></span>
+            <button id="sx-page-next" type="button">다음 쪽 ›</button>
+          </div>
+        </div>
+      </section>
       <section id="panel-thumbs" class="pdf-panel" data-panel="thumbs">
         <div class="pdf-panel-head"><h2>페이지</h2><button class="pdf-icon-btn pdf-panel-close" type="button" data-close-panel title="닫기" aria-label="닫기"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
         <div id="thumbs" class="pdf-thumbs"></div>
@@ -277,6 +312,9 @@
 
     <!-- 맨 오른쪽 줄 -->
     <nav class="pdf-rail" aria-label="보기">
+      <button id="rail-search" class="pdf-rail-btn" type="button" data-panel="search" aria-pressed="false" title="찾기 (Ctrl+F)" aria-label="찾기">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      </button>
       <button id="rail-comments" class="pdf-rail-btn" type="button" data-panel="comments" aria-pressed="false" title="메모" aria-label="메모">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M4 5h16v11H9l-5 4z"/><path d="M8 9h8M8 12h5"/></svg>
       </button>
