@@ -258,7 +258,12 @@
             <button type="button" role="radio" data-scope="doc" aria-checked="true">전체 문서</button>
             <button type="button" role="radio" data-scope="within" aria-checked="false" disabled title="먼저 찾은 결과가 있어야 합니다">결과 안에서</button>
           </div>
-          <label class="pdf-layer-row pdf-sx-check"><input id="sx-headings" type="checkbox" /><span>제목에서만 찾기</span></label>
+          <div class="pdf-sx-target" role="radiogroup" aria-label="찾을 곳">
+            <span class="pdf-sx-target-label" aria-hidden="true">찾을 곳</span>
+            <button type="button" role="radio" data-target="all" aria-checked="true" title="제목과 본문 모두">전체</button>
+            <button type="button" role="radio" data-target="headings" aria-checked="false" title="제목·소제목에서만">제목</button>
+            <button type="button" role="radio" data-target="body" aria-checked="false" title="제목을 뺀 본문에서만(머리말·쪽 번호 제외)">본문</button>
+          </div>
           <nav id="sx-trail" class="pdf-sx-trail" aria-label="검색 단계" hidden></nav>
           <div class="pdf-sx-summary">
             <span id="find-count" class="pdf-sx-count" aria-live="polite"></span>
@@ -271,7 +276,7 @@
         <div id="sx-preview" class="pdf-sx-preview" hidden>
           <div class="pdf-sx-preview-head">
             <div class="pdf-sx-tabs" role="tablist" aria-label="미리보기">
-              <button type="button" role="tab" data-view="block" aria-selected="true">문단</button>
+              <button type="button" role="tab" data-view="block" aria-selected="true" title="찾은 곳이 속한 제목부터 다음 제목 전까지">절</button>
               <button type="button" role="tab" data-view="page" aria-selected="false">쪽 전체 글</button>
             </div>
             <button id="sx-copy" class="pdf-icon-btn" type="button" title="글 복사" aria-label="글 복사"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/></svg></button>
