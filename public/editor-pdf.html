@@ -247,21 +247,18 @@
     <!-- 오른쪽: 정보 창(페이지·책갈피·레이어) -->
     <aside id="inspector" class="pdf-inspector" aria-label="정보 창">
       <section id="panel-search" class="pdf-panel pdf-sx" data-panel="search" hidden role="search" aria-label="문서에서 찾기">
-        <div class="pdf-panel-head"><h2>찾기</h2><button class="pdf-icon-btn pdf-panel-close" type="button" data-close-panel title="닫기" aria-label="닫기"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+        <div class="pdf-panel-head"><h2>찾기 <span id="sx-total" class="pdf-count"></span></h2><button class="pdf-icon-btn pdf-panel-close" type="button" data-close-panel title="닫기" aria-label="닫기"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
         <div class="pdf-sx-top">
-          <label class="pdf-sx-box">
+          <label class="pdf-search pdf-sx-box">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
             <input id="find-input" type="search" placeholder="찾을 내용" autocomplete="off" aria-label="찾을 내용" aria-controls="sx-results" />
           </label>
           <div class="pdf-sx-scope" role="radiogroup" aria-label="찾는 범위">
-            <button type="button" role="radio" data-scope="page" aria-checked="false"><b>1</b>이 페이지</button>
-            <button type="button" role="radio" data-scope="doc" aria-checked="true"><b>2</b>전체 문서</button>
-            <button type="button" role="radio" data-scope="within" aria-checked="false" disabled title="먼저 찾은 결과가 있어야 합니다"><b>3</b>결과 안에서</button>
+            <button type="button" role="radio" data-scope="page" aria-checked="false">이 페이지</button>
+            <button type="button" role="radio" data-scope="doc" aria-checked="true">전체 문서</button>
+            <button type="button" role="radio" data-scope="within" aria-checked="false" disabled title="먼저 찾은 결과가 있어야 합니다">결과 안에서</button>
           </div>
-          <div class="pdf-sx-target" role="radiogroup" aria-label="찾을 곳">
-            <button type="button" role="radio" data-target="all" aria-checked="true">모든 글</button>
-            <button type="button" role="radio" data-target="headings" aria-checked="false">제목만</button>
-          </div>
+          <label class="pdf-layer-row pdf-sx-check"><input id="sx-headings" type="checkbox" /><span>제목에서만 찾기</span></label>
           <nav id="sx-trail" class="pdf-sx-trail" aria-label="검색 단계" hidden></nav>
           <div class="pdf-sx-summary">
             <span id="find-count" class="pdf-sx-count" aria-live="polite"></span>
@@ -282,9 +279,9 @@
           <p id="sx-preview-heading" class="pdf-sx-preview-heading"></p>
           <div id="sx-preview-body" class="pdf-sx-preview-body" tabindex="0"></div>
           <div id="sx-pager" class="pdf-sx-pager" hidden>
-            <button id="sx-page-prev" type="button">‹ 이전 쪽</button>
+            <button id="sx-page-prev" class="pdf-icon-btn" type="button" title="이전 쪽" aria-label="이전 쪽"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m15 6-6 6 6 6"/></svg></button>
             <span id="sx-page-num"></span>
-            <button id="sx-page-next" type="button">다음 쪽 ›</button>
+            <button id="sx-page-next" class="pdf-icon-btn" type="button" title="다음 쪽" aria-label="다음 쪽"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m9 6 6 6-6 6"/></svg></button>
           </div>
         </div>
       </section>
