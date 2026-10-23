@@ -7,7 +7,7 @@ import { normalizeForFind } from './findText.js';
 import { readOutline, type OutlineNode, type PDFDocumentProxy } from './pdfDocument.js';
 import type { PageView, TextItemInfo } from './pageView.js';
 import { blocksOf, groupByPage, searchPage, type SearchResult, type SearchScope, type SearchTarget } from './searchEngine.js';
-import { analyzePage, type PageStructure } from './textStructure.js';
+import { analyzePage, type PageStructure, type StructItem } from './textStructure.js';
 
 interface Stage {
   readonly query: string;
@@ -80,7 +80,14 @@ export function setupSearchPanel(opts: {
     if (hit && hit.items === items) return hit;
     // 쪽 앞에서 이어지는 제목 — 앞 쪽 구조가 있으면 그 마지막 제목
     const prev = page > 1 ? structures.get(page - 1)?.structure.lastHeading ?? '' : '';
-    const entry = { items, structure: analyzePage(page, items, prev, outlineTitles) };
+    // 글꼴 굵기·태그 구조 역할을 조각에 붙여 제목 점수에 쓴다(못 받으면 크기·번호 같은 단서로만)
+    const meta = await view.textMeta(page);
+    const styled: StructItem[] = items.map((it, i) => ({
+      ...it,
+      bold: it.fontName ? meta.fonts[it.fontName]?.bold ?? false : false,
+      role: meta.roles[i] ?? null,
+    }));
+    const entry = { items, structure: analyzePage(page, styled, prev, outlineTitles, { pageHeight: view.sizeOf(page).h }) };
     structures.set(page, entry);
     return entry;
   }
@@ -146,7 +153,7 @@ export function setupSearchPanel(opts: {
             g.results
               .map((r) => {
                 const i = n++;
-                const head = r.isHeading ? '<span class="tag">제목</span>' : r.heading ? esc(r.heading) : '';
+                const head = r.isHeading ? `<span class="tag">${r.level === 1 ? '제목' : '소제목'}</span>` : r.heading ? esc(r.heading) : '';
                 return `<button type="button" role="option" class="pdf-sx-item" data-i="${i}" id="sx-opt-${i}" aria-selected="${i === index}">${head ? `<span class="pdf-sx-head">${head}</span>` : ''}<span class="pdf-sx-snip">${esc(r.before)}<mark>${esc(r.hit)}</mark>${esc(r.after)}</span></button>`;
               })
               .join('') +
@@ -183,7 +190,7 @@ export function setupSearchPanel(opts: {
     if (previewMode === 'block' && current) {
       const { structure } = await structureOf(current.page);
       const block = structure.blocks[current.block];
-      previewHeading.textContent = block.isHeading ? `${current.page}쪽 · 제목` : `${current.page}쪽${block.heading ? ` · ${block.heading}` : ''}`;
+      previewHeading.textContent = block.isHeading ? `${current.page}쪽 · ${block.level === 1 ? '제목' : '소제목'}` : `${current.page}쪽${block.heading ? ` · ${block.heading}` : ''}`;
       previewBody.innerHTML = markHtml(block.text, q).replace(/\n/g, '<br>');
       pager.hidden = true;
     } else {
