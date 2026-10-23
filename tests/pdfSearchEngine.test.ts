@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { analyzePage, type StructItem } from '../src/client/pdf/textStructure.js';
+import { analyzePage, isBoldFontName, type StructItem } from '../src/client/pdf/textStructure.js';
 import { blocksOf, groupByPage, searchPage } from '../src/client/pdf/searchEngine.js';
 
 /** 한 줄 = 조각 하나. y 는 위에서부터 내려가며(PDF 좌표는 위로 커지므로 800 - n) */
@@ -80,5 +80,53 @@ describe('searchPage — 3단 검색', () => {
     // '합니다'는 다섯 블록 모두에 있지만 '펌프' 결과가 든 블록(1쪽 문단, 2쪽 첫 문단)만 남는다
     const narrowed = [...searchPage(s1, page1, '합니다', 'all', allowed), ...searchPage(s2, page2, '합니다', 'all', allowed)];
     expect(narrowed.map((x) => `${x.page}:${x.block}`)).toEqual(['1:1', '1:1', '2:0']);
+  });
+});
+
+describe('제목 점수(붙여 받은 기준표)', () => {
+  const at = (str: string, y: number, extra: Partial<StructItem> = {}, size = 10, x = 50): StructItem => ({ ...line(str, y, size, x), ...extra });
+  const body = (y: number) => at('운전원은 매일 아침 점검표를 작성하고 이상이 있으면 보고합니다.', y, { fontName: 'R' });
+
+  test('본문 크기라도 굵은 짧은 줄은 제목, 같은 글꼴의 본문은 아님', () => {
+    const s = analyzePage(1, [at('주의 사항', 700, { fontName: 'B', bold: true }), body(680), body(666), body(652)]);
+    expect(s.blocks[0].isHeading).toBe(true);
+    expect(s.blocks[1].isHeading).toBe(false);
+  });
+
+  test('글자가 커도 도면 치수(숫자뿐)·긴 문장은 제목이 아니다', () => {
+    const s = analyzePage(1, [
+      at('300', 700, {}, 18),
+      body(660),
+      at('이 도면은 1층 기계실 냉각수 배관의 배치와 밸브 위치를 보여 주며 시공 전에 현장 치수를 다시 확인해야 합니다.', 620, {}, 14),
+      body(580),
+    ]);
+    expect(s.blocks.filter((b) => b.isHeading)).toHaveLength(0);
+  });
+
+  test('태그 PDF: H 역할은 크기와 상관없이 제목, P 역할의 번호 줄은 본문', () => {
+    const s = analyzePage(1, [at('설치 조건', 700, { role: 'H2' }), at('1. 전원은 220V 입니다', 680, { role: 'P' }), body(660)]);
+    expect(s.blocks[0].isHeading).toBe(true);
+    expect(s.blocks.find((b) => b.text.startsWith('1. 전원'))?.isHeading).toBe(false);
+  });
+
+  test('큰 제목(1)과 소제목(2) 단계', () => {
+    const s = analyzePage(1, page1);
+    expect(s.blocks.filter((b) => b.isHeading).map((b) => b.level)).toEqual([1, 2]);
+    expect(s.blocks.filter((b) => !b.isHeading).every((b) => b.level === 0)).toBe(true);
+  });
+
+  test('쪽 위쪽의 짧은 줄은 점수가 오르고, 칸이 크게 벌어진 표 줄은 내려간다', () => {
+    const top = analyzePage(1, [at('운전 기록', 800, { fontName: 'R' }), body(600), body(586)], '', new Set(), { pageHeight: 842 });
+    const mid = analyzePage(1, [at('운전 기록', 400, { fontName: 'R' }), body(300), body(286)], '', new Set(), { pageHeight: 842 });
+    expect(top.blocks[0].score).toBe(mid.blocks[0].score + 1);
+    const row = analyzePage(1, [at('1.', 700), at('펌프', 700, {}, 10, 150), at('정상', 700, {}, 10, 300), body(680)]);
+    expect(row.blocks[0].text).toBe('1. 펌프 정상');
+    expect(row.blocks[0].score).toBeLessThan(analyzePage(1, [at('1. 펌프 정상', 700), body(680)]).blocks[0].score);
+  });
+
+  test('글꼴 이름으로 굵기 짐작', () => {
+    expect(isBoldFontName('ABCDEF+NanumGothicBold')).toBe(true);
+    expect(isBoldFontName('HYHeadLine-Medium')).toBe(true);
+    expect(isBoldFontName('MalgunGothic')).toBe(false);
   });
 });

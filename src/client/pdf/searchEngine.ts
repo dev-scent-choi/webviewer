@@ -14,6 +14,8 @@ export interface SearchResult {
   readonly block: number;
   readonly heading: string;
   readonly isHeading: boolean;
+  /** 제목 단계 — 1 큰 제목, 2 소제목, 본문 0 */
+  readonly level: 0 | 1 | 2;
   readonly before: string;
   readonly hit: string;
   readonly after: string;
@@ -70,7 +72,7 @@ export function searchPage(
     seenInBlock.set(block, nth + 1);
     if (target === 'headings' && !b.isHeading) continue;
     if (allowed && !allowed.has(blockKey(structure.page, block))) continue;
-    out.push({ match: m, page: structure.page, block, heading: b.heading, isHeading: b.isHeading, ...snippetOf(b.text, query, nth) });
+    out.push({ match: m, page: structure.page, block, heading: b.heading, isHeading: b.isHeading, level: b.level, ...snippetOf(b.text, query, nth) });
   }
   return out;
 }

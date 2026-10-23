@@ -10,6 +10,7 @@
  * 쪽 번호(1부터)는 언제나 지금 목록에서의 자리다.
  */
 import { pdfjs, type OptionalContentConfig, type PDFDocumentProxy } from './pdfDocument.js';
+import { isBoldFontName } from './textStructure.js';
 import type { FindMatch } from './findText.js';
 import { identityPages, parsePageKey, type OcrWord, type PdfPageEntry } from '../../pdf/annotTypes.js';
 
@@ -57,6 +58,16 @@ export interface TextItemInfo {
   readonly transform: readonly number[];
   readonly width: number;
   readonly height: number;
+  /** pdf.js 글꼴 열쇠(같은 글꼴이면 같은 값) — OCR 낱말은 없음 */
+  readonly fontName?: string;
+}
+
+/** 쪽 글의 서식·구조 단서 — 찾기 패널의 제목 판별(textStructure.ts)이 쓴다 */
+export interface TextMeta {
+  /** 글꼴 열쇠 → 실제 글꼴 이름·굵기 */
+  readonly fonts: Readonly<Record<string, { readonly name: string; readonly bold: boolean }>>;
+  /** pdf.js 글 조각 순번 → 태그 PDF의 구조 역할(H1, P …) — 태그가 없으면 빈 배열 */
+  readonly roles: readonly (string | null)[];
 }
 
 /** 넣은 PDF(부속)를 연다 — 편집기가 /api/view/pdf-part에서 받아 캐시한다 */
@@ -81,6 +92,7 @@ export class PageView {
   /** 찾기 패널에서 고른 결과가 든 문단 — PDF 좌표 상자 [x0, y0, x1, y1] */
   private focusBlock: { page: number; bbox: readonly [number, number, number, number] } | null = null;
   private readonly textCache = new Map<string, Promise<TextItemInfo[]>>();
+  private readonly metaCache = new Map<string, Promise<TextMeta>>();
   private scrollRaf = 0;
   private defaultW = 612;
   private defaultH = 792;
@@ -663,7 +675,7 @@ export class PageView {
         if (!p) return [];
         const content = await p.getTextContent();
         const items = content.items.map((item) =>
-          'str' in item ? { str: item.str, transform: item.transform as number[], width: item.width, height: item.height } : { str: '', transform: [1, 0, 0, 1, 0, 0], width: 0, height: 0 },
+          'str' in item ? { str: item.str, transform: item.transform as number[], width: item.width, height: item.height, fontName: item.fontName } : { str: '', transform: [1, 0, 0, 1, 0, 0], width: 0, height: 0 },
         );
         // OCR 낱말은 글자 층에서처럼 pdf.js 조각 뒤에(찾기의 조각 순번이 span 순서와 같게)
         for (const w of this.extraText(slot.entry.key)) {
@@ -673,6 +685,66 @@ export class PageView {
         return items;
       });
       this.textCache.set(slot.entry.key, cached);
+    }
+    return cached;
+  }
+
+  /**
+   * 쪽 글의 글꼴(이름·굵기)과 태그 구조 역할 — 글꼴 정보는 연산 목록을 한 번 받아야 채워지므로(그리지 않은 쪽도)
+   * 찾기 패널이 필요할 때만 부른다. 실패하면 빈 정보(크기·번호 같은 다른 단서로만 판별)
+   */
+  textMeta(page: number): Promise<TextMeta> {
+    const slot = this.slots[page - 1];
+    const empty: TextMeta = { fonts: {}, roles: [] };
+    if (!slot) return Promise.resolve(empty);
+    let cached = this.metaCache.get(slot.entry.key);
+    if (!cached) {
+      cached = this.proxyOf(slot.entry)
+        .then(async (p) => {
+          if (!p) return empty;
+          await p.getOperatorList();
+          const content = await p.getTextContent({ includeMarkedContent: true });
+          const fonts: Record<string, { name: string; bold: boolean }> = {};
+          const ids = new Set<string>();
+          for (const item of content.items) if ('fontName' in item && item.fontName) ids.add(item.fontName);
+          for (const id of ids) {
+            try {
+              const f = p.commonObjs.get(id) as { name?: string; bold?: boolean; black?: boolean } | undefined;
+              const name = f?.name ?? '';
+              fonts[id] = { name, bold: !!(f?.bold || f?.black) || isBoldFontName(name) };
+            } catch {
+              /* 아직 안 실린 글꼴 — 이름 없이 둔다 */
+            }
+          }
+          // 태그 구조: 내용 열쇠(mcid) → 역할, 글 조각마다 감싼 표시 내용의 역할을 붙인다
+          const roleOf = new Map<string, string>();
+          const tree = await p.getStructTree().catch(() => null);
+          const walk = (node: unknown, role: string | null) => {
+            const n = node as { role?: string; type?: string; id?: string; children?: unknown[] } | null;
+            if (!n) return;
+            if (n.type === 'content' && n.id && role) roleOf.set(n.id, role);
+            const next = n.role && n.role !== 'Root' && n.role !== 'Document' && n.role !== 'Part' && n.role !== 'Sect' && n.role !== 'Div' ? n.role : role;
+            for (const c of n.children ?? []) walk(c, next);
+          };
+          walk(tree, null);
+          const roles: (string | null)[] = [];
+          if (roleOf.size > 0) {
+            const stack: string[] = [];
+            for (const item of content.items) {
+              const it = item as { type?: string; id?: string; str?: string };
+              if (it.type === 'beginMarkedContentProps' || it.type === 'beginMarkedContent') stack.push(it.id ?? '');
+              else if (it.type === 'endMarkedContent') stack.pop();
+              else if ('str' in it) {
+                let role: string | null = null;
+                for (let k = stack.length - 1; k >= 0 && !role; k -= 1) role = roleOf.get(stack[k]) ?? null;
+                roles.push(role);
+              }
+            }
+          }
+          return { fonts, roles };
+        })
+        .catch(() => empty);
+      this.metaCache.set(slot.entry.key, cached);
     }
     return cached;
   }

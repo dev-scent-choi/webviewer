@@ -29,12 +29,19 @@ async function manualPdf() {
   const doc = await PDFDocument.create();
   doc.registerFontkit(fontkit);
   const font = await doc.embedFont(fs.readFileSync('assets/fonts/Pretendard-Regular.ttf'), { subset: false });
-  for (const [title, sub, body] of PAGES) {
+  const bold = await doc.embedFont(fs.readFileSync('assets/fonts/Pretendard-Bold.ttf'), { subset: false });
+  PAGES.forEach(([title, sub, body], k) => {
     const page = doc.addPage([595, 842]);
     page.drawText(title, { x: 60, y: 770, size: 22, font, color: rgb(0.1, 0.2, 0.4) });
     page.drawText(sub, { x: 60, y: 720, size: 14, font });
     body.forEach((line, i) => page.drawText(line, { x: 60, y: 690 - i * 17, size: 11, font }));
-  }
+    // 5쪽: 본문 크기지만 굵은 짧은 줄(제목이어야 한다) / 3쪽: 큰 글자 도면 치수(제목이 아니어야 한다)
+    if (k === 4) {
+      page.drawText('주의 사항', { x: 60, y: 620, size: 11, font: bold });
+      page.drawText('작업 전 차단기를 내리고 검전기로 확인합니다.', { x: 60, y: 600, size: 11, font });
+    }
+    if (k === 2) page.drawText('300', { x: 300, y: 560, size: 20, font });
+  });
   return doc.save();
 }
 
@@ -122,6 +129,18 @@ await settle();
 s = await state();
 check(s.count === '1/3' && s.heads.every((h) => h.includes('제목')), '제목만 → 제목 3건(펌프 점검, 2. 원심펌프, 4. 예비 펌프 전환)', `${s.count} ${s.heads.join('|')}`);
 await page.uncheck('#sx-headings');
+await settle();
+
+// 붙여 받은 기준: 굵은 짧은 줄은 소제목, 큰 글자 치수는 제목 아님
+await page.fill('#find-input', '주의');
+await settle();
+s = await state();
+check(s.count === '1/1' && s.heads[0] === '소제목', '굵은 본문 크기 줄 "주의 사항" → 소제목', `${s.count} ${s.heads.join('|')}`);
+await page.fill('#find-input', '300');
+await settle();
+s = await state();
+check(s.count === '1/1' && s.heads[0] !== '제목' && s.heads[0] !== '소제목', '큰 글자 도면 치수 "300" → 제목 아님(속한 제목만 표시)', `${s.count} ${s.heads.join('|')}`);
+await page.fill('#find-input', '펌프');
 await settle();
 
 // ① 이 페이지 — 지금 4쪽
