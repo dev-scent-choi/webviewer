@@ -75,7 +75,8 @@ const state = () => page.evaluate(() => ({
   items: document.querySelectorAll('.pdf-sx-item').length,
   groups: [...document.querySelectorAll('.pdf-sx-page')].map((e) => e.firstChild.textContent.trim()),
   selected: document.querySelector('.pdf-sx-item[aria-selected="true"] .pdf-sx-snip')?.textContent ?? '',
-  heads: [...document.querySelectorAll('.pdf-sx-item .pdf-sx-head')].map((e) => e.textContent),
+  heads: [...document.querySelectorAll('.pdf-sx-item')].map((e) => e.querySelector('.pdf-sx-head')?.textContent ?? ''),
+  total: document.getElementById('sx-total').textContent,
   hits: document.querySelectorAll('.pdf-find-hit').length,
   current: document.querySelectorAll('.pdf-find-hit.current').length,
   block: document.querySelectorAll('.pdf-find-block').length,
@@ -98,7 +99,7 @@ check(await page.evaluate(() => document.activeElement?.id === 'find-input'), '�
 await page.type('#find-input', '펌프');
 await settle();
 s = await state();
-check(s.count === '1/8' && s.pages === '4쪽', '"펌프" 전체 문서 → 8건·4쪽', `${s.count} ${s.pages}`);
+check(s.count === '1/8' && s.pages === '4쪽' && s.total === '8', '"펌프" 전체 문서 → 8건·4쪽(제목 옆 개수 8)', `${s.count} ${s.pages} ${s.total}`);
 check(s.groups.join(',') === '1쪽,2쪽,4쪽,6쪽', '결과를 쪽별로 묶음', s.groups.join(','));
 check(s.heads[0].includes('개요') || s.heads[0].includes('설비 운전 지침'), '결과마다 속한 제목', s.heads.join(' | '));
 check(s.hits >= 1 && s.current === 1 && s.block === 1, '본문 노란 표시·현재 결과·문단 테두리', `hits ${s.hits} current ${s.current} block ${s.block}`);
@@ -116,11 +117,11 @@ check(s.count === '5/8' && s.pageInput === '4', '목록에서 누르면 그 쪽�
 await page.keyboard.press('Shift+Enter').catch(() => {});
 
 // 제목만
-await page.click('[data-target="headings"]');
+await page.check('#sx-headings');
 await settle();
 s = await state();
 check(s.count === '1/3' && s.heads.every((h) => h.includes('제목')), '제목만 → 제목 3건(펌프 점검, 2. 원심펌프, 4. 예비 펌프 전환)', `${s.count} ${s.heads.join('|')}`);
-await page.click('[data-target="all"]');
+await page.uncheck('#sx-headings');
 await settle();
 
 // ① 이 페이지 — 지금 4쪽

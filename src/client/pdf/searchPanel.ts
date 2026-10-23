@@ -46,7 +46,8 @@ export function setupSearchPanel(opts: {
   const pager = $('sx-pager');
   const pageNum = $('sx-page-num');
   const scopeButtons = [...section.querySelectorAll<HTMLButtonElement>('[data-scope]')];
-  const targetButtons = [...section.querySelectorAll<HTMLButtonElement>('[data-target]')];
+  const headingsOnly = $<HTMLInputElement>('sx-headings');
+  const totalBadge = $('sx-total');
   const tabButtons = [...section.querySelectorAll<HTMLButtonElement>('[data-view]')];
 
   let scope: SearchScope = 'doc';
@@ -91,7 +92,7 @@ export function setupSearchPanel(opts: {
 
   function renderControls(): void {
     setChecked(scopeButtons, 'scope', scope);
-    setChecked(targetButtons, 'target', target);
+    headingsOnly.checked = target === 'headings';
     const within = scopeButtons.find((b) => b.dataset.scope === 'within')!;
     within.disabled = scope !== 'within' && results.length === 0;
     input.placeholder = scope === 'within' ? '결과 안에서 찾을 내용' : scope === 'page' ? '이 페이지에서 찾을 내용' : '찾을 내용';
@@ -110,6 +111,7 @@ export function setupSearchPanel(opts: {
     else if (total === 0) count.textContent = searching ? '찾는 중…' : '결과 없음';
     else count.textContent = `${position}${searching ? '…' : ''}`;
     count.dataset.pages = total > 0 ? `${pages}쪽` : '';
+    totalBadge.textContent = total > 0 ? String(total) : '';
   }
 
   function markHtml(text: string, query: string): string {
@@ -144,7 +146,7 @@ export function setupSearchPanel(opts: {
             g.results
               .map((r) => {
                 const i = n++;
-                const head = r.isHeading ? '<span class="tag">제목</span>' : r.heading ? `<span class="h">${esc(r.heading)}</span>` : '';
+                const head = r.isHeading ? '<span class="tag">제목</span>' : r.heading ? esc(r.heading) : '';
                 return `<button type="button" role="option" class="pdf-sx-item" data-i="${i}" id="sx-opt-${i}" aria-selected="${i === index}">${head ? `<span class="pdf-sx-head">${head}</span>` : ''}<span class="pdf-sx-snip">${esc(r.before)}<mark>${esc(r.hit)}</mark>${esc(r.after)}</span></button>`;
               })
               .join('') +
@@ -331,13 +333,11 @@ export function setupSearchPanel(opts: {
       input.focus();
     });
   }
-  for (const b of targetButtons) {
-    b.addEventListener('click', () => {
-      target = b.dataset.target as SearchTarget;
-      renderControls();
-      void run();
-    });
-  }
+  headingsOnly.addEventListener('change', () => {
+    target = headingsOnly.checked ? 'headings' : 'all';
+    renderControls();
+    void run();
+  });
   trail.addEventListener('click', (event) => {
     const chip = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-stage]');
     if (!chip) return;
