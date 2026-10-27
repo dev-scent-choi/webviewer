@@ -1639,22 +1639,6 @@ body.home-hidden .doclist-link { display: none !important; }
   display: flex;
 }
 
-/* 읽기 전용 열람자가 아직 아무도 열어본 적 없는 슬라이드를 볼 때(editor-slides.ts의
-   showSlideUnavailablePlaceholder) 빈 캔버스 대신 보여주는 안내 문구 — error-card와 달리 화면
-   전체를 덮지 않고 캔버스 안에서 중앙 정렬만 한다. */
-.slide-canvas-placeholder {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 2rem;
-  text-align: center;
-  color: var(--v-text-dim);
-  font-size: 0.9rem;
-  line-height: 1.6;
-}
-
 .slide-card {
   position: relative;
   border: 1px solid var(--v-glass-line);

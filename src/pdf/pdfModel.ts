@@ -78,8 +78,20 @@ export async function redactedBase(original: Uint8Array, ydoc: Y.Doc): Promise<U
 }
 
 /** 원본 지문 — 편집기가 받은 원본이 방의 원본과 같은지 확인한다 */
+// 같은 바이트 객체(메모리 저장소·편집 방은 같은 Buffer를 돌려준다)를 요청마다 다시 해시하지 않게 — 저장하면 새 Buffer가 된다
+const sha1Cache = new WeakMap<Uint8Array, string>();
+/** 바이트 전체의 sha1(16진) — 같은 객체면 한 번만 계산한다 */
+export function sha1Of(bytes: Uint8Array): string {
+  let hex = sha1Cache.get(bytes);
+  if (hex === undefined) {
+    hex = createHash('sha1').update(bytes).digest('hex');
+    sha1Cache.set(bytes, hex);
+  }
+  return hex;
+}
+
 export function pdfBaseFingerprint(bytes: Uint8Array): string {
-  return createHash('sha1').update(bytes).digest('hex').slice(0, 16);
+  return sha1Of(bytes).slice(0, 16);
 }
 
 /** 넣은 PDF(부속) 바이트를 돌려준다 — 없으면 undefined(그 쪽은 빠진다) */

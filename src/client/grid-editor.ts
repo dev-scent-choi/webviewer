@@ -21,6 +21,7 @@ import {
   type SheetStructure,
 } from '../collab/gridShared.js';
 import { dedupeByName, pickPresenceColorForName, renderPresenceAvatars, type AwarenessUserState } from './presence.js';
+import { applyWatermark } from './watermark.js';
 import { parseTypedNumber, serialToDateText } from '../collab/cellValueShared.js';
 import { initOfficeShell } from './officeShell.js';
 import { bindDropdown } from './ribbonMenus.js';
@@ -240,33 +241,6 @@ function applyStyleToTd(td: HTMLTableCellElement, style: CellStyleAttrs | undefi
   td.classList.toggle('g-bord-tl', Boolean(style?.bt || style?.bl));
   td.classList.toggle('g-locked', style?.lk === 1);
   condFormatOverlay?.(td);
-}
-
-function escapeXmlText(value: string): string {
-  return value.replace(/[<>&'"]/g, (ch) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', "'": '&apos;', '"': '&quot;' })[ch] as string);
-}
-
-/** "2026-09-06 23:30:11" — toISOString은 UTC라 화면을 보는 사람의 실제 시계와 어긋나 보이므로
- * 로컬 시각 그대로 초 단위까지 조립한다. viewer.js/editor.ts의 동명 함수와 같은 포맷(별도
- * 번들이라 공유 불가). */
-function formatWatermarkTimestamp(date: Date): string {
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return (
-    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ` +
-    `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
-  );
-}
-
-/** 뷰어/docx 편집기와 같은 화면 열람용 워터마크를 xlsx 동시편집 화면에도 띄운다. */
-function applyWatermark(viewerName: string): void {
-  if (!viewerName) return;
-  const text = `${viewerName}  ${formatWatermarkTimestamp(new Date())}`;
-  const svg =
-    `<svg xmlns="http://www.w3.org/2000/svg" width="300" height="180">` +
-    `<text x="150" y="100" transform="rotate(-28 150 100)" text-anchor="middle" ` +
-    `font-family="sans-serif" font-size="14" fill="rgba(0,0,0,0.16)">${escapeXmlText(text)}</text>` +
-    `</svg>`;
-  document.documentElement.style.setProperty('--watermark-bg', `url("data:image/svg+xml,${encodeURIComponent(svg)}")`);
 }
 
 async function main(): Promise<void> {
@@ -510,7 +484,6 @@ async function main(): Promise<void> {
   let selAnchorCol = 0;
   let selFocusRow = 0;
   let selFocusCol = 0;
-  let isRangeDragging = false;
 
   /** 셀의 표시용 값을 얻는다 — 수식 셀이면 서버가 계산해 둔 값(computed 맵)을, 아니면 원본
    * 텍스트(cells 맵)를 그대로 쓴다. 클라이언트는 더 이상 수식을 직접 계산하지 않는다(서버가
@@ -1088,42 +1061,6 @@ async function main(): Promise<void> {
     sendGridStructureOp('deleteCols', col);
   }
 
-  /** 선택한 열 기준 오름차순/내림차순 정렬 — 데이터 행(구조상 실제 rowCount) 전체를 그 열의
-   * 값으로 재배열한다. 숫자로 보이면 숫자 비교, 아니면 문자열 비교(로캘 기준)로 — 엑셀의
-   * "간단한 오름차순/내림차순 정렬"과 같은 수준의 단순한 구현이다. */
-  function sortByColumn(col: number, direction: 'asc' | 'desc'): void {
-    const sheet = structure.get(String(activeSheet));
-    if (!sheet) return;
-    const rows = Array.from({ length: sheet.rowCount }, (_, r) => r);
-    const valueOf = (r: number) => cells.get(gridCellKey(activeSheet, r, col)) ?? '';
-    rows.sort((a, b) => {
-      const va = valueOf(a);
-      const vb = valueOf(b);
-      const na = NUMERIC_VALUE.test(va.trim()) ? Number(va) : null;
-      const nb = NUMERIC_VALUE.test(vb.trim()) ? Number(vb) : null;
-      const cmp = na !== null && nb !== null ? na - nb : va.localeCompare(vb, 'ko');
-      return direction === 'asc' ? cmp : -cmp;
-    });
-    ydoc.transact(() => {
-      // 원본을 전부 스냅샷으로 떠 둔 뒤(재배치 중 원본을 덮어써도 안전하게) 새 순서로 다시 쓴다.
-      const snapshot = rows.map((r) =>
-        Array.from({ length: sheet.colCount }, (_, c) => ({
-          value: cells.get(gridCellKey(activeSheet, r, c)),
-          style: styles.get(gridCellKey(activeSheet, r, c)),
-        })),
-      );
-      snapshot.forEach((rowData, newR) => {
-        rowData.forEach((cell, c) => {
-          const key = gridCellKey(activeSheet, newR, c);
-          if (cell.value !== undefined) cells.set(key, cell.value);
-          else cells.delete(key);
-          if (cell.style) styles.set(key, cell.style);
-          else styles.delete(key);
-        });
-      });
-    });
-  }
-
   function openRowContextMenu(row: number, x: number, y: number): void {
     closeSheetPopup();
     const menu = document.createElement('div');
@@ -1154,8 +1091,8 @@ async function main(): Promise<void> {
     const items: Array<[string, () => void]> = [
       ['왼쪽에 열 삽입', () => insertColumnAt(col)],
       ['열 삭제', () => deleteColumnAt(col)],
-      ['오름차순 정렬', () => sortByColumn(col, 'asc')],
-      ['내림차순 정렬', () => sortByColumn(col, 'desc')],
+      ['오름차순 정렬', () => sortWholeSheetBy(col, false)],
+      ['내림차순 정렬', () => sortWholeSheetBy(col, true)],
     ];
     items.forEach(([label, action]) => {
       const btn = document.createElement('button');
@@ -1559,7 +1496,6 @@ async function main(): Promise<void> {
       // focusin이 범위를 한 칸으로 접지 않는다. 누른 채 끌면 이어서 넓힌다.
       event.preventDefault();
       extendSelectionTo(r, c);
-      isRangeDragging = true;
       document.addEventListener('mousemove', onRangeDragMove);
       document.addEventListener('mouseup', onRangeDragEnd);
       return;
@@ -1574,7 +1510,6 @@ async function main(): Promise<void> {
     selAnchorCol = c;
     selFocusRow = r;
     selFocusCol = c;
-    isRangeDragging = true;
     renderRangeHighlight();
     td.focus();
     document.addEventListener('mousemove', onRangeDragMove);
@@ -2674,7 +2609,6 @@ async function main(): Promise<void> {
     renderRangeHighlight();
   }
   function onRangeDragEnd(): void {
-    isRangeDragging = false;
     document.removeEventListener('mousemove', onRangeDragMove);
     document.removeEventListener('mouseup', onRangeDragEnd);
   }
@@ -3841,6 +3775,13 @@ async function main(): Promise<void> {
     const filter = filtersMap.get(String(activeSheet));
     const inFilter = filter && region.r1 >= filter.r1 && region.r2 <= filter.r2;
     sortRegion(inFilter ? filter : region, keyCol, descending, inFilter ? true : looksLikeHeader(region));
+  }
+  /** 열 머리 메뉴 — 시트 전체를 그 열로(도착하지 않은 행이 있으면 sortRegion 이 막는다) */
+  function sortWholeSheetBy(col: number, descending: boolean): void {
+    const sheet = structure.get(String(activeSheet));
+    if (!sheet) return;
+    const region = { r1: 0, c1: 0, r2: sheet.rowCount - 1, c2: sheet.colCount - 1 };
+    sortRegion(region, col, descending, looksLikeHeader(region));
   }
   document.getElementById('btn-sort-asc')?.addEventListener('click', () => sortActiveColumn(false));
   document.getElementById('btn-sort-desc')?.addEventListener('click', () => sortActiveColumn(true));

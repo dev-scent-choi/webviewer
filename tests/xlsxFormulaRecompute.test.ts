@@ -10,7 +10,7 @@ import * as Y from 'yjs';
 import { messageYjsSyncStep2, messageYjsUpdate, readUpdate, writeUpdate } from 'y-protocols/sync';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { computeGridCellDisplayAsync } from '../src/xlsx/formulas.js';
-import { ingestXlsxLazily, setDirtyCell } from '../src/xlsx/lazyGridStore.js';
+import { ingestXlsxLazily } from '../src/xlsx/lazyGridStore.js';
 
 const MESSAGE_SYNC = 0;
 const MESSAGE_PAGE_SUBSCRIBE = 2;

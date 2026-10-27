@@ -25,9 +25,6 @@ export interface SearchResult {
   readonly after: string;
 }
 
-/** 블록을 가리키는 열쇠 */
-export const blockKey = (page: number, block: number) => `${page}:${block}`;
-
 /** 결과가 속한 절 열쇠 — 제목 앞의 글은 그 블록만 */
 export function sectionKeyOf(structure: PageStructure, block: number): string {
   const b = structure.blocks[block];

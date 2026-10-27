@@ -1,6 +1,5 @@
 import fs from 'node:fs/promises';
-import { createHash } from 'node:crypto';
-import { basePdfForEditor } from '../pdf/pdfModel.js';
+import { basePdfForEditor, sha1Of } from '../pdf/pdfModel.js';
 import { addPdfPart, compressRoomPdf, currentPlainBytes, editorSourceOf, signRoomPdf, extractPdfGroups, PdfRoomError, pdfInfoOf, protectPdf, readPdfPart, tokenKey, unlockPdf, type ProtectRequest } from '../pdf/pdfRoomOps.js';
 import { isCompressLevel } from '../pdf/pdfCompress.js';
 import { convertPdf, isConvertTarget } from '../pdf/pdfConvert.js';
@@ -8,7 +7,7 @@ import { fileToPdf, FileToPdfError } from '../pdf/fileToPdf.js';
 import { ConversionError } from '../converters/types.js';
 import os from 'node:os';
 import path from 'node:path';
-import type { FastifyInstance, FastifyReply } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { recordAudit } from '../audit.js';
 import { SizedLruCache } from '../cache.js';
 import { config } from '../config.js';
@@ -69,7 +68,7 @@ export interface ViewContext {
 /** PDF 편집기용 PDF(다루는 주석을 뺀 것) — 문서 id·길이·내용 해시로 최근 몇 개만 기억한다 */
 const editorBaseCache = new Map<string, Uint8Array>();
 async function editorBaseOf(docId: string, bytes: Uint8Array): Promise<Uint8Array> {
-  const key = `${docId}:${bytes.length}:${createHash('sha1').update(bytes).digest('hex')}`;
+  const key = `${docId}:${bytes.length}:${sha1Of(bytes)}`;
   const hit = editorBaseCache.get(key);
   if (hit) return hit;
   const base = await basePdfForEditor(bytes);
@@ -86,6 +85,20 @@ async function resolveEditorDataView(token: string | undefined, reply: FastifyRe
     return null;
   }
   return view;
+}
+
+/** 문서에서 꺼낸 SVG 등을 그 주소로 직접 열었을 때 스크립트가 이 사이트 출처로 돌지 않게 — <img>·innerHTML 표시에는 영향 없음 */
+const SANDBOX_CSP = "sandbox; default-src 'none'; img-src data:; style-src 'unsafe-inline'";
+
+/** 큰 본문을 받는 라우트에 onRequest 로 — 본문(최대 maxUploadBytes)을 메모리에 다 받기 전에 토큰부터 본다.
+ * 권한·문서 확인은 핸들러의 resolveView 가 그대로 한다. */
+async function tokenBeforeBody(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+  const token = (request.query as { token?: unknown }).token;
+  try {
+    verifyViewToken(typeof token === 'string' ? token : '');
+  } catch {
+    await reply.code(401).send({ success: false, error: '열람 토큰이 없거나 유효하지 않습니다.' });
+  }
 }
 
 export async function resolveView(token: string | undefined, reply: FastifyReply): Promise<ViewContext | null> {
@@ -805,7 +818,7 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
       }
       try {
         const svg = await store.readDerived(view.meta.id, 'svg');
-        return await reply.type('image/svg+xml').header('cache-control', 'private, no-store').send(svg);
+        return await reply.type('image/svg+xml').header('cache-control', 'private, no-store').header('content-security-policy', SANDBOX_CSP).send(svg);
       } catch (error) {
         request.log.error(error, 'svg view failed');
         return reply.code(500).send({ success: false, error: 'SVG를 불러오지 못했습니다.' });
@@ -844,7 +857,7 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
         }
         // 편집기는 그림을 바꾸지 않는다 — 슬라이드를 오갈 때마다 수 MB를 다시 받지 않게 브라우저가 1시간 보관한다
         // (주소에 열람 토큰이 있어 그 사람의 브라우저에만 남는다: private)
-        return await reply.type(mime).header('cache-control', 'private, max-age=3600').send(Buffer.from(mediaBytes));
+        return await reply.type(mime).header('cache-control', 'private, max-age=3600').header('content-security-policy', SANDBOX_CSP).send(Buffer.from(mediaBytes));
       } catch (error) {
         request.log.error(error, 'slide media fetch failed');
         return reply.code(500).send({ success: false, error: '이미지를 불러오지 못했습니다.' });
@@ -909,7 +922,9 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
         }
         const pages = await loadPdfText(view.meta.id);
         const { hits, total } = searchPdfText(pages, q, limit);
-        return { success: true, data: { kind: 'pages', hits, total } };
+        // 복사 금지 토큰에는 글 조각을 주지 않는다 — 검색어를 바꿔 가며 조각을 모으면 본문을 되살릴 수 있었다(화면은 위치만 쓴다)
+        const shown = view.claims.perms.canCopy ? hits : hits.map((h) => ({ ...h, snippet: '' }));
+        return { success: true, data: { kind: 'pages', hits: shown, total } };
       } catch (error) {
         request.log.error(error, 'search failed');
         return reply.code(500).send({ success: false, error: '검색에 실패했습니다.' });
@@ -1119,7 +1134,7 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
         .type('application/pdf')
         .header('cache-control', 'no-store')
         .header('x-pdf-base', base)
-        .send(Buffer.from(await editorBaseOf(meta.id, bytes)));
+        .send(await editorBaseOf(meta.id, bytes).then((b) => Buffer.from(b.buffer, b.byteOffset, b.byteLength))); // 복사 없이
     } catch (error) {
       if (error instanceof PdfRoomError) return reply.code(error.status).send({ success: false, error: error.message, locked: error.status === 423 });
       throw error;
@@ -1217,7 +1232,7 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
-  app.post<{ Querystring: { token?: string; name?: string } }>('/api/view/file-to-pdf', { bodyLimit: config.maxUploadBytes, config: { rateLimit: HEAVY_RATE_LIMIT } }, async (request, reply) => {
+  app.post<{ Querystring: { token?: string; name?: string } }>('/api/view/file-to-pdf', { bodyLimit: config.maxUploadBytes, onRequest: tokenBeforeBody, config: { rateLimit: HEAVY_RATE_LIMIT } }, async (request, reply) => {
     const view = await downloadOnly(request.query.token, reply);
     if (!view) return reply;
     if (!Buffer.isBuffer(request.body) || request.body.length === 0) return reply.code(415).send({ success: false, error: '파일을 보내 주세요.' });
@@ -1271,7 +1286,7 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // PDF 편집기 — 다른 PDF 넣기(파일에서 넣기·파일 합치기). 본문은 PDF 바이트(application/octet-stream).
-  app.post<{ Querystring: { token?: string; name?: string } }>('/api/view/pdf-part', { bodyLimit: config.maxUploadBytes }, async (request, reply) => {
+  app.post<{ Querystring: { token?: string; name?: string } }>('/api/view/pdf-part', { bodyLimit: config.maxUploadBytes, onRequest: tokenBeforeBody }, async (request, reply) => {
     const view = await resolveView(request.query.token, reply);
     if (!view) return reply;
     const perms = view.claims.perms;
@@ -1407,7 +1422,7 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
   // 호출하는 "저장" 한 번이 곧 전체 문서 교체다.
   app.post<{ Querystring: TokenQuery }>(
     '/api/view/hwp-save',
-    { schema: { querystring: tokenQuerySchema }, bodyLimit: config.maxUploadBytes },
+    { schema: { querystring: tokenQuerySchema }, bodyLimit: config.maxUploadBytes, onRequest: tokenBeforeBody },
     async (request, reply) => {
       const view = await resolveView(request.query.token, reply);
       if (!view) return reply;

@@ -56,7 +56,9 @@ export async function buildApp(): Promise<FastifyInstance> {
   if (config.allowedOrigins.length > 0) {
     const frameAncestors = `frame-ancestors ${config.allowedOrigins.join(' ')}`;
     app.addHook('onSend', async (_request, reply, payload) => {
-      reply.header('Content-Security-Policy', frameAncestors);
+      // 라우트가 먼저 단 정책(문서 SVG의 sandbox 등)은 지우지 않고 뒤에 붙인다
+      const existing = reply.getHeader('content-security-policy');
+      reply.header('Content-Security-Policy', existing ? `${String(existing)}; ${frameAncestors}` : frameAncestors);
       return payload;
     });
   }
@@ -119,8 +121,11 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(fastifyStatic, {
     root: publicDir,
     // 뷰어/관리 화면 JS가 브라우저에 캐시되어 구버전이 돌지 않도록 항상 재검증시킨다.
+    // 단 화면 HTML이 내용 해시(?v=, assetVersion.ts)를 붙여 부른 주소는 내용이 바뀌면 주소도 바뀌므로 오래 보관해도 된다 —
+    // 화면을 열 때마다 번들마다 재검증 요청이 가던 것을 없앤다.
     setHeaders(res) {
-      res.setHeader('cache-control', 'no-cache');
+      const url = (res as { req?: { url?: string } }).req?.url ?? '';
+      res.setHeader('cache-control', /[?&]v=[0-9a-f]+/.test(url) ? 'public, max-age=31536000, immutable' : 'no-cache');
     },
   });
   await app.register(documentRoutes);

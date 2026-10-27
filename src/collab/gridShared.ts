@@ -28,14 +28,6 @@ export const DOC_META_SAVED_AT_KEY = 'savedAt';
  * 자연스럽게 실패 표시가 사라진다. 이 값이 없으면(구버전 세션 등) 실패한 적 없는 것으로 본다.
  */
 export const DOC_META_SAVE_ERROR_AT_KEY = 'saveErrorAt';
-/**
- * 시딩 시점의 셀 값을 그대로 담아두는 불변 스냅샷 — 클라이언트는 절대 쓰지 않는다.
- * 수식 셀은 계산된 결괏값 문자열로 시딩되는데, 저장 시 `cells`에 있는 모든 키를 원본에
- * 그대로 쓰면 사용자가 손대지 않은 수식까지 정적 값으로 덮어써 버린다. `cells`와 이 값을
- * 비교해 실제로 달라진(=사용자가 편집한) 셀만 원본에 반영하기 위한 기준선이다.
- */
-export const GRID_BASELINE_MAP = 'baseline';
-
 export function gridCellKey(sheetIdx: number, row: number, col: number): string {
   return `${sheetIdx}:${row}:${col}`;
 }
@@ -73,11 +65,9 @@ export interface SheetStructure {
 
 /**
  * 셀 값과 같은 "시트:행:열" 키로 병행 관리하는 서식 레이어 — 값(cells)과 분리해 두면
- * 값만 바뀐 셀과 서식만 바뀐 셀을 export 시 독립적으로 판단할 수 있다(둘 다 baseline과
- * 비교해 실제로 바뀐 것만 원본에 반영 — cells/baseline과 동일한 패턴).
+ * 값만 바뀐 셀과 서식만 바뀐 셀을 저장 때 따로 판단할 수 있다(room.dirtyCells).
  */
 export const GRID_STYLES_MAP = 'styles';
-export const GRID_STYLES_BASELINE_MAP = 'stylesBaseline';
 
 /**
  * "시트:행:열" 키로 칸 단위 데이터를 담고, **페이지 창(window)에 맞춰 함께 채워지고 함께 비워지는**
@@ -91,16 +81,14 @@ export const GRID_STYLES_BASELINE_MAP = 'stylesBaseline';
  * `cells`에 쓰지만 서식은 **값이 비어 있어도** 쓴다. 그래서 "테두리·배경만 있고 글자는 없는
  * 서식 템플릿 행"으로만 이뤄진 페이지는 `styles`에 500개 키가 있어도 `cells`에는 한 개도 없다 —
  * `cells`만 보면 그 페이지가 "안 채워진 것"으로 보여, 행/열 삽입·삭제 뒤 재시딩 대상에서 통째로
- * 빠지고 옛 좌표의 서식 키가 그대로 남는다. 기준선(baseline/stylesBaseline)과 계산값(computed)도
- * 같은 이유로 포함한다: 사용자가 값을 지우면(cells.delete) 기준선 키만 남는 페이지가 될 수 있다.
+ * 빠지고 옛 좌표의 서식 키가 그대로 남는다. 계산값(computed)도
+ * 같은 이유로 포함한다.
  * (구조/병합 맵은 애초에 윈도잉하지 않으므로 여기 없다.)
  */
 export const WINDOWED_GRID_CELL_MAPS = [
   GRID_CELLS_MAP,
-  GRID_BASELINE_MAP,
   GRID_COMPUTED_MAP,
   GRID_STYLES_MAP,
-  GRID_STYLES_BASELINE_MAP,
 ] as const;
 
 /** 테두리 굵기 — 1=가는 선, 2=굵은 선(엑셀 thin/medium을 단순화). 색은 항상 기본(검정 계열)만 지원. */

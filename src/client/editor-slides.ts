@@ -245,26 +245,6 @@ function buildSlideKeymap(): Record<string, Command> {
 }
 
 /**
- * (Task 9 당시 도입 — 2026-09-17 읽기 전용 시딩 허용 수정으로 현재는 호출부가 없다) 읽기 전용
- * 열람자가 "아직 아무도 열어본 적 없는" 슬라이드를 볼 때 캔버스에 보여주던 안내. 그 시점엔
- * canEdit 세션만 subscribeSlideContent로 서버 지연 시딩을 요청할 수 있었고, 읽기 전용 연결은
- * room.ts가 그 요청 자체를 서버에서 거부해 응답이 영영 오지 않았다 — 지금은 room.ts의
- * MESSAGE_SLIDE_CONTENT_SUBSCRIBE 핸들러가 읽기 전용 연결의 순수 시딩 요청도 그대로 처리하므로
- * (duplicateOfId를 실은 요청만 거부한다), renderCanvasForSlide는 canEdit 여부와 무관하게 항상
- * subscribeSlideContent를 부르고 이 함수는 더 이상 쓰이지 않는다. 시딩 자체가 실패하는(연결당
- * 동시 시딩 상한 초과 등) 드문 경우는 canEdit 세션이 겪는 것과 같은 무설명 빈 캔버스로 수렴하므로
- * 새 회귀는 아니다. 당장 도로 쓸 데는 없지만 앞으로 "시딩이 아예 막힌 경우"를 다시 구분해 알려야
- * 할 상황이 생기면 그대로 재사용할 수 있어 남겨 둔다. canvasEl.replaceChildren()이 이미 이전
- * 내용을 비운 뒤 호출된다는 전제(호출부가 생기면 지켜야 할 조건)로 여기서는 추가만 한다.
- */
-function showSlideUnavailablePlaceholder(): void {
-  const placeholder = document.createElement('div');
-  placeholder.className = 'slide-canvas-placeholder';
-  placeholder.textContent = '이 슬라이드는 아직 미리보기를 사용할 수 없습니다 (편집자가 먼저 열어야 합니다).';
-  canvasEl.append(placeholder);
-}
-
-/**
  * 표·차트·스마트아트·EMF 그림·선처럼 편집 대상이 아닌 복잡한 요소는, LibreOffice가 원본 그대로
  * 렌더링한 슬라이드 이미지에서 그 영역만 잘라 같은 자리에 끼운다 — 직접 흉내 내면 표의 색·열 너비·
  * 병합·글꼴이나 차트를 다 재현할 수 없지만, 이렇게 하면 뷰어(같은 렌더링)와 픽셀 단위로 같다.

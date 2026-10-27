@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import ExcelJS from 'exceljs';
 import { describe, expect, test } from 'vitest';
-import { gridCellKey } from '../src/collab/gridShared.js';
 import { findOrAddGridStyleIndex } from '../src/xlsx/collab.js';
 import { exportXlsxFromGridStreaming } from '../src/xlsx/exportStreaming.js';
 import { growSheet, ingestXlsxLazily, setDirtyCell } from '../src/xlsx/lazyGridStore.js';

@@ -11,6 +11,7 @@
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { sweepStaleChunks } from './chunkedUpload.js';
 
 export const STALE_AFTER_MS = 30 * 60_000;
 export const SWEEP_INTERVAL_MS = 30 * 60_000;
@@ -49,7 +50,11 @@ export async function sweepStaleTempDirs(dir: string = os.tmpdir(), now: number 
 
 /** 서버 시작 때 한 번, 그 뒤 주기적으로 청소한다. 타이머는 프로세스 종료를 막지 않는다. */
 export function startTempSweeper(log: (removed: number) => void): void {
-  const run = () => void sweepStaleTempDirs().then((removed) => removed > 0 && log(removed));
+  const run = () => {
+    void sweepStaleTempDirs().then((removed) => removed > 0 && log(removed));
+    // 올리다 만 조각 업로드(docview-chunks)도 — 새 조각이 안 오면 지워지지 않고 남았다(향기랩은 '저장하지 않음' 약속)
+    void sweepStaleChunks(true);
+  };
   run();
   setInterval(run, SWEEP_INTERVAL_MS).unref();
 }

@@ -28,7 +28,6 @@ export interface TextMarkupItem extends MarkupItemBase {
   readonly fontFamily: PdfFontFamily;
 }
 
-export type MarkupKind = MarkupItem['kind'];
 export type MarkupItem = CommentMarkupItem | TextMarkupItem;
 
 export interface AddCommentInput {

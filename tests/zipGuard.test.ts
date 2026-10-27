@@ -82,4 +82,13 @@ describe('zipGuard: 풀기 전 선언 크기(declaredUnzippedSize)', () => {
     expect(declaredUnzippedSize(forged)).toBe(10);
     expect(guardedUnzipSync(forged, 'forged', undefined, 100)['big.txt'].length).toBe(10);
   });
+
+  test('같은 이름 항목이 여럿이면 크기를 모두 더한다 — 마지막 하나만 세면 상한을 우회해 풀기마다 큰 버퍼를 만들었다', () => {
+    const zip = zipSync({ 'a.xml': strToU8('x'.repeat(1000)), 'b.xml': strToU8('y'.repeat(1000)) });
+    const dup = new Uint8Array(zip);
+    const b = strToU8('b.xml');
+    for (let i = 0; i + b.length <= dup.length; i += 1) if (b.every((ch, k) => dup[i + k] === ch)) dup[i] = 'a'.charCodeAt(0);
+    expect(declaredUnzippedSize(dup)).toBe(2000);
+    expect(() => assertZipNotTooLarge(dup, 'upload', 1500)).toThrow(ZipTooLargeError);
+  });
 });

@@ -11,7 +11,6 @@ import {
   PDFName,
   PDFOptionList,
   PDFRadioGroup,
-  PDFRef,
   PDFTextField,
   type PDFFont,
 } from 'pdf-lib';
@@ -95,8 +94,4 @@ export function dropFieldsOnRemovedPages(doc: PDFDocument, removedAnnotRefs: Rea
       }
     }
   }
-}
-
-export function refTag(ref: unknown): string | null {
-  return ref instanceof PDFRef ? ref.tag : null;
 }

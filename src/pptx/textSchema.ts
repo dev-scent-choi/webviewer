@@ -1,4 +1,5 @@
 import { Schema, type MarkSpec, type NodeSpec } from 'prosemirror-model';
+import { safeCssColor } from '../docx/schema.js';
 
 /**
  * pptx 텍스트박스 전용 최소 ProseMirror 스키마. docx의 docxSchema(src/docx/schema.ts)와
@@ -79,8 +80,7 @@ const marks: Record<string, MarkSpec> = {
      * 만들어져 일반 RGB 색으로 저장된다. */
     attrs: { color: {}, raw: { default: null } },
     parseDOM: [{ style: 'color', getAttrs: (value) => ({ color: value as string }) }],
-    toDOM: (mark) =>
-      mark.attrs.color ? ['span', { style: `color: ${mark.attrs.color as string}` }, 0] : ['span', 0],
+    toDOM: (mark) => (safeCssColor(mark.attrs.color) ? ['span', { style: `color: ${mark.attrs.color as string}` }, 0] : ['span', 0]),
   },
   fontSize: {
     /** 포인트(pt) 단위 — pptx의 <a:rPr sz="..">(100분의 1 포인트)와는 import/export 시 변환한다. */
@@ -98,15 +98,16 @@ const marks: Record<string, MarkSpec> = {
     // 캔버스는 실제 슬라이드를 축소/확대해 그리므로 글자도 같은 비율이어야 한다 — CSS의 pt(=1.333px)를
     // 그대로 쓰면 캔버스 축척과 어긋나 글자만 33% 크게 보여 PowerPoint에선 한 줄인 제목이 줄바꿈됐다.
     // --slide-pt(캔버스 1pt의 실제 px)는 편집기가 슬라이드 크기에 맞춰 .slide-canvas에 지정한다.
-    toDOM: (mark) => ['span', { style: `font-size: calc(${mark.attrs.size as number} * var(--slide-pt, 1pt))` }, 0],
+    toDOM: (mark) => ['span', { style: `font-size: calc(${Number(mark.attrs.size) || 18} * var(--slide-pt, 1pt))` }, 0],
   },
   fontFamily: {
     /** 글꼴 이름 — pptx의 <a:rPr><a:latin typeface=".."/>(한글 글리프용 <a:ea>도 같이 내보낸다,
      * slideContent.ts 참고)와 import/export 시 서로 변환한다. */
     attrs: { family: {} },
     parseDOM: [{ style: 'font-family', getAttrs: (value) => ({ family: String(value).replace(/['"]/g, '') }) }],
-    toDOM: (mark) => ['span', { style: `font-family: '${mark.attrs.family as string}'` }, 0],
+    toDOM: (mark) => ['span', { style: `font-family: '${String(mark.attrs.family ?? '').replace(/["';<>\\]/g, '')}'` }, 0],
   },
 };
 
 export const pptxTextSchema = new Schema({ nodes, marks });
+
