@@ -24,6 +24,10 @@ export interface SheetLink {
   readonly location?: string;
   /** 마우스를 올렸을 때 보일 설명 */
   readonly tooltip?: string;
+  /** 주소를 칸 값으로 만드는 수식 링크 — =HYPERLINK("#'"&$A2&"'!A1", …)의 첫 인자. 편집 화면이 누른 칸 기준으로 푼다
+   * (anchor는 수식이 적힌 칸 — 아래로 복사한 공유 수식이면 상대 참조를 그만큼 옮긴다) */
+  readonly expr?: string;
+  readonly anchor?: { readonly row: number; readonly col: number };
 }
 
 export interface SheetListValidation {
@@ -54,10 +58,24 @@ function rangesOfSqref(sqref: string) {
     .map(({ r1, c1, r2, c2 }) => ({ r1, c1, r2, c2 }));
 }
 
-/** HYPERLINK("주소", "글자") 수식의 첫 인자(문자열 그대로 적힌 것만) */
-function hyperlinkFormulaTarget(formula: string): string | undefined {
-  const m = /^\s*(?:_xlfn\.)?HYPERLINK\s*\(\s*"((?:[^"]|"")*)"/i.exec(formula);
-  return m ? m[1].replace(/""/g, '"') : undefined;
+/** 수식 안 HYPERLINK( 의 첫 인자 글 — IFERROR(HYPERLINK(...), "")처럼 감싸여 있어도 찾는다. 없으면 undefined */
+export function hyperlinkFirstArg(formula: string): string | undefined {
+  const start = /\bHYPERLINK\s*\(/i.exec(formula);
+  if (!start) return undefined;
+  const from = start.index + start[0].length;
+  let depth = 0;
+  let quoted = false;
+  for (let i = from; i < formula.length; i += 1) {
+    const ch = formula[i];
+    if (quoted) {
+      if (ch === '"' && formula[i + 1] === '"') i += 1;
+      else if (ch === '"') quoted = false;
+    } else if (ch === '"') quoted = true;
+    else if (ch === '(') depth += 1;
+    else if (ch === ')' && depth > 0) depth -= 1;
+    else if ((ch === ',' || ch === ')') && depth === 0) return formula.slice(from, i).trim();
+  }
+  return undefined;
 }
 
 function linkOf(sheetName: string, ref: { r1: number; c1: number; r2: number; c2: number }, target: string, tooltip?: string): SheetLink | null {
@@ -92,14 +110,22 @@ export function parseSheetExtras(sheetName: string, sheetXml: string, sheetRelsX
       linked.add(`${ref.r1}:${ref.c1}`);
     }
   }
-  // =HYPERLINK("#시트!A1","글자") 수식 — 링크 목록에 없는 칸만
+  // =HYPERLINK("#시트!A1","글자") 수식 — 링크 목록에 없는 칸만. IFERROR 등으로 감싸도, 주소를 칸 값으로 만들어도
+  // ("#'"&$A2&"'!a1") 링크로 본다. 아래로 복사한 공유 수식(t="shared" ref="B2:B50")은 첫 칸에만 글이 있어 그 범위 전체를 링크로.
   // 빈 칸(<c r="A1"/>)에서 시작해 다음 칸의 수식을 잘못 잡지 않게, 닫는 칸·다음 칸을 넘지 않는다
-  for (const m of sheetXml.matchAll(/<c\b[^>]*\br="([A-Z]{1,3}\d+)"[^>]*(?<!\/)>(?:(?!<\/c>|<c\b)[\s\S])*?<f\b[^>]*>([^<]*)<\/f>/g)) {
-    const target = hyperlinkFormulaTarget(decodeXmlAttr(m[2]));
-    const ref = parseRangeFormula(m[1]);
-    if (!target || !ref || linked.has(`${ref.r1}:${ref.c1}`)) continue;
-    const link = linkOf(sheetName, { r1: ref.r1, c1: ref.c1, r2: ref.r2, c2: ref.c2 }, target);
-    if (link) links.push(link);
+  for (const m of sheetXml.matchAll(/<c\b[^>]*\br="([A-Z]{1,3}\d+)"[^>]*(?<!\/)>(?:(?!<\/c>|<c\b)[\s\S])*?<f\b([^>]*)>([^<]*)<\/f>/g)) {
+    const arg = hyperlinkFirstArg(decodeXmlAttr(m[3]));
+    const cell = parseRangeFormula(m[1]);
+    if (arg === undefined || !cell || linked.has(`${cell.r1}:${cell.c1}`)) continue;
+    const literal = /^"((?:[^"]|"")*)"$/.exec(arg);
+    if (literal) {
+      const link = linkOf(sheetName, { r1: cell.r1, c1: cell.c1, r2: cell.r2, c2: cell.c2 }, literal[1].replace(/""/g, '"'));
+      if (link) links.push(link);
+      continue;
+    }
+    const shared = /\bt="shared"/.test(m[2]) ? parseRangeFormula(/\bref="([^"]+)"/.exec(m[2])?.[1] ?? '') : null;
+    const range = shared ?? cell;
+    links.push({ sheetName, r1: range.r1, c1: range.c1, r2: range.r2, c2: range.c2, expr: arg, anchor: { row: cell.r1, col: cell.c1 } });
   }
 
   const lists: SheetListValidation[] = [];

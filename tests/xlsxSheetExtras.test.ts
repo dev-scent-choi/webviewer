@@ -1,7 +1,7 @@
 import { strToU8 } from 'fflate';
 import { describe, expect, test } from 'vitest';
 import { parseSheetExtras, tableFilterOf } from '../src/xlsx/sheetExtras.js';
-import { parseLocation } from '../src/client/gridLinks.js';
+import { evalLinkExpr, parseLocation } from '../src/client/gridLinks.js';
 
 const RELS = (items: string) => `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${items}</Relationships>`;
 
@@ -41,6 +41,34 @@ describe('하이퍼링크(바로가기) 읽기', () => {
     expect(parseLocation('#요약!C5')).toEqual({ sheetName: '요약', row: 4, col: 2 });
     expect(parseLocation('AA10')).toEqual({ sheetName: null, row: 9, col: 26 });
     expect(parseLocation('이름있는범위')).toBeNull();
+  });
+});
+
+describe('주소를 칸 값으로 만드는 HYPERLINK 수식 — =IFERROR(HYPERLINK("#\'"&$A2&"\'!a1",">> Go <<"), "")', () => {
+  // 엑셀이 아래로 복사한 공유 수식: 첫 칸만 글이 있고 ref가 범위, 나머지 칸은 <f t="shared" si="0"/>
+  const formula = 'IFERROR(HYPERLINK("#\'"&amp;$A2&amp;"\'!a1","&gt;&gt; Go &lt;&lt;"), "")';
+  const sheet =
+    '<worksheet><sheetData>' +
+    `<row r="2"><c r="A2" t="s"><v>0</v></c><c r="B2" t="str"><f t="shared" ref="B2:B4" si="0">${formula}</f><v>&gt;&gt; Go &lt;&lt;</v></c></row>` +
+    '<row r="3"><c r="A3" t="s"><v>1</v></c><c r="B3" t="str"><f t="shared" si="0"/><v>&gt;&gt; Go &lt;&lt;</v></c></row>' +
+    `<row r="6"><c r="C6" t="str"><f>${formula}</f><v>x</v></c></row>` +
+    '</sheetData></worksheet>';
+  const { links } = parseSheetExtras('목차', sheet, undefined);
+
+  test('IFERROR로 감싸도 찾고, 공유 수식은 복사된 범위 전체를 링크로', () => {
+    expect(links).toContainEqual({ sheetName: '목차', r1: 1, c1: 1, r2: 3, c2: 1, expr: `"#'"&$A2&"'!a1"`, anchor: { row: 1, col: 1 } });
+    expect(links).toContainEqual({ sheetName: '목차', r1: 5, c1: 2, r2: 5, c2: 2, expr: `"#'"&$A2&"'!a1"`, anchor: { row: 5, col: 2 } });
+  });
+
+  test('누른 칸 기준으로 주소를 푼다 — $A 는 열 고정, 행은 따라 내려간다', () => {
+    const values: Record<string, string> = { '1:0': '1월 실적', '2:0': "김's 시트" };
+    const valueAt = (r: number, c: number) => values[`${r}:${c}`] ?? '';
+    const expr = `"#'"&$A2&"'!a1"`;
+    expect(evalLinkExpr(expr, { row: 1, col: 1 }, { row: 1, col: 1 }, valueAt)).toBe("#'1월 실적'!a1");
+    expect(evalLinkExpr(expr, { row: 1, col: 1 }, { row: 2, col: 1 }, valueAt)).toBe("#'김's 시트'!a1");
+    expect(parseLocation("'1월 실적'!a1")).toEqual({ sheetName: '1월 실적', row: 0, col: 0 });
+    // 칸 참조·글자·& 말고 다른 것이 섞이면 풀지 않는다
+    expect(evalLinkExpr('"#"&TEXT(A1,"0")', { row: 0, col: 0 }, { row: 0, col: 0 }, valueAt)).toBeNull();
   });
 });
 
