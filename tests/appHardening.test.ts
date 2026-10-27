@@ -25,14 +25,14 @@ describe('서버 기본 방어(본문 상한·프록시 IP·로그의 토큰)', 
     expect(res.statusCode).toBe(413);
   });
 
-  test('파일을 받는 라우트(pdf-part)는 큰 본문도 받아서 토큰을 확인한다', async () => {
+  test('파일을 받는 라우트(pdf-part)는 본문을 받기 전에 토큰부터 확인한다(큰 본문이라도 413이 아니라 401)', async () => {
     const res = await app.inject({
       method: 'POST',
       url: '/api/view/pdf-part?token=bad',
       headers: { 'content-type': 'application/octet-stream' },
       payload: Buffer.alloc(6 * 1024 * 1024),
     });
-    expect(res.statusCode).not.toBe(413);
+    expect(res.statusCode).toBe(401);
   });
 
   test('이 컴퓨터의 프록시가 붙인 X-Forwarded-For는 믿고, 그 밖의 주소에서 온 것은 믿지 않는다', async () => {

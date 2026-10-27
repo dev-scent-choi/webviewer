@@ -235,7 +235,6 @@ describe('serializeTxBodyXml + spliceShapeTxBody (export)', () => {
       '<p:txBody><a:bodyPr/><a:p><a:r><a:t>Untouched</a:t></a:r></a:p></p:txBody></p:sp>' +
       XML_TAIL;
 
-    const shapes = parseSlideShapes(original);
     const editedDoc = schema.node('doc', null, [
       schema.node('paragraph', null, [
         schema.text('Edited ', [schema.marks.strong.create()]),

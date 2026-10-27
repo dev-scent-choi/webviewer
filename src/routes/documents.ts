@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
-import { requireApiKey, type ApiKeyAuthenticatedRequest } from '../apiKeyAuth.js';
+import { hasApiKeyAccess, requireApiKey, type ApiKeyAuthenticatedRequest } from '../apiKeyAuth.js';
 import { recordAudit } from '../audit.js';
 import { discardPrewarmedXlsx, forceCloseRoom, getChangeLog, prewarmXlsxRoom } from '../collab/room.js';
 import { config } from '../config.js';
@@ -345,7 +345,7 @@ const TOKEN_RATE_LIMIT = { max: 120, timeWindow: '1 minute' } as const;
 export async function documentRoutes(app: FastifyInstance): Promise<void> {
   app.post(
     '/api/documents',
-    { bodyLimit: config.maxUploadBytes, preHandler: requireApiKey, config: { rateLimit: WRITE_RATE_LIMIT } },
+    { bodyLimit: config.maxUploadBytes, onRequest: requireApiKey, config: { rateLimit: WRITE_RATE_LIMIT } },
     async (request, reply) => {
       const callerProject = (request as ApiKeyAuthenticatedRequest).callerProject;
       let file;
@@ -374,7 +374,8 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
     '/api/documents/stream',
     {
       bodyLimit: config.maxUploadBytes,
-      preHandler: requireApiKey,
+      // 본문(최대 maxUploadBytes)을 받기 전에 키부터 — preHandler 는 본문을 다 받은 뒤에 돈다
+      onRequest: requireApiKey,
       config: { rateLimit: WRITE_RATE_LIMIT },
       schema: {
         querystring: {
@@ -430,7 +431,9 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
     // API에 얹는 방식(새 엔드포인트·웹훅 없이). 룸이 없거나(편집자가 전부 나가 이미 저장 완료됐거나)
     // 지원하지 않는 형식이면 changes는 빈 배열이다 — "변경 없음"과 "지금은 조회할 수 없음"을
     // 구분하지 않는다(단순화, README에 명시).
-    return { success: true, data: { ...meta, changes: getChangeLog(meta.id) } };
+    // 상태 조회는 키 없이도 되지만(향기랩 status.js 등), 바뀐 글자·편집자 이름이 든 changes 는 키가 있을 때만 —
+    // 열람만 토큰으로 받은 docId 로 /api/view/changes 의 권한 검사를 우회해 읽을 수 있었다
+    return { success: true, data: { ...meta, changes: hasApiKeyAccess(request) ? getChangeLog(meta.id) : [] } };
   });
 
   // 업로드/토큰발급과 같은 이유로 인증을 건다 — 이 엔드포인트는 서버에 올라와 있는 모든 문서의

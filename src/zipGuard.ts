@@ -132,7 +132,9 @@ export function declaredEntrySizes(data: Uint8Array): Map<string, number> | null
       if (size < 0) return null;
     }
     if (p + 46 + nameLen > data.length) return null;
-    sizes.set(nameDecoder.decode(data.subarray(p + 46, p + 46 + nameLen)), size);
+    // 같은 이름이 여럿이면 더한다 — fflate는 항목마다 따로 풀어서, 마지막 것만 세면 상한을 우회할 수 있었다
+    const name = nameDecoder.decode(data.subarray(p + 46, p + 46 + nameLen));
+    sizes.set(name, (sizes.get(name) ?? 0) + size);
     p += 46 + nameLen + extraLen + commentLen;
   }
   return sizes;

@@ -74,9 +74,17 @@ interface CachedRenderDoc {
 
 /** 렌더링 문서 캐시가 예산의 대부분을 차지하므로 캐시 예산의 65%를 할당한다 */
 const documentCache = new SizedLruCache<CachedRenderDoc>({
-  maxBytes: Math.floor(config.cacheBudgetBytes * 0.65),
+  maxBytes: Math.floor(config.cacheBudgetBytes * 0.5),
   maxEntries: 8,
   sizeOf: (entry) => entry.estimatedBytes,
+});
+
+/** 그린 쪽 PNG — 같은 쪽·배율을 여럿이 보거나(슬라이드 레일 썸네일 등) 다시 볼 때 다시 그리지 않는다.
+ * PNG 인코딩은 동기라 그동안 서버 전체가 멈춘다. 문서 캐시 몫(0.65)에서 0.15를 떼어 쓴다. */
+const pngCache = new SizedLruCache<Buffer>({
+  maxBytes: Math.floor(config.cacheBudgetBytes * 0.15),
+  maxEntries: 2000,
+  sizeOf: (png) => png.length,
 });
 
 /** 페이지 크기 배열은 작으므로 개수만 제한한다 */
@@ -169,6 +177,7 @@ export async function getPdfPageInfo(pdfBytes: Buffer): Promise<PdfPageInfo> {
  */
 export function invalidateRenderCache(docId: string): void {
   documentCache.invalidatePrefix(`${docId}#`);
+  pngCache.invalidatePrefix(`${docId}#`);
   pageSizeCache.invalidate(docId);
 }
 
@@ -200,8 +209,7 @@ export async function renderPage(
     throw new PageOutOfRangeError(pageNumber, sizes.length);
   }
   const scale = clampScale(requestedScale ?? config.renderScale, sizes[pageNumber - 1], allowSmall ? 0.25 : 1);
-  const document = await openDocument(docId, scale, loadBytes);
-  return document.getPage(pageNumber);
+  return pngCache.getOrLoad(`${docId}#${scale}#${pageNumber}`, async () => (await openDocument(docId, scale, loadBytes)).getPage(pageNumber));
 }
 
 /** Helvetica는 WinAnsi 범위만 인코딩 가능하므로 워터마크 문자열을 ASCII로 정리한다. */

@@ -68,7 +68,6 @@ export async function exportXlsxFromGridStreaming(
   const { bytes: loadable, stash: drawings } = stripDrawings(originalXlsxBytes);
   await src.xlsx.load(loadable as unknown as ArrayBuffer);
   const srcSheets = src.worksheets.filter((sheet) => !sheet.state || sheet.state === 'visible');
-  const originalSheetCount = srcSheets.length;
 
   // 편집된 칸을 시트+행별로 미리 묶는다 — collab.ts의 exportXlsxFromGrid와 같은 이유. 값 자체를
   // 함께 들고 있으므로(옛 "row:col" 좌표 집합과 달리) 아래 쓰기 지점에서 store를 다시 조회할

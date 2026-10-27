@@ -235,7 +235,8 @@ export const MAX_ROWS = 1_048_576;
 export const MAX_COLS = 120;
 
 function argbToCss(argb?: string): string | undefined {
-  if (!argb) return undefined;
+  // 16진수만 — 이 값은 보기 화면 <style>에 그대로 들어가 'FF;}*{x:' 같은 값이 규칙을 깰 수 있었다
+  if (!argb || !/^[0-9a-f]{6}([0-9a-f]{2})?$/i.test(argb)) return undefined;
   // 대부분의 엑셀 파일(과 ExcelJS 자신)은 8자리 AARRGGBB로 쓰지만, POI는 알파 없이 6자리
   // RRGGBB만 쓰는 경우가 있다 — 두 형태 모두 지원해야 색이 조용히 누락되지 않는다.
   if (argb.length === 8) return `#${argb.slice(2)}`;

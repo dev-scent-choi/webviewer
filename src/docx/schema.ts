@@ -106,7 +106,7 @@ function paragraphDOMAttrs(attrs: Record<string, unknown>): Record<string, strin
     }
     out['data-spacing'] = JSON.stringify(spacing);
   }
-  if (attrs.shading) {
+  if (attrs.shading && safeCssColor(attrs.shading)) {
     styles.push(`background-color: ${attrs.shading as string}`);
     out['data-shading'] = attrs.shading as string;
   }
@@ -206,6 +206,12 @@ export const HIGHLIGHT_COLORS: Readonly<Record<string, string>> = {
 };
 
 /** 글꼴 이름을 CSS 문자열 안에 넣어도 안전하게 — 따옴표·세미콜론·꺾쇠·역슬래시는 글꼴 이름에 쓰이지 않는다. */
+/** style 속성에 넣어도 되는 색 값인지 — 문서나 다른 참여자(Yjs)가 보낸 값이라 'red;position:fixed…'처럼 CSS를 덧붙여
+ * 다른 사람 화면을 덮는 것을 막는다(가져오기는 #rrggbb 만 만들지만 Yjs 갱신은 서버가 검사하지 않는다) */
+export function safeCssColor(value: unknown): boolean {
+  return typeof value === 'string' && /^(#[0-9a-f]{3,8}|rgba?\([\d\s.,%]+\)|[a-z]{3,20})$/i.test(value.trim());
+}
+
 export function safeFontName(value: unknown): string {
   return String(value ?? '').replace(/["';<>\\]/g, '').trim();
 }
@@ -235,7 +241,7 @@ const marks: Record<string, MarkSpec> = {
         getAttrs: (value) => ({ color: value as string }),
       },
     ],
-    toDOM: (mark) => ['span', { style: `color: ${mark.attrs.color as string}` }, 0],
+    toDOM: (mark) => (safeCssColor(mark.attrs.color) ? ['span', { style: `color: ${mark.attrs.color as string}` }, 0] : ['span', 0]),
   },
   /** w:rFonts — 한글(eastAsia)과 영문·숫자(ascii) 글꼴을 따로 갖는다(Word와 같다). 리본 글꼴 상자로
    * 고르면 둘 다 같은 이름이 된다. 화면에는 한글 글꼴을 먼저 쓴다. */
@@ -276,11 +282,10 @@ const marks: Record<string, MarkSpec> = {
     parseDOM: [
       { tag: 'mark[data-highlight]', getAttrs: (dom) => ({ color: (dom as HTMLElement).getAttribute('data-highlight') }) },
     ],
-    toDOM: (mark) => [
-      'mark',
-      { 'data-highlight': mark.attrs.color as string, style: `background-color: ${mark.attrs.color as string}; color: inherit` },
-      0,
-    ],
+    toDOM: (mark) =>
+      safeCssColor(mark.attrs.color)
+        ? ['mark', { 'data-highlight': mark.attrs.color as string, style: `background-color: ${mark.attrs.color as string}; color: inherit` }, 0]
+        : ['mark', 0],
   },
   /** 메모가 달린 글자 범위 — 메모 내용은 Y.Map(DOCX_COMMENTS_MAP)의 같은 id 항목에 있다. 메모끼리 겹칠 수 있다. */
   comment: {
@@ -299,7 +304,7 @@ const marks: Record<string, MarkSpec> = {
         getAttrs: (value) => ({ size: parseFloat(value as string) }),
       },
     ],
-    toDOM: (mark) => ['span', { style: `font-size: ${mark.attrs.size as number}pt` }, 0],
+    toDOM: (mark) => ['span', { style: `font-size: ${Number(mark.attrs.size) || 11}pt` }, 0],
   },
 };
 
@@ -428,7 +433,7 @@ const tableNodeSpecs = tableNodes({
       default: null,
       getFromDOM: (dom) => (dom as HTMLElement).style.backgroundColor || null,
       setDOMAttr: (value, attrs) => {
-        if (value) attrs.style = `${(attrs.style as string | undefined) ?? ''}background-color: ${value as string};`;
+        if (value && safeCssColor(value)) attrs.style = `${(attrs.style as string | undefined) ?? ''}background-color: ${value as string};`;
       },
     },
     /** 셀 4변 테두리(docx의 w:tcBorders/w:tblBorders에서 계산된 최종값) — 없으면 null(에디터 기본 테두리 사용) */

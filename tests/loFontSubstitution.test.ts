@@ -34,4 +34,21 @@ describe('LibreOffice 글꼴 대체표', () => {
     expect(count(xml)).toBe(FONT_SUBSTITUTIONS.length);
     expect(xml.trim().endsWith('</oor:items>')).toBe(true);
   });
+
+  test('외부 링크 차단(BlockUntrustedRefererLinks)도 넣고, 그것만 없던 예전 프로필에도 한 번만 덧붙인다', () => {
+    const blocks = (xml: string) => (xml.match(/BlockUntrustedRefererLinks/g) ?? []).length;
+    const fresh = path.join(root, 'block-fresh');
+    ensureFontSubstitutions(fresh);
+    expect(readFileSync(fileOf(fresh), 'utf8')).toMatch(/BlockUntrustedRefererLinks" oor:op="fuse"><value>true</);
+    // 글꼴 대체표만 있던 예전 판 프로필
+    const old = path.join(root, 'block-old');
+    ensureFontSubstitutions(old);
+    writeFileSync(fileOf(old), readFileSync(fileOf(old), 'utf8').replace(/<item[^\n]*BlockUntrustedRefererLinks[^\n]*\n/, ''));
+    expect(blocks(readFileSync(fileOf(old), 'utf8'))).toBe(0);
+    ensureFontSubstitutions(old);
+    ensureFontSubstitutions(old);
+    const xml = readFileSync(fileOf(old), 'utf8');
+    expect(blocks(xml)).toBe(1);
+    expect(count(xml)).toBe(FONT_SUBSTITUTIONS.length);
+  });
 });

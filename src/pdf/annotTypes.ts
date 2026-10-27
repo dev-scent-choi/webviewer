@@ -121,8 +121,6 @@ export function identityPages(count: number): PdfPageEntry[] {
 
 export type PdfAnnotType = 'note' | 'highlight' | 'underline' | 'strike' | 'ink' | 'freetext' | 'rect' | 'ellipse' | 'line' | 'arrow' | 'stamp';
 
-export const PDF_ANNOT_TYPES: readonly PdfAnnotType[] = ['note', 'highlight', 'underline', 'strike', 'ink', 'freetext', 'rect', 'ellipse', 'line', 'arrow', 'stamp'];
-
 export interface PdfAnnot {
   readonly id: string;
   readonly pageKey: string;

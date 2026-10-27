@@ -13,6 +13,8 @@ const UPLOAD_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 /** 조각 수 상한 — 64MB 조각이면 4GB, 실제 상한은 maxBytes가 정한다 */
 export const MAX_CHUNKS = 64;
 const STALE_MS = 60 * 60 * 1000;
+/** 마무리되지 않은 조각 전체 상한 — 업로드 ID 개수에 상한이 없어, 올리다 만 업로드로 임시 폴더(디스크)를 채울 수 있었다 */
+export const MAX_PENDING_BYTES = 4 * 1024 ** 3;
 
 export class ChunkUploadError extends Error {
   constructor(
@@ -26,9 +28,9 @@ export class ChunkUploadError extends Error {
 const assembling = new Set<string>();
 let lastSweep = 0;
 
-/** 오래된(마무리되지 않은) 업로드 폴더 정리 — 10분에 한 번만 */
-async function sweepStale(): Promise<void> {
-  if (Date.now() - lastSweep < 10 * 60 * 1000) return;
+/** 오래된(마무리되지 않은) 업로드 폴더 정리 — 조각이 올 때는 10분에 한 번만, tempSweep.ts 의 주기 청소는 force */
+export async function sweepStaleChunks(force = false): Promise<void> {
+  if (!force && Date.now() - lastSweep < 10 * 60 * 1000) return;
   lastSweep = Date.now();
   const names = await fs.readdir(ROOT).catch(() => [] as string[]);
   for (const name of names) {
@@ -36,6 +38,16 @@ async function sweepStale(): Promise<void> {
     const stat = await fs.stat(dir).catch(() => null);
     if (stat && Date.now() - stat.mtimeMs > STALE_MS) await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
   }
+}
+
+/** 아직 합치지 않은 조각의 전체 크기 */
+async function pendingBytes(): Promise<number> {
+  let total = 0;
+  for (const name of await fs.readdir(ROOT).catch(() => [] as string[])) {
+    const dir = path.join(ROOT, name);
+    for (const part of await fs.readdir(dir).catch(() => [] as string[])) total += (await fs.stat(path.join(dir, part)).catch(() => null))?.size ?? 0;
+  }
+  return total;
 }
 
 /**
@@ -53,8 +65,12 @@ export async function acceptChunk(
   if (!Number.isInteger(total) || total < 1 || total > MAX_CHUNKS) throw new ChunkUploadError(400, '조각 수가 올바르지 않습니다.');
   if (!Number.isInteger(index) || index < 0 || index >= total) throw new ChunkUploadError(400, '조각 순번이 올바르지 않습니다.');
   if (assembling.has(uploadId)) throw new ChunkUploadError(409, '이미 합치는 중인 업로드입니다.');
-  void sweepStale();
+  void sweepStaleChunks();
   const dir = path.join(ROOT, uploadId.toLowerCase());
+  const isNew = !(await fs.stat(dir).catch(() => null));
+  if (isNew && (await pendingBytes()) + data.length > MAX_PENDING_BYTES) {
+    throw new ChunkUploadError(503, '지금은 올리는 중인 파일이 너무 많습니다. 잠시 뒤에 다시 시도해 주세요.');
+  }
   await fs.mkdir(dir, { recursive: true });
   // 같은 순번이 동시에 와도 반쪽 파일이 남지 않게 임시 이름으로 쓴 뒤 바꾼다
   const tmp = path.join(dir, `${index}.${randomUUID()}.part`);

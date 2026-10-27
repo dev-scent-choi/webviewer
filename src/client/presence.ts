@@ -4,10 +4,6 @@ import type { Awareness } from 'y-protocols/awareness';
  * 순수 DOM/문자열 로직이라 서버 전용 의존성은 없다. */
 export const PRESENCE_COLORS = ['#f76707', '#2f9e44', '#1971c2', '#ae3ec9', '#e8590c', '#0c8599'];
 
-export function pickPresenceColor(clientId: number): string {
-  return PRESENCE_COLORS[clientId % PRESENCE_COLORS.length];
-}
-
 /** 문자열(사용자 이름)로부터 결정론적인 해시를 뽑는다 — Array.prototype.reduce로 짧게 구현하지 않고
  * 루프를 쓴 이유는 없음, 그냥 흔한 해시 패턴(각 문자 코드로 누적)을 그대로 쓴 것뿐. */
 function hashString(value: string): number {

@@ -1,6 +1,7 @@
 import type { IncomingMessage } from 'node:http';
 import type { WebSocket } from 'ws';
 import { unzipXmlParts } from '../zipGuard.js';
+import { sanitizeAwarenessUpdate } from './awarenessGuard.js';
 import { strFromU8 } from 'fflate';
 import * as decoding from 'lib0/decoding';
 import * as encoding from 'lib0/encoding';
@@ -46,8 +47,6 @@ import {
   MAX_ROWS,
   YIELD_EVERY_N_ROWS,
   type GridCell,
-  type GridDocument,
-  type GridSheet,
 } from '../spreadsheet.js';
 import { exportXlsxFromGridStreaming } from '../xlsx/exportStreaming.js';
 import { GRID_CHARTS_MAP, type GridChart } from '../xlsx/chartModel.js';
@@ -85,7 +84,6 @@ import {
   applyRowShift,
   closeLazyGridStore,
   getCell,
-  getRow,
   getRowCells,
   growSheet,
   ingestXlsxLazily,
@@ -418,9 +416,18 @@ export async function checkRoomCapacity(
   return { ok: true };
 }
 
+const MAX_BUFFERED_BYTES = 256 * 1024 * 1024;
+
 function send(room: Room, conn: WebSocket, message: Uint8Array): void {
   if (conn.readyState !== conn.CONNECTING && conn.readyState !== conn.OPEN) {
     closeConn(room, conn);
+    return;
+  }
+  // 받지 못하고 쌓이기만 하는 연결(느린 휴대폰 등)은 끊는다 — 큰 엑셀 스크롤의 채우기·비우기 방송이 끝없이 쌓여
+  // 서버 메모리가 늘 수 있었다. 클라이언트는 다시 접속해 처음부터 맞춘다. 첫 동기화(큰 문서 통째)보다 넉넉한 값.
+  if (conn.bufferedAmount > MAX_BUFFERED_BYTES) {
+    closeConn(room, conn);
+    conn.terminate();
     return;
   }
   try {
@@ -2460,7 +2467,10 @@ function handleMessage(room: Room, conn: WebSocket, message: Uint8Array): void {
         break;
       }
       case MESSAGE_AWARENESS: {
-        applyAwarenessUpdate(room.awareness, decoding.readVarUint8Array(decoder), conn);
+        const foreignIds = new Set<number>();
+        for (const [other, ids] of room.conns) if (other !== conn) for (const id of ids) foreignIds.add(id);
+        const update = sanitizeAwarenessUpdate(decoding.readVarUint8Array(decoder), foreignIds, room.viewerByConn.get(conn) ?? null);
+        applyAwarenessUpdate(room.awareness, update, conn);
         break;
       }
       case MESSAGE_PAGE_SUBSCRIBE: {
@@ -2696,11 +2706,6 @@ export async function joinEditSession(
     encoding.writeVarUint8Array(awarenessEncoder, encodeAwarenessUpdate(room.awareness, [...states.keys()]));
     send(room, socket, encoding.toUint8Array(awarenessEncoder));
   }
-}
-
-/** 현재 메모리에 열려 있는 협업 룸 수 (진단·테스트용) */
-export function activeRoomCount(): number {
-  return rooms.size;
 }
 
 /** GET /api/documents/:id가 그대로 응답에 실을 수 있는 모양 — CellChangeEntry의 GridCell(서식

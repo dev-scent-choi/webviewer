@@ -28,12 +28,14 @@ import {
   DOCX_PAGE_MAP,
   DOCX_PAGE_SETUP_KEY,
   docxSchema,
+  safeFontName,
   type DocxComment,
   type DocxPageSetup,
   type PageSetup,
 } from '../docx/schema.js';
 import { setupWordReview } from './wordReview.js';
 import { pickPresenceColorForName, renderPresenceAvatars } from './presence.js';
+import { applyWatermark } from './watermark.js';
 import { DOC_META_MAP, DOC_META_SAVED_AT_KEY, DOC_META_SAVE_ERROR_AT_KEY } from '../collab/gridShared.js';
 import { initOfficeShell } from './officeShell.js';
 import { bindDropdown, fillColorPalette, type PaletteColor } from './ribbonMenus.js';
@@ -231,33 +233,6 @@ function measureSingleLineRatio(): void {
   if (ratio >= 1 && ratio <= 2) editorHost.style.setProperty('--doc-single-line', ratio.toFixed(3));
 }
 
-function escapeXmlText(value: string): string {
-  return value.replace(/[<>&'"]/g, (ch) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', "'": '&apos;', '"': '&quot;' })[ch] as string);
-}
-
-/** "2026-09-06 23:30:11" — toISOString은 UTC라 화면을 보는 사람의 실제 시계와 어긋나 보이므로
- * 로컬 시각 그대로 초 단위까지 조립한다. viewer.js의 동명 함수와 같은 포맷(별도 번들이라 공유 불가). */
-function formatWatermarkTimestamp(date: Date): string {
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return (
-    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ` +
-    `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
-  );
-}
-
-/** 뷰어(viewer.js)와 같은 화면 열람용 워터마크를 동시편집 화면에도 띄운다 — 토큰에 서명된(위조
- * 불가) viewer 이름 + 이 화면을 연 시각을 편집 화면 전체에 옅게 반복해 깐다. */
-function applyWatermark(viewerName: string): void {
-  if (!viewerName) return;
-  const text = `${viewerName}  ${formatWatermarkTimestamp(new Date())}`;
-  const svg =
-    `<svg xmlns="http://www.w3.org/2000/svg" width="300" height="180">` +
-    `<text x="150" y="100" transform="rotate(-28 150 100)" text-anchor="middle" ` +
-    `font-family="sans-serif" font-size="14" fill="rgba(0,0,0,0.16)">${escapeXmlText(text)}</text>` +
-    `</svg>`;
-  document.documentElement.style.setProperty('--watermark-bg', `url("data:image/svg+xml,${encodeURIComponent(svg)}")`);
-}
-
 /**
  * 한글(Hangul) 코드 영역 — 이 범위의 글자만 eastAsia 서체(예: 굴림)를 쓰게 강제하고, 나머지
  * (숫자·영문·기호 등)는 ascii 서체(예: Arial)로 넘긴다. 그냥 "굴림, Arial" 순서로만 나열하면
@@ -275,7 +250,10 @@ const HANGUL_UNICODE_RANGE = 'U+1100-11FF, U+3130-318F, U+A960-A97F, U+AC00-D7A3
  */
 function applyDefaultFontFamily(family: ScriptFontFamily | null): void {
   if (!family || (!family.eastAsia && !family.ascii)) return; // 이게 없으면 이 앱 UI용 폰트로 그려져 Word와 아예 다른 서체가 된다
-  const { eastAsia, ascii } = family;
+  // 문서(styles.xml)에서 온 이름이라 따옴표 등을 빼고 쓴다 — 그대로 <style>에 넣으면 문서가 페이지 전체에 CSS를 걸 수 있었다
+  const eastAsia = family.eastAsia ? safeFontName(family.eastAsia) || null : null;
+  const ascii = family.ascii ? safeFontName(family.ascii) || null : null;
+  if (!eastAsia && !ascii) return;
   // .ProseMirror 자신에게 이미 font-family 선언이 있어(style.css) 상위 요소의 inline
   // font-family는 상속되지 않는다 — 그 선언이 참조하는 CSS 변수로 값을 흘려보낸다.
   if (eastAsia && ascii && eastAsia !== ascii) {
@@ -522,19 +500,6 @@ function insertTable(view: EditorView, rows: number, cols: number): void {
   const tr = state.tr.setSelection(TextSelection.create(state.doc, state.selection.to)).replaceSelectionWith(node);
   view.dispatch(tr.scrollIntoView());
   view.focus();
-}
-
-function bindToolbarButton(
-  view: EditorView,
-  id: string,
-  command: Command,
-): void {
-  const button = document.getElementById(id);
-  if (!button) return;
-  button.addEventListener('click', () => {
-    command(view.state, view.dispatch, view);
-    view.focus();
-  });
 }
 
 /**

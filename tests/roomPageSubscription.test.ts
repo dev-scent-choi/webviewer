@@ -7,7 +7,6 @@ import ExcelJS from 'exceljs';
 import * as encoding from 'lib0/encoding';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
-const MESSAGE_SYNC = 0;
 const MESSAGE_PAGE_SUBSCRIBE = 2;
 
 class FakeSocket extends EventEmitter {

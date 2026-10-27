@@ -17,12 +17,22 @@ export interface ApiKeyAuthenticatedRequest extends FastifyRequest {
  * DOCVIEW_API_KEYS가 비어 있으면(미설정) 검사 자체를 건너뛴다 — 로컬 개발 편의를 위해서다.
  * 부팅 시 한 번 경고를 남기므로(server.ts), 운영 배포 시 설정을 빠뜨려도 로그에서 확인할 수 있다.
  */
+/** 요청의 Bearer 키에 맞는 연동 프로젝트(없으면 undefined) */
+function callerOf(request: FastifyRequest): string | undefined {
+  const header = request.headers.authorization;
+  const key = header?.startsWith('Bearer ') ? header.slice('Bearer '.length).trim() : undefined;
+  return key ? config.apiKeys.get(key) : undefined;
+}
+
+/** 키 인증이 꺼져 있거나 맞는 키를 보냈는지 — 응답 일부만 키 있는 호출에 줄 때 */
+export function hasApiKeyAccess(request: FastifyRequest): boolean {
+  return !isApiKeyAuthEnabled || callerOf(request) !== undefined;
+}
+
 export async function requireApiKey(request: FastifyRequest, reply: FastifyReply): Promise<void> {
   if (!isApiKeyAuthEnabled) return;
 
-  const header = request.headers.authorization;
-  const key = header?.startsWith('Bearer ') ? header.slice('Bearer '.length).trim() : undefined;
-  const caller = key ? config.apiKeys.get(key) : undefined;
+  const caller = callerOf(request);
 
   if (!caller) {
     await reply.code(401).send({ success: false, error: 'API 키가 없거나 유효하지 않습니다.' });

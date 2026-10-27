@@ -8,11 +8,9 @@ import { strFromU8, unzipSync } from 'fflate';
 import * as Y from 'yjs';
 import { defaultFontOfStylesXml, maxDigitWidthPx, pxToExcelColWidth } from './sheetGeometry.js';
 import {
-  GRID_BASELINE_MAP,
   GRID_CELLS_MAP,
   GRID_MERGES_MAP,
   GRID_STRUCTURE_MAP,
-  GRID_STYLES_BASELINE_MAP,
   GRID_STYLES_MAP,
   gridCellKey,
   parseGridCellKey,
@@ -149,9 +147,7 @@ const seedableCellValue = unformattedCellValue;
  * 사이에 이벤트 루프로 제어권을 돌려준다. */
 export async function seedGridFromXlsx(ydoc: Y.Doc, grid: GridDocument): Promise<void> {
   const cells = ydoc.getMap<string>(GRID_CELLS_MAP);
-  const baseline = ydoc.getMap<string>(GRID_BASELINE_MAP);
   const styles = ydoc.getMap<CellStyleAttrs>(GRID_STYLES_MAP);
-  const stylesBaseline = ydoc.getMap<CellStyleAttrs>(GRID_STYLES_BASELINE_MAP);
   const structure = ydoc.getMap<SheetStructure>(GRID_STRUCTURE_MAP);
   const merges = ydoc.getMap<readonly GridMergeShape[]>(GRID_MERGES_MAP);
 
@@ -188,14 +184,10 @@ export async function seedGridFromXlsx(ydoc: Y.Doc, grid: GridDocument): Promise
             if (cell.v !== '') {
               const value = seedableCellValue(cell.v, style);
               cells.set(key, value);
-              baseline.set(key, value);
             }
             if (style) {
               const attrs = toCellStyleAttrs(style);
-              if (Object.keys(attrs).length > 0) {
-                styles.set(key, attrs);
-                stylesBaseline.set(key, attrs);
-              }
+              if (Object.keys(attrs).length > 0) styles.set(key, attrs);
             }
           }
         }
@@ -327,9 +319,7 @@ export async function seedGridPageFromXlsx(
   const meta = store.sheetMeta[sheetIdx];
   if (!meta) return;
   const cells = ydoc.getMap<string>(GRID_CELLS_MAP);
-  const baseline = ydoc.getMap<string>(GRID_BASELINE_MAP);
   const styles = ydoc.getMap<CellStyleAttrs>(GRID_STYLES_MAP);
-  const stylesBaseline = ydoc.getMap<CellStyleAttrs>(GRID_STYLES_BASELINE_MAP);
   const covered = mergeCoveredCells(meta.merges);
   const pageStart = page * PAGE_SIZE_ROWS;
   const pageEnd = Math.min(pageStart + PAGE_SIZE_ROWS, meta.rowCount);
@@ -357,21 +347,13 @@ export async function seedGridPageFromXlsx(
           if (cell.v !== '') {
             const value = seedableCellValue(cell.v, style);
             cells.set(key, value);
-            // 이 baseline 맵은 이제 저장 기준선이 아니다 — 저장은 room.dirtyCells/structuralOps로
-            // "무엇이 편집됐는지"를 판단한다(Task 3 이후). 그래서 편집된 셀이 재시딩될 때 여기에
-            // "편집된 값"이 들어가도 저장 결과에는 영향이 없다. 클라이언트가 참고할 수 있도록
-            // 채우는 것뿐.
-            baseline.set(key, value);
           }
           // 서식도 콘텐츠와 같은 창(이 페이지)만, 같은 시점에 채운다 — 함수 docblock의
-          // "서식을 윈도잉해도 안전한 이유" 참고. GRID_STYLES_BASELINE_MAP도 GRID_BASELINE_MAP과
-          // 똑같이 저장 기준선이 아니라 클라이언트 참고용일 뿐이다.
+          // "서식을 윈도잉해도 안전한 이유" 참고. (저장은 room.dirtyCells/structuralOps로 편집을 가리므로
+          // 예전의 baseline/stylesBaseline 맵은 아무도 읽지 않아 없앴다 — 칸마다 두 번씩 방송되던 몫)
           if (style) {
             const attrs = toCellStyleAttrs(style);
-            if (Object.keys(attrs).length > 0) {
-              styles.set(key, attrs);
-              stylesBaseline.set(key, attrs);
-            }
+            if (Object.keys(attrs).length > 0) styles.set(key, attrs);
           }
         }
       }
@@ -411,7 +393,7 @@ export async function unseedGridPageFromXlsx(
   page: number,
   rowCount: number,
 ): Promise<void> {
-  // 서식 맵(GRID_STYLES_MAP/GRID_STYLES_BASELINE_MAP)도 이제 콘텐츠와 함께 비운다 — 서식이 더
+  // 서식 맵(GRID_STYLES_MAP)도 이제 콘텐츠와 함께 비운다 — 서식이 더
   // 이상 "절대 윈도잉하지 않는" 예외가 아니다(seedGridPageFromXlsx의 docblock "서식을 윈도잉해도
   // 안전한 이유" 참고). 서버에는 클라이언트의 서식 편집을 canonical로 되반영하는 경로
   // (room.ts styles.observe → applyStylesChangeToCanonical → setDirtyCell)가 이미 있으므로,

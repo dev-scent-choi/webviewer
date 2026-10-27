@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 
 /** apiKeyAuth.ts는 config.ts를 import 시점에 한 번만 읽으므로, 서로 다른 DOCVIEW_API_KEYS
  * 값으로 테스트하려면 매번 모듈 캐시를 초기화하고 env를 바꾼 뒤 동적으로 다시 import해야 한다. */
@@ -57,6 +57,15 @@ describe('apiKeyAuth', () => {
     await requireApiKey(request, reply as any);
 
     expect(reply.calls.code).toBe(401);
+  });
+
+  test('hasApiKeyAccess: 키가 꺼져 있으면 누구나, 켜져 있으면 맞는 키만(변경 내역 같은 일부 응답용)', async () => {
+    const off = await loadWithEnv(undefined);
+    expect(off.hasApiKeyAccess(fakeRequest(undefined))).toBe(true);
+    const on = await loadWithEnv('maintenance-management:secret-1');
+    expect(on.hasApiKeyAccess(fakeRequest(undefined))).toBe(false);
+    expect(on.hasApiKeyAccess(fakeRequest('Bearer wrong'))).toBe(false);
+    expect(on.hasApiKeyAccess(fakeRequest('Bearer secret-1'))).toBe(true);
   });
 
   test('rejects a request with an unknown key', async () => {

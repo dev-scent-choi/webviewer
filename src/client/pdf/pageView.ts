@@ -741,6 +741,9 @@ export class PageView {
               }
             }
           }
+          // 그리지 않은 쪽이면 연산 목록·그림 디코딩 결과를 놓는다 — 전체 문서 찾기가 쪽마다 연산 목록을 받아
+          // 그림 많은 스캔 문서에서 탭 메모리가 GB 단위로 늘었다(그리는 중이면 pdf.js가 알아서 거절한다)
+          if (slot.renderedKey === null) p.cleanup();
           return { fonts, roles };
         })
         .catch(() => empty);

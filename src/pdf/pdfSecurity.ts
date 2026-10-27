@@ -22,14 +22,18 @@ export interface PdfProtection {
 
 export const ALL_PERMISSIONS: PdfPermissions = { printing: true, copying: true, modifying: true, annotating: true, fillingForms: true };
 
-/** 암호가 걸린 PDF인지(pdf-lib가 그대로 열지 못하면) */
-export async function isEncryptedPdf(bytes: Uint8Array): Promise<boolean> {
-  try {
-    const doc = await PDFDocument.load(bytes, { ignoreEncryption: true, updateMetadata: false });
-    return doc.isEncrypted;
-  } catch {
-    return false;
+const encryptedCache = new WeakMap<Uint8Array, Promise<boolean>>();
+/** 암호가 걸린 PDF인지(pdf-lib가 그대로 열지 못하면) — 같은 바이트 객체면 한 번만 연다(PDF 전체를 파싱해 무겁다) */
+export function isEncryptedPdf(bytes: Uint8Array): Promise<boolean> {
+  let found = encryptedCache.get(bytes);
+  if (!found) {
+    found = PDFDocument.load(bytes, { ignoreEncryption: true, updateMetadata: false }).then(
+      (doc) => doc.isEncrypted,
+      () => false,
+    );
+    encryptedCache.set(bytes, found);
   }
+  return found;
 }
 
 /** 암호 사전의 /P → 권한(ISO 32000 표 22의 비트) */
