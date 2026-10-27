@@ -19,6 +19,9 @@ interface SheetLink extends CellRange {
   readonly url?: string;
   readonly location?: string;
   readonly tooltip?: string;
+  /** 주소를 칸 값으로 만드는 수식(=HYPERLINK("#'"&$A2&"'!A1", …)의 첫 인자) — 누른 칸 기준으로 푼다 */
+  readonly expr?: string;
+  readonly anchor?: { readonly row: number; readonly col: number };
 }
 interface SheetListValidation {
   readonly sheetName: string;
@@ -61,13 +64,58 @@ export function parseLocation(location: string): { sheetName: string | null; row
   return { sheetName, row: Number(m[2]) - 1, col: col - 1 };
 }
 
+const colNumber = (letters: string) => [...letters.toUpperCase()].reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0) - 1;
+
+/**
+ * HYPERLINK 첫 인자 수식을 푼다 — "글자"와 칸 참조를 &로 이은 것만(그 밖의 함수가 섞이면 null).
+ * 상대 참조(A2)는 수식이 적힌 칸(anchor)에서 누른 칸까지 옮겨 읽고, $가 붙은 쪽은 그대로 둔다(엑셀 공유 수식과 같다).
+ */
+export function evalLinkExpr(
+  expr: string,
+  anchor: { row: number; col: number },
+  at: { row: number; col: number },
+  valueAt: (row: number, col: number) => string,
+): string | null {
+  const token = /\s*(?:"((?:[^"]|"")*)"|(\$?)([A-Za-z]{1,3})(\$?)(\d+))\s*/y;
+  let out = '';
+  let pos = 0;
+  for (;;) {
+    token.lastIndex = pos;
+    const m = token.exec(expr);
+    if (!m) return null;
+    if (m[1] !== undefined) out += m[1].replace(/""/g, '"');
+    else {
+      const col = colNumber(m[3]) + (m[2] ? 0 : at.col - anchor.col);
+      const row = Number(m[5]) - 1 + (m[4] ? 0 : at.row - anchor.row);
+      if (row < 0 || col < 0) return null;
+      out += valueAt(row, col);
+    }
+    pos = token.lastIndex;
+    if (pos >= expr.length) return out;
+    if (expr[pos] !== '&') return null;
+    pos += 1;
+  }
+}
+
 export function setupGridLinks(host: GridLinksHost): GridLinks {
   let links: SheetLink[] = [];
   let lists: SheetListValidation[] = [];
 
   const linkAt = (row: number, col: number) => {
     const sheet = host.currentSheetName();
-    return links.find((l) => l.sheetName === sheet && inRange(l, row, col));
+    const link = links.find((l) => l.sheetName === sheet && inRange(l, row, col));
+    // 수식 링크는 IFERROR(…, "")처럼 빈 값을 보이는 칸(아래로 넉넉히 복사해 둔 빈 행 등)이면 링크로 치지 않는다
+    if (link?.expr && host.valueText(sheet, row, col) === '') return undefined;
+    return link;
+  };
+  /** 누른 칸 기준의 실제 주소 — 수식 링크면 지금 칸 값으로 푼다 */
+  const targetOf = (link: SheetLink, row: number, col: number): { url?: string; location?: string } => {
+    if (!link.expr || !link.anchor) return link;
+    const sheet = link.sheetName;
+    const text = evalLinkExpr(link.expr, link.anchor, { row, col }, (r, c) => host.valueText(sheet, r, c))?.trim();
+    if (!text) return {};
+    if (text.startsWith('#')) return { location: text.slice(1) };
+    return /^(https?:|mailto:|tel:)/i.test(text) ? { url: text } : {}; // 스크립트 주소 등은 열지 않는다
   };
   const listAt = (row: number, col: number) => {
     const sheet = host.currentSheetName();
@@ -88,7 +136,10 @@ export function setupGridLinks(host: GridLinksHost): GridLinks {
     const link = links.length ? linkAt(row, col) : undefined;
     td.classList.toggle('g-link', Boolean(link));
     if (link) {
-      td.title = link.tooltip || (link.url ? `${link.url}\n클릭하면 열립니다 (Ctrl+클릭: 칸 선택)` : `클릭하면 ${link.location}(으)로 이동합니다 (Ctrl+클릭: 칸 선택)`);
+      const target = targetOf(link, row, col);
+      td.title =
+        link.tooltip ||
+        (target.url ? `${target.url}\n클릭하면 열립니다 (Ctrl+클릭: 칸 선택)` : `클릭하면 ${target.location ?? '연결된 곳'}(으)로 이동합니다 (Ctrl+클릭: 칸 선택)`);
       td.dataset.linkTitle = '';
     } else if (td.dataset.linkTitle !== undefined) {
       // 가상 스크롤로 같은 <td>가 다른 칸에 다시 쓰일 때 예전 링크 설명이 남지 않게
@@ -97,12 +148,13 @@ export function setupGridLinks(host: GridLinksHost): GridLinks {
     }
   }
 
-  function follow(link: SheetLink): void {
-    if (link.url) {
-      window.open(link.url, '_blank', 'noopener,noreferrer');
+  function follow(link: SheetLink, row: number, col: number): void {
+    const { url, location } = targetOf(link, row, col);
+    if (url) {
+      window.open(url, '_blank', 'noopener,noreferrer');
       return;
     }
-    const target = link.location ? parseLocation(link.location) : null;
+    const target = location ? parseLocation(location) : null;
     if (target) host.goTo(target.sheetName, target.row, target.col);
   }
 
@@ -117,7 +169,7 @@ export function setupGridLinks(host: GridLinksHost): GridLinks {
     if (!hit || !hit.td.classList.contains('g-link') || host.isEditing(hit.td)) return;
     if (downAt && Math.hypot(event.clientX - downAt.x, event.clientY - downAt.y) > 4) return;
     const link = linkAt(hit.row, hit.col);
-    if (link) follow(link);
+    if (link) follow(link, hit.row, hit.col);
   });
 
   // ---- 목록 상자 ----
