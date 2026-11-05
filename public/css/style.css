@@ -1103,6 +1103,52 @@ h2 {
   outline: none;
 }
 
+/* 텍스트 추가 도구: 마우스를 댄 자리에 글이 들어갈 줄 미리 보기 — 글은 누른 점 위에 앉는다 */
+.text-tool-ghost {
+  position: absolute;
+  z-index: 4;
+  display: flex;
+  align-items: flex-end;
+  padding-left: 4px;
+  box-sizing: border-box;
+  border-left: 2px solid #e8590c;
+  color: rgba(232, 89, 12, 0.75);
+  font-family: "Pretendard Variable", "Pretendard", var(--font-sans);
+  line-height: 1;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.text-tool-ghost::after {
+  content: "누르고 입력";
+  font-size: max(11px, 0.7em);
+  background: rgba(255, 255, 255, 0.85);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+.text-tool-ghost[hidden] { display: none; }
+
+/* 텍스트 추가 도구를 고른 동안 아래쪽에 뜨는 쓰는 법 */
+.text-tool-hint {
+  position: fixed;
+  left: 50%;
+  bottom: 28px;
+  z-index: 60;
+  transform: translateX(-50%);
+  padding: 7px 14px;
+  border-radius: 999px;
+  background: rgba(32, 33, 36, 0.86);
+  color: #fff;
+  font-size: 13px;
+  line-height: 1.3;
+  white-space: nowrap;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);
+  pointer-events: none;
+}
+.text-tool-hint[hidden] { display: none; }
+@media (max-width: 600px) {
+  .text-tool-hint { bottom: 80px; white-space: normal; width: max-content; max-width: calc(100vw - 32px); text-align: center; }
+}
+
 .text-insert-controls {
   display: flex;
   top: -26px;
