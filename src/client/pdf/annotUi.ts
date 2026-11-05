@@ -54,8 +54,17 @@ export function setupAnnotUi(opts: {
     const t = layer.currentTool;
     return t === 'select' || t === 'hand' || t === 'eraser' || t === 'textedit' || t === 'redact' ? null : t;
   }
+  // 글 도구를 고른 동안 아래쪽에 쓰는 법을 띄운다 — 쓰고 나서도 도구가 남아 있어 지금 상태를 알 수 있게
+  const toolHint = Object.assign(document.createElement('div'), {
+    className: 'pdf-tool-hint',
+    hidden: true,
+    textContent: '글 쓰기 — 누른 곳에 바로 입력 · 끌면 글 상자 · 다 쓰면 Esc',
+  });
+  toolHint.setAttribute('role', 'status');
+  document.body.append(toolHint);
   function setTool(tool: ToolName): void {
     layer.setTool(tool);
+    toolHint.hidden = tool !== 'freetext' || !canEdit;
     selectBtn.setAttribute('aria-pressed', String(tool === 'select'));
     handBtn.setAttribute('aria-pressed', String(tool === 'hand'));
     for (const b of toolButtons) b.setAttribute('aria-pressed', String(b.dataset.tool === tool));
@@ -135,10 +144,12 @@ export function setupAnnotUi(opts: {
     widthInput.value = String(s.width);
     $('annot-width-val').textContent = `${s.width}pt`;
     const fontRow = fontInput.closest('.pdf-style-row') as HTMLElement;
-    fontRow.hidden = type !== 'freetext' || !sel;
-    if (sel?.type === 'freetext') {
-      fontInput.value = String(sel.fontSize ?? 12);
-      $('annot-fontsize-val').textContent = `${sel.fontSize ?? 12}pt`;
+    // 글을 고르지 않았으면 다음에 쓸 글의 크기
+    fontRow.hidden = type !== 'freetext';
+    if (type === 'freetext') {
+      const size = sel?.type === 'freetext' ? sel.fontSize ?? 12 : layer.textSize;
+      fontInput.value = String(size);
+      $('annot-fontsize-val').textContent = `${size}pt`;
     }
     opacityInput.value = String(Math.round(s.opacity * 100));
     $('annot-opacity-val').textContent = `${Math.round(s.opacity * 100)}%`;
@@ -157,6 +168,7 @@ export function setupAnnotUi(opts: {
   fontInput.addEventListener('change', () => {
     const sel = layer.selectedAnnot;
     if (sel?.type === 'freetext') layer.update(sel.id, { fontSize: Number(fontInput.value) });
+    else if (layer.currentTool === 'freetext') layer.textSize = Number(fontInput.value);
   });
   layer.onSelect(() => {
     syncStyle();
@@ -255,6 +267,8 @@ export function setupAnnotUi(opts: {
       return;
     } else if (!mod && !event.altKey && TOOL_KEYS[event.key.toLowerCase()]) {
       setTool(TOOL_KEYS[event.key.toLowerCase()]);
+    } else if (event.key === 'Escape' && layer.currentTool !== 'select' && layer.currentTool !== 'hand') {
+      setTool('select'); // 글 쓰기·그리기 도구를 끝낸다(입력 중이면 첫 Esc 는 그 글만 마친다)
     } else if (!mod && (event.key === 'v' || event.key === 'V')) setTool('select');
     else if (!mod && (event.key === 'h' || event.key === 'H')) setTool('hand');
   });

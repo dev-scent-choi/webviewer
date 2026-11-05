@@ -29,6 +29,8 @@ const BOX_TYPES = new Set<PdfAnnotType>(['rect', 'ellipse', 'freetext', 'stamp']
 /** 서명 그림을 그냥 눌러 놓을 때의 폭(pt) */
 const STAMP_WIDTH = 150;
 const NOTE_SIZE = 24;
+/** 바로 쓰는 글에서 누른 점이 줄의 어디인지(위에서부터 비율) — 서류 빈칸은 밑줄을 겨냥해 누르므로 글자 바닥 근처 */
+const TEXT_ANCHOR = 0.78;
 
 function svg<K extends keyof SVGElementTagNameMap>(tag: K, attrs: Record<string, string | number> = {}): SVGElementTagNameMap[K] {
   const el = document.createElementNS(SVG_NS, tag);
@@ -38,6 +40,21 @@ function svg<K extends keyof SVGElementTagNameMap>(tag: K, attrs: Record<string,
 
 const pt = (vp: PageViewport, x: number, y: number) => vp.convertToViewportPoint(x, y) as [number, number];
 const toPdf = (vp: PageViewport, x: number, y: number) => vp.convertToPdfPoint(x, y) as [number, number];
+
+/** 글 상자와 같은 글꼴·줄 간격·여백으로 글의 크기(화면 px)를 잰다 — maxWidth 가 있으면 그 폭에서 줄을 바꾼다 */
+let measurer: HTMLDivElement | null = null;
+function measureText(text: string, fontPx: number, maxWidth: number | null): { w: number; h: number } {
+  measurer ??= Object.assign(document.createElement('div'), { className: 'pdf-text-measure' });
+  if (!measurer.isConnected) document.body.append(measurer);
+  measurer.style.fontSize = `${fontPx}px`;
+  measurer.style.whiteSpace = maxWidth === null ? 'pre' : 'pre-wrap';
+  measurer.style.width = maxWidth === null ? 'auto' : `${maxWidth}px`;
+  // 끝의 빈 줄도 높이에 들어가게, 빈 글이면 한 줄 높이로
+  measurer.textContent = `${text}${text === '' || text.endsWith('\n') ? '​' : ''}`;
+  return { w: measurer.offsetWidth, h: measurer.offsetHeight };
+}
+/** 바로 쓴 글 상자의 폭 — 저장한 PDF는 다른 한글 글꼴로 줄을 나누므로(annotWrite.ts wrapText) 그 차이만큼 여유를 둔다 */
+const fitWidth = (textWidth: number, fontPx: number) => Math.ceil(textWidth * 1.12 + fontPx * 0.6);
 
 /** 주석이 차지하는 PDF 좌표 점들 */
 function pointsOf(a: PdfAnnot): number[] {
@@ -126,6 +143,10 @@ export class AnnotLayer {
   private readonly pageChangeListeners: Array<(pages: Set<number>) => void> = [];
   /** 서명 탭: 다음 한 번 누를 때 놓을 그림(aspect = 높이/폭) 또는 글(날짜) */
   private pending: { kind: 'stamp'; image: string; aspect: number } | { kind: 'text'; text: string } | null = null;
+  /** 글 도구로 새로 쓰는 글자 크기(pt) — 글을 고르지 않았을 때 글자 크기 칸이 이것을 바꾼다 */
+  textSize = 14;
+  /** 글 도구로 페이지 위에 마우스를 대면 글이 들어갈 자리를 보여 주는 표시 */
+  private readonly ghost = Object.assign(document.createElement('div'), { className: 'pdf-text-ghost', hidden: true });
 
   constructor(private readonly opts: AnnotLayerOptions) {
     for (const [type, d] of Object.entries(ANNOT_DEFAULTS) as Array<[PdfAnnotType, ToolStyle]>) this.styles.set(type, { ...d });
@@ -171,6 +192,7 @@ export class AnnotLayer {
   setTool(tool: ToolName): void {
     this.tool = tool;
     this.pending = null;
+    this.ghost.hidden = true;
     this.closePopup();
     if (tool !== 'select') this.select(null);
     const root = this.opts.scroller;
@@ -530,8 +552,34 @@ export class AnnotLayer {
       }
       if (!this.opts.canEdit || !hitPage || !DRAW_TOOLS.has(this.tool)) return;
       event.preventDefault();
+      // 글 도구로 이미 쓴 글을 누르면 새로 만들지 않고 그 글을 고친다
+      const hitAnnot = annotId ? this.opts.map.get(annotId) : undefined;
+      if (this.tool === 'freetext' && !this.pending && hitAnnot?.type === 'freetext') {
+        this.ghost.hidden = true;
+        this.editFreetext(hitAnnot.id);
+        return;
+      }
+      this.ghost.hidden = true;
       this.drawNew(event, hitPage);
     });
+    // 글 도구: 마우스를 댄 자리에 글이 들어갈 줄(지금 글자 크기 높이)과 입력 막대를 미리 보여 준다
+    scroller.addEventListener('pointermove', (event) => {
+      const target = event.target as HTMLElement;
+      const at = this.tool === 'freetext' && !this.pending && this.opts.canEdit && event.buttons === 0 ? this.pageAt(target) : null;
+      if (!at || target.closest('.pdf-freetext, .pdf-freetext-editor, .pdf-note-popup')) {
+        this.ghost.hidden = true;
+        return;
+      }
+      const [x, y] = this.local(event, at.el);
+      const lineH = this.textSize * at.vp.scale * 1.2 + 4;
+      if (this.ghost.parentElement !== at.el) at.el.append(this.ghost);
+      this.ghost.style.left = `${x}px`;
+      this.ghost.style.top = `${y - lineH * TEXT_ANCHOR}px`;
+      this.ghost.style.height = `${lineH}px`;
+      this.ghost.style.fontSize = `${this.textSize * at.vp.scale}px`;
+      this.ghost.hidden = false;
+    });
+    scroller.addEventListener('pointerleave', () => (this.ghost.hidden = true));
     scroller.addEventListener('dblclick', (event) => {
       const id = (event.target as HTMLElement).closest<HTMLElement>('[data-id]')?.dataset.id;
       const a = id ? this.opts.map.get(id) : undefined;
@@ -701,20 +749,25 @@ export class AnnotLayer {
         this.select(annot.id);
         return;
       }
-      // 상자 종류: 너무 작게 끌었으면(=클릭) 글상자는 기본 크기, 도형은 만들지 않는다
-      let end = last;
-      if (tiny) {
-        if (tool !== 'freetext') return;
-        end = [start[0] + 200 * vp.scale, start[1] + 40 * vp.scale];
+      // 글 도구로 누르기만 했으면(끌지 않음) 그 자리에서 바로 입력 — 누른 곳이 글자 바닥 근처(밑줄을 누르면 그 위에 써진다), 상자는 친 글에 맞춰 자란다.
+      // 쓰고 나서도 글 도구를 유지해 서류 빈칸 여러 곳을 연달아 채울 수 있다(Esc 로 끝).
+      if (tool === 'freetext' && tiny) {
+        const lineH = this.textSize * 1.2 + 4;
+        const [x, y] = toPdf(vp, start[0], start[1] - lineH * vp.scale * TEXT_ANCHOR);
+        const annot = this.make('freetext', pageKey, { rect: [x, y - lineH, x + this.textSize, y], text: '', fontSize: this.textSize });
+        this.add(annot);
+        this.editFreetext(annot.id, true, true);
+        return;
       }
+      // 상자 종류: 너무 작게 끌었으면(=클릭) 도형은 만들지 않는다
+      if (tiny) return;
       const p1 = toPdf(vp, start[0], start[1]);
-      const p2 = toPdf(vp, end[0], end[1]);
+      const p2 = toPdf(vp, last[0], last[1]);
       const rect: PdfAnnot['rect'] = [Math.min(p1[0], p2[0]), Math.min(p1[1], p2[1]), Math.max(p1[0], p2[0]), Math.max(p1[1], p2[1])];
       if (tool === 'freetext') {
-        const annot = this.make('freetext', pageKey, { rect, text: '', fontSize: 14 });
+        // 끌어서 그린 상자 — 그 폭 안에서 줄을 바꾸고, 글이 넘치면 아래로 자란다
+        const annot = this.make('freetext', pageKey, { rect, text: '', fontSize: this.textSize });
         this.add(annot);
-        this.setTool('select');
-        this.select(annot.id);
         this.editFreetext(annot.id, true);
         return;
       }
@@ -773,8 +826,12 @@ export class AnnotLayer {
 
   // ---------- 메모 창·글상자 입력 ----------
   closePopup(): void {
-    this.popup?.remove();
+    const popup = this.popup;
     this.popup = null;
+    // 글 상자 입력창은 먼저 포커스를 놓아 쓰던 글을 저장시킨다(저장 처리가 입력창을 스스로 지운다) —
+    // 그냥 지우면 그 도중 blur 저장이 끼어들어 같은 요소를 두 번 지우다 오류가 났다
+    if (popup instanceof HTMLTextAreaElement && document.activeElement === popup) popup.blur();
+    if (popup?.isConnected) popup.remove();
   }
 
   openNote(id: string, fresh = false): void {
@@ -844,7 +901,11 @@ export class AnnotLayer {
     area.focus();
   }
 
-  editFreetext(id: string, fresh = false): void {
+  /**
+   * 글 상자 입력창. fit(누른 자리에 바로 쓴 글)이면 상자가 친 글에 맞춰 가로·세로로 자라고 줄은 Enter 로만 바뀐다.
+   * 아니면(끌어 그린 상자) 그 폭 안에서 줄을 바꾸고 넘치면 아래로 자란다. fit 을 안 주면 상자가 글에 꼭 맞는지로 정한다.
+   */
+  editFreetext(id: string, fresh = false, fit?: boolean): void {
     const a = this.opts.map.get(id);
     const page = a ? this.opts.view.pageOfKey(a.pageKey) : null;
     const el = page ? this.opts.view.pageElement(page) : null;
@@ -853,26 +914,50 @@ export class AnnotLayer {
     this.closePopup();
     const [x1, y1, x2, y2] = a.rect;
     const [tx, ty] = pt(vp, x1, y2);
+    const s = vp.scale;
+    const fontPx = (a.fontSize ?? 12) * s;
+    const boxW = (x2 - x1) * s;
+    const boxH = (y2 - y1) * s;
+    const exact = fit ?? Math.abs(fitWidth(measureText(a.text ?? '', fontPx, null).w, fontPx) - boxW) < 4;
     const area = document.createElement('textarea');
     area.className = 'pdf-freetext-editor';
+    area.classList.toggle('fit', exact);
+    area.wrap = exact ? 'off' : 'soft';
     area.value = a.text ?? '';
     area.style.left = `${tx}px`;
     area.style.top = `${ty}px`;
-    area.style.width = `${(x2 - x1) * vp.scale}px`;
-    area.style.height = `${(y2 - y1) * vp.scale}px`;
-    area.style.fontSize = `${(a.fontSize ?? 12) * vp.scale}px`;
+    area.style.fontSize = `${fontPx}px`;
     area.style.color = a.color;
     if (vp.rotation) area.style.transform = `rotate(${vp.rotation}deg)`;
+    /** 지금 글에 맞는 크기(화면 px) */
+    const sizeNow = () => {
+      if (exact) {
+        const m = measureText(area.value, fontPx, null);
+        return { w: fitWidth(m.w, fontPx), h: m.h };
+      }
+      return { w: boxW, h: Math.max(boxH, measureText(area.value, fontPx, boxW).h) };
+    };
+    const resize = () => {
+      const { w, h } = sizeNow();
+      area.style.width = `${w}px`;
+      area.style.height = `${h}px`;
+    };
+    resize();
+    area.addEventListener('input', resize);
     const commit = () => {
       if (!area.isConnected) return;
       const text = area.value;
+      const { w, h } = sizeNow();
       area.remove();
       this.popup = null;
       if (!text.trim()) {
         if (fresh || !(a.text ?? '').trim()) this.remove(id);
         return;
       }
-      if (text !== a.text) this.update(id, { text });
+      // 왼쪽 위는 그대로 두고 오른쪽·아래로만 크기를 맞춘다
+      const rect: PdfAnnot['rect'] = [x1, y2 - h / s, exact ? x1 + w / s : x2, y2];
+      const sized = rect.some((v, i) => Math.abs(v - a.rect[i]) > 0.5);
+      if (text !== a.text || sized) this.update(id, { text, ...(sized ? { rect } : {}) });
     };
     area.addEventListener('blur', commit);
     area.addEventListener('keydown', (e) => {
