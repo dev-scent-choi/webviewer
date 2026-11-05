@@ -819,7 +819,7 @@ function setupDeterrents() {
     }
     if (key === 'escape') {
       if (measure.mode) setMeasureMode(false);
-      else if (textTool.pending) cancelTextInsert();
+      else if (textTool.pending) commitTextInsert();
       else if (textTool.active) setTextToolActive(false);
       else if (markup.drawMode) setMarkupDrawMode(false);
       else closeSearchBar();
@@ -2406,14 +2406,46 @@ function setupMarkupTool() {
 
 /* ==================== 텍스트 추가(주변 폰트에 맞춰 삽입) ==================== */
 
-const textTool = { active: false, pending: null };
+// lastFontSizePt: 마우스를 댈 때 보여 줄 줄 높이 — 마지막으로 넣은 글의 크기(처음엔 12pt)
+const textTool = { active: false, pending: null, lastFontSizePt: 12, ghost: null, hint: null };
 
 function setTextToolActive(on) {
   textTool.active = on;
   document.getElementById('text-tool-btn').setAttribute('aria-pressed', String(on));
   pagesContainer.classList.toggle('text-tool-active', on);
   if (on) setMarkupDrawMode(false);
-  if (!on) cancelTextInsert();
+  if (!on) commitTextInsert(); // 도구를 끌 때 쓰던 글은 저장한다(버리지 않는다)
+  if (textTool.ghost) textTool.ghost.hidden = true;
+  // 도구를 고른 동안 아래쪽에 쓰는 법을 띄운다 — 글을 넣은 뒤에도 도구가 남아 있어 지금 상태를 알 수 있게
+  if (!textTool.hint) {
+    textTool.hint = Object.assign(document.createElement('div'), {
+      className: 'text-tool-hint',
+      textContent: '텍스트 추가 — 누른 곳에 바로 입력 · Enter 로 마침 · 다 쓰면 Esc',
+    });
+    textTool.hint.setAttribute('role', 'status');
+    document.body.append(textTool.hint);
+  }
+  textTool.hint.hidden = !on;
+}
+
+/** 마우스를 댄 자리에 글이 들어갈 줄(입력 막대 + '누르고 입력')을 미리 보인다 — 글은 누른 점 위에 앉는다 */
+function showTextGhost(event) {
+  const frame = textTool.active && !textTool.pending ? event.target.closest('.page-frame') : null;
+  if (!frame || event.target.closest('.text-overlay-item, .text-insert-wrapper, .markup-rect')) {
+    if (textTool.ghost) textTool.ghost.hidden = true;
+    return;
+  }
+  if (!textTool.ghost) textTool.ghost = Object.assign(document.createElement('div'), { className: 'text-tool-ghost' });
+  const ghost = textTool.ghost;
+  if (ghost.parentElement !== frame) frame.append(ghost);
+  const page = [...pagesContainer.children].indexOf(frame) + 1;
+  const rect = frame.getBoundingClientRect();
+  applyFontSizeToEl(ghost, frame, page, textTool.lastFontSizePt);
+  const h = parseFloat(ghost.style.fontSize) * 1.15 + 2;
+  ghost.style.left = `${event.clientX - rect.left}px`;
+  ghost.style.top = `${event.clientY - rect.top - h}px`;
+  ghost.style.height = `${h}px`;
+  ghost.hidden = false;
 }
 
 function cancelTextInsert() {
@@ -2438,6 +2470,7 @@ async function commitTextInsert() {
   const text = pending.box.value.trim();
   pending.wrapper.remove();
   if (!text) return;
+  textTool.lastFontSizePt = pending.style.fontSizePt;
   try {
     const item = await fetchJsonView(`/api/view/markup?${tokenQuery}`, {
       method: 'POST',
@@ -2507,8 +2540,10 @@ function openTextInsertBox(frame, page, xRatio, style) {
       event.preventDefault();
       commitTextInsert();
     } else if (event.key === 'Escape') {
+      // 첫 Esc 는 쓰던 글을 저장하고 마친다(도구는 그대로) — 두 번째 Esc 가 도구를 끈다(전역 단축키)
       event.preventDefault();
-      cancelTextInsert();
+      event.stopPropagation();
+      commitTextInsert();
     }
   });
   box.addEventListener('blur', () => commitTextInsert());
@@ -2530,16 +2565,17 @@ function setupTextTool() {
   if (!permissions.canEdit) return; // 버튼은 hidden 상태를 유지한다
   btn.hidden = false;
   btn.addEventListener('click', () => setTextToolActive(!textTool.active));
+  pagesContainer.addEventListener('mousemove', (event) => showTextGhost(event));
+  pagesContainer.addEventListener('mouseleave', () => textTool.ghost && (textTool.ghost.hidden = true));
 
   pagesContainer.addEventListener('click', async (event) => {
     if (!textTool.active) return;
     if (event.target.closest('.text-overlay-item') || event.target.closest('.text-insert-wrapper')) return;
     const frame = event.target.closest('.page-frame');
     if (!frame) return;
-    if (textTool.pending) {
-      commitTextInsert();
-      return;
-    }
+    // 쓰던 글이 있으면 저장하고, 누른 자리에서 바로 새 글을 시작한다(빈칸 여러 곳을 연달아 채우게)
+    if (textTool.pending) commitTextInsert();
+    if (textTool.ghost) textTool.ghost.hidden = true;
     const page = [...pagesContainer.children].indexOf(frame) + 1;
     const rect = frame.getBoundingClientRect();
     const xRatio = (event.clientX - rect.left) / rect.width;
