@@ -33,11 +33,12 @@ async function loadFormats() {
   }
 }
 
-async function issueToken(docId, viewer, canPrint, canDownload, canCopy, canEdit) {
+async function issueToken(docId, viewer, canPrint, canDownload, canCopy, canEdit, pdfEditor = false) {
   return fetchJson(`/api/documents/${docId}/tokens`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ viewer, canPrint, canDownload, canCopy, canEdit: canEdit === true }),
+    // pdfEditor: PDF 를 PDF 편집기(editor-pdf.html)로 열기 — 내려받기 권한이 있을 때만 editorUrl 이 온다(서버 editorUrlFor)
+    body: JSON.stringify({ viewer, canPrint, canDownload, canCopy, canEdit: canEdit === true, ...(pdfEditor ? { pdfEditor: true } : {}) }),
   });
 }
 
@@ -59,8 +60,10 @@ async function deleteDocument(docId) {
  * (리뷰 코멘트) 추가/삭제 권한이 된다 — 업로더 본인이 보는 화면이니 기본으로 켜서 발급한다. */
 async function openViewer(docId, viewer, ext) {
   const canEdit = !supportsEdit({ ext });
-  const issued = await issueToken(docId, viewer, true, true, true, canEdit);
-  location.href = issued.viewerUrl;
+  // PDF 는 향기랩처럼 PDF 편집기로 연다 — 보기·찾기·주석·쪽 정리·서명이 한 화면에 있다(올린 사람 본인 화면이라 전체 권한)
+  const pdf = ext === 'pdf';
+  const issued = await issueToken(docId, viewer, true, true, true, canEdit, pdf);
+  location.href = (pdf && issued.editorUrl) || issued.viewerUrl;
 }
 
 /** 업로더 본인 편집용 — 전체 권한 + canEdit 토큰을 발급해 동시편집기로 이동한다(docx/xlsx). */
@@ -302,6 +305,20 @@ function renderDocItem(doc) {
       });
     });
     info.append(quickEdit);
+  } else if (doc.ext === 'pdf') {
+    // PDF 는 동시편집 대신 PDF 편집기(주석·쪽 정리·서명·글자 고치기 등) — 바로 보기와 같은 화면이지만 찾기 쉽게 따로 둔다
+    const pdfEdit = document.createElement('button');
+    pdfEdit.type = 'button';
+    pdfEdit.className = 'btn';
+    pdfEdit.textContent = 'PDF 편집';
+    pdfEdit.addEventListener('click', () => {
+      pdfEdit.disabled = true;
+      openViewer(doc.id, '업로더', 'pdf').catch((error) => {
+        pdfEdit.disabled = false;
+        setStatus(error.message, 'error');
+      });
+    });
+    info.append(pdfEdit);
   }
 
   info.append(makeDeleteButton());
@@ -315,6 +332,7 @@ function renderDocItem(doc) {
     <label><input type="checkbox" name="canCopy" /> 복사</label>
     ${supportsEdit(doc) ? '<label><input type="checkbox" name="canEdit" /> 동시편집</label>' : ''}
     ${supportsMarkup(doc) ? '<label><input type="checkbox" name="canEdit" /> 마크업 편집(코멘트 추가/삭제)</label>' : ''}
+    ${doc.ext === 'pdf' ? '<label title="저장 권한이 있어야 PDF 편집기로 열립니다"><input type="checkbox" name="pdfEditor" /> PDF 편집기로 열기</label>' : ''}
     <button type="submit" class="btn btn-primary">열람 링크 발급</button>
   `;
   const result = document.createElement('p');
@@ -331,6 +349,7 @@ function renderDocItem(doc) {
         data.get('canDownload') === 'on',
         data.get('canCopy') === 'on',
         data.get('canEdit') === 'on',
+        data.get('pdfEditor') === 'on',
       );
       result.replaceChildren();
       const open = document.createElement('a');
