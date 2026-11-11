@@ -42,6 +42,7 @@ interface Permissions {
 }
 
 interface ViewInfo {
+  readonly viewerUrl?: string;
   readonly docId: string;
   readonly name: string;
   readonly viewer: string;
@@ -1218,6 +1219,7 @@ async function main(): Promise<void> {
     canEdit,
     canDownload: info.permissions.canDownload,
     canPrint: info.permissions.canPrint,
+    viewerUrl: info.viewerUrl,
     onUndo: () => {
       if (focusedView) undo(focusedView.state);
     },

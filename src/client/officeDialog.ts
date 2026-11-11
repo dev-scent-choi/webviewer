@@ -10,13 +10,15 @@ interface DialogOptions {
   readonly cancelLabel?: string;
   /** 지우기처럼 되돌리기 어려운 동작 — 확인 단추를 경고 색으로 */
   readonly danger?: boolean;
+  /** 세 번째 단추(확인·취소 사이) — 누르면 결과가 'alt'(officeChoose) */
+  readonly altLabel?: string;
 }
 
 function open(
   message: string,
   kind: 'alert' | 'confirm' | 'prompt',
   opts: DialogOptions & { defaultValue?: string; maxLength?: number },
-): Promise<{ ok: boolean; value: string }> {
+): Promise<{ ok: boolean; alt: boolean; value: string }> {
   return new Promise((resolve) => {
     const previousFocus = document.activeElement as HTMLElement | null;
     const backdrop = document.createElement('div');
@@ -49,6 +51,14 @@ function open(
     okBtn.className = `btn-mini btn-mini-primary${opts.danger ? ' btn-mini-danger' : ''}`;
     okBtn.textContent = opts.okLabel ?? '확인';
     actions.append(okBtn);
+    let altBtn: HTMLButtonElement | null = null;
+    if (opts.altLabel) {
+      altBtn = document.createElement('button');
+      altBtn.type = 'button';
+      altBtn.className = 'btn-mini';
+      altBtn.textContent = opts.altLabel;
+      actions.append(altBtn);
+    }
     let cancelBtn: HTMLButtonElement | null = null;
     if (kind !== 'alert') {
       cancelBtn = document.createElement('button');
@@ -60,11 +70,11 @@ function open(
     card.append(actions);
     backdrop.append(card);
 
-    const finish = (ok: boolean) => {
+    const finish = (ok: boolean, alt = false) => {
       document.removeEventListener('keydown', onKey, true);
       backdrop.remove();
       previousFocus?.focus?.({ preventScroll: true });
-      resolve({ ok, value: input?.value ?? '' });
+      resolve({ ok, alt, value: input?.value ?? '' });
     };
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
@@ -77,13 +87,14 @@ function open(
         finish(true);
       } else if (event.key === 'Tab') {
         // 창 안에서만 돈다
-        const focusables = [input, okBtn, cancelBtn].filter((e): e is HTMLInputElement | HTMLButtonElement => e !== null);
+        const focusables = [input, okBtn, altBtn, cancelBtn].filter((e): e is HTMLInputElement | HTMLButtonElement => e !== null);
         const index = focusables.indexOf(document.activeElement as HTMLInputElement | HTMLButtonElement);
         event.preventDefault();
         focusables[(index + (event.shiftKey ? -1 : 1) + focusables.length) % focusables.length].focus();
       }
     };
     okBtn.addEventListener('click', () => finish(true));
+    altBtn?.addEventListener('click', () => finish(false, true));
     cancelBtn?.addEventListener('click', () => finish(false));
     backdrop.addEventListener('mousedown', (event) => {
       if (event.target === backdrop) finish(kind === 'alert');
@@ -109,4 +120,10 @@ export async function officeConfirm(message: string, opts: DialogOptions = {}): 
 export async function officePrompt(message: string, defaultValue = '', opts: DialogOptions & { maxLength?: number } = {}): Promise<string | null> {
   const r = await open(message, 'prompt', { ...opts, defaultValue });
   return r.ok ? r.value : null;
+}
+
+/** 세 갈래(확인 / 다른 동작 / 취소) — Esc·바깥 누르기는 'cancel' */
+export async function officeChoose(message: string, opts: DialogOptions & { readonly okLabel: string; readonly altLabel: string }): Promise<'ok' | 'alt' | 'cancel'> {
+  const r = await open(message, 'confirm', opts);
+  return r.ok ? 'ok' : r.alt ? 'alt' : 'cancel';
 }

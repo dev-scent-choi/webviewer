@@ -15,6 +15,7 @@ import { setupSearch } from './view/search.js';
 import { setupFileActions } from './view/fileActions.js';
 import { setupMeasure } from './view/measure.js';
 import { setupMarkup } from './view/markup.js';
+import { setupEditButton } from './view/editButton.js';
 import type { ViewInfo } from './view/types.js';
 
 const token = new URLSearchParams(location.search).get('token') ?? '';
@@ -131,6 +132,7 @@ async function boot(): Promise<void> {
   document.title = `DocView — ${info.name}`;
   applyWatermark(info.viewer);
   startPresence();
+  setupEditButton({ info });
 
   const png = () => new PngSource(tokenQuery, info.pageCount, info.pages);
   const body = new PagesBody(await openSource(info, png), info.pages);

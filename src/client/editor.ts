@@ -126,6 +126,7 @@ interface ScriptFontFamily {
 }
 
 interface ViewInfo {
+  readonly viewerUrl?: string;
   readonly docId: string;
   readonly name: string;
   readonly viewer: string;
@@ -663,6 +664,7 @@ async function main(): Promise<void> {
     canEdit,
     canDownload: info.permissions.canDownload,
     canPrint: info.permissions.canPrint,
+    viewerUrl: info.viewerUrl,
     onUndo: () => {
       undo(view.state);
       view.focus();

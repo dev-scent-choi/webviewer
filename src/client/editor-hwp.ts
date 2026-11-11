@@ -1,5 +1,6 @@
 import { createEditor, type RhwpEditor } from '@rhwp/editor';
-import { officeAlert } from './officeDialog.js';
+import { mountBackToView } from './backToView.js';
+import { officeAlert, officeChoose } from './officeDialog.js';
 
 interface Permissions {
   readonly canPrint: boolean;
@@ -9,6 +10,7 @@ interface Permissions {
 }
 
 interface ViewInfo {
+  readonly viewerUrl?: string;
   readonly docId: string;
   readonly name: string;
   readonly ext: string;
@@ -59,7 +61,8 @@ async function exportBytes(editor: RhwpEditor, ext: string): Promise<Uint8Array>
   return ext === 'hwpx' ? editor.exportHwpx() : editor.exportHwp();
 }
 
-async function saveToServer(editor: RhwpEditor, ext: string): Promise<void> {
+/** 저장 — 성공하면 true(실패는 안내까지 하고 false) */
+async function saveToServer(editor: RhwpEditor, ext: string): Promise<boolean> {
   saveStatusEl.textContent = '저장 중…';
   try {
     const bytes = await exportBytes(editor, ext);
@@ -79,10 +82,12 @@ async function saveToServer(editor: RhwpEditor, ext: string): Promise<void> {
     // 보존해 재시도/복구가 가능하다(@rhwp/editor README "저장 계약" 참고).
     await editor.notifySaved();
     saveStatusEl.textContent = `저장됨 ${new Date().toLocaleTimeString('ko-KR')}`;
+    return true;
   } catch (error) {
     saveStatusEl.textContent = '저장 실패';
     console.error('hwp 저장 실패:', error);
     void officeAlert(error instanceof Error ? error.message : '저장에 실패했습니다.');
+    return false;
   }
 }
 
@@ -128,6 +133,25 @@ async function main(): Promise<void> {
       void saveToServer(editor, info.ext);
     });
   }
+
+  // 보기 화면에서 편집으로 들어왔으면 "보기로"(설계 V7) — 한글은 자동 저장이 아니라 저장 안 한 내용을 묻는다
+  mountBackToView(saveStatusEl.parentElement as HTMLElement, null, {
+    token,
+    viewerUrl: info.viewerUrl,
+    canEdit,
+    beforeLeave: async () => {
+      // 상태를 못 읽으면 바뀐 것으로 친다(묻는 쪽이 안전)
+      const dirty = canEdit && (await editor.getDocumentState().then((state) => state.dirty, () => true));
+      if (!dirty) return true;
+      const choice = await officeChoose('저장하지 않은 내용이 있습니다 — 저장하고 돌아갈까요?', {
+        title: '보기로',
+        okLabel: '저장 후 이동',
+        altLabel: '버리고 이동',
+      });
+      if (choice === 'cancel') return false;
+      return choice === 'alt' || (await saveToServer(editor, info.ext));
+    },
+  });
 }
 
 main().catch((error) => {

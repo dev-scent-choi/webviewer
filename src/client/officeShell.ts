@@ -7,12 +7,16 @@
  * .ribbon-panel[data-panel] 하나. data-edit-only가 붙은 탭은 읽기 전용이면 숨긴다.
  */
 
+import { mountBackToView } from './backToView.js';
+
 export interface OfficeShellOptions {
   readonly token: string;
   readonly docName: string;
   readonly canEdit: boolean;
   readonly canDownload: boolean;
   readonly canPrint: boolean;
+  /** /api/view/info 의 viewerUrl — 보기 화면에서 들어왔으면(from=view) 제목 표시줄에 "보기로"(backToView.ts) */
+  readonly viewerUrl?: string;
   readonly onUndo?: () => void;
   readonly onRedo?: () => void;
 }
@@ -54,6 +58,10 @@ const EXT_LABELS: Readonly<Record<string, string>> = {
 
 export function initOfficeShell(options: OfficeShellOptions): OfficeShell {
   const toolbar = document.getElementById('toolbar') as HTMLElement;
+  const titleRight = toolbar.querySelector('.titlebar-right');
+  if (titleRight) {
+    mountBackToView(titleRight, titleRight.querySelector('#presence-list'), { token: options.token, viewerUrl: options.viewerUrl, canEdit: options.canEdit });
+  }
   // 앱 색(--app-accent)이 body에 붙어 있어야 body 밑에 따로 붙는 "파일" 화면·드롭다운도 같은 색을 쓴다.
   if (toolbar.dataset.app) document.body.dataset.app = toolbar.dataset.app;
   const tabs = [...toolbar.querySelectorAll<HTMLButtonElement>('.ribbon-tab')];

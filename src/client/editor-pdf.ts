@@ -3,6 +3,7 @@
  * 1단계: 보기·확대·회전·쪽 이동·썸네일·책갈피·레이어·찾기, 협업 방 연결(참여자 표시), 내려받기·인쇄.
  * 편집 내용(주석·쪽 정리·양식)은 다음 단계에서 이 방의 맵(src/pdf/pdfModel.ts)에 쌓는다.
  */
+import { mountBackToView } from './backToView.js';
 import * as Y from 'yjs';
 import { WebsocketProvider } from 'y-websocket';
 import { openPdf, openPdfData, type PDFDocumentProxy } from './pdf/pdfDocument.js';
@@ -24,6 +25,7 @@ import { setupCertSign, type CertSignUi } from './pdf/certSignUi.js';
 import { pickPresenceColorForName, renderPresenceAvatars } from './presence.js';
 
 interface ViewInfo {
+  readonly viewerUrl?: string;
   readonly docId: string;
   readonly name: string;
   readonly viewer: string;
@@ -277,6 +279,12 @@ async function main(): Promise<void> {
   }
   $('doc-name').textContent = info.name;
   document.title = `${info.name} — PDF 편집`;
+  // 보기 화면에서 편집으로 들어왔으면 머리에 "보기로"(설계 V7) — 저장은 방이 하고, 떠나기 전에 지금 저장한다
+  mountBackToView(document.querySelector('.pdf-titlebar') as HTMLElement, document.getElementById('presence'), {
+    token,
+    viewerUrl: info.viewerUrl,
+    canEdit: info.permissions.canEdit,
+  });
   const { ydoc, provider } = connect(info);
 
   let base = '';
