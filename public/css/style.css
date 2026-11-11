@@ -3905,3 +3905,9 @@ body.review-pane-open #editor-zoom-host { margin-right: 320px; }
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
   white-space: nowrap;
 }
+/* 편집기의 "보기로"(src/client/backToView.ts) — 제목 줄 높이(40px)에 맞춘 작은 알약. 색 제목 줄(워드·엑셀·PPT)은 흰 글자,
+   PDF 편집기 회색 줄·한글 편집기 밝은 막대는 기본 글자색 그대로 */
+.back-to-view { flex: none; padding: 0.25rem 0.75rem; font-size: 0.8rem; }
+.office-titlebar .back-to-view { color: #ffffff; border-color: rgba(255, 255, 255, 0.6); }
+.office-titlebar .back-to-view:hover:not(:disabled) { background: rgba(255, 255, 255, 0.16); }
+.pdf-titlebar .back-to-view { align-self: center; background: #ffffff; }

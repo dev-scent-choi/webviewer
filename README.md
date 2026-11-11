@@ -100,6 +100,12 @@ Windows에서는 `start.bat`을 그대로 쓰면 된다. `DOCVIEW_SECRET`/`DOCVI
 `start.bat`이 있을 때만 자동으로 불러온다. 그 파일이 없으면 서버는 매 재시작마다 임시 시크릿으로
 경고와 함께 계속 동작한다(로컬 개발용 기본 동작, 아래 `DOCVIEW_SECRET` 설명과 동일).
 
+**반영(합치기) 순서 — 통합 보기 화면.** `public/js/view.bundle.js`(와 `public/js/chunks/`)는 커밋하지 않는 빌드
+산출물이다. 운영 폴더에 새 코드를 합치면 `viewer.js`의 넘기기(쪽 문서 → `/view.html`)는 바로 살아나는데 묶음은
+없어서, **`npm run build:editor`를 돌리기 전까지 워드·PPT·PDF 열람이 빈 화면**이 된다. 그래서 합치기 직전(또는 같은
+순간)에 운영 폴더에서 `npm run build:editor`를 먼저 돌리고 그다음 src를 반영한다. 서버 src가 바뀌면 `tsx watch`로
+떠 있는 서버(8000, 향기랩 8010)가 재시작되어 열려 있던 세션·편집 연결이 한 번 끊긴다 — 사용이 적은 때 반영한다.
+
 ## 다른 시스템에 npm으로 설치하기
 
 git clone 없이, 버전 관리된 패키지로 다른 서버에 배포하고 싶을 때 쓰는 경로다. `package.json`에
