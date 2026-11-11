@@ -74,6 +74,19 @@ body.thumbs-open .pages-container { padding-left: calc(1rem + 152px); }
 .thumb-box > canvas, .thumb-box > img { display: block; width: 100%; height: 100%; }
 .thumb-box.thumb-error { background: repeating-linear-gradient(45deg, #f3f3f3 0 6px, #e7e7e7 6px 12px); }
 .thumb-label { font-size: 0.75rem; opacity: 0.75; }
+/* "쪽을 준비하는 중"(설계 V8) */
+.prep-screen {
+  position: fixed;
+  inset: 6.2rem 0 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 0.8rem;
+  z-index: 8;
+  font-size: 1rem;
+}
+.prep-screen progress { width: min(320px, 70vw); }
+
 @media (max-width: 639px) {
   /* 왼쪽 도구는 모두 도구▾로 들어가 비어 있다 — 막대에는 확대·쪽·찾기·도구▾만(설계 §2). 계획 작성 때 390px에서 도구▾가
      화면 밖으로 밀리던 것을 이 규칙으로 맞춤 */

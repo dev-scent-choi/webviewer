@@ -6,7 +6,7 @@
 import { renderPresenceNames } from './presence.js';
 import { applyWatermark } from './watermark.js';
 import type { ShellCtx } from './view/ctx.js';
-import { chooseBodyKind, createEscapeChain, pathOf } from './view/logic.js';
+import { chooseBodyKind, createEscapeChain, editHref, pathOf } from './view/logic.js';
 import { PagesBody, type PageSource } from './view/pagesBody.js';
 import { PngSource } from './view/pngSource.js';
 import { setupToolbar } from './view/toolbar.js';
@@ -16,6 +16,7 @@ import { setupFileActions } from './view/fileActions.js';
 import { setupMeasure } from './view/measure.js';
 import { setupMarkup } from './view/markup.js';
 import { setupEditButton } from './view/editButton.js';
+import { waitUntilPrepared } from './view/prepare.js';
 import type { ViewInfo } from './view/types.js';
 
 const token = new URLSearchParams(location.search).get('token') ?? '';
@@ -31,11 +32,17 @@ function postReady(): void {
   requestAnimationFrame(() => requestAnimationFrame(() => window.parent.postMessage({ type: 'docview:ready' }, '*')));
 }
 
-function showError(message: string): void {
+function showError(message: string, editorUrl?: string): void {
   (document.getElementById('toolbar') as HTMLElement).hidden = true;
   (document.getElementById('pages') as HTMLElement).hidden = true;
   (document.getElementById('error-screen') as HTMLElement).hidden = false;
   (document.getElementById('error-message') as HTMLElement).textContent = message;
+  // 쪽을 못 그려도 편집기는 원본으로 열린다(설계 §7)
+  const edit = document.getElementById('error-edit') as HTMLAnchorElement;
+  if (editorUrl) {
+    edit.href = editHref(editorUrl, location.search);
+    edit.hidden = false;
+  }
   postReady();
 }
 
@@ -133,6 +140,16 @@ async function boot(): Promise<void> {
   applyWatermark(info.viewer);
   startPresence();
   setupEditButton({ info });
+  if (info.processing) {
+    postReady();
+    try {
+      await waitUntilPrepared(tokenQuery);
+      info = await fetchInfo();
+    } catch (error) {
+      showError(error instanceof Error ? error.message : '문서를 열 수 없습니다.', info.editorUrl);
+      return;
+    }
+  }
 
   const png = () => new PngSource(tokenQuery, info.pageCount, info.pages);
   const body = new PagesBody(await openSource(info, png), info.pages);
