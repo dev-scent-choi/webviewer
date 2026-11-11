@@ -6,7 +6,7 @@
 import { renderPresenceNames } from './presence.js';
 import { applyWatermark } from './watermark.js';
 import type { ShellCtx } from './view/ctx.js';
-import { createEscapeChain, pathOf } from './view/logic.js';
+import { chooseBodyKind, createEscapeChain, pathOf } from './view/logic.js';
 import { PagesBody, type PageSource } from './view/pagesBody.js';
 import { PngSource } from './view/pngSource.js';
 import type { ViewInfo } from './view/types.js';
@@ -89,9 +89,19 @@ function setupDeterrents(ctx: ShellCtx, runEscape: () => boolean): void {
   });
 }
 
-/** 권한에 맞는 원천 — 이 작업에서는 PNG만(Task 4에서 내려받기 권한이면 pdf.js) */
-async function openSource(_info: ViewInfo, png: () => PageSource): Promise<PageSource> {
-  return png();
+const FALLBACK_NOTICE = 'PDF를 바로 그리지 못해 서버 그림으로 보여 줍니다 — 글자 선택은 되지 않습니다.';
+
+/** 권한에 맞는 원천 — 내려받기 권한이 있으면 pdf.js(동적 import), 받지 못하면 PNG와 한 줄 안내 */
+async function openSource(info: ViewInfo, png: () => PageSource): Promise<PageSource> {
+  if (chooseBodyKind(info.permissions) === 'pages-png') return png();
+  try {
+    const { openPdfjsSource } = await import('./view/pdfjsSource.js');
+    return await openPdfjsSource(tokenQuery, info.permissions.canCopy, new AbortController().signal);
+  } catch (error) {
+    console.warn('pdf.js로 열지 못해 서버 그림으로 보여 줍니다:', error);
+    notice(FALLBACK_NOTICE);
+    return png();
+  }
 }
 
 async function boot(): Promise<void> {
@@ -122,6 +132,12 @@ async function boot(): Promise<void> {
   const ctx: ShellCtx = { token, tokenQuery, info, body, onEscape: escape.add, notice };
   setupDeterrents(ctx, escape.run);
   body.onDraw(() => postReady());
+  // pdf.js로 그리다 실패하면(깨진 파일·휴대폰 메모리) 같은 자리에 서버 PNG로(설계 §4·§7)
+  body.onDrawError(() => {
+    if (body.kind !== 'pages-pdfjs') return;
+    notice(FALLBACK_NOTICE);
+    body.replaceSource(png());
+  });
   await body.mount(document.getElementById('pages') as HTMLElement);
 }
 
