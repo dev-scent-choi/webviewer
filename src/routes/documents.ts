@@ -15,7 +15,7 @@ import { getPdfPageInfo, invalidateRenderCache } from '../rendering.js';
 import { issueViewToken } from '../security.js';
 import { buildGridFromOriginal, saveGridDerived, type GridDocument } from '../spreadsheet.js';
 import { newDocumentId, store } from '../storage.js';
-import type { DocumentMeta } from '../types.js';
+import type { DocumentMeta, ViewKind } from '../types.js';
 import { invalidateViewCaches } from './viewer.js';
 import { isOpenable, trackInitialConversion } from '../conversionGate.js';
 import { assertZipNotTooLarge, ZipTooLargeError } from '../zipGuard.js';
@@ -64,6 +64,18 @@ export function editorPathFor(ext: string): string {
   if (ext === 'pptx') return '/editor-slides.html';
   if (ext === 'hwp' || ext === 'hwpx') return '/editor-hwp.html';
   return '/editor.html';
+}
+
+/** 지금 보기 화면(viewer.html)에 남는 쪽 문서 — 한글은 2단계에서 껍데기로 옮긴다(설계 §1·§3) */
+const LEGACY_VIEW_EXTS = new Set(['hwp', 'hwpx']);
+
+/**
+ * 보기 화면 경로 — 쪽 문서(한글 빼고)는 통합 보기 껍데기(/view.html), 엑셀 격자·도면·한글은 지금 보기 화면(/viewer.html).
+ * 변환 전(editReady)이라 viewKind가 아직 없으면 확장자로 정한다(엑셀·csv는 격자, 나머지는 쪽).
+ */
+export function viewPathFor(ext: string, viewKind: ViewKind | undefined): '/view.html' | '/viewer.html' {
+  const kind = viewKind ?? (GRID_VIEW_EXTS.has(ext) ? 'grid' : 'pages');
+  return kind === 'pages' && !LEGACY_VIEW_EXTS.has(ext) ? '/view.html' : '/viewer.html';
 }
 
 /**

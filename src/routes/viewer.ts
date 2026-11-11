@@ -15,7 +15,7 @@ import { findConverter } from '../converters/index.js';
 import { IMAGE_MIME_BY_EXT, readSlideSizeEmu } from '../pptx/slideContent.js';
 import { unzipSync } from 'fflate';
 import { assertZipNotTooLarge, guardedUnzipSync, ZipTooLargeError } from '../zipGuard.js';
-import { convertToPdf } from './documents.js';
+import { convertToPdf, editorUrlFor, viewPathFor } from './documents.js';
 import {
   PageOutOfRangeError,
   buildPrintPdf,
@@ -678,8 +678,82 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
           defaultFontFamily,
           defaultParagraphSpacing,
           slideSize,
+          // 통합 보기 껍데기(view.html)의 편집 단추와 편집기의 "보기로"가 쓴다 — 토큰 하나로 오가므로 새 토큰을 만들지 않는다
+          editorUrl: editorUrlFor(
+            view.meta.ext,
+            { effectiveCanEdit: view.claims.perms.canEdit, canDownload: view.claims.perms.canDownload, pdfEditor: view.claims.perms.pdfEditor === true },
+            request.query.token!,
+          ),
+          viewerUrl: `${viewPathFor(view.meta.ext, view.meta.viewKind)}?token=${encodeURIComponent(request.query.token!)}`,
+          processing: view.meta.status === 'processing',
         },
       };
+    },
+  );
+
+  /**
+   * 변환 상태 — 보기 화면이 첫 변환(editReady)을 기다리는 동안 부른다("쪽을 준비하는 중", 설계 V8). 감사 기록을 남기지 않고,
+   * 변환에 실패한 문서(열 수 없는 상태)도 그 문구를 돌려준다.
+   */
+  app.get<{ Querystring: TokenQuery }>(
+    '/api/view/status',
+    { schema: { querystring: tokenQuerySchema } },
+    async (request, reply) => {
+      let claims: ViewClaims;
+      try {
+        claims = verifyViewToken(request.query.token ?? '');
+      } catch {
+        return reply.code(401).send({ success: false, error: '열람 토큰이 없거나 유효하지 않습니다.' });
+      }
+      const meta = await store.readMeta(claims.docId);
+      if (!meta) return reply.code(404).send({ success: false, error: '문서를 찾을 수 없습니다.' });
+      return {
+        success: true,
+        data: {
+          status: meta.status,
+          progress: meta.progress ?? 0,
+          pageCount: meta.pageCount,
+          ...(meta.status === 'failed' ? { error: meta.error ?? '문서를 변환하지 못했습니다.' } : {}),
+        },
+      };
+    },
+  );
+
+  /**
+   * 보기용 PDF(설계 V5) — 통합 보기 껍데기가 내려받기 권한이 있을 때 pdf.js로 그린다. 권한이 없으면 403(PDF가 브라우저로 가지
+   * 않는다). 원본이 PDF면 지금 상태(pdf-current와 같은 규칙: 편집 방이 열려 있으면 저장 전 상태, 암호 파일은 비밀번호를 맞힌 토큰만),
+   * 그 밖에는 변환한 PDF. 첫 변환 중이면 202. 내려받기와 달리 보기라서 파일 이름·감사 기록을 붙이지 않는다.
+   */
+  app.get<{ Querystring: TokenQuery }>(
+    '/api/view/derived-pdf',
+    { schema: { querystring: tokenQuerySchema } },
+    async (request, reply) => {
+      const view = await resolveView(request.query.token, reply);
+      if (!view) return reply;
+      if (!view.claims.perms.canDownload) {
+        return reply.code(403).send({ success: false, error: '저장(다운로드) 권한이 없습니다.' });
+      }
+      const meta = view.meta;
+      try {
+        let bytes: Uint8Array;
+        if (meta.ext === 'pdf') {
+          bytes = await currentPlainBytes(meta.id, () => store.readOriginal(meta.id, meta.ext), tokenKey(request.query.token!));
+        } else if (meta.status === 'processing') {
+          return reply.code(202).send({ success: true, data: { processing: true } });
+        } else if ((meta.viewKind ?? 'pages') !== 'pages') {
+          return reply.code(400).send({ success: false, error: '쪽으로 보는 문서가 아닙니다.' });
+        } else {
+          bytes = await store.readDerived(meta.id, 'pdf');
+        }
+        return await reply
+          .type('application/pdf')
+          .header('cache-control', 'no-store')
+          .send(Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength));
+      } catch (error) {
+        if (error instanceof PdfRoomError) return reply.code(error.status).send({ success: false, error: error.message });
+        request.log.error(error, 'derived pdf failed');
+        return reply.code(500).send({ success: false, error: '보기용 PDF를 불러오지 못했습니다.' });
+      }
     },
   );
 
