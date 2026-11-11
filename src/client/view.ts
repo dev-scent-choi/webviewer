@@ -14,6 +14,7 @@ import { setupThumbs } from './view/thumbs.js';
 import { setupSearch } from './view/search.js';
 import { setupFileActions } from './view/fileActions.js';
 import { setupMeasure } from './view/measure.js';
+import { setupMarkup } from './view/markup.js';
 import type { ViewInfo } from './view/types.js';
 
 const token = new URLSearchParams(location.search).get('token') ?? '';
@@ -155,6 +156,7 @@ async function boot(): Promise<void> {
   setupSearch(ctx);
   setupFileActions(ctx);
   setupMeasure(ctx);
+  setupMarkup(ctx);
 }
 
 boot().catch((error) => {
