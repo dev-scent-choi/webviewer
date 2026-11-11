@@ -36,3 +36,15 @@
 .pages-container.measuring .pdf-text-layer,
 .pages-container.markup-drawing .pdf-text-layer,
 .pages-container.text-tool-active .pdf-text-layer { pointer-events: none; }
+
+.tools-btn { width: auto; padding: 0 0.6rem; font-size: 0.85rem; }
+
+@media (max-width: 639px) {
+  /* 왼쪽 도구는 모두 도구▾로 들어가 비어 있다 — 막대에는 확대·쪽·찾기·도구▾만(설계 §2). 계획 작성 때 390px에서 도구▾가
+     화면 밖으로 밀리던 것을 이 규칙으로 맞춤 */
+  #toolbar-tools-left { display: none; }
+  .toolbar-tools-center { flex: 1 1 auto; justify-content: flex-start; gap: 0.15rem; }
+  .toolbar-tools-center .toolbar-sep { display: none; }
+  .toolbar-tools-right { flex: 0 0 auto; gap: 0.15rem; }
+  .edit-btn { margin-right: 0.3rem; }
+}

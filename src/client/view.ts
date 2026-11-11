@@ -9,6 +9,7 @@ import type { ShellCtx } from './view/ctx.js';
 import { chooseBodyKind, createEscapeChain, pathOf } from './view/logic.js';
 import { PagesBody, type PageSource } from './view/pagesBody.js';
 import { PngSource } from './view/pngSource.js';
+import { setupToolbar } from './view/toolbar.js';
 import type { ViewInfo } from './view/types.js';
 
 const token = new URLSearchParams(location.search).get('token') ?? '';
@@ -139,6 +140,7 @@ async function boot(): Promise<void> {
     body.replaceSource(png());
   });
   await body.mount(document.getElementById('pages') as HTMLElement);
+  setupToolbar(ctx);
 }
 
 boot().catch((error) => {
