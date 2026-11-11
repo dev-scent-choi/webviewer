@@ -49,20 +49,24 @@ export function dedupeByName<T extends [number, AwarenessUserState]>(states: rea
   });
 }
 
+function presenceBadge(name: string, color: string): HTMLSpanElement {
+  const avatar = document.createElement('span');
+  avatar.className = 'presence-badge';
+  avatar.style.setProperty('--presence-color', color);
+  avatar.textContent = initialsOf(name);
+  avatar.title = name;
+  return avatar;
+}
+
 /** 오피스 365 스타일의 겹쳐진 원형 아바타 스택으로 현재 접속자를 렌더링한다. */
 export function renderPresenceAvatars(container: HTMLElement, awareness: Awareness): void {
   const states = [...awareness.getStates().entries()] as Array<[number, AwarenessUserState]>;
   container.replaceChildren(
-    ...dedupeByName(states)
-      .map(([, state]) => {
-        const name = state.user!.name!;
-        const color = state.user!.color ?? pickPresenceColorForName(name);
-        const avatar = document.createElement('span');
-        avatar.className = 'presence-badge';
-        avatar.style.setProperty('--presence-color', color);
-        avatar.textContent = initialsOf(name);
-        avatar.title = name;
-        return avatar;
-      }),
+    ...dedupeByName(states).map(([, state]) => presenceBadge(state.user!.name!, state.user!.color ?? pickPresenceColorForName(state.user!.name!))),
   );
+}
+
+/** 이름 목록으로 같은 아바타를 그린다 — 보기 화면(view.ts)의 /api/view/presence 하트비트 응답용 */
+export function renderPresenceNames(container: HTMLElement, names: readonly string[]): void {
+  container.replaceChildren(...names.map((name) => presenceBadge(name, pickPresenceColorForName(name))));
 }

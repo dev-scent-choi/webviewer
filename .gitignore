@@ -26,6 +26,8 @@ public/js/editor-hwp.bundle.js
 public/js/editor-hwp.bundle.js.map
 public/js/editor-pdf.bundle.js
 public/js/editor-pdf.bundle.js.map
+public/js/view.bundle.js
+public/js/view.bundle.js.map
 # PDF 편집기의 pdf.js 부속(build-editor.mjs가 node_modules/pdfjs-dist에서 복사)
 public/js/pdf.worker.mjs
 public/pdfjs/

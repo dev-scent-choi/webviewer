@@ -1,0 +1,25 @@
+/* 통합 보기 껍데기(view.html) — style.css의 보기 화면(viewer.html) 모양 위에 새 부분만 둔다 */
+
+/* 편집 단추(설계 V6) — 제목 줄 오른쪽, 함께 보는 사람 앞 */
+.edit-btn { margin-left: auto; margin-right: 0.6rem; }
+
+/* 한 줄 안내(pdf.js → 서버 그림 등) */
+.view-notice {
+  position: fixed;
+  top: 6.4rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 12;
+  max-width: calc(100vw - 2rem);
+  padding: 0.35rem 0.9rem;
+  border-radius: 6px;
+  background: var(--color-surface);
+  border: 1px solid var(--v-glass-line);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+  font-size: 0.85rem;
+}
+
+#error-edit { margin-top: 0.6rem; }
+
+/* 아래 칸들은 display를 정하므로 hidden 속성이 이기도록 따로 적는다(계획 작성 때 hidden인데 보이던 것을 확인함) */
+.thumbs-panel[hidden], .prep-screen[hidden], .view-notice[hidden] { display: none; }

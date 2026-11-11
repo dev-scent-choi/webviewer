@@ -76,6 +76,8 @@ await retry(() => build({
     'src/client/editor-slides.ts',
     'src/client/editor-hwp.ts',
     'src/client/editor-pdf.ts',
+    // 통합 보기 껍데기(public/view.html) — pdf.js 원천은 동적 import라 PNG 모드에서는 받지 않는다
+    'src/client/view.ts',
   ],
   outdir: 'public/js',
   entryNames: '[name].bundle',
