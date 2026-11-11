@@ -169,6 +169,13 @@ export function measureLabel(mm: number, factor: number, unit: string): string {
 
 /** 640~1023px에서 "도구▾" 메뉴로 들어가는 것(설계 §2 도구▾). 1024px 이상은 막대에 그대로 둔다(verify:viewer-quicktext가 #text-tool-btn을 누른다) */
 export const TOOL_MENU_IDS = ['markup-add-btn', 'text-tool-btn', 'markup-include-wrap', 'measure-btn', 'invert-btn', 'fullscreen-btn'] as const;
+/** 썸네일 — 보이는 쪽 앞뒤 margin장까지만 그려 두고 그 밖은 비운다(긴 문서에서 캔버스가 쌓이지 않게). 보이는 쪽이 없으면 null */
+export function thumbWindow(visible: Iterable<number>, margin: number, count: number): [number, number] | null {
+  const pages = [...visible];
+  if (pages.length === 0) return null;
+  return [Math.max(1, Math.min(...pages) - margin), Math.min(count, Math.max(...pages) + margin)];
+}
+
 /** 640px 미만에서 더 들어가는 것 — 막대에는 확대·쪽·찾기·도구▾만 남는다(설계 §2) */
 export const NARROW_MENU_IDS = ['thumbs-btn', 'rotate-btn', 'print-btn', 'download-btn', 'download-as-btn'] as const;
 

@@ -17,6 +17,7 @@ import {
   needsRedraw,
   offersBackToView,
   pagesToKeep,
+  thumbWindow,
   paperMm,
   pathOf,
   pngScale,
@@ -177,5 +178,13 @@ describe('늦게 끝난 그림·글자 층', () => {
     expect(keepFinishedDraw(3, 1, 20, 2, [1])).toBe(true);
     expect(keepFinishedDraw(10, 1, 20, 2, [1])).toBe(false);
     expect(keepFinishedDraw(10, 1, 20, 2, [10])).toBe(true);
+  });
+});
+
+describe('thumbWindow', () => {
+  test('보이는 쪽 앞뒤 margin, 문서 끝에서 자름', () => {
+    expect(thumbWindow([30, 31, 33], 10, 100)).toEqual([20, 43]);
+    expect(thumbWindow([2], 10, 5)).toEqual([1, 5]);
+    expect(thumbWindow([], 10, 5)).toBeNull();
   });
 });

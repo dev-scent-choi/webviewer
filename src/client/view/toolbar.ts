@@ -7,13 +7,16 @@ import { ZOOM_STEPS, menuIdsFor } from './logic.js';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string): T => document.getElementById(id) as T;
 
-export function setupToolbar(ctx: ShellCtx): void {
+/** 반환값은 해제 함수(떠날 때 document·window 처리를 걷는다) */
+export function setupToolbar(ctx: ShellCtx): () => void {
+  const off = new AbortController();
   setupZoom(ctx);
   setupPageNav(ctx);
   $('rotate-btn').addEventListener('click', () => ctx.body.rotate(90));
-  setupFullscreen();
-  setupPointer(ctx);
-  setupToolsMenu();
+  setupFullscreen(off.signal);
+  setupPointer(ctx, off.signal);
+  setupToolsMenu(ctx, off.signal);
+  return () => off.abort();
 }
 
 function setupZoom(ctx: ShellCtx): void {
@@ -83,7 +86,7 @@ function setupPageNav(ctx: ShellCtx): void {
 }
 
 /** 전체 화면 — Esc·브라우저 메뉴로 나가는 경우도 fullscreenchange로 맞춘다(viewer.js setupFullscreen) */
-function setupFullscreen(): void {
+function setupFullscreen(signal: AbortSignal): void {
   const btn = $<HTMLButtonElement>('fullscreen-btn');
   if (!document.fullscreenEnabled) {
     btn.disabled = true;
@@ -103,12 +106,12 @@ function setupFullscreen(): void {
     if (document.fullscreenElement) void document.exitFullscreen();
     else document.documentElement.requestFullscreen().catch(() => undefined);
   });
-  document.addEventListener('fullscreenchange', sync);
+  document.addEventListener('fullscreenchange', sync, { signal });
   sync();
 }
 
 /** Ctrl+휠·두 번 누르기 확대, 끌어서 옮기기(viewer.js setupDrawingTools 앞부분) */
-function setupPointer(ctx: ShellCtx): void {
+function setupPointer(ctx: ShellCtx, signal: AbortSignal): void {
   const pages = ctx.body.container;
   pages.addEventListener(
     'wheel',
@@ -121,6 +124,8 @@ function setupPointer(ctx: ShellCtx): void {
   );
   pages.addEventListener('dblclick', (event) => {
     if (pages.classList.contains('measuring')) return;
+    // 글자 선택이 되는 화면에서는 두 번 누르기가 낱말 고르기다 — 확대하지 않는다
+    if (ctx.body.textSelectable && (event.target as Element).closest('.pdf-text-layer')) return;
     ctx.body.zoomAtPoint(ctx.body.zoomIndex + 2, event.clientX, event.clientY);
   });
   let pan: { x: number; y: number; left: number; top: number } | null = null;
@@ -129,9 +134,11 @@ function setupPointer(ctx: ShellCtx): void {
     if (event.button !== 0 && event.button !== 1) return;
     const target = event.target as Element;
     // 글자 선택이 되는 화면에서 글자 위를 누르면 끌기 대신 글자 고르기
-    if (ctx.body.textSelectable && target.closest('.pdf-text-layer span')) return;
+    // 쪽 위 왼쪽 단추는 빈 곳에서도 글자 고르기를 시작해야 하니 끌기는 쪽 밖(여백)이나 가운데 단추로만
+    if (ctx.body.textSelectable && event.button === 0 && target.closest('.page-frame')) return;
     // 칸 스크롤바를 누른 것은 브라우저에 맡긴다
     if (target === pages && (event.offsetX > pages.clientWidth || event.offsetY > pages.clientHeight)) return;
+    (document.activeElement as HTMLElement | null)?.blur?.(); // 쪽 번호 입력 중이면 blur로 이동을 확정
     pan = { x: event.clientX, y: event.clientY, left: pages.scrollLeft, top: window.scrollY };
     pages.classList.add('panning');
     event.preventDefault();
@@ -140,18 +147,18 @@ function setupPointer(ctx: ShellCtx): void {
     if (!pan) return;
     pages.scrollLeft = pan.left - (event.clientX - pan.x);
     window.scrollTo(window.scrollX, pan.top - (event.clientY - pan.y));
-  });
+  }, { signal });
   document.addEventListener('mouseup', () => {
     pan = null;
     pages.classList.remove('panning');
-  });
+  }, { signal });
 }
 
 /**
  * "도구▾" — 화면 폭에 따라 정해진 단추(logic.ts menuIdsFor)를 메뉴로 옮기고, 넓어지면 제자리로 돌린다. 요소를 그대로
  * 옮기므로 걸어 둔 클릭 처리가 그대로 산다(viewer.js toolbar-more와 같은 방법).
  */
-function setupToolsMenu(): void {
+function setupToolsMenu(ctx: ShellCtx, signal: AbortSignal): void {
   const btn = $<HTMLButtonElement>('tools-btn');
   const menu = $('tools-menu');
   const home = new Map<string, { parent: Node; next: Node | null }>();
@@ -159,6 +166,9 @@ function setupToolsMenu(): void {
     menu.hidden = true;
     btn.setAttribute('aria-expanded', 'false');
   };
+  const items = () => [...menu.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled)')];
+  // 메뉴 안 요소는 menuitem, 제자리로 돌아가면 역할을 걷는다
+  const setRole = (el: HTMLElement, inMenu: boolean) => (inMenu ? el.setAttribute('role', 'menuitem') : el.removeAttribute('role'));
   const layout = () => {
     const wanted = new Set(menuIdsFor(window.innerWidth));
     // 메뉴에 있을 필요가 없어진 것부터 제자리로 — 뒤에서부터 넣어 기억해 둔 다음 형제가 먼저 돌아와 있게
@@ -166,6 +176,7 @@ function setupToolsMenu(): void {
       if (wanted.has(id)) continue;
       const el = document.getElementById(id);
       // 기억해 둔 다음 형제가 아직 메뉴에 있으면 끝에 붙인다(insertBefore가 던지지 않게)
+      if (el) setRole(el, false);
       if (el) place.parent.insertBefore(el, place.next?.parentNode === place.parent ? place.next : null);
       home.delete(id);
     }
@@ -173,6 +184,7 @@ function setupToolsMenu(): void {
       const el = document.getElementById(id);
       if (!el || home.has(id)) continue;
       home.set(id, { parent: el.parentNode as Node, next: el.nextSibling });
+      setRole(el, true);
       menu.append(el);
     }
     btn.hidden = wanted.size === 0;
@@ -182,6 +194,22 @@ function setupToolsMenu(): void {
     event.stopPropagation();
     menu.hidden = !menu.hidden;
     btn.setAttribute('aria-expanded', String(!menu.hidden));
+    if (!menu.hidden && event.detail === 0) items()[0]?.focus(); // 키보드로 열면 첫 항목으로
+  });
+  menu.addEventListener('keydown', (event) => {
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+    const list = items();
+    if (list.length === 0) return;
+    event.preventDefault();
+    const at = list.indexOf(document.activeElement as HTMLElement);
+    list[(at + (event.key === 'ArrowDown' ? 1 : -1) + list.length) % list.length].focus();
+  });
+  // Esc — 메뉴를 닫고 도구▾로 돌아간다(우선순위 25: 쓰던 글 20 다음)
+  ctx.onEscape(25, () => {
+    if (menu.hidden) return false;
+    close();
+    btn.focus();
+    return true;
   });
   // 메뉴 안 단추를 누르면 그 동작을 한 뒤 닫는다
   menu.addEventListener('click', (event) => {
@@ -189,7 +217,7 @@ function setupToolsMenu(): void {
   });
   document.addEventListener('click', (event) => {
     if (!menu.hidden && !(event.target as Element).closest('#tools-wrap')) close();
-  });
-  window.addEventListener('resize', layout);
+  }, { signal });
+  window.addEventListener('resize', layout, { signal });
   layout();
 }
