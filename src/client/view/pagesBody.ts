@@ -202,8 +202,8 @@ export class PagesBody implements ViewBody {
     try {
       return await source.thumbnail(page, width);
     } finally {
-      // 몸체가 그려 두지 않은 쪽이면 썸네일 때문에 받은 쪽 객체를 놓는다
-      if (!this.drawnKey.has(page)) source.release?.(page);
+      // 몸체가 그려 두지 않았고 곧 그리지도 않을(보이는 쪽·지금 쪽 ±2 밖) 쪽이면 썸네일 때문에 받은 쪽 객체를 놓는다
+      if (!this.drawnKey.has(page) && !keepFinishedDraw(page, this.current, this.frames.length, KEEP_RADIUS, this.visible)) source.release?.(page);
     }
   }
 
@@ -358,26 +358,40 @@ export class PagesBody implements ViewBody {
       if (signal.aborted || source !== this.source || !this.pending.isLatest(page, want)) return;
       // 다 그린 canvas로 한 번에 바꿔 끼운다(그리는 동안 빈 쪽이 보이지 않게)
       const next = document.createElement('canvas');
+      // 버리는 캔버스는 0×0으로 — iOS Safari는 캔버스 메모리를 GC 뒤에야 늦게 돌려줘 연달아 확대하면 상한에 걸린다
+      const discard = () => {
+        next.width = 0;
+        next.height = 0;
+      };
       try {
         await source.draw(page, next, opts, signal);
       } catch (error) {
+        discard();
         this.pending.end(page, want);
         if (isCancel(error) || signal.aborted) return;
         frame.classList.add('page-error');
         for (const cb of this.errorCbs) cb(error);
         return;
       }
-      if (signal.aborted || source !== this.source) return;
-      // 그리는 사이 더 새 요청이 왔거나(그것이 붙는다) 지금 그림을 쓰기로 했으면 버린다
-      if (!this.pending.isLatest(page, want)) return;
+      // 그리는 사이 원천이 바뀌었거나, 더 새 요청이 왔거나(그것이 붙는다) 지금 그림을 쓰기로 했으면 버린다
+      if (signal.aborted || source !== this.source || !this.pending.isLatest(page, want)) {
+        discard();
+        return;
+      }
       this.pending.end(page, want);
       // 그리는 사이 창 밖이 된 쪽은 붙이지 않는다(다음 스크롤까지 메모리를 잡지 않게)
       if (!keepFinishedDraw(page, this.current, this.frames.length, KEEP_RADIUS, this.visible)) {
+        discard();
         if (!this.drawnKey.has(page)) source.release?.(page);
         return;
       }
       next.dataset.page = String(page);
-      frame.querySelector('canvas')?.replaceWith(next);
+      const old = frame.querySelector('canvas');
+      if (old) {
+        old.width = 0;
+        old.height = 0;
+        old.replaceWith(next);
+      }
       frame.style.aspectRatio = `${next.width} / ${next.height}`;
       frame.classList.remove('page-loading', 'page-error');
       frame.classList.add('page-ready');
