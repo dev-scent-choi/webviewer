@@ -10,6 +10,7 @@ import { chooseBodyKind, createEscapeChain, pathOf } from './view/logic.js';
 import { PagesBody, type PageSource } from './view/pagesBody.js';
 import { PngSource } from './view/pngSource.js';
 import { setupToolbar } from './view/toolbar.js';
+import { setupThumbs } from './view/thumbs.js';
 import type { ViewInfo } from './view/types.js';
 
 const token = new URLSearchParams(location.search).get('token') ?? '';
@@ -141,6 +142,7 @@ async function boot(): Promise<void> {
   });
   await body.mount(document.getElementById('pages') as HTMLElement);
   setupToolbar(ctx);
+  setupThumbs(ctx);
 }
 
 boot().catch((error) => {
