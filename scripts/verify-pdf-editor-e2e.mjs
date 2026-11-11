@@ -136,7 +136,7 @@ const plainId = await upload(plainBytes, '글꼴없음.pdf');
 const t8000 = await token(mainId, {});
 const tPdf = await token(mainId, { pdfEditor: true });
 const tNoDownload = await token(mainId, { pdfEditor: true, canDownload: false });
-check(!t8000.data.editorUrl && /viewer\.html/.test(t8000.data.viewerUrl), '8000처럼 pdfEditor 없이 → editorUrl 없음(보기 화면 그대로)');
+check(!t8000.data.editorUrl && /^\/view\.html\?/.test(t8000.data.viewerUrl), '8000처럼 pdfEditor 없이 → editorUrl 없음(통합 보기 화면 view.html)');
 check(/^\/editor-pdf\.html\?token=/.test(tPdf.data.editorUrl ?? ''), 'pdfEditor → PDF 편집기 주소');
 check(!tNoDownload.data.editorUrl, '내려받기 권한 없으면 PDF 편집기 주소 없음');
 const srcPlain = await fetch(`${BASE}/api/view/pdf-source?token=${encodeURIComponent(t8000.data.token)}`);
