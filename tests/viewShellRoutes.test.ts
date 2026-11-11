@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
+import { PDFDocument as Cantoo } from '@cantoo/pdf-lib';
 import { makeSamplePdf } from './helpers.js';
 
 type Perms = { canPrint?: boolean; canDownload?: boolean; canCopy?: boolean; canEdit?: boolean; pdfEditor?: boolean };
@@ -90,6 +91,44 @@ describe('보기 껍데기 서버 경로(info·status·derived-pdf)', () => {
     expect(r202.json()).toEqual({ success: true, data: { processing: true } });
     const grid = await addDoc('xlsx', { viewKind: 'grid', derived: false });
     expect((await get(`/api/view/derived-pdf?token=${encodeURIComponent(tok(grid, { canDownload: true }))}`)).statusCode).toBe(400);
+  });
+
+  test('derived-pdf: 토큰이 없거나 틀리거나 지났으면 401', async () => {
+    const docx = await addDoc('docx', { viewKind: 'pages' });
+    expect((await get('/api/view/derived-pdf')).statusCode).toBeGreaterThanOrEqual(400);
+    expect((await get('/api/view/derived-pdf?token=bad')).statusCode).toBe(401);
+    const expired = issueViewToken({ docId: docx, viewer: '시험자', perms: { canPrint: false, canDownload: true, canCopy: false, canEdit: false } }, -10);
+    expect((await get(`/api/view/derived-pdf?token=${encodeURIComponent(expired)}`)).statusCode).toBe(401);
+  });
+
+  test('derived-pdf: 첫 변환 중이어도 내려받기 권한이 없으면 202가 아니라 403', async () => {
+    const busy = await addDoc('pptx', { status: 'processing', derived: false });
+    expect((await get(`/api/view/derived-pdf?token=${encodeURIComponent(tok(busy, { canEdit: true }))}`)).statusCode).toBe(403);
+  });
+
+  test('derived-pdf: 암호 PDF는 423과 locked 표시(pdf-current와 같다)', async () => {
+    const d = await Cantoo.load(pdf);
+    d.encrypt({ userPassword: 'pw1234', ownerPassword: 'pw1234-owner' });
+    const id = newDocumentId();
+    await store.saveOriginal(id, 'pdf', Buffer.from(await d.save()));
+    await store.writeMeta({ id, name: '암호.pdf', ext: 'pdf', status: 'ready', pageCount: 2, createdAt: new Date().toISOString(), viewKind: 'pages' });
+    const res = await get(`/api/view/derived-pdf?token=${encodeURIComponent(tok(id, { canDownload: true }))}`);
+    expect(res.statusCode).toBe(423);
+    expect(res.json()).toMatchObject({ success: false, locked: true });
+  });
+
+  test('info editorUrl: 내려받기만(docx·xlsx·pptx는 읽기 전용 편집기), PDF는 pdfEditor+내려받기, 한글은 편집 권한', async () => {
+    const editorOf = async (id: string, perms: Perms) => (await get(`/api/view/info?token=${encodeURIComponent(tok(id, perms))}`)).json().data.editorUrl as string | undefined;
+    for (const [ext, path] of [['docx', '/editor.html'], ['xlsx', '/editor-grid.html'], ['pptx', '/editor-slides.html']] as const) {
+      const id = await addDoc(ext, ext === 'xlsx' ? { viewKind: 'grid' } : { viewKind: 'pages' });
+      expect((await editorOf(id, { canDownload: true }))?.startsWith(`${path}?token=`)).toBe(true);
+    }
+    const pdfDoc = await addDoc('pdf', { viewKind: 'pages' });
+    expect((await editorOf(pdfDoc, { pdfEditor: true, canDownload: true }))?.startsWith('/editor-pdf.html?token=')).toBe(true);
+    expect(await editorOf(pdfDoc, { pdfEditor: true })).toBeUndefined();
+    const hwp = await addDoc('hwp', { viewKind: 'pages' });
+    expect((await editorOf(hwp, { canEdit: true }))?.startsWith('/editor-hwp.html?token=')).toBe(true);
+    expect(await editorOf(hwp, { canDownload: true })).toBeUndefined();
   });
 
   test('info: 편집기·보기 주소와 첫 변환 여부', async () => {

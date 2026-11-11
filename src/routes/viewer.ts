@@ -750,7 +750,7 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
           .header('cache-control', 'no-store')
           .send(Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength));
       } catch (error) {
-        if (error instanceof PdfRoomError) return reply.code(error.status).send({ success: false, error: error.message });
+        if (error instanceof PdfRoomError) return reply.code(error.status).send({ success: false, error: error.message, locked: error.status === 423 });
         request.log.error(error, 'derived pdf failed');
         return reply.code(500).send({ success: false, error: '보기용 PDF를 불러오지 못했습니다.' });
       }
