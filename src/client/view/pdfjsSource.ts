@@ -122,6 +122,14 @@ export class PdfjsSource implements PageSource {
     return canvas;
   }
 
+  /** 연산 목록·풀어 놓은 그림을 놓는다(PDF 편집기 pageView.ts와 같다) — 그리는 중이면 pdf.js가 끝난 뒤 놓는다 */
+  release(page: number): void {
+    this.doc
+      .getPage(page)
+      .then((proxy) => proxy.cleanup())
+      .catch(() => undefined);
+  }
+
   destroy(): void {
     void this.doc.destroy();
   }

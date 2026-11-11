@@ -99,14 +99,21 @@ export function setupSearch(ctx: ShellCtx): void {
     }
   };
 
+  // 이전·다음 — 지난번 찾은 뒤 입력이 바뀌었으면 옛 결과로 가지 않고 새로 찾는다
+  const step = (delta: number) => {
+    const query = input.value.trim();
+    if (query !== '' && query !== lastQuery) void run();
+    else show(current + delta);
+  };
+
   $('search-btn').addEventListener('click', open);
   $('search-close').addEventListener('click', close);
-  prev.addEventListener('click', () => show(current - 1));
-  next.addEventListener('click', () => show(current + 1));
+  prev.addEventListener('click', () => step(-1));
+  next.addEventListener('click', () => step(1));
   input.addEventListener('keydown', (event) => {
     if (event.key !== 'Enter') return;
     event.preventDefault();
-    if (event.shiftKey) show(current - 1);
+    if (event.shiftKey) step(-1);
     else void run();
   });
   document.addEventListener('keydown', (event) => {
@@ -117,7 +124,7 @@ export function setupSearch(ctx: ShellCtx): void {
       open();
     } else if (key === 'f3') {
       event.preventDefault();
-      if (hits.length > 0) show(current + (event.shiftKey ? -1 : 1));
+      if (hits.length > 0) step(event.shiftKey ? -1 : 1);
       else open();
     }
   });

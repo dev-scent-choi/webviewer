@@ -4,7 +4,7 @@
  */
 import type { CommentMarkupItem, MarkupItem, TextMarkupItem } from '../../markup.js';
 import type { ShellCtx } from './ctx.js';
-import { disabledReason } from './logic.js';
+import { disabledReason, toFrameRatio } from './logic.js';
 
 type Mutable<T> = T extends unknown ? { -readonly [K in keyof T]: T[K] } : never;
 type Item = Mutable<MarkupItem>;
@@ -101,17 +101,8 @@ export function setupMarkup(ctx: ShellCtx): void {
   const pagesContainer = (): HTMLElement => ctx.body.container;
 
   /** 화면 좌표 → 쪽 틀 안의 비율. 보기 회전(CSS rotate)은 되돌려 계산한다 — 확대는 틀 크기에 이미 반영돼 있다 */
-  const toFrame = (frame: HTMLElement, clientX: number, clientY: number): { fx: number; fy: number } => {
-    const rect = frame.getBoundingClientRect();
-    const deg = ctx.body.rotateDeg;
-    if (deg === 0) return { fx: (clientX - rect.left) / rect.width, fy: (clientY - rect.top) / rect.height };
-    const rad = (deg * Math.PI) / 180;
-    const dx = clientX - (rect.left + rect.width / 2);
-    const dy = clientY - (rect.top + rect.height / 2);
-    const lx = dx * Math.cos(rad) + dy * Math.sin(rad);
-    const ly = -dx * Math.sin(rad) + dy * Math.cos(rad);
-    return { fx: 0.5 + lx / frame.offsetWidth, fy: 0.5 + ly / frame.offsetHeight };
-  };
+  const toFrame = (frame: HTMLElement, clientX: number, clientY: number): { fx: number; fy: number } =>
+    toFrameRatio(frame.getBoundingClientRect(), frame.offsetWidth, frame.offsetHeight, ctx.body.rotateDeg, clientX, clientY);
 
   const markupLayer = (frame: HTMLElement): HTMLElement => {
     let layer = frame.querySelector<HTMLElement>('.markup-layer');
@@ -612,6 +603,19 @@ export function setupMarkup(ctx: ShellCtx): void {
       return true;
     });
   }
+
+  // 확대·창 크기로 쪽 높이가 바뀌면 넣은 글(과 쓰던 글)의 글자 크기를 쪽에 다시 맞춘다
+  const refitTextFonts = (): void => {
+    for (const el of pagesContainer().querySelectorAll<HTMLElement>('.text-overlay-item')) {
+      const item = markup.items.find((it) => it.id === el.dataset.markupId);
+      const frame = el.closest<HTMLElement>('.page-frame');
+      if (item?.kind === 'text' && frame) applyFontSizeToEl(el, frame, item.page, item.fontSizePt);
+    }
+    const pending = textTool.pending;
+    if (pending) applyFontSizeToEl(pending.box, pending.frame, pending.page, pending.style.fontSizePt);
+  };
+  ctx.body.onZoom(refitTextFonts);
+  window.addEventListener('resize', refitTextFonts);
 
   // 쪽 틀이 다시 만들어지면(pdf.js → PNG) 겹침을 다시 그린다
   ctx.body.onSourceChange(() => {

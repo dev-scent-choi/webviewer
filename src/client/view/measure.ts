@@ -2,7 +2,7 @@
  * 거리 측정·도면 모드(반전) — PDF 문서에서만(지금 보기 화면과 같다, viewer.js measure·applyInvert). 다른 형식은 흐리게 + 이유.
  */
 import type { ShellCtx } from './ctx.js';
-import { disabledReason, measureLabel, paperMm } from './logic.js';
+import { disabledReason, measureLabel, paperMm, toFrameRatio } from './logic.js';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string): T => document.getElementById(id) as T;
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -108,8 +108,8 @@ export function setupMeasure(ctx: ShellCtx): void {
     if (!state.mode) return;
     const frame = (event.target as Element).closest<HTMLElement>('.page-frame');
     if (!frame) return;
-    const rect = frame.getBoundingClientRect();
-    const point = { frame, fx: (event.clientX - rect.left) / rect.width, fy: (event.clientY - rect.top) / rect.height };
+    // 보기 회전을 되돌린 쪽 비율(표시와 같은 toFrameRatio)
+    const point = { frame, ...toFrameRatio(frame.getBoundingClientRect(), frame.offsetWidth, frame.offsetHeight, ctx.body.rotateDeg, event.clientX, event.clientY) };
     if (!state.pending || state.pending.frame !== frame) {
       state.pending?.dot.remove();
       state.pending = { ...point, dot: dot(frame, point.fx, point.fy) };

@@ -10,6 +10,8 @@ import {
   fitPagePercent,
   hitCountLabel,
   keepFinishedDraw,
+  LatestDraws,
+  toFrameRatio,
   textLayerStale,
   matchRects,
   measureLabel,
@@ -125,7 +127,22 @@ describe('찾기', () => {
       { str: 'def', transform: [10, 0, 0, 10, 30, 100], width: 30, height: 10 },
     ];
     const [m] = findInPage(1, items, 'cd');
-    expect(matchRects(m, items, { transform: [1, 0, 0, -1, 0, 200], width: 100, height: 200 })).toHaveLength(2);
+    const rects = matchRects(m, items, { transform: [1, 0, 0, -1, 0, 200], width: 100, height: 200 });
+    expect(rects).toHaveLength(2);
+    expect(rects[0].x).toBeCloseTo(0.2, 6); // 'c' = 20~30pt
+    expect(rects[0].w).toBeCloseTo(0.1, 6);
+    expect(rects[1].x).toBeCloseTo(0.3, 6); // 'd' = 30~40pt
+    expect(rects[1].y).toBeCloseTo(90 / 200, 6);
+  });
+  test('/Rotate 90 쪽(배율 1 viewport가 x·y를 바꾼다)에서는 세로로 선 사각형', () => {
+    const items = [{ str: 'hello world', transform: [10, 0, 0, 10, 100, 700], width: 55, height: 10 }];
+    const [m] = findInPage(1, items, 'world');
+    // pdf.js getViewport({scale:1}) — A4, rotation 90: (x, y) → (y, x), 폭·높이가 바뀐다
+    const [r] = matchRects(m, items, { transform: [0, 1, 1, 0, 0, 0], width: 842, height: 595 });
+    expect(r.x).toBeCloseTo(700 / 842, 6);
+    expect(r.w).toBeCloseTo(10 / 842, 6);
+    expect(r.y).toBeCloseTo((100 + (55 * 6) / 11) / 595, 6);
+    expect(r.h).toBeCloseTo((55 * 5) / 11 / 595, 6);
   });
 });
 
@@ -179,6 +196,48 @@ describe('늦게 끝난 그림·글자 층', () => {
     expect(keepFinishedDraw(10, 1, 20, 2, [1])).toBe(false);
     expect(keepFinishedDraw(10, 1, 20, 2, [10])).toBe(true);
   });
+});
+
+describe('같은 쪽을 다른 배율로 겹쳐 그리기(LatestDraws)', () => {
+  test('먼저 끝난 그림은 나중 요청을 지우지 않고 붙지도 않는다 — 나중 배율이 그린다', () => {
+    const d = new LatestDraws();
+    d.start(1, 100); // A
+    d.start(1, 200); // B(확대) — A가 그리는 중
+    expect(d.isLatest(1, 100)).toBe(false); // A가 끝나도 버린다
+    d.end(1, 100); // A 끝 — B 표시는 그대로
+    expect(d.isLatest(1, 200)).toBe(true); // B가 자리를 얻으면 그린다
+    d.end(1, 200);
+    expect(d.isLatest(1, 200)).toBe(false);
+  });
+  test('지금 그림으로 충분하면(drop) 그리던 것은 붙지 않는다, 쪽마다 따로', () => {
+    const d = new LatestDraws();
+    d.start(1, 400);
+    d.start(2, 400);
+    d.drop(1);
+    expect(d.isLatest(1, 400)).toBe(false);
+    expect(d.isLatest(2, 400)).toBe(true);
+    d.clear();
+    expect(d.isLatest(2, 400)).toBe(false);
+  });
+});
+
+describe('toFrameRatio(표시·측정 좌표, 보기 회전 되돌리기)', () => {
+  // 돌기 전 틀 200×100, 겉 상자 왼쪽 위 (10, 20)
+  const at = (deg: number, x: number, y: number) => {
+    const rect = deg % 180 === 0 ? { left: 10, top: 20, width: 200, height: 100 } : { left: 60, top: -30, width: 100, height: 200 };
+    return toFrameRatio(rect, 200, 100, deg, x, y);
+  };
+  const near = (p: { fx: number; fy: number }, fx: number, fy: number) => {
+    expect(p.fx).toBeCloseTo(fx, 6);
+    expect(p.fy).toBeCloseTo(fy, 6);
+  };
+  test('0°: 겉 상자 비율 그대로', () => near(at(0, 60, 45), 0.25, 0.25));
+  test('90°: 틀 왼쪽 위는 화면 오른쪽 위', () => {
+    near(at(90, 160, -30), 0, 0);
+    near(at(90, 110, 70), 0.5, 0.5);
+  });
+  test('180°: 틀 왼쪽 위는 화면 오른쪽 아래', () => near(at(180, 210, 120), 0, 0));
+  test('270°: 틀 왼쪽 위는 화면 왼쪽 아래', () => near(at(270, 60, 170), 0, 0));
 });
 
 describe('thumbWindow', () => {

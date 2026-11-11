@@ -52,6 +52,30 @@ export function keepFinishedDraw(page: number, current: number, count: number, r
   return pagesToKeep(current, count, radius, visible).has(page);
 }
 
+/**
+ * 쪽마다 가장 최근 그리기 요청(배율 키) — 같은 쪽을 다른 배율로 겹쳐 그릴 때 먼저 끝난 그림이 나중 요청의 표시를 지우거나
+ * 나중 그림을 덮지 않게 한다. 마지막 요청만 붙일 수 있고(isLatest), 끝낸 요청은 자기 것일 때만 지운다(end).
+ */
+export class LatestDraws {
+  private readonly keys = new Map<number, number>();
+  start(page: number, key: number): void {
+    this.keys.set(page, key);
+  }
+  isLatest(page: number, key: number): boolean {
+    return this.keys.get(page) === key;
+  }
+  end(page: number, key: number): void {
+    if (this.keys.get(page) === key) this.keys.delete(page);
+  }
+  /** 지금 그림을 그대로 쓰기로 했다 — 그리고 있던 것은 끝나도 붙이지 않는다 */
+  drop(page: number): void {
+    this.keys.delete(page);
+  }
+  clear(): void {
+    this.keys.clear();
+  }
+}
+
 /** 캔버스를 남겨 둘 쪽 — 보이는 쪽 + 지금 쪽 앞뒤 radius(설계 §7 "보이는 쪽 ±2") */
 export function pagesToKeep(current: number, count: number, radius: number, visible: Iterable<number>): Set<number> {
   const keep = new Set<number>(visible);
@@ -154,6 +178,24 @@ export function matchRects(m: FindMatch, items: readonly TextItemGeom[], vp: Vie
     out.push({ x: left / vp.width, y: top / vp.height, w: (Math.max(ax, bx) - left) / vp.width, h: (Math.max(ay, by) - top) / vp.height });
   }
   return out;
+}
+
+/** 화면 좌표 → 쪽 틀 안 비율. 보기 회전(CSS rotate, 틀 가운데 기준)은 되돌린다 — rect는 돌아간 겉 상자, w·h는 돌기 전 틀 크기 */
+export function toFrameRatio(
+  rect: { readonly left: number; readonly top: number; readonly width: number; readonly height: number },
+  w: number,
+  h: number,
+  deg: number,
+  clientX: number,
+  clientY: number,
+): { fx: number; fy: number } {
+  if (deg === 0) return { fx: (clientX - rect.left) / rect.width, fy: (clientY - rect.top) / rect.height };
+  const rad = (deg * Math.PI) / 180;
+  const dx = clientX - (rect.left + rect.width / 2);
+  const dy = clientY - (rect.top + rect.height / 2);
+  const lx = dx * Math.cos(rad) + dy * Math.sin(rad);
+  const ly = -dx * Math.sin(rad) + dy * Math.cos(rad);
+  return { fx: 0.5 + lx / w, fy: 0.5 + ly / h };
 }
 
 /** 측정: 두 점(쪽 비율) 사이 용지 거리(mm) — viewer.js addMeasurement 그대로(1pt = 1/72in) */

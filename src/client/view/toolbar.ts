@@ -129,8 +129,17 @@ function setupPointer(ctx: ShellCtx, signal: AbortSignal): void {
     ctx.body.zoomAtPoint(ctx.body.zoomIndex + 2, event.clientX, event.clientY);
   });
   let pan: { x: number; y: number; left: number; top: number } | null = null;
+  // 글자 선택이 되는 화면에서는 쪽 위 끌기가 글자 고르기다 — 끌어 옮기는 법을 쪽 바깥 여백의 툴팁으로 알린다(쪽 위는 빈 title로 가린다)
+  const panHint = () => {
+    const on = ctx.body.textSelectable;
+    pages.title = on ? '쪽 바깥 여백을 끌거나 가운데 단추로 끌면 화면이 움직입니다 — 쪽 위를 끌면 글자를 고릅니다' : '';
+    for (const frame of pages.querySelectorAll('.page-frame')) frame.toggleAttribute('title', on);
+  };
+  ctx.body.onSourceChange(panHint);
+  panHint();
   pages.addEventListener('mousedown', (event) => {
-    if (pages.classList.contains('measuring')) return;
+    // 측정·강조 사각형 그리기 중에는 끌어도 화면을 옮기지 않는다(사각형 높이가 0이 되지 않게)
+    if (pages.classList.contains('measuring') || pages.classList.contains('markup-drawing')) return;
     if (event.button !== 0 && event.button !== 1) return;
     const target = event.target as Element;
     // 글자 선택이 되는 화면에서 글자 위를 누르면 끌기 대신 글자 고르기
@@ -168,7 +177,13 @@ function setupToolsMenu(ctx: ShellCtx, signal: AbortSignal): void {
   };
   const items = () => [...menu.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled)')];
   // 메뉴 안 요소는 menuitem, 제자리로 돌아가면 역할을 걷는다
-  const setRole = (el: HTMLElement, inMenu: boolean) => (inMenu ? el.setAttribute('role', 'menuitem') : el.removeAttribute('role'));
+  // 체크 상자를 감싼 label은 감싼 채로 두고 상자에 menuitemcheckbox를 준다(메뉴 항목 안에 상호작용 요소를 넣지 않게)
+  const setRole = (el: HTMLElement, inMenu: boolean) => {
+    const box = el.tagName === 'LABEL' ? el.querySelector('input') : null;
+    const target = box ?? el;
+    if (inMenu) target.setAttribute('role', box ? 'menuitemcheckbox' : 'menuitem');
+    else target.removeAttribute('role');
+  };
   const layout = () => {
     const wanted = new Set(menuIdsFor(window.innerWidth));
     // 메뉴에 있을 필요가 없어진 것부터 제자리로 — 뒤에서부터 넣어 기억해 둔 다음 형제가 먼저 돌아와 있게
@@ -213,7 +228,13 @@ function setupToolsMenu(ctx: ShellCtx, signal: AbortSignal): void {
   });
   // 메뉴 안 단추를 누르면 그 동작을 한 뒤 닫는다
   menu.addEventListener('click', (event) => {
-    if ((event.target as Element).closest('button')) close();
+    if (!(event.target as Element).closest('button')) return;
+    close();
+    // 숨긴 메뉴 안에 남은 초점은 도구▾로 — 항목이 다른 곳(찾기 칸 등)으로 옮겼으면 그대로 둔다
+    setTimeout(() => {
+      const active = document.activeElement;
+      if (!active || active === document.body || menu.contains(active)) btn.focus();
+    });
   });
   document.addEventListener('click', (event) => {
     if (!menu.hidden && !(event.target as Element).closest('#tools-wrap')) close();

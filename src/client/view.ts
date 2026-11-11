@@ -104,6 +104,8 @@ function setupDeterrents(ctx: ShellCtx, runEscape: () => boolean): void {
 }
 
 const FALLBACK_NOTICE = 'PDF를 바로 그리지 못해 서버 그림으로 보여 줍니다 — 글자 선택은 되지 않습니다.';
+/** 암호 PDF — 이 토큰으로는 브라우저에서 풀 수 없다(비밀번호 풀기는 PDF 편집기 권한) */
+const LOCKED_NOTICE = '암호가 걸린 PDF라 서버 그림으로 보여 줍니다 — 글자 선택은 되지 않습니다.';
 
 /** 권한에 맞는 원천 — 내려받기 권한이 있으면 pdf.js(동적 import), 받지 못하면 PNG와 한 줄 안내 */
 async function openSource(info: ViewInfo, png: () => PageSource): Promise<PageSource> {
@@ -113,7 +115,7 @@ async function openSource(info: ViewInfo, png: () => PageSource): Promise<PageSo
     return await openPdfjsSource(tokenQuery, info.permissions.canCopy, new AbortController().signal);
   } catch (error) {
     console.warn('pdf.js로 열지 못해 서버 그림으로 보여 줍니다:', error);
-    notice(FALLBACK_NOTICE);
+    notice(error instanceof Error && error.message === '423' ? LOCKED_NOTICE : FALLBACK_NOTICE);
     return png();
   }
 }

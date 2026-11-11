@@ -8,6 +8,8 @@ import { thumbsOpenAtStart, thumbWindow } from './logic.js';
 const THUMB_WIDTH = 120;
 /** 보이는 쪽 앞뒤로 이만큼까지만 그려 둔다 */
 const KEEP_MARGIN = 10;
+/** 동시에 그리는 썸네일 — 칸을 빨리 굴려도 한꺼번에 수십 장을 그리지 않게(몸체는 3장) */
+const MAX_CONCURRENT_THUMBS = 2;
 
 /** 반환값은 해제 함수(떠날 때) */
 export function setupThumbs(ctx: ShellCtx): () => void {
@@ -35,20 +37,37 @@ export function setupThumbs(ctx: ShellCtx): () => void {
     if (open) mark(ctx.body.currentPage);
   };
 
+  let active = 0;
+  const queue: Array<{ page: number; box: HTMLElement }> = [];
+  // 차례가 오기 전에 창 밖이 된(비운) 것은 그리지 않고 건너뛴다
+  const pump = () => {
+    while (active < MAX_CONCURRENT_THUMBS && queue.length > 0) {
+      const { page, box } = queue.shift()!;
+      if (!drawn.has(page) || items[page - 1]?.querySelector('.thumb-box') !== box) continue;
+      active += 1;
+      ctx.body
+        .thumbnail(page, THUMB_WIDTH)
+        .then((picture) => {
+          // 그리는 사이 창 밖이 됐으면 버린다
+          if (drawn.has(page) && items[page - 1]?.querySelector('.thumb-box') === box) box.replaceChildren(picture);
+        })
+        .catch(() => {
+          drawn.delete(page);
+          box.classList.add('thumb-error');
+        })
+        .finally(() => {
+          active -= 1;
+          pump();
+        });
+    }
+  };
+
   const draw = (page: number) => {
     const box = items[page - 1]?.querySelector('.thumb-box') as HTMLElement | undefined;
     if (!box || drawn.has(page)) return;
     drawn.add(page);
-    ctx.body
-      .thumbnail(page, THUMB_WIDTH)
-      .then((picture) => {
-        // 그리는 사이 창 밖이 됐으면 버린다
-        if (drawn.has(page) && items[page - 1]?.querySelector('.thumb-box') === box) box.replaceChildren(picture);
-      })
-      .catch(() => {
-        drawn.delete(page);
-        box.classList.add('thumb-error');
-      });
+    queue.push({ page, box });
+    pump();
   };
 
   // 보이는 것은 그리고, 창(보이는 쪽 ±KEEP_MARGIN) 밖으로 나간 것은 비운다 — 되돌아오면 다시 그린다

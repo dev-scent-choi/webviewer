@@ -4,7 +4,7 @@
  * 지금 쪽 ±2만 캔버스 유지)·찾기 강조는 두 원천이 같다 — 마크업·측정·찾기 겹침이 .page-frame 비율 좌표 하나로 붙는다.
  * pdf.js가 실패하면 replaceSource로 같은 몸체에 PNG 원천을 끼운다(등록한 콜백·확대는 그대로).
  */
-import { DEFAULT_ZOOM_INDEX, ZOOM_STEPS, clampZoomIndex, fitPagePercent, keepFinishedDraw, needsRedraw, pagesToKeep, snapZoomIndex, textLayerStale } from './logic.js';
+import { DEFAULT_ZOOM_INDEX, LatestDraws, ZOOM_STEPS, clampZoomIndex, fitPagePercent, keepFinishedDraw, needsRedraw, pagesToKeep, snapZoomIndex, textLayerStale } from './logic.js';
 import type { BodyKind, PageSize, SearchHit, ViewBody, ZoomMode } from './types.js';
 
 export interface DrawOpts {
@@ -30,6 +30,8 @@ export interface PageSource {
   drawText?(page: number, layer: HTMLElement, cssWidth: number): Promise<void>;
   search(q: string, signal: AbortSignal): Promise<SearchHit[]>;
   thumbnail(page: number, width: number): Promise<HTMLCanvasElement | HTMLImageElement>;
+  /** 이 쪽을 다 썼다 — pdf.js는 쪽 객체의 연산 목록·풀어 놓은 그림을 놓는다(긴·스캔 PDF 메모리) */
+  release?(page: number): void;
   destroy(): void;
 }
 
@@ -53,7 +55,10 @@ export class PagesBody implements ViewBody {
   private readonly drawnKey = new Map<number, number>();
   /** 글자 층을 그린 쪽 폭(CSS px) — 확대로 폭이 바뀌면 글자 층만 다시 그린다 */
   private readonly textWidth = new Map<number, number>();
-  private readonly pendingKey = new Map<number, number>();
+  private readonly pending = new LatestDraws();
+  /** 글자 층 그리기 차례 — 겹쳐 그리거나 비운 쪽에 늦게 붙지 않게 마지막 것만 붙인다 */
+  private readonly textGen = new Map<number, number>();
+  private resizeObserver: ResizeObserver | null = null;
   private abort = new AbortController();
   private active = 0;
   private readonly waiters: Array<() => void> = [];
@@ -89,6 +94,14 @@ export class PagesBody implements ViewBody {
     host.classList.add('pages-container');
     this.buildFrames();
     this.applyZoom();
+    // 창·썸네일 칸 크기가 바뀌면 쪽 폭(칸의 %)도 바뀐다 — 확대와 같이 보이는 쪽과 글자 층을 새 폭으로
+    let lastWidth = host.clientWidth;
+    this.resizeObserver = new ResizeObserver(() => {
+      if (host.clientWidth === lastWidth) return; // 쪽이 그려지며 높이만 느는 것은 무시
+      lastWidth = host.clientWidth;
+      this.scheduleQualityReload();
+    });
+    this.resizeObserver.observe(host);
   }
 
   pageCount(): number {
@@ -184,8 +197,14 @@ export class PagesBody implements ViewBody {
   search(q: string, signal: AbortSignal): Promise<SearchHit[]> {
     return this.source.search(q, signal);
   }
-  thumbnail(page: number, width: number): Promise<HTMLCanvasElement | HTMLImageElement> {
-    return this.source.thumbnail(page, width);
+  async thumbnail(page: number, width: number): Promise<HTMLCanvasElement | HTMLImageElement> {
+    const source = this.source;
+    try {
+      return await source.thumbnail(page, width);
+    } finally {
+      // 몸체가 그려 두지 않은 쪽이면 썸네일 때문에 받은 쪽 객체를 놓는다
+      if (!this.drawnKey.has(page)) source.release?.(page);
+    }
   }
 
   /** 찾은 곳 강조(viewer.js renderPageHitOverlays 그대로) — 지금 결과의 첫 사각형을 돌려준다 */
@@ -217,6 +236,7 @@ export class PagesBody implements ViewBody {
     this.abort.abort();
     this.drawObserver?.disconnect();
     this.pageObserver?.disconnect();
+    this.resizeObserver?.disconnect();
     if (this.reloadTimer !== null) clearTimeout(this.reloadTimer);
     this.source.destroy();
   }
@@ -227,7 +247,7 @@ export class PagesBody implements ViewBody {
     this.visible.clear();
     this.drawnKey.clear();
     this.textWidth.clear();
-    this.pendingKey.clear();
+    this.pending.clear();
     // 화면 근처(한 화면 위아래)에 들어오면 그리고, 멀어지면 trim()이 비운다
     this.drawObserver = new IntersectionObserver(
       (entries) => {
@@ -323,37 +343,37 @@ export class PagesBody implements ViewBody {
     if (!frame) return;
     const opts = this.drawOpts(frame);
     const want = this.source.qualityKey(page, opts);
-    if (this.pendingKey.get(page) === want) return;
+    if (this.pending.isLatest(page, want)) return;
     if (!needsRedraw(this.drawnKey.get(page) ?? 0, want)) {
-      // 그림은 그대로 쓰되 글자 층은 지금 쪽 폭에 다시 맞춘다
-      const layer = frame.querySelector<HTMLElement>('.pdf-text-layer');
-      const source = this.source;
-      if (layer && source.drawText && this.drawnKey.has(page) && textLayerStale(this.textWidth.get(page), opts.cssWidth)) {
-        this.textWidth.set(page, opts.cssWidth);
-        await source.drawText(page, layer, opts.cssWidth).catch(() => undefined);
-      }
+      // 지금 그림으로 충분하다 — 다른 배율로 그리던 것은 끝나도 붙이지 않고, 글자 층만 지금 쪽 폭에 다시 맞춘다
+      this.pending.drop(page);
+      if (this.drawnKey.has(page) && textLayerStale(this.textWidth.get(page), opts.cssWidth)) await this.drawTextLayer(page, frame, opts.cssWidth);
       return;
     }
-    this.pendingKey.set(page, want);
+    this.pending.start(page, want);
     const source = this.source;
     const signal = this.abort.signal;
     await this.withSlot(async () => {
-      if (signal.aborted || source !== this.source || this.pendingKey.get(page) !== want) return;
+      // 자리를 기다리는 사이 더 새 배율이 왔으면 그것이 그린다
+      if (signal.aborted || source !== this.source || !this.pending.isLatest(page, want)) return;
       // 다 그린 canvas로 한 번에 바꿔 끼운다(그리는 동안 빈 쪽이 보이지 않게)
       const next = document.createElement('canvas');
       try {
         await source.draw(page, next, opts, signal);
       } catch (error) {
-        this.pendingKey.delete(page);
+        this.pending.end(page, want);
         if (isCancel(error) || signal.aborted) return;
         frame.classList.add('page-error');
         for (const cb of this.errorCbs) cb(error);
         return;
       }
       if (signal.aborted || source !== this.source) return;
+      // 그리는 사이 더 새 요청이 왔거나(그것이 붙는다) 지금 그림을 쓰기로 했으면 버린다
+      if (!this.pending.isLatest(page, want)) return;
+      this.pending.end(page, want);
       // 그리는 사이 창 밖이 된 쪽은 붙이지 않는다(다음 스크롤까지 메모리를 잡지 않게)
       if (!keepFinishedDraw(page, this.current, this.frames.length, KEEP_RADIUS, this.visible)) {
-        this.pendingKey.delete(page);
+        if (!this.drawnKey.has(page)) source.release?.(page);
         return;
       }
       next.dataset.page = String(page);
@@ -362,12 +382,27 @@ export class PagesBody implements ViewBody {
       frame.classList.remove('page-loading', 'page-error');
       frame.classList.add('page-ready');
       this.drawnKey.set(page, want);
-      this.pendingKey.delete(page);
-      const layer = frame.querySelector<HTMLElement>('.pdf-text-layer');
-      if (layer && source.drawText) this.textWidth.set(page, opts.cssWidth);
-      if (layer && source.drawText) await source.drawText(page, layer, opts.cssWidth).catch(() => undefined);
+      await this.drawTextLayer(page, frame, opts.cssWidth);
       for (const cb of this.drawCbs) cb(page);
     });
+  }
+
+  /** 글자 층을 새로 그려 바꿔 끼운다 — 그사이 더 새 글자 층이 시작됐거나 쪽을 비웠으면 버린다 */
+  private async drawTextLayer(page: number, frame: HTMLElement, cssWidth: number): Promise<void> {
+    const layer = frame.querySelector<HTMLElement>('.pdf-text-layer');
+    const source = this.source;
+    if (!layer || !source.drawText) return;
+    const gen = (this.textGen.get(page) ?? 0) + 1;
+    this.textGen.set(page, gen);
+    this.textWidth.set(page, cssWidth);
+    const fresh = layer.cloneNode(false) as HTMLElement;
+    try {
+      await source.drawText(page, fresh, cssWidth);
+    } catch {
+      return;
+    }
+    if (this.textGen.get(page) !== gen || source !== this.source || !this.drawnKey.has(page)) return;
+    layer.replaceWith(fresh);
   }
 
   /** 멀어진 쪽의 캔버스를 비워 메모리를 돌려준다 — 틀의 가로세로 비율은 남아 스크롤 위치가 그대로다 */
@@ -382,6 +417,9 @@ export class PagesBody implements ViewBody {
     frame.querySelector('.pdf-text-layer')?.replaceChildren();
     this.drawnKey.delete(page);
     this.textWidth.delete(page);
+    // 그리던 글자 층은 붙이지 않는다
+    this.textGen.set(page, (this.textGen.get(page) ?? 0) + 1);
+    this.source.release?.(page);
     frame.classList.remove('page-ready');
     frame.classList.add('page-loading');
   }
