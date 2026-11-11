@@ -12,6 +12,8 @@ import { PngSource } from './view/pngSource.js';
 import { setupToolbar } from './view/toolbar.js';
 import { setupThumbs } from './view/thumbs.js';
 import { setupSearch } from './view/search.js';
+import { setupFileActions } from './view/fileActions.js';
+import { setupMeasure } from './view/measure.js';
 import type { ViewInfo } from './view/types.js';
 
 const token = new URLSearchParams(location.search).get('token') ?? '';
@@ -151,6 +153,8 @@ async function boot(): Promise<void> {
   });
   const disposers = [setupToolbar(ctx), setupThumbs(ctx)];
   setupSearch(ctx);
+  setupFileActions(ctx);
+  setupMeasure(ctx);
 }
 
 boot().catch((error) => {
