@@ -121,4 +121,15 @@ describe('보기 껍데기 서버 경로(info·status·derived-pdf)', () => {
     expect(s2.data.error).toBe('문서를 변환하지 못했습니다. 파일이 손상되었습니다.');
     expect((await get('/api/view/status?token=bad')).statusCode).toBe(401);
   });
+
+  test('토큰 응답 viewerUrl: 쪽 문서는 껍데기, 격자·한글은 지금 보기 화면', async () => {
+    const issue = async (id: string) =>
+      (await app.inject({ method: 'POST', url: `/api/documents/${id}/tokens`, payload: { viewer: '연동' } })).json().data;
+    const docx = await addDoc('docx', { viewKind: 'pages' });
+    expect((await issue(docx)).viewerUrl.startsWith('/view.html?token=')).toBe(true);
+    const grid = await addDoc('xlsx', { viewKind: 'grid', derived: false });
+    expect((await issue(grid)).viewerUrl.startsWith('/viewer.html?token=')).toBe(true);
+    const hwp = await addDoc('hwp', { viewKind: 'pages' });
+    expect((await issue(hwp)).viewerUrl.startsWith('/viewer.html?token=')).toBe(true);
+  });
 });

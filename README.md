@@ -417,7 +417,7 @@ node scripts/formula-check.mjs            # xlsx 수식 엔진(VLOOKUP/MATCH/SUM
    별도의 자동저장으로 안전하지만) 그 세션의 변경 이력은 디스크에도 남지 않는다.
 3. `POST /api/documents/:id/tokens` `{viewer, canEdit, canDownload, canPrint, canCopy}`
    (**API 키 필요**) — 토큰 발급, `{data.token, data.editorUrl 또는 data.viewerUrl}` 반환.
-   `editorUrl`/`viewerUrl`은 이
+   `viewerUrl`은 쪽 문서(워드·PPT·PDF 등)면 통합 보기 화면 `/view.html`, 엑셀·도면·한글이면 `/viewer.html`이다(예전 `/viewer.html` 주소도 쪽 문서면 새 화면으로 넘어간다). `editorUrl`/`viewerUrl`은 이
    서비스의 상대경로이므로, 호출하는 쪽에서 이 서비스의 접속 주소를 앞에 붙여 `<iframe>`으로
    그대로 띄우면 된다(브라우저가 이 서비스에 직접 WebSocket 연결을 맺어야 하므로 iframe은 반드시
    이 서비스 자체의 URL로 로드해야 한다).

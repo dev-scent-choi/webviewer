@@ -529,7 +529,8 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
         success: true,
         data: {
           token,
-          viewerUrl: `/viewer.html?token=${encodeURIComponent(token)}`,
+          // 쪽 문서는 통합 보기 껍데기, 엑셀 격자·도면·한글은 지금 보기 화면(viewPathFor) — 주소·토큰 계약은 그대로(설계 V2)
+          viewerUrl: `${viewPathFor(meta.ext, meta.viewKind)}?token=${encodeURIComponent(token)}`,
           editorUrl: editorUrlFor(meta.ext, { effectiveCanEdit, canDownload, pdfEditor }, token),
           expiresInSeconds: config.tokenTtlSeconds,
         },

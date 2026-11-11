@@ -2766,6 +2766,12 @@ async function init() {
     showError(json.error || '문서를 열 수 없습니다.');
     return;
   }
+  // 쪽 문서는 통합 보기 껍데기(view.html)로 — 예전에 받아 둔 viewer.html 주소도 같은 화면으로 열린다(같은 조회 문자열).
+  // 기준은 서버 viewerUrl(viewPathFor) 하나라 view.html과 서로 넘기지 않는다.
+  if (json.data.viewerUrl && new URL(json.data.viewerUrl, location.href).pathname === '/view.html') {
+    location.replace(`/view.html${location.search}`);
+    return;
+  }
 
   docTitle.textContent = json.data.name;
   document.title = `DocView — ${json.data.name}`;
