@@ -42,6 +42,16 @@ export function needsRedraw(drawnKey: number, wantKey: number): boolean {
   return drawnKey === 0 || wantKey > drawnKey || wantKey * 2 < drawnKey;
 }
 
+/** 글자 층을 다시 그릴지 — 그림은 두 배까지 그대로 쓰지만 글자 층은 쪽 폭에 맞춰야 선택이 그림과 겹친다(1px 넘게 다르면) */
+export function textLayerStale(drawnWidth: number | undefined, cssWidth: number): boolean {
+  return drawnWidth === undefined || Math.abs(drawnWidth - cssWidth) >= 1;
+}
+
+/** 늦게 끝난 그림을 쓸지 — 그리는 사이 창(보이는 쪽 + 지금 쪽 ±2) 밖이 됐으면 버린다 */
+export function keepFinishedDraw(page: number, current: number, count: number, radius: number, visible: Iterable<number>): boolean {
+  return pagesToKeep(current, count, radius, visible).has(page);
+}
+
 /** 캔버스를 남겨 둘 쪽 — 보이는 쪽 + 지금 쪽 앞뒤 radius(설계 §7 "보이는 쪽 ±2") */
 export function pagesToKeep(current: number, count: number, radius: number, visible: Iterable<number>): Set<number> {
   const keep = new Set<number>(visible);

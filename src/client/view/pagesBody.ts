@@ -4,7 +4,7 @@
  * 지금 쪽 ±2만 캔버스 유지)·찾기 강조는 두 원천이 같다 — 마크업·측정·찾기 겹침이 .page-frame 비율 좌표 하나로 붙는다.
  * pdf.js가 실패하면 replaceSource로 같은 몸체에 PNG 원천을 끼운다(등록한 콜백·확대는 그대로).
  */
-import { DEFAULT_ZOOM_INDEX, ZOOM_STEPS, clampZoomIndex, fitPagePercent, needsRedraw, pagesToKeep, snapZoomIndex } from './logic.js';
+import { DEFAULT_ZOOM_INDEX, ZOOM_STEPS, clampZoomIndex, fitPagePercent, keepFinishedDraw, needsRedraw, pagesToKeep, snapZoomIndex, textLayerStale } from './logic.js';
 import type { BodyKind, PageSize, SearchHit, ViewBody, ZoomMode } from './types.js';
 
 export interface DrawOpts {
@@ -51,6 +51,8 @@ export class PagesBody implements ViewBody {
   private current = 1;
   private readonly visible = new Set<number>();
   private readonly drawnKey = new Map<number, number>();
+  /** 글자 층을 그린 쪽 폭(CSS px) — 확대로 폭이 바뀌면 글자 층만 다시 그린다 */
+  private readonly textWidth = new Map<number, number>();
   private readonly pendingKey = new Map<number, number>();
   private abort = new AbortController();
   private active = 0;
@@ -120,12 +122,14 @@ export class PagesBody implements ViewBody {
   }
 
   replaceSource(next: PageSource): void {
+    const page = this.current;
     this.abort.abort();
     this.abort = new AbortController();
     this.source.destroy();
     this.source = next;
     this.buildFrames();
     this.applyZoom();
+    this.frames[page - 1]?.scrollIntoView({ block: 'start' });
     for (const cb of this.sourceCbs) cb();
   }
 
@@ -222,6 +226,7 @@ export class PagesBody implements ViewBody {
     this.pageObserver?.disconnect();
     this.visible.clear();
     this.drawnKey.clear();
+    this.textWidth.clear();
     this.pendingKey.clear();
     // 화면 근처(한 화면 위아래)에 들어오면 그리고, 멀어지면 trim()이 비운다
     this.drawObserver = new IntersectionObserver(
@@ -318,7 +323,17 @@ export class PagesBody implements ViewBody {
     if (!frame) return;
     const opts = this.drawOpts(frame);
     const want = this.source.qualityKey(page, opts);
-    if (this.pendingKey.get(page) === want || !needsRedraw(this.drawnKey.get(page) ?? 0, want)) return;
+    if (this.pendingKey.get(page) === want) return;
+    if (!needsRedraw(this.drawnKey.get(page) ?? 0, want)) {
+      // 그림은 그대로 쓰되 글자 층은 지금 쪽 폭에 다시 맞춘다
+      const layer = frame.querySelector<HTMLElement>('.pdf-text-layer');
+      const source = this.source;
+      if (layer && source.drawText && this.drawnKey.has(page) && textLayerStale(this.textWidth.get(page), opts.cssWidth)) {
+        this.textWidth.set(page, opts.cssWidth);
+        await source.drawText(page, layer, opts.cssWidth).catch(() => undefined);
+      }
+      return;
+    }
     this.pendingKey.set(page, want);
     const source = this.source;
     const signal = this.abort.signal;
@@ -336,6 +351,11 @@ export class PagesBody implements ViewBody {
         return;
       }
       if (signal.aborted || source !== this.source) return;
+      // 그리는 사이 창 밖이 된 쪽은 붙이지 않는다(다음 스크롤까지 메모리를 잡지 않게)
+      if (!keepFinishedDraw(page, this.current, this.frames.length, KEEP_RADIUS, this.visible)) {
+        this.pendingKey.delete(page);
+        return;
+      }
       next.dataset.page = String(page);
       frame.querySelector('canvas')?.replaceWith(next);
       frame.style.aspectRatio = `${next.width} / ${next.height}`;
@@ -344,6 +364,7 @@ export class PagesBody implements ViewBody {
       this.drawnKey.set(page, want);
       this.pendingKey.delete(page);
       const layer = frame.querySelector<HTMLElement>('.pdf-text-layer');
+      if (layer && source.drawText) this.textWidth.set(page, opts.cssWidth);
       if (layer && source.drawText) await source.drawText(page, layer, opts.cssWidth).catch(() => undefined);
       for (const cb of this.drawCbs) cb(page);
     });
@@ -360,6 +381,7 @@ export class PagesBody implements ViewBody {
     }
     frame.querySelector('.pdf-text-layer')?.replaceChildren();
     this.drawnKey.delete(page);
+    this.textWidth.delete(page);
     frame.classList.remove('page-ready');
     frame.classList.add('page-loading');
   }

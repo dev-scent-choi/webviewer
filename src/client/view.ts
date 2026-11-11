@@ -141,6 +141,10 @@ async function boot(): Promise<void> {
     body.replaceSource(png());
   });
   await body.mount(document.getElementById('pages') as HTMLElement);
+  // 떠날 때 pdf.js 문서·워커를 돌려준다(bfcache 복귀 때는 쓰지 않으므로 persisted면 둔다)
+  window.addEventListener('pagehide', (event) => {
+    if (!event.persisted) ctx.body.destroy();
+  });
   setupToolbar(ctx);
   setupThumbs(ctx);
 }

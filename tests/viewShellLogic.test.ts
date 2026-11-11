@@ -9,6 +9,8 @@ import {
   editHref,
   fitPagePercent,
   hitCountLabel,
+  keepFinishedDraw,
+  textLayerStale,
   matchRects,
   measureLabel,
   menuIdsFor,
@@ -162,5 +164,18 @@ describe('막대 배치·단추 상태', () => {
     chain.add(40, () => (calls.push('markup'), true));
     expect(chain.run()).toBe(true);
     expect(calls).toEqual(['measure', 'markup']);
+  });
+});
+
+describe('늦게 끝난 그림·글자 층', () => {
+  test('textLayerStale: 처음이거나 폭이 1px 이상 다르면', () => {
+    expect(textLayerStale(undefined, 800)).toBe(true);
+    expect(textLayerStale(800, 800.4)).toBe(false);
+    expect(textLayerStale(800, 400)).toBe(true);
+  });
+  test('keepFinishedDraw: 창(보이는 쪽 + 지금 쪽 ±2) 밖이면 버린다', () => {
+    expect(keepFinishedDraw(3, 1, 20, 2, [1])).toBe(true);
+    expect(keepFinishedDraw(10, 1, 20, 2, [1])).toBe(false);
+    expect(keepFinishedDraw(10, 1, 20, 2, [10])).toBe(true);
   });
 });
