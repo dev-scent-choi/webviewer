@@ -142,6 +142,8 @@ function setupPointer(ctx: ShellCtx, signal: AbortSignal): void {
     if (pages.classList.contains('measuring') || pages.classList.contains('markup-drawing')) return;
     if (event.button !== 0 && event.button !== 1) return;
     const target = event.target as Element;
+    // 쓰던 글 상자·코멘트 창 안(글자 크기 단추·입력 칸)은 끌기가 아니다 — 아래 blur가 쓰던 글을 저장해 버린다
+    if (target.closest('.text-insert-wrapper, .markup-popover')) return;
     // 글자 선택이 되는 화면에서 글자 위를 누르면 끌기 대신 글자 고르기
     // 쪽 위 왼쪽 단추는 빈 곳에서도 글자 고르기를 시작해야 하니 끌기는 쪽 밖(여백)이나 가운데 단추로만
     if (ctx.body.textSelectable && event.button === 0 && target.closest('.page-frame')) return;
