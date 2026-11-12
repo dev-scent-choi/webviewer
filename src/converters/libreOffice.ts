@@ -261,7 +261,7 @@ type SourcePreprocessor = (bytes: Uint8Array) => Uint8Array;
  * 같은 프로필을 두 프로세스가 동시에 쓰는 일은 없다.
  */
 const PROFILE_POOL_SIZE = 2;
-const profileRoot = path.join(os.tmpdir(), 'docview-lo-profiles');
+const profileRoot = process.env.DOCVIEW_LO_PROFILE_ROOT ?? path.join(os.tmpdir(), 'docview-lo-profiles'); // 환경변수는 시험용
 const slotQueues: Array<Promise<unknown>> = Array.from({ length: PROFILE_POOL_SIZE }, () =>
   Promise.resolve(),
 );

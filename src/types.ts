@@ -39,6 +39,9 @@ export interface DocumentMeta {
   readonly error?: string;
   /** 변환(PDF)이 끝나기 전에도 편집기를 열 수 있다 — 워드(docx) 편집기는 원본만 읽는다(conversionGate.ts) */
   readonly editReady?: boolean;
+  /** 향기랩 옛 형식 편집(설계 2026-11-12-hyanggilab-always-edit A2): 올린 .doc·.xls·.ppt를 OOXML로 바꿔 ext에 두고, 원래 형식·바꾼 직후
+   * OOXML의 sha256(고쳤는지 판단)·매크로 유무를 적는다. 올린 바이트는 파생 'legacy'. 업로드에 legacyEdit=1이 있을 때만 생긴다 */
+  readonly legacy?: { readonly ext: LegacyExt; readonly sha256: string; readonly hasMacros: boolean };
 }
 
 export interface ViewClaims {

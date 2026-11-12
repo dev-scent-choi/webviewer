@@ -8,14 +8,15 @@ import { discardPrewarmedXlsx, forceCloseRoom, getChangeLog, prewarmXlsxRoom } f
 import { config } from '../config.js';
 import { convertDwgToDxf } from '../converters/dwgConverter.js';
 import { findConverter, supportedExtensions } from '../converters/index.js';
-import { convertDxfToSvg, convertLegacySpreadsheetToXlsx } from '../converters/libreOffice.js';
+import { convertDxfToSvg, convertLegacySpreadsheetToXlsx, convertOfficeFile } from '../converters/libreOffice.js';
+import { hasVbaMacros, isLegacyExt, LEGACY_EDIT_TARGET, sha256 } from '../legacyOffice.js';
 import { ConversionError, type Converter } from '../converters/types.js';
 import { clearPresence } from '../presence.js';
 import { getPdfPageInfo, invalidateRenderCache } from '../rendering.js';
 import { issueViewToken } from '../security.js';
 import { buildGridFromOriginal, saveGridDerived, type GridDocument } from '../spreadsheet.js';
 import { newDocumentId, store } from '../storage.js';
-import type { DocumentMeta, ViewKind } from '../types.js';
+import type { DocumentMeta, LegacyExt, ViewKind } from '../types.js';
 import { invalidateViewCaches } from './viewer.js';
 import { isOpenable, trackInitialConversion } from '../conversionGate.js';
 import { assertZipNotTooLarge, ZipTooLargeError } from '../zipGuard.js';
@@ -257,6 +258,7 @@ async function ingestUpload(
   originalFilename: string,
   data: Buffer,
   callerProject: string | undefined,
+  legacyEdit = false,
 ): Promise<UploadResult> {
   let ext = path.extname(originalFilename).slice(1).toLowerCase();
   let displayName = originalFilename;
@@ -272,7 +274,25 @@ async function ingestUpload(
   // 여기서 xlsx로 정규화해 두면 이후 로직 전체(findConverter부터 GRID_VIEW_EXTS 분기까지)가
   // 원래 xlsx가 올라온 것처럼 그대로 동작해 그리드 뷰·동시편집이 자동으로 켜진다 — 실패하면
   // (LibreOffice 미설치, 손상된 파일 등) 원래 ext로 계속 진행해 기존 PDF 전용 열람으로 폴백한다.
-  if (ext === 'xls' || ext === 'ods') {
+  // 향기랩(legacyEdit=1)만: 옛 오피스를 OOXML로 바꿔 편집기로 연다 — 표시 이름은 그대로, 올린 바이트는 파생 'legacy'(설계 §2.1)
+  let legacy: { ext: LegacyExt; bytes: Buffer; hasMacros: boolean } | null = null;
+  if (legacyEdit && isLegacyExt(ext)) {
+    const legacyExt = ext;
+    try {
+      // LibreOffice는 깨진 .doc를 글자 파일로 읽어 바꿔 버리므로 복합 파일(OLE) 머리부터 확인한다
+      if (data.length < 4 || data.readUInt32LE(0) !== 0xe011cfd0) throw new Error('not an OLE compound file');
+      const converted = await convertOfficeFile(data, legacyExt, LEGACY_EDIT_TARGET[legacyExt]);
+      legacy = { ext: legacyExt, bytes: data, hasMacros: hasVbaMacros(data, legacyExt) };
+      data = converted;
+      ext = LEGACY_EDIT_TARGET[legacyExt];
+    } catch (error) {
+      app.log.warn(error, 'legacy office conversion failed');
+      return {
+        code: 422,
+        body: { success: false, error: `이 .${legacyExt} 파일을 편집할 수 있게 바꾸지 못했습니다. 파일이 손상되었거나 암호가 걸려 있을 수 있습니다.` },
+      };
+    }
+  } else if (ext === 'xls' || ext === 'ods') {
     const converted = await tryNormalizeLegacySpreadsheetToXlsx(data, ext);
     if (converted) {
       data = converted;
@@ -298,6 +318,7 @@ async function ingestUpload(
   const id = newDocumentId();
   try {
     await store.saveOriginal(id, ext, data);
+    if (legacy) await store.saveDerived(id, 'legacy', legacy.bytes);
     const meta: DocumentMeta = {
       id,
       name: displayName,
@@ -313,6 +334,7 @@ async function ingestUpload(
       // pptx도 변환(LibreOffice PDF)을 기다리지 않고 연다 — 편집기는 글자·도형을 원본에서 바로 그리고, 쪽 그림(복잡한 도형·
       // 썸네일)만 변환이 끝나는 대로 채운다(/api/view/pages가 첫 변환을 기다려 준다). 예전엔 85MB 파일이 21초 동안 안 열렸다.
       ...(ext === 'docx' || ext === 'pptx' || ((ext === 'xlsx' || ext === 'pdf') && config.storageMode === 'memory') ? { editReady: true } : {}),
+      ...(legacy ? { legacy: { ext: legacy.ext, sha256: sha256(data), hasMacros: legacy.hasMacros } } : {}),
     };
     await store.writeMeta(meta);
     await recordAudit({
@@ -382,7 +404,7 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
-  app.post<{ Querystring: { filename: string; uploadId?: string; index?: number; total?: number } }>(
+  app.post<{ Querystring: { filename: string; uploadId?: string; index?: number; total?: number; legacyEdit?: '1' } }>(
     '/api/documents/stream',
     {
       bodyLimit: config.maxUploadBytes,
@@ -399,6 +421,8 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
             uploadId: { type: 'string', maxLength: 64 },
             index: { type: 'integer', minimum: 0 },
             total: { type: 'integer', minimum: 1 },
+            // 향기랩만 보낸다 — 옛 오피스(.doc·.xls·.ppt)를 편집용 OOXML로 바꿔 받는다(설계 2026-11-12-hyanggilab-always-edit A1)
+            legacyEdit: { type: 'string', enum: ['1'] },
           },
         },
       },
@@ -427,7 +451,7 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
           throw error;
         }
       }
-      const result = await ingestUpload(app, request.query.filename, data, callerProject);
+      const result = await ingestUpload(app, request.query.filename, data, callerProject, request.query.legacyEdit === '1');
       return await reply.code(result.code).send(result.body);
     },
   );
