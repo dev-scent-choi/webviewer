@@ -42,7 +42,8 @@
     "verify:pdf-quicktext": "node scripts/verify-pdf-quicktext-e2e.mjs",
     "verify:viewer-quicktext": "node scripts/verify-viewer-quicktext-e2e.mjs",
     "verify:pdf-sign": "node scripts/verify-pdf-sign-e2e.mjs",
-    "verify:view-only": "node scripts/verify-view-only-e2e.mjs"
+    "verify:view-only": "node scripts/verify-view-only-e2e.mjs",
+    "verify:view-shell": "node scripts/verify-view-shell-e2e.mjs"
   },
   "dependencies": {
     "@cantoo/pdf-lib": "^2.11.1",
