@@ -53,6 +53,7 @@ interface Permissions {
 
 interface ViewInfo {
   readonly viewerUrl?: string;
+  readonly legacy?: { readonly ext: string; readonly hasMacros: boolean };
   readonly docId: string;
   readonly name: string;
   readonly viewer: string;
@@ -442,6 +443,7 @@ async function main(): Promise<void> {
     canDownload: info.permissions.canDownload,
     canPrint: info.permissions.canPrint,
     viewerUrl: info.viewerUrl,
+    legacy: info.legacy,
     onUndo: () => undoManager.undo(),
     onRedo: () => undoManager.redo(),
   });

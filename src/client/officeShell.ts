@@ -17,6 +17,8 @@ export interface OfficeShellOptions {
   readonly canPrint: boolean;
   /** /api/view/info 의 viewerUrl — 보기 화면에서 들어왔으면(from=view) 제목 표시줄에 "보기로"(backToView.ts) */
   readonly viewerUrl?: string;
+  /** 향기랩 옛 형식(.doc·.xls·.ppt)을 바꿔 연 문서 — 내려받기는 원래 형식(서버 /api/view/download), 매크로가 있으면 경고 한 줄 */
+  readonly legacy?: { readonly ext: string; readonly hasMacros: boolean };
   readonly onUndo?: () => void;
   readonly onRedo?: () => void;
 }
@@ -54,10 +56,21 @@ const EXT_LABELS: Readonly<Record<string, string>> = {
   docx: 'Word 문서',
   xlsx: 'Excel 통합 문서',
   pptx: 'PowerPoint 프레젠테이션',
+  doc: 'Word 97-2003 문서',
+  xls: 'Excel 97-2003 통합 문서',
+  ppt: 'PowerPoint 97-2003 프레젠테이션',
 };
 
 export function initOfficeShell(options: OfficeShellOptions): OfficeShell {
   const toolbar = document.getElementById('toolbar') as HTMLElement;
+  // 매크로는 고치지 않고 내려받으면 남고(같은 바이트), 고친 뒤 내려받으면 빠진다 — 고치기 전에 알린다(설계 A5)
+  if (options.legacy?.hasMacros) {
+    const note = document.createElement('div');
+    note.className = 'unsupported-warning legacy-macro-note';
+    note.setAttribute('role', 'status');
+    note.textContent = '이 문서에는 매크로(VBA)가 있습니다. 고치지 않고 내려받으면 원본 그대로이지만, 고친 뒤 내려받으면 매크로가 빠집니다.';
+    toolbar.after(note);
+  }
   const titleRight = toolbar.querySelector('.titlebar-right');
   if (titleRight) {
     mountBackToView(titleRight, titleRight.querySelector('#presence-list'), { token: options.token, viewerUrl: options.viewerUrl, canEdit: options.canEdit });
@@ -191,7 +204,9 @@ export function initOfficeShell(options: OfficeShellOptions): OfficeShell {
         <h2>다운로드</h2>
         ${
           options.canDownload
-            ? '<p>지금 편집 중인 내용 그대로 원본 형식 파일을 내려받습니다.</p><a class="backstage-action" data-action="download">원본 형식으로 다운로드</a>'
+            ? options.legacy
+              ? `<p>원래 형식(.${options.legacy.ext})으로 내려받습니다. 고치지 않았으면 올린 파일 그대로이고, 고쳤으면 LibreOffice로 다시 바꾸므로 모양이 조금 달라질 수 있습니다.</p><a class="backstage-action" data-action="download">${options.legacy.ext.toUpperCase()} 파일로 다운로드</a>`
+              : '<p>지금 편집 중인 내용 그대로 원본 형식 파일을 내려받습니다.</p><a class="backstage-action" data-action="download">원본 형식으로 다운로드</a>'
             : '<p class="backstage-denied">이 문서는 다운로드가 허용되지 않았습니다.</p>'
         }
       </div>

@@ -687,6 +687,8 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
           ),
           viewerUrl: `${viewPathFor(view.meta.ext, view.meta.viewKind)}?token=${encodeURIComponent(request.query.token!)}`,
           processing: view.meta.status === 'processing',
+          // 향기랩 옛 형식(.doc·.xls·.ppt) — 편집기가 형식 이름·내려받기 문구·매크로 경고를 보인다(설계 §2.5)
+          legacy: view.meta.legacy ? { ext: view.meta.legacy.ext, hasMacros: view.meta.legacy.hasMacros } : undefined,
         },
       };
     },

@@ -171,4 +171,14 @@ describe('보기 껍데기 서버 경로(info·status·derived-pdf)', () => {
     const hwp = await addDoc('hwp', { viewKind: 'pages' });
     expect((await issue(hwp)).viewerUrl.startsWith('/viewer.html?token=')).toBe(true);
   });
+
+  test('info: 옛 형식이면 legacy(형식·매크로), 아니면 없음', async () => {
+    const id = await addDoc('docx');
+    const meta = (await store.readMeta(id))!;
+    await store.writeMeta({ ...meta, name: '시험.doc', legacy: { ext: 'doc', sha256: 'x', hasMacros: true } });
+    const res = await get(`/api/view/info?token=${encodeURIComponent(tok(id, { canDownload: true }))}`);
+    expect(res.json().data.legacy).toEqual({ ext: 'doc', hasMacros: true });
+    const plain = await addDoc('docx');
+    expect((await get(`/api/view/info?token=${encodeURIComponent(tok(plain, { canDownload: true }))}`)).json().data.legacy).toBeUndefined();
+  });
 });
