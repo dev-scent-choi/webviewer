@@ -2036,6 +2036,15 @@ export async function pdfRoomState(docId: string): Promise<PdfRoomControl | null
   };
 }
 
+/** 열린 방에 아직 저장하지 않은 편집이 있는가(방이 없으면 false). 시딩 쓰기가 잠깐 표시를 켜므로 시딩이 끝난 뒤에 본다 —
+ * 향기랩 옛 형식 내려받기가 "고쳤는가"를 정할 때 쓴다(src/legacyOffice.ts) */
+export async function hasUnsavedEdits(docId: string): Promise<boolean> {
+  const room = rooms.get(docId);
+  if (!room) return false;
+  await room.ready;
+  return room.editedSinceSave;
+}
+
 export async function getCurrentBytes(docId: string): Promise<Uint8Array | null> {
   const room = rooms.get(docId);
   if (!room) return null;

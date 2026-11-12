@@ -87,6 +87,34 @@ describe.skipIf(!sofficePath)('향기랩 옛 형식 편집(legacyEdit)', () => {
     expect(res.statusCode).toBe(400);
   });
 
-  // Task 3이 이 아래에 내려받기 시험을 더한다(issueViewToken을 쓴다)
-  void issueViewToken;
+  const download = (docId: string) => {
+    const t = issueViewToken({ docId, viewer: '시험', perms: { canPrint: false, canDownload: true, canCopy: false, canEdit: true } }, 600);
+    return app.inject({ method: 'GET', url: `/api/view/download?token=${encodeURIComponent(t)}` });
+  };
+  const fileName = (cd: string | string[] | undefined) => decodeURIComponent(String(cd).split("''")[1] ?? '');
+
+  test('안 고친 내려받기는 올린 바이트 그대로·원래 이름', async () => {
+    for (const name of ['table-merges.doc', 'chinese-provinces.xls', 'SampleShow.ppt']) {
+      const meta = (await upload(name, true)).body.data!;
+      const res = await download(meta.id);
+      expect(res.statusCode).toBe(200);
+      expect(res.rawPayload.equals(fx(name))).toBe(true);
+      expect(fileName(res.headers['content-disposition'])).toBe(name);
+    }
+  }, 180_000);
+
+  test('고친(저장된 OOXML이 바뀐) 내려받기는 원래 형식으로 다시 바꾼다', async () => {
+    const { makeSampleDocx } = await import('./helpers.js');
+    const { convertOfficeFile } = await import('../src/converters/libreOffice.js');
+    const meta = (await upload('table-merges.doc', true)).body.data!;
+    await store.saveOriginal(meta.id, 'docx', makeSampleDocx(['고친글자LEGACY']));
+    const res = await download(meta.id);
+    expect(res.statusCode).toBe(200);
+    expect(res.rawPayload.readUInt32LE(0)).toBe(0xe011cfd0);
+    expect(fileName(res.headers['content-disposition'])).toBe('table-merges.doc');
+    const back = await convertOfficeFile(res.rawPayload, 'doc', 'docx');
+    const { unzipSync, strFromU8 } = await import('fflate');
+    // LibreOffice가 글자를 여러 run으로 나누므로 태그를 떼고 본다
+    expect(strFromU8(unzipSync(back, { filter: (f) => f.name === 'word/document.xml' })['word/document.xml']!).replace(/<[^>]+>/g, '')).toContain('고친글자LEGACY');
+  }, 180_000);
 });

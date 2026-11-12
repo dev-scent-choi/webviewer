@@ -49,6 +49,7 @@ import {
   type GridHeader,
 } from '../spreadsheet.js';
 import { store } from '../storage.js';
+import { legacyDownload } from '../legacyOffice.js';
 import { isViewOnly, type DocumentMeta, type ViewClaims } from '../types.js';
 import { isOpenable, waitForInitialConversion } from '../conversionGate.js';
 import { buildViewerGridFile, saveGridFile } from '../xlsx/viewerGrid.js';
@@ -1457,6 +1458,16 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
             .header('content-disposition', `attachment; filename*=UTF-8''${encodedName}`)
             .send(Buffer.from(merged));
         }
+      }
+
+      // 향기랩 옛 형식(.doc·.xls·.ppt): 원래 형식으로(설계 2026-11-12-hyanggilab-always-edit §2.4)
+      if (view.meta.legacy) {
+        const out = await legacyDownload(view.meta);
+        await recordAudit({ type: 'downloaded', docId: view.meta.id, viewer: view.claims.viewer, detail: `legacy ${out.how}` });
+        return reply
+          .type('application/octet-stream')
+          .header('content-disposition', `attachment; filename*=UTF-8''${encodeURIComponent(out.name)}`)
+          .send(out.bytes);
       }
 
       // 지금 이 문서를 편집 중인 동시편집 세션이 떠 있으면(=유휴 자동저장 8초 debounce가 아직 안

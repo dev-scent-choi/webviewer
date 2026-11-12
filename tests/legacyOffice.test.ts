@@ -2,7 +2,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { unzipSync, strFromU8 } from 'fflate';
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 import { convertOfficeFile, sofficePath } from '../src/converters/libreOffice.js';
 import { hasVbaMacros, isLegacyExt, LEGACY_EDIT_TARGET, sha256 } from '../src/legacyOffice.js';
 
@@ -47,5 +47,25 @@ describe.skipIf(!sofficePath)('LibreOffice로 바꾸기', () => {
   }, 120_000);
   test('모르는 형식은 거절', async () => {
     await expect(convertOfficeFile(Buffer.from('x'), 'doc', 'hwp')).rejects.toThrow('바꿀 수 없는 형식');
+  });
+});
+
+describe('legacyDownload: 다시 바꾸기 실패면 편집본을 OOXML 이름으로', () => {
+  test('fallback', async () => {
+    vi.stubEnv('DOCVIEW_STORAGE', 'memory');
+    vi.resetModules();
+    const { store, newDocumentId } = await import('../src/storage.js');
+    const { legacyDownload } = await import('../src/legacyOffice.js');
+    const id = newDocumentId();
+    await store.saveOriginal(id, 'docx', Buffer.from('편집본'));
+    await store.saveDerived(id, 'legacy', Buffer.from('올린 원본'));
+    const meta = { id, name: '보고서.doc', ext: 'docx', status: 'ready', pageCount: 1, createdAt: '', legacy: { ext: 'doc', sha256: '다름', hasMacros: false } } as const;
+    const out = await legacyDownload(meta, async () => {
+      throw new Error('soffice 없음');
+    });
+    expect(out).toEqual({ bytes: Buffer.from('편집본'), name: '보고서.docx', how: 'fallback' });
+    const same = await legacyDownload({ ...meta, legacy: { ...meta.legacy, sha256: (await import('../src/legacyOffice.js')).sha256(Buffer.from('편집본')) } });
+    expect(same).toEqual({ bytes: Buffer.from('올린 원본'), name: '보고서.doc', how: 'original' });
+    vi.unstubAllEnvs();
   });
 });
