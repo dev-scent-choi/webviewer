@@ -24,6 +24,8 @@ export type DocumentStatus = 'processing' | 'ready' | 'failed';
 /** pages: PDF 페이지 이미지 뷰 / grid: 스프레드시트 그리드 뷰 / svg: 도면(dxf/dwg) 벡터 뷰 */
 export type ViewKind = 'pages' | 'grid' | 'svg';
 
+export type LegacyExt = 'doc' | 'xls' | 'ppt';
+
 export interface DocumentMeta {
   readonly id: string;
   readonly name: string;

@@ -496,6 +496,40 @@ export async function convertLegacySpreadsheetToXlsx(
   }
 }
 
+/** 옛 오피스 ↔ OOXML(향기랩 옛 형식 편집, 설계 2026-11-12-hyanggilab-always-edit §2.2) */
+const OFFICE_FILTERS: Readonly<Record<string, string>> = {
+  docx: 'docx:MS Word 2007 XML',
+  doc: 'doc:MS Word 97',
+  xlsx: 'xlsx:Calc MS Excel 2007 XML',
+  xls: 'xls:MS Excel 97',
+  pptx: 'pptx:Impress MS PowerPoint 2007 XML',
+  ppt: 'ppt:MS PowerPoint 97',
+};
+
+// shortcut: 바꿀 때마다 soffice를 새로 띄운다(수 초) — 느리다는 말이 나오면 loWorker.py에 storeToURL 필터를 더한다
+export async function convertOfficeFile(data: Uint8Array, fromExt: string, toExt: string): Promise<Buffer> {
+  const filter = OFFICE_FILTERS[toExt];
+  if (!filter || !OFFICE_FILTERS[fromExt] || fromExt === toExt) throw new ConversionError(`바꿀 수 없는 형식입니다: .${fromExt} → .${toExt}`);
+  if (!sofficePath) throw new ConversionError('이 서버에는 LibreOffice가 없어 변환할 수 없습니다.');
+  const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'docview-office-'));
+  try {
+    const source = path.join(workDir, `source.${fromExt}`);
+    await fs.writeFile(source, data);
+    await withProfileSlot(async (profileDir) => {
+      await execFileAsync(
+        sofficePath!,
+        ['--headless', '--norestore', `-env:UserInstallation=${pathToFileURL(profileDir).href}`, '--convert-to', filter, '--outdir', workDir, source],
+        { timeout: CONVERT_TIMEOUT_MS },
+      );
+    });
+    const out = await fs.readFile(path.join(workDir, `source.${toExt}`)).catch(() => null);
+    if (!out || out.length === 0) throw new ConversionError('변환하지 못했습니다(LibreOffice가 결과를 만들지 않았습니다).');
+    return out;
+  } finally {
+    await fs.rm(workDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }).catch(() => undefined);
+  }
+}
+
 /**
  * 서버 시작 시 프로필 풀을 미리 웜업해 첫 변환의 콜드 스타트(수 초)를 없앤다.
  * 각 슬롯에서 초소형 문서를 한 번씩 변환해 LibreOffice 프로필을 생성해 둔다.
