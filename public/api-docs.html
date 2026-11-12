@@ -128,6 +128,7 @@
             <thead><tr><th>이름</th><th>타입</th><th>설명</th></tr></thead>
             <tbody>
               <tr><td><code>filename</code><span class="apidoc-required">필수</span></td><td>string (1–300자)</td><td>원본 파일명(확장자 포함) — 저장될 형식 판별에 쓰인다.</td></tr>
+              <tr><td><code>legacyEdit</code></td><td><code>1</code></td><td>(향기랩 전용) <code>.doc</code>·<code>.xls</code>·<code>.ppt</code>를 LibreOffice로 <code>.docx</code>·<code>.xlsx</code>·<code>.pptx</code>로 바꿔 편집기로 연다. 표시 이름은 그대로, 응답 <code>data.ext</code>는 바꾼 형식, <code>data.legacy</code>에 원래 형식. 내려받기는 원래 형식(안 고쳤으면 올린 바이트 그대로). 바꾸지 못하면 <code>422</code>. 없으면 지금과 같다(<code>.doc</code>·<code>.ppt</code>는 열람만, <code>.xls</code>는 <code>.xlsx</code>로).</td></tr>
             </tbody>
           </table>
 
