@@ -47,6 +47,8 @@
 
 - `POST /api/documents/stream?legacyEdit=1`(스키마 `enum: ['1']`). 조각 업로드는 조각마다 같은 값을 붙인다(마지막 조각이 처리한다). multipart `POST /api/documents`에는 더하지 않는다(쓰는 곳이 없다).
 - `legacyEdit`이고 확장자가 doc·xls·ppt면: `convertOfficeFile(바이트, 'doc', 'docx')` 등 → 성공하면 원본 = 바꾼 OOXML, `ext` = docx/xlsx/pptx, `meta.name`은 그대로, `store.saveDerived(id, 'legacy', 올린 바이트)`, `meta.legacy = { ext, sha256(바꾼 OOXML), hasMacros }`. 실패하면 422(A6).
+  - (2026-11-13 최종 점검 반영) 들어온 바이트가 ZIP이면 바꾸지 않는다: `[Content_Types].xml` 주 파트로 docx/xlsx/pptx를 정해(.doc 이름의 xlsx는 엑셀 편집기) 그 편집기로 열고, `meta.legacy`(올린 바이트·원래 확장자)는 남겨 안 고친 내려받기는 같은 바이트·같은 이름. 고친 내려받기는 편집본을 제 OOXML 이름으로, `/api/view/info`에는 `legacy`를 싣지 않는다(옛 형식 문구 없음).
+  - ZIP이 아니면(OLE·RTF·HTML·XML 2003 등) LibreOffice로 바꾸고, 결과가 `assertZipNotTooLarge`를 통과한 올바른 OOXML일 때만 받는다. 정말 바꾸지 못한 것만 422.
 - 그 뒤는 OOXML이 올라온 것과 같다: docx·pptx는 `editReady`, xlsx는 메모리 저장 모드(향기랩)에서 `editReady`.
 - `legacyEdit`이 없으면 지금과 **완전히 같다**: .doc·.ppt는 PDF 열람(편집기 주소 없음), .xls는 지금처럼 xlsx로 정규화하고 이름도 `.xlsx`로.
 
@@ -68,6 +70,7 @@
 2. 안 고침 → 파생 `legacy` 바이트 그대로, 이름 `meta.name`(`보고서.doc`).
 3. 고침 → `getCurrentBytes(id) ?? 저장된 OOXML` → `convertOfficeFile(…, ext, legacy.ext)`, 이름 `meta.name`.
 4. 3이 실패 → 편집본 그대로, 이름 `보고서.docx`(A4), 서버 기록에 남김.
+5. (2026-11-13) 3의 결과는 `옛 확장자:sha256(지금 OOXML)`로 메모리 캐시(64MB, LRU) — 같은 상태를 거듭 받으면 LibreOffice는 한 번만. 캐시에 없어 LibreOffice를 실제로 띄울 때만 `HEAVY_RATE_LIMIT`(IP당 분당 20)을 세고, 넘으면 429.
 
 감사 기록 `downloaded`의 detail에 `legacy original|converted|fallback`. 인쇄(`/api/view/print`)·쪽 그림은 지금처럼 OOXML에서 만든다.
 
