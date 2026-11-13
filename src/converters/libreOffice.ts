@@ -12,7 +12,6 @@ import { ConversionError, type Converter } from './types.js';
 import { guardedUnzipSync } from '../zipGuard.js';
 import { createLibreOfficeWorker } from './loWorker.js';
 import { ensureFontSubstitutions } from './loFontSubstitution.js';
-import { config } from '../config.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -263,7 +262,8 @@ type SourcePreprocessor = (bytes: Uint8Array) => Uint8Array;
  */
 const PROFILE_POOL_SIZE = 2;
 // 서버(포트)마다 따로 — 8000·8010이 같은 slot-0·1을 같이 쓰면 프로필 잠금이 부딪치고, 한쪽 실패가 다른 쪽이 쓰는 슬롯을 지운다
-const profileRoot = process.env.DOCVIEW_LO_PROFILE_ROOT ?? path.join(os.tmpdir(), 'docview-lo-profiles', `port-${config.port}`);
+// (config.ts를 읽지 않는다 — 이 모듈을 먼저 읽는 시험이 저장 모드 환경을 바꾸기 전에 config가 굳어 버린다. 포트 기본값은 config와 같은 8000)
+const profileRoot = process.env.DOCVIEW_LO_PROFILE_ROOT ?? path.join(os.tmpdir(), 'docview-lo-profiles', `port-${process.env.DOCVIEW_PORT ?? 8000}`);
 const slotQueues: Array<Promise<unknown>> = Array.from({ length: PROFILE_POOL_SIZE }, () =>
   Promise.resolve(),
 );
