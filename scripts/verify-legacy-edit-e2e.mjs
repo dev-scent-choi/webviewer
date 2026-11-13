@@ -1,6 +1,6 @@
 // 향기랩 옛 형식 편집(legacyEdit) 확인 — 시험 서버(기본 http://127.0.0.1:8141, 메모리 저장 권장).
 //   node scripts/verify-legacy-edit-e2e.mjs [BASE] [스크린샷 폴더]
-// doc·xls·ppt를 legacyEdit=1로 올리면 편집기 주소, 안 고친 내려받기는 같은 바이트, 워드는 화면에서 고친 뒤 .doc로 받아 다시 올리면
+// doc·xls·ppt를 legacyEdit=1로 올리면 편집기 주소, 안 고친 내려받기는 같은 바이트(편집기를 열어 둔 채·닫은 뒤에도), 워드는 화면에서 고친 뒤 .doc로 받아 다시 올리면
 // 고친 글자가 남는다. legacyEdit 없이 올린 doc은 지금처럼 편집기가 없다(다른 호출자 회귀). 시험 자료: tests/fixtures/legacy(Apache POI).
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -67,9 +67,33 @@ for (const [name, editor, macros] of [
   check(up.json.data.ext === 'doc' && !up.json.data.legacy && !t.editorUrl, 'legacyEdit 없는 doc: 지금처럼 열람(편집기 주소 없음)');
 }
 
-// 3) 워드: 화면에서 고친 뒤 .doc로 받고, 그 .doc를 다시 올려 편집기에서 고친 글자를 본다 + 매크로 경고 줄
 const browser = await chromium.launch();
 try {
+  // 1b) 향기랩 실제 흐름: 편집기를 열기만 하고(첫 동기화·자동 저장이 돌 시간) 받아도 같은 바이트 — 편집기를 연 채로, 닫은 뒤에도
+  for (const [name, ready] of [
+    ['table-merges.doc', '.ProseMirror'],
+    ['chinese-provinces.xls', '#grid-edit-table td[data-row]'],
+    ['SampleShow.ppt', '#slide-canvas .slide-textbox'],
+  ]) {
+    const up = await upload(name);
+    const t = await token(up.json.data.id);
+    const viewCtx = await browser.newContext({ viewport: { width: 1400, height: 900 } });
+    const viewPage = await viewCtx.newPage();
+    const pageErrors = [];
+    viewPage.on('pageerror', (e) => pageErrors.push(String(e)));
+    await viewPage.goto(`${BASE}${t.editorUrl}&home=hidden&back=parent`);
+    await viewPage.waitForSelector(ready, { timeout: 60000 });
+    await viewPage.waitForTimeout(2500);
+    const open = await download(t.token);
+    check(hash(open.bytes) === hash(fx(name)) && open.name === name, `${name}: 편집기를 연 채로 안 고친 내려받기는 같은 바이트`, open.name);
+    await viewCtx.close();
+    await new Promise((res) => setTimeout(res, 1500));
+    const closed = await download(t.token);
+    check(hash(closed.bytes) === hash(fx(name)) && closed.name === name, `${name}: 편집기를 닫은 뒤에도 같은 바이트`, closed.name);
+    check(pageErrors.length === 0, `${name}: 편집기 페이지 오류 없음`, pageErrors.join(' | '));
+  }
+
+  // 3) 워드: 화면에서 고친 뒤 .doc로 받고, 그 .doc를 다시 올려 편집기에서 고친 글자를 본다 + 매크로 경고 줄
   const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } });
   const page = await ctx.newPage();
   const errors = [];
