@@ -603,6 +603,7 @@ interface SlideMediaQuery extends TokenQuery {
 const HEAVY_RATE_LIMIT = { max: 20, timeWindow: '1 minute' } as const;
 
 export async function viewerRoutes(app: FastifyInstance): Promise<void> {
+  const legacyConvertLimit = app.createRateLimit(HEAVY_RATE_LIMIT);
   app.get<{ Querystring: TokenQuery }>(
     '/api/view/info',
     { schema: { querystring: tokenQuerySchema } },
@@ -1464,7 +1465,13 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
 
       // 향기랩 옛 형식(.doc·.xls·.ppt): 원래 형식으로(설계 2026-11-12-hyanggilab-always-edit §2.4)
       if (view.meta.legacy) {
-        const out = await legacyDownload(view.meta);
+        // 고친 내용을 다시 바꿀 때만(캐시에 없을 때) LibreOffice를 띄우므로 그때만 무거운 요청 제한을 센다
+        const out = await legacyDownload(view.meta, undefined, async () => {
+          const limit = await legacyConvertLimit(request);
+          if (!limit.isAllowed) {
+            throw Object.assign(new Error(`요청이 너무 많습니다. ${limit.ttlInSeconds}초 후 다시 시도하세요.`), { statusCode: 429 });
+          }
+        });
         await recordAudit({ type: 'downloaded', docId: view.meta.id, viewer: view.claims.viewer, detail: `legacy ${out.how}` });
         return reply
           .type('application/octet-stream')

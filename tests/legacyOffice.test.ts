@@ -68,4 +68,23 @@ describe('legacyDownload: 다시 바꾸기 실패면 편집본을 OOXML 이름�
     expect(same).toEqual({ bytes: Buffer.from('올린 원본'), name: '보고서.doc', how: 'original' });
     vi.unstubAllEnvs();
   });
+
+  test('같은 내용을 다시 받으면 LibreOffice·요청 제한 없이 캐시에서, 제한에 걸리면 그 오류 그대로', async () => {
+    vi.stubEnv('DOCVIEW_STORAGE', 'memory');
+    vi.resetModules();
+    const { store, newDocumentId } = await import('../src/storage.js');
+    const { legacyDownload } = await import('../src/legacyOffice.js');
+    const id = newDocumentId();
+    await store.saveOriginal(id, 'docx', Buffer.from('고친 본'));
+    const meta = { id, name: '보고서.doc', ext: 'docx', status: 'ready', pageCount: 1, createdAt: '', legacy: { ext: 'doc', sha256: '다름', hasMacros: false } } as const;
+    const convert = vi.fn(async () => Buffer.from('옛 형식'));
+    const guard = vi.fn(async () => {});
+    for (let i = 0; i < 3; i++) expect(await legacyDownload(meta, convert, guard)).toEqual({ bytes: Buffer.from('옛 형식'), name: '보고서.doc', how: 'converted' });
+    expect(convert).toHaveBeenCalledTimes(1);
+    expect(guard).toHaveBeenCalledTimes(1);
+    await store.saveOriginal(id, 'docx', Buffer.from('또 고친 본'));
+    await expect(legacyDownload(meta, convert, async () => { throw new Error('너무 많음'); })).rejects.toThrow('너무 많음');
+    expect(convert).toHaveBeenCalledTimes(1);
+    vi.unstubAllEnvs();
+  });
 });
