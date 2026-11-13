@@ -1140,7 +1140,8 @@ async function main(): Promise<void> {
     }
   });
 
-  window.addEventListener('beforeunload', () => {
+  // pagehide: 내려받기 링크를 누르면 Chrome이 beforeunload를 내고도 페이지는 남는다 — 그때 끊으면 그 뒤 편집이 서버에 가지 않는다
+  window.addEventListener('pagehide', () => {
     provider.disconnect();
   });
 }
