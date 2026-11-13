@@ -49,7 +49,7 @@ import {
   type GridHeader,
 } from '../spreadsheet.js';
 import { store } from '../storage.js';
-import { legacyDownload } from '../legacyOffice.js';
+import { LEGACY_EDIT_TARGET, legacyDownload } from '../legacyOffice.js';
 import { isViewOnly, type DocumentMeta, type ViewClaims } from '../types.js';
 import { isOpenable, waitForInitialConversion } from '../conversionGate.js';
 import { buildViewerGridFile, saveGridFile } from '../xlsx/viewerGrid.js';
@@ -689,7 +689,11 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
           viewerUrl: `${viewPathFor(view.meta.ext, view.meta.viewKind)}?token=${encodeURIComponent(request.query.token!)}`,
           processing: view.meta.status === 'processing',
           // 향기랩 옛 형식(.doc·.xls·.ppt) — 편집기가 형식 이름·내려받기 문구·매크로 경고를 보인다(설계 §2.5)
-          legacy: view.meta.legacy ? { ext: view.meta.legacy.ext, hasMacros: view.meta.legacy.hasMacros } : undefined,
+          // .doc 이름의 OOXML(ZIP)은 실제로 OOXML이라 옛 형식 문구를 보이지 않는다(내려받기는 그래도 안 고쳤으면 올린 바이트 그대로)
+          legacy:
+            view.meta.legacy && LEGACY_EDIT_TARGET[view.meta.legacy.ext] === view.meta.ext
+              ? { ext: view.meta.legacy.ext, hasMacros: view.meta.legacy.hasMacros }
+              : undefined,
         },
       };
     },
@@ -1466,12 +1470,19 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
       // 향기랩 옛 형식(.doc·.xls·.ppt): 원래 형식으로(설계 2026-11-12-hyanggilab-always-edit §2.4)
       if (view.meta.legacy) {
         // 고친 내용을 다시 바꿀 때만(캐시에 없을 때) LibreOffice를 띄우므로 그때만 무거운 요청 제한을 센다
+        let waitSeconds = 0;
         const out = await legacyDownload(view.meta, undefined, async () => {
           const limit = await legacyConvertLimit(request);
-          if (!limit.isAllowed) {
-            throw Object.assign(new Error(`요청이 너무 많습니다. ${limit.ttlInSeconds}초 후 다시 시도하세요.`), { statusCode: 429 });
+          // isAllowed는 허용 목록일 때만 true — 센 요청은 늘 false이고, 넘었는지는 isExceeded
+          if (!limit.isAllowed && limit.isExceeded) {
+            waitSeconds = limit.ttlInSeconds;
+            throw new Error('rate limited');
           }
+        }).catch((error: unknown) => {
+          if (waitSeconds) return null;
+          throw error;
         });
+        if (!out) return reply.code(429).send({ success: false, error: `요청이 너무 많습니다. ${waitSeconds}초 후 다시 시도하세요.` });
         await recordAudit({ type: 'downloaded', docId: view.meta.id, viewer: view.claims.viewer, detail: `legacy ${out.how}` });
         return reply
           .type('application/octet-stream')

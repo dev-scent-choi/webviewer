@@ -71,15 +71,48 @@ describe.skipIf(!sofficePath)('향기랩 옛 형식 편집(legacyEdit)', () => {
     expect(xls.legacy).toBeUndefined();
   }, 120_000);
 
-  test('바꾸지 못하는 옛 파일은 422(열람 화면으로 내려가지 않는다)', async () => {
+  const uploadBytes = async (name: string, payload: Buffer) => {
     const res = await app.inject({
       method: 'POST',
-      url: '/api/documents/stream?filename=broken.doc&legacyEdit=1',
+      url: `/api/documents/stream?filename=${encodeURIComponent(name)}&legacyEdit=1`,
       headers: { 'content-type': 'application/octet-stream' },
-      payload: Buffer.from('this is not a word file'),
+      payload,
     });
-    expect(res.statusCode).toBe(422);
-    expect(res.json().error).toContain('편집할 수 있게 바꾸지 못했습니다');
+    return { status: res.statusCode, body: res.json() as { success: boolean; data?: Record<string, any>; error?: string } };
+  };
+
+  test('이름만 .doc인 OOXML은 실제 종류의 편집기로, 바꾸지 않고, 원래 이름·바이트는 legacy', async () => {
+    const { makeSamplePptx } = await import('./helpers.js');
+    const pptx = makeSamplePptx(['이름만 doc']);
+    const { status, body } = await uploadBytes('deck.doc', pptx);
+    expect(status).toBe(201);
+    expect(body.data).toMatchObject({ name: 'deck.doc', ext: 'pptx', editReady: true, legacy: { ext: 'doc', hasMacros: false } });
+    expect((await store.readOriginal(body.data!.id, 'pptx')).equals(pptx)).toBe(true);
+    expect((await tokenFor(body.data!.id)).json().data.editorUrl).toMatch(/^\/editor-slides\.html\?token=/);
+    const res = await download(body.data!.id);
+    expect(res.rawPayload.equals(pptx)).toBe(true);
+    expect(fileName(res.headers['content-disposition'])).toBe('deck.doc');
+  }, 120_000);
+
+  test('OLE가 아닌 .doc(RTF·글자 파일)도 LibreOffice가 바꾸면 편집기로', async () => {
+    for (const [name, bytes] of [
+      ['memo.doc', Buffer.from('{\\rtf1\\ansi RTF로 저장한 문서}')],
+      ['plain.doc', Buffer.from('this is not a word file')],
+    ] as const) {
+      const { status, body } = await uploadBytes(name, bytes);
+      expect(status, name).toBe(201);
+      expect(body.data).toMatchObject({ name, ext: 'docx', legacy: { ext: 'doc', hasMacros: false } });
+    }
+  }, 120_000);
+
+  test('정말 바꾸지 못하는 옛 파일만 422(열람 화면으로 내려가지 않는다)', async () => {
+    // 복합 파일 머리만 있고 속은 깨진 .ppt — LibreOffice가 아무것도 만들지 못한다
+    const broken = Buffer.alloc(4096, 0x5a);
+    broken.writeUInt32LE(0xe011cfd0, 0);
+    broken.writeUInt32LE(0xe11ab1a1, 4);
+    const { status, body } = await uploadBytes('broken.ppt', broken);
+    expect(status).toBe(422);
+    expect(body.error).toContain('편집할 수 있게 바꾸지 못했습니다');
   }, 120_000);
 
   test('legacyEdit 값은 1만', async () => {

@@ -9,7 +9,7 @@ import { config } from '../config.js';
 import { convertDwgToDxf } from '../converters/dwgConverter.js';
 import { findConverter, supportedExtensions } from '../converters/index.js';
 import { convertDxfToSvg, convertLegacySpreadsheetToXlsx, convertOfficeFile } from '../converters/libreOffice.js';
-import { hasVbaMacros, isLegacyExt, LEGACY_EDIT_TARGET, sha256 } from '../legacyOffice.js';
+import { hasVbaMacros, isLegacyExt, LEGACY_EDIT_TARGET, ooxmlKind, sha256 } from '../legacyOffice.js';
 import { ConversionError, type Converter } from '../converters/types.js';
 import { clearPresence } from '../presence.js';
 import { getPdfPageInfo, invalidateRenderCache } from '../rendering.js';
@@ -215,7 +215,9 @@ async function tryNormalizeLegacySpreadsheetToXlsx(
     await fs.writeFile(sourcePath, data);
     const targetXlsxPath = path.join(workDir, 'out.xlsx');
     await convertLegacySpreadsheetToXlsx(sourcePath, ext, targetXlsxPath);
-    return await fs.readFile(targetXlsxPath);
+    const out = await fs.readFile(targetXlsxPath);
+    assertZipNotTooLarge(out, `normalize ${ext}`); // 바꾼 결과도 zip 폭탄 검사 — 걸리면 정규화 실패처럼 PDF 열람으로
+    return out;
   } catch (error) {
     console.warn(`.${ext} → xlsx 정규화 실패 (PDF 전용 열람으로 폴백):`, error);
     return null;
@@ -279,12 +281,21 @@ async function ingestUpload(
   if (legacyEdit && isLegacyExt(ext)) {
     const legacyExt = ext;
     try {
-      // LibreOffice는 깨진 .doc를 글자 파일로 읽어 바꿔 버리므로 복합 파일(OLE) 머리부터 확인한다
-      if (data.length < 4 || data.readUInt32LE(0) !== 0xe011cfd0) throw new Error('not an OLE compound file');
-      const converted = await convertOfficeFile(data, legacyExt, LEGACY_EDIT_TARGET[legacyExt]);
-      legacy = { ext: legacyExt, bytes: data, hasMacros: hasVbaMacros(data, legacyExt) };
-      data = converted;
-      ext = LEGACY_EDIT_TARGET[legacyExt];
+      const zipped = ooxmlKind(data);
+      if (zipped) {
+        // 이름만 .doc 등인 OOXML(ZIP) — 바꾸지 않고 실제 종류의 편집기로. 안 고친 내려받기는 올린 바이트·이름 그대로(legacy)
+        legacy = { ext: legacyExt, bytes: data, hasMacros: zipped.hasMacros };
+        ext = zipped.ext;
+      } else {
+        // 보통은 복합 파일(OLE)이지만 RTF·HTML·XML 2003을 .doc·.xls로 저장한 것도 있다 — LibreOffice가 낸 것이 올바른 OOXML일 때만 받는다
+        const target = LEGACY_EDIT_TARGET[legacyExt];
+        const converted = await convertOfficeFile(data, legacyExt, target);
+        assertZipNotTooLarge(converted, `legacy ${legacyExt}`);
+        if (ooxmlKind(converted)?.ext !== target) throw new Error(`converted .${legacyExt} is not a valid .${target}`);
+        legacy = { ext: legacyExt, bytes: data, hasMacros: hasVbaMacros(data, legacyExt) };
+        data = converted;
+        ext = target;
+      }
     } catch (error) {
       app.log.warn(error, 'legacy office conversion failed');
       return {
