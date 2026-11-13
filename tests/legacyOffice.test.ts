@@ -87,4 +87,25 @@ describe('legacyDownload: 다시 바꾸기 실패면 편집본을 OOXML 이름�
     expect(convert).toHaveBeenCalledTimes(1);
     vi.unstubAllEnvs();
   });
+
+  test('문서를 지우면(forgetLegacyDownloads) 다시 바꾼 결과도 캐시에서 빠진다 — 다른 문서 것은 남는다', async () => {
+    vi.stubEnv('DOCVIEW_STORAGE', 'memory');
+    vi.resetModules();
+    const { store, newDocumentId } = await import('../src/storage.js');
+    const { legacyDownload, forgetLegacyDownloads } = await import('../src/legacyOffice.js');
+    const metaOf = (id: string) => ({ id, name: '보고서.doc', ext: 'docx', status: 'ready', pageCount: 1, createdAt: '', legacy: { ext: 'doc', sha256: '다름', hasMacros: false } }) as const;
+    const a = newDocumentId();
+    const b = newDocumentId();
+    await store.saveOriginal(a, 'docx', Buffer.from('고친 본'));
+    await store.saveOriginal(b, 'docx', Buffer.from('고친 본'));
+    const convert = vi.fn(async () => Buffer.from('옛 형식'));
+    await legacyDownload(metaOf(a), convert);
+    await legacyDownload(metaOf(b), convert);
+    expect(convert).toHaveBeenCalledTimes(2);
+    forgetLegacyDownloads(a);
+    await legacyDownload(metaOf(a), convert);
+    await legacyDownload(metaOf(b), convert);
+    expect(convert).toHaveBeenCalledTimes(3);
+    vi.unstubAllEnvs();
+  });
 });

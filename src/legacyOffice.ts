@@ -75,6 +75,11 @@ export interface LegacyDownload {
 /** 다시 바꾼 결과를 지금 OOXML 내용의 해시로 기억한다 — 같은 상태를 거듭 내려받아도 LibreOffice는 한 번만(64MB까지) */
 const convertedCache = new SizedLruCache<Buffer>({ maxBytes: 64 * 1024 * 1024, sizeOf: (b) => b.length });
 
+/** 문서를 지우면 그 문서의 다시 바꾼 결과도 메모리에서 지운다(향기랩 "돌아가기를 누르면 바로 지웁니다") — 키가 `문서id#`로 시작한다 */
+export function forgetLegacyDownloads(id: string): void {
+  convertedCache.invalidatePrefix(`${id}#`);
+}
+
 /**
  * 옛 형식 문서 내려받기(설계 §2.4). 안 고쳤으면(방에 저장 안 된 편집 없음 + 저장된 OOXML 해시가 바꾼 직후와 같음) 올린 바이트 그대로,
  * 고쳤으면 지금 내용을 LibreOffice로 원래 형식으로. 그게 실패하면 고친 것을 잃지 않게 편집본을 OOXML 이름으로(A4).
@@ -93,7 +98,7 @@ export async function legacyDownload(
   const fallback = { bytes: current, name: `${meta.name.replace(/\.[^./]+$/, '')}.${meta.ext}`, how: 'fallback' } as const;
   // .doc 이름으로 올라온 xlsx 등(종류가 다른 OOXML)은 원래 형식이 따로 없다 — 편집본을 제 이름으로
   if (LEGACY_EDIT_TARGET[legacy.ext] !== meta.ext) return fallback;
-  const key = `${legacy.ext}:${sha256(current)}`;
+  const key = `${meta.id}#${legacy.ext}:${sha256(current)}`;
   if (!convertedCache.get(key)) await beforeConvert();
   try {
     return { bytes: await convertedCache.getOrLoad(key, () => convert(current, meta.ext, legacy.ext)), name: meta.name, how: 'converted' };

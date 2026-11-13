@@ -6,6 +6,7 @@
  */
 import { config } from './config.js';
 import { discardPrewarmedXlsx, forceCloseRoom, isRoomOpen } from './collab/room.js';
+import { forgetLegacyDownloads } from './legacyOffice.js';
 import { invalidateRenderCache } from './rendering.js';
 import { store } from './storage.js';
 
@@ -22,6 +23,7 @@ export async function expireIdleMemoryDocuments(now = Date.now()): Promise<numbe
     discardPrewarmedXlsx(meta.id);
     forceCloseRoom(meta.id);
     invalidateRenderCache(meta.id);
+    forgetLegacyDownloads(meta.id);
     removed += 1;
   }
   return removed;
