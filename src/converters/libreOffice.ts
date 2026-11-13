@@ -12,6 +12,7 @@ import { ConversionError, type Converter } from './types.js';
 import { guardedUnzipSync } from '../zipGuard.js';
 import { createLibreOfficeWorker } from './loWorker.js';
 import { ensureFontSubstitutions } from './loFontSubstitution.js';
+import { config } from '../config.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -261,7 +262,8 @@ type SourcePreprocessor = (bytes: Uint8Array) => Uint8Array;
  * 같은 프로필을 두 프로세스가 동시에 쓰는 일은 없다.
  */
 const PROFILE_POOL_SIZE = 2;
-const profileRoot = process.env.DOCVIEW_LO_PROFILE_ROOT ?? path.join(os.tmpdir(), 'docview-lo-profiles'); // 환경변수는 시험용
+// 서버(포트)마다 따로 — 8000·8010이 같은 slot-0·1을 같이 쓰면 프로필 잠금이 부딪치고, 한쪽 실패가 다른 쪽이 쓰는 슬롯을 지운다
+const profileRoot = process.env.DOCVIEW_LO_PROFILE_ROOT ?? path.join(os.tmpdir(), 'docview-lo-profiles', `port-${config.port}`);
 const slotQueues: Array<Promise<unknown>> = Array.from({ length: PROFILE_POOL_SIZE }, () =>
   Promise.resolve(),
 );
