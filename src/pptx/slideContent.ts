@@ -1016,7 +1016,8 @@ export function parseSlideVisuals(zipEntries: Record<string, Uint8Array>, source
     if (mediaPath) {
       visuals.push({ kind: 'image', x: 0, y: 0, w: cx, h: cy, mediaPath, background: true });
     } else {
-      const fill = bgPr ? fillColorFromSpPr(bgPr, theme) : bgRef && theme ? theme.resolve(bgRef) : undefined;
+      // bgRef는 도형 스타일 fillRef와 같은 규칙(idx 1001~ = 테마 배경 채우기 목록, phClr = bgRef의 색)
+      const fill = bgPr ? fillColorFromSpPr(bgPr, theme) : bgRef ? fillColorFromSpPr(undefined, theme, { 'a:fillRef': bgRef }) : undefined;
       if (fill) visuals.push({ kind: 'shape', x: 0, y: 0, w: cx, h: cy, fill, background: true });
     }
   }
