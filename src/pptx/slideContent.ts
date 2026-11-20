@@ -714,7 +714,21 @@ export function setShapeAutofit(slideXml: string, shapeId: string, autofit: { fo
   return slideXml.replace(spBlockRe, (spBlock) => {
     const idMatch = /<p:cNvPr\b[^>]*\bid="([^"]+)"/.exec(spBlock);
     if (!idMatch || idMatch[1] !== shapeId) return spBlock;
-    return spBlock.replace(/<a:normAutofit\b[^>]*?(?:\/>|>\s*<\/a:normAutofit>)/, () => tag);
+    if (/<a:normAutofit\b/.test(spBlock)) return spBlock.replace(/<a:normAutofit\b[^>]*?(?:\/>|>\s*<\/a:normAutofit>)/, () => tag);
+    // 맞춤 종류를 레이아웃에서만 물려받은 도형 — 슬라이드 bodyPr에 맞춤 요소가 없으면 넣는다(편집 화면과 저장본이 같게, 2차 검토
+    // R2-m3). 다른 맞춤 종류가 적혀 있으면 건드리지 않고, 100%·0%면 상속값과 같으니 넣지 않는다.
+    if (/<a:(noAutofit|spAutoFit)\b/.test(spBlock) || (fs === 100000 && lr === 0)) return spBlock;
+    const bodyPr = /<a:bodyPr\b[^>]*?(?:\/>|>[\s\S]*?<\/a:bodyPr>)/.exec(spBlock)?.[0];
+    if (!bodyPr) return spBlock;
+    let next: string;
+    if (bodyPr.endsWith('/>')) next = `${bodyPr.slice(0, -2)}>${tag}</a:bodyPr>`;
+    else {
+      // 자식 순서: prstTxWarp → 맞춤 → scene3d …
+      const warp = /<a:prstTxWarp\b[^>]*?(?:\/>|>[\s\S]*?<\/a:prstTxWarp>)/.exec(bodyPr);
+      const at = warp ? warp.index + warp[0].length : bodyPr.indexOf('>') + 1;
+      next = bodyPr.slice(0, at) + tag + bodyPr.slice(at);
+    }
+    return spBlock.replace(bodyPr, () => next);
   });
 }
 
@@ -1350,8 +1364,9 @@ export function parseSlideVisuals(zipEntries: Record<string, Uint8Array>, source
     // Choice)의 각 개체 자리를 원본 렌더링(LibreOffice) 조각으로 보인다. 편집 대상이 아니라(parseSlideShapes는 안으로
     // 들어가지 않는다) 저장 때 원문이 그대로 남는다(검토 I5: 예전엔 편집 화면에 통째로 안 보였다).
     for (const ac of asArray<XmlNode>(node['mc:AlternateContent'] as XmlNode | XmlNode[] | undefined)) {
-      const alt = asArray<XmlNode>(ac['mc:Fallback'] as XmlNode | XmlNode[] | undefined)[0] ?? asArray<XmlNode>(ac['mc:Choice'] as XmlNode | XmlNode[] | undefined)[0];
-      if (!alt || typeof alt !== 'object') continue;
+      // LibreOffice는 아는 확장이면 Choice를, 모르면 Fallback을 그린다 — 어느 쪽을 그렸는지 서버가 알 수 없으므로 같은 개체 id의
+      // 두 자리를 합친 영역을 잘라 온다(두 자리가 다른 표본에서도 그려진 쪽이 조각 안에 든다 — 2차 검토 R2-m4)
+      const branches = [...asArray<XmlNode>(ac['mc:Fallback'] as XmlNode | XmlNode[] | undefined), ...asArray<XmlNode>(ac['mc:Choice'] as XmlNode | XmlNode[] | undefined)];
       const kinds: ReadonlyArray<[string, string, (el: XmlNode) => unknown]> = [
         ['p:sp', 'p:nvSpPr', (el) => (el['p:spPr'] as XmlNode | undefined)?.['a:xfrm']],
         ['p:pic', 'p:nvPicPr', (el) => (el['p:spPr'] as XmlNode | undefined)?.['a:xfrm']],
@@ -1359,14 +1374,24 @@ export function parseSlideVisuals(zipEntries: Record<string, Uint8Array>, source
         ['p:graphicFrame', 'p:nvGraphicFramePr', (el) => el['p:xfrm']],
         ['p:grpSp', 'p:nvGrpSpPr', (el) => (el['p:grpSpPr'] as XmlNode | undefined)?.['a:xfrm']],
       ];
-      for (const [tag, nvTag, xfrmOf] of kinds) {
-        for (const el of asArray<XmlNode>(alt[tag] as XmlNode | XmlNode[] | undefined)) {
-          if (template && isPlaceholder(el, nvTag)) continue;
-          const place = placeXfrm(transforms, xfrmOf(el) as XmlNode | undefined);
-          if (place.x === null || place.y === null) continue;
-          push(el, nvTag, { kind: 'snapshot', ...rotatedBounds(place, place.rot), snapshot: true });
+      const areas = new Map<string, { el: XmlNode; nvTag: string; x0: number; y0: number; x1: number; y1: number }>();
+      for (const branch of branches) {
+        if (!branch || typeof branch !== 'object') continue;
+        for (const [tag, nvTag, xfrmOf] of kinds) {
+          for (const el of asArray<XmlNode>(branch[tag] as XmlNode | XmlNode[] | undefined)) {
+            if (template && isPlaceholder(el, nvTag)) continue;
+            const place = placeXfrm(transforms, xfrmOf(el) as XmlNode | undefined);
+            const box = rotatedBounds(place, place.rot);
+            if (box.x === null || box.y === null || box.w === null || box.h === null) continue;
+            const id = `${tag}#${String(((el[nvTag] as XmlNode | undefined)?.['p:cNvPr'] as XmlNode | undefined)?.['@_id'] ?? areas.size)}`;
+            const seen = areas.get(id);
+            areas.set(id, seen
+              ? { ...seen, x0: Math.min(seen.x0, box.x), y0: Math.min(seen.y0, box.y), x1: Math.max(seen.x1, box.x + box.w), y1: Math.max(seen.y1, box.y + box.h) }
+              : { el, nvTag, x0: box.x, y0: box.y, x1: box.x + box.w, y1: box.y + box.h });
+          }
         }
       }
+      for (const a of areas.values()) push(a.el, a.nvTag, { kind: 'snapshot', x: a.x0, y: a.y0, w: a.x1 - a.x0, h: a.y1 - a.y0, snapshot: true });
     }
 
     for (const grp of asArray<XmlNode>(node['p:grpSp'] as XmlNode | XmlNode[] | undefined)) {

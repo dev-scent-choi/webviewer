@@ -552,3 +552,22 @@ describe('2차 검토 R2-I2·R2-m1: 글자 속성은 바이트 신뢰 대신 구
     expect(notices.size).toBe(1);
   });
 });
+
+describe('2차 검토 R2-m3: 레이아웃에서만 맞춤을 물려받은 도형도 다시 맞춘 값을 저장', () => {
+  test('bodyPr에 맞춤 요소가 없으면 넣고(100%면 안 넣음), 다른 맞춤 종류면 그대로', async () => {
+    const { setShapeAutofit } = await import('../src/pptx/slideContent.js');
+    const slide = (bodyPr: string) => `<p:sld ${NS}>${tree(sp(2, '<p:ph idx="1"/>', '', `${bodyPr}<a:lstStyle/><a:p/>`))}</p:sld>`;
+    expect(setShapeAutofit(slide('<a:bodyPr/>'), '2', { fontScale: 0.85, lnSpcReduction: 0.2 })).toContain('<a:bodyPr><a:normAutofit fontScale="85000" lnSpcReduction="20000"/></a:bodyPr>');
+    expect(setShapeAutofit(slide('<a:bodyPr wrap="square"><a:prstTxWarp prst="textNoShape"/><a:scene3d/></a:bodyPr>'), '2', { fontScale: 0.85, lnSpcReduction: 0 })).toContain('<a:prstTxWarp prst="textNoShape"/><a:normAutofit fontScale="85000"/><a:scene3d/>');
+    expect(setShapeAutofit(slide('<a:bodyPr/>'), '2', { fontScale: 1, lnSpcReduction: 0 })).toBe(slide('<a:bodyPr/>'));
+    expect(setShapeAutofit(slide('<a:bodyPr><a:noAutofit/></a:bodyPr>'), '2', { fontScale: 0.5, lnSpcReduction: 0.2 })).toBe(slide('<a:bodyPr><a:noAutofit/></a:bodyPr>'));
+  });
+});
+
+describe('2차 검토 R2-m4: 감싼 도형은 Choice·Fallback 자리를 합친 영역을 잘라 온다', () => {
+  test('두 자리가 다르면 합친 상자', () => {
+    const box = (x: number) => `<p:sp><p:nvSpPr><p:cNvPr id="3" name="s"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr>${xfrm(x, 0, 100000, 50000)}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:sp>`;
+    const zip = deck(`<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><mc:Choice Requires="a14">${box(500000)}</mc:Choice><mc:Fallback>${box(400000)}</mc:Fallback></mc:AlternateContent>`);
+    expect(parseSlideVisuals(zip, 'slide1.xml')).toEqual([{ kind: 'snapshot', x: 400000, y: 0, w: 200000, h: 50000, snapshot: true }]);
+  });
+});

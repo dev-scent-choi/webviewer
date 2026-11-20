@@ -217,15 +217,58 @@ const AUTOFIT_STEPS: readonly Autofit[] = [
   ...Array.from({ length: 10 }, (_, i) => ({ fontScale: Math.round((0.925 - i * 0.075) * 1000) / 1000, lnSpcReduction: 0.2 })),
 ];
 
-/** 글을 고친 뒤 상자에 맞는 가장 큰 단계를 다시 고른다(글상자 높이 안에 글이 다 들어가는 첫 단계, 다 넘치면 마지막). */
-export function refitAutofit(box: HTMLElement, dom: HTMLElement): Autofit {
-  const cs = getComputedStyle(box);
-  const room = box.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom) + 1;
-  for (const step of AUTOFIT_STEPS) {
-    applyAutofit(dom, step);
-    if (dom.scrollHeight <= room) return step;
+/** 측정용 축척 — 슬라이드 1pt = 4px 고정(화면 크기·확대·기기 픽셀 비율과 무관하게 모든 참여자가 같은 값을 낸다) */
+const MEASURE_PT_PX = 4;
+let measureHost: HTMLElement | null = null;
+
+/** 단계 순서(큰 글자 → 작은 글자)에서 이 값의 자리 — 목록에 없는 값(파일에 적힌 62500·10000 등)은 그보다 작은 첫 단계 바로 앞 */
+const stepRank = (a: Autofit) => {
+  const exact = AUTOFIT_STEPS.findIndex((s) => s.fontScale === a.fontScale && s.lnSpcReduction === a.lnSpcReduction);
+  if (exact >= 0) return exact;
+  const next = AUTOFIT_STEPS.findIndex((s) => s.fontScale < a.fontScale || (s.fontScale === a.fontScale && s.lnSpcReduction > a.lnSpcReduction));
+  return (next < 0 ? AUTOFIT_STEPS.length : next) - 0.5;
+};
+
+/**
+ * 글을 고친 뒤 자동 맞춤 단계를 다시 고른다 — PowerPoint처럼 지금 단계에서 시작해, 넘치면 넘치지 않을 때까지 작게, 넘치지 않으면
+ * 한 단계 크게 해도 들어가는 동안 크게(글을 지우면 커진다). 측정은 화면 캔버스가 아니라 슬라이드 좌표(1pt = 4px)의 화면 밖 복제본에서,
+ * 글상자 안쪽 크기는 meta(EMU)로 잡는다 — 예전엔 화면 캔버스에서 재서 창 크기에 따라 같은 글이 다른 단계가 됐다(2차 검토 R2-I3).
+ * 바뀌지 않으면 current를 그대로 돌려준다.
+ */
+export function refitAutofit(box: HTMLElement, dom: HTMLElement, meta: SlideShapeMeta, current: Autofit): Autofit {
+  if (!meta.w || !meta.h || meta.vert) return current;
+  const extra = textRectInsets(meta.presetGeom, meta.w, meta.h);
+  const [l, t, r, b] = (meta.insets ?? DEFAULT_INSETS_EMU).map((v, i) => v + (meta.geom ? 0 : extra[i]));
+  const width = ((meta.w - l - r) / 12700) * MEASURE_PT_PX;
+  const room = ((meta.h - t - b) / 12700) * MEASURE_PT_PX + MEASURE_PT_PX / 4; // 0.25pt 여유(반올림)
+  if (width <= 0) return current;
+  if (!measureHost) {
+    measureHost = document.createElement('div');
+    measureHost.setAttribute('aria-hidden', 'true');
+    document.body.append(measureHost);
   }
-  return AUTOFIT_STEPS[AUTOFIT_STEPS.length - 1];
+  measureHost.className = box.className;
+  measureHost.setAttribute(
+    'style',
+    `position: fixed; left: -100000px; top: 0; visibility: hidden; padding: 0; height: auto; display: block; transform: none; width: ${width}px; --slide-pt: ${MEASURE_PT_PX}px;`,
+  );
+  const clone = dom.cloneNode(true) as HTMLElement;
+  clone.removeAttribute('contenteditable');
+  measureHost.replaceChildren(clone);
+  const fits = (step: Autofit) => {
+    applyAutofit(clone, step);
+    return clone.scrollHeight <= room;
+  };
+  let result = current;
+  const rank = stepRank(current);
+  if (!fits(current)) {
+    const smaller = AUTOFIT_STEPS.filter((_, i) => i > rank);
+    result = smaller.find(fits) ?? AUTOFIT_STEPS[AUTOFIT_STEPS.length - 1];
+  } else {
+    for (let i = Math.ceil(rank) - 1; i >= 0 && fits(AUTOFIT_STEPS[i]); i -= 1) result = AUTOFIT_STEPS[i];
+  }
+  measureHost.replaceChildren();
+  return result;
 }
 
 /** 캔·구름 모양 — 다각형(clip-path polygon)으로 못 그리는 곡선 모양을 px 경로로(상자 크기를 알아야 한다). */

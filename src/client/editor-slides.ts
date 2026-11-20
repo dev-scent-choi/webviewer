@@ -765,7 +765,7 @@ function scheduleRefit(shapeId: string): void {
     const meta = shapeMap?.get('meta') as SlideShapeMeta | undefined;
     const box = view?.dom.parentElement;
     if (!view || !shapeMap || !meta?.autofit || !box) return;
-    const fit = refitAutofit(box, view.dom);
+    const fit = refitAutofit(box, view.dom, meta, meta.autofit);
     if (fit.fontScale !== meta.autofit.fontScale || fit.lnSpcReduction !== meta.autofit.lnSpcReduction) {
       shapeMap.set('meta', { ...meta, autofit: fit });
     }
