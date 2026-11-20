@@ -95,7 +95,7 @@ import {
   type LazyGridSheetMeta,
   type LazyGridStore,
 } from '../xlsx/lazyGridStore.js';
-import { cfRangeValues, type CfRangeCache, type CfRangeRect, type CfRangeValues } from '../xlsx/cfRangeValues.js';
+import { answerCfRemote, cfTallyApply, cfTallyDropSheet, newCfRoomTally, type CfRemoteAnswer, type CfRemoteRequest, type CfRoomTally } from '../xlsx/cfRangeValues.js';
 import { shiftTables } from '../xlsx/tableStyles.js';
 import {
   duplicateSlideContent,
@@ -359,8 +359,8 @@ interface Room {
    * 각 호출이 자기 첫 await까지 동기로 실행돼 양보 없는 블록이 연달아 붙는다.
    */
   canonicalGrowth: Promise<void>;
-  /** xlsx 룸 — 편집 화면 조건부 서식용 범위 값 개수 표(cfRangeValues.ts). 칸 값·행열 구조가 바뀌면 rev가 오르고 비운다 */
-  cfRanges: CfRangeCache;
+  /** xlsx 룸 — 편집 화면 조건부 서식용 범위 값 개수 표(cfRangeValues.ts). 칸 편집마다 −1/+1, 행열 구조가 바뀌면 다시 센다 */
+  cfRanges: CfRoomTally;
   /**
    * 지금 진행 중인 "흘려보낸(fire-and-forget) 백그라운드 작업"들 — 페이지 창 반영
    * (reconcilePageSubscriptions), 수식 재계산 체인(recomputeSubscribedPagesInBackground), 셀/서식
@@ -597,6 +597,7 @@ async function applyCellsChangeToCanonical(
       if (c.row >= meta.rowCount || c.col >= meta.colCount) continue; // 원래 있던 칸이 아니면 할 일 없음
       setDirtyCell(store, c.sheetIdx, c.row, c.col, 0);
       recordCellChange(room, c.sheetIdx, c.row, c.col, before, 0, viewer);
+      cfTallyApply(room.cfRanges, c.sheetIdx, c.row, c.col, before ? gridCellValue(before) : '', '');
       continue;
     }
     const value = cells.get(c.key) ?? '';
@@ -610,42 +611,27 @@ async function applyCellsChangeToCanonical(
     const after: GridCell | 0 = value === '' ? 0 : { v: value, ...(keptStyle !== undefined ? { s: keptStyle } : {}) };
     setDirtyCell(store, c.sheetIdx, c.row, c.col, after);
     recordCellChange(room, c.sheetIdx, c.row, c.col, before, after, viewer);
+    cfTallyApply(room.cfRanges, c.sheetIdx, c.row, c.col, before ? gridCellValue(before) : '', after ? gridCellValue(after) : '');
   }
-  bumpCfRanges(room);
-}
-
-/** 칸 값·구조가 바뀌었다 — 편집 화면이 범위 값 표를 다시 묻게 리비전을 올린다 */
-function bumpCfRanges(room: Room): void {
-  room.cfRanges.rev += 1;
-  room.cfRanges.byKey.clear();
 }
 
 /**
- * 편집 화면 조건부 서식용 범위 값 개수 표(/api/view/xlsx-cf-ranges). knownRev가 지금 리비전과 같으면 표를 다시 보내지 않는다.
+ * 편집 화면 조건부 서식용 서버 답(/api/view/xlsx-cf-ranges, src/xlsx/cfRangeValues.ts). 범위는 이 방의 규칙에서만 뽑는다.
  * 열린 xlsx 편집 방이 없으면 null.
  */
-export async function getCfRangeValues(
-  docId: string,
-  sheet: number,
-  ranges: readonly CfRangeRect[],
-  knownRev: number | undefined,
-): Promise<{ rev: number; ranges?: CfRangeValues[] } | null> {
+export async function getCfRemoteAnswer(docId: string, req: CfRemoteRequest): Promise<CfRemoteAnswer | null> {
   const room = rooms.get(docId);
   if (!room?.lazyGrid) return null;
   await room.ready;
   const store = room.lazyGrid;
-  if (!store.sheetMeta[sheet]) return null;
-  // 방금 들어온 편집(웹소켓)이 lazyGrid에 다 반영된 뒤에 센다 — 길어도 2초까지만 기다린다
+  if (!store.sheetMeta[req.sheet]) return null;
+  // 방금 들어온 편집(웹소켓)이 lazyGrid에 다 반영된 뒤에 답한다 — 길어도 2초까지만 기다린다
   let timer: NodeJS.Timeout | undefined;
   await Promise.race([Promise.all([room.cfRanges.applying, room.canonicalGrowth]), new Promise((resolve) => (timer = setTimeout(resolve, 2_000)))]);
   clearTimeout(timer);
-  const rev = room.cfRanges.rev;
-  if (knownRev === rev) return { rev };
+  const entries = room.ydoc.getMap<readonly CondFormatEntry[]>(GRID_COND_FORMATS_MAP).get(String(req.sheet)) ?? [];
   const computed = room.ydoc.getMap<string>(GRID_COMPUTED_MAP);
-  const values = await cfRangeValues(store, sheet, ranges, (r, c) => computed.get(gridCellKey(sheet, r, c)), room.cfRanges);
-  // 계산하는 사이 편집이 들어왔으면 방금 넣은 표는 낡았다 — 비우고, 낡은 리비전(-1)으로 알린다(편집 화면이 다음 변경 때 다시 묻는다)
-  if (room.cfRanges.rev !== rev) room.cfRanges.byKey.clear();
-  return { rev: room.cfRanges.rev === rev ? rev : -1, ranges: values };
+  return answerCfRemote(room.cfRanges, store, req, entries, (r, c) => computed.get(gridCellKey(req.sheet, r, c)));
 }
 
 /**
@@ -1528,7 +1514,7 @@ async function applyGridStructureOp(room: Room, op: GridStructureOp): Promise<vo
   // 이 연산을 기록한다 — 내보내기(exportXlsxFromGrid)가 원본을 다시 로드한 워크북에 같은 순서로
   // 재생하기 위한 로그다.
   room.structuralOps.push({ sheet: op.sheet, kind: op.kind, at: op.at, count: op.count });
-  bumpCfRanges(room);
+  cfTallyDropSheet(room.cfRanges, op.sheet);
   // 행/열 삽입·삭제는 Yjs 쓰기가 없을 수도 있다(병합·채워진 페이지가 없으면) — 직접 편집으로 표시한다
   room.editedSinceSave = true;
   scheduleAutosave(room);
@@ -2225,7 +2211,7 @@ function getOrCreateRoom(docId: string, ext: string): Room {
     pageSubscriptions: new Map(),
     loadedPages: new Map(),
     canonicalGrowth: Promise.resolve(),
-    cfRanges: { rev: 0, byKey: new Map(), applying: Promise.resolve() },
+    cfRanges: newCfRoomTally(),
     backgroundWork: new Set<Promise<void>>(),
     pendingSlideSeeds: new Map(),
     connSlideSeedsInFlight: new Map(),
@@ -3067,6 +3053,11 @@ export function getSeededPagesForTest(docId: string, sheet: number): Set<number>
 /** 테스트 전용 — 룸의 지연(lazy) 그리드 저장소를 직접 들여다본다. 프로덕션 코드에서는 쓰지 않는다. */
 export function getRoomLazyGridForTest(docId: string): LazyGridStore | null {
   return rooms.get(docId)?.lazyGrid ?? null;
+}
+
+/** 테스트 전용 — 조건부 서식 서버 답의 범위 개수 표 */
+export function getRoomCfTallyForTest(docId: string): CfRoomTally | null {
+  return rooms.get(docId)?.cfRanges ?? null;
 }
 
 /** 테스트 전용 — 룸의 Y.Doc을 직접 들여다본다. 프로덕션 코드에서는 쓰지 않는다. */

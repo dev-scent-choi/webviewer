@@ -30,8 +30,8 @@ import { currentRegion, setupGridCharts } from './gridCharts.js';
 import { setupGridLinks, type GridLinks } from './gridLinks.js';
 import {
   CF_PRESETS,
+  cfCritKey,
   cfEngineRanges,
-  cfRangeTableFromCounts,
   cfRuleTooCostly,
   computeStats,
   GRID_COND_FORMATS_MAP,
@@ -41,7 +41,10 @@ import {
   subtractRect,
   type CfEnv,
   type CfFormulaFallback,
+  type CfRangeAgg,
+  type CfRangeTable,
   type CfRect,
+  type CfVal,
   type CfRule,
   type CfStats,
   type CondFormatEntry,
@@ -3253,25 +3256,16 @@ async function main(): Promise<void> {
   function cfStatsNow(): ReadonlyMap<string, CfStats> {
     if (cfStats && cfStatsSheet === activeSheet) return cfStats;
     const next = new Map<string, CfStats>();
-    const { rows, cols } = cfExtent();
+    const { rows } = cfExtent();
     const local: CondFormatEntry[] = [];
     for (const e of cfEntries()) {
       if (!needsStats(e.rule)) continue;
-      // 범위가 불러오지 않은 페이지까지 걸치면 서버가 센 값으로(편집 화면은 보고 있는 페이지의 칸만 가진다)
-      const remote = e.ranges.map((r) => cfRemoteRange(r.r0, r.c0, Math.min(r.r1, rows - 1), Math.min(r.c1, cols - 1)));
-      if (remote.every((x) => x === null) || remote.some((x) => x === undefined || x === 'skipped')) {
-        if (remote.includes('skipped')) showCfSkipNotice();
-        local.push(e); // 아직 안 왔으면 불러온 값으로 먼저 칠하고, 도착하면 다시 칠한다
+      // 범위가 불러온 행 안이면 직접 세고, 불러오지 않은 행까지 걸치면 서버가 보낸 작은 통계로(아직 없으면 칠하지 않고 기다린다)
+      if (e.ranges.every((r) => rowsArrived(r.r0, Math.min(r.r1, rows - 1)))) {
+        local.push(e);
         continue;
       }
-      const values: string[] = [];
-      remote.forEach((x, k) => {
-        if (x === null) {
-          const r = e.ranges[k];
-          for (let row = r.r0; row <= Math.min(r.r1, rows - 1); row += 1) for (let col = r.c0; col <= Math.min(r.c1, cols - 1); col += 1) values.push(cfValueAt(row, col));
-        } else if (x && x !== 'skipped') for (const [v, n] of x.values) for (let m = 0; m < n; m += 1) values.push(v);
-      });
-      next.set(e.id, computeStats(e.rule, values));
+      next.set(e.id, cfRemoteStats(e.id));
     }
     if (local.length > 0) {
       const values = new Map<string, string[]>(local.map((e) => [e.id, []]));
@@ -3435,20 +3429,36 @@ async function main(): Promise<void> {
       ...(cfFallback ? { fallback: cfFallback } : {}),
       tables: new Map(),
       extent: cfExtent,
-      remote: (r0, c0, r1, c1) => {
-        const x = cfRemoteRange(r0, c0, r1, c1);
-        if (x === 'skipped') showCfSkipNotice();
-        return x && x !== 'skipped' ? cfRangeTableFromCounts(x.cells, x.values) : undefined;
-      },
+      remote: cfRemoteTable,
+      unsupported: showCfSkipNotice,
     };
     return cfEnv;
   }
-  // ---------- 서버 범위 값 개수 표(/api/view/xlsx-cf-ranges) ----------
+  // ---------- 서버 답(/api/view/xlsx-cf-ranges, src/xlsx/cfRangeValues.ts) ----------
   // 편집 화면은 보고 있는 페이지(500행 단위)만 받는다. 범위 전체를 보아야 하는 규칙(COUNTIF($A:$A,$A1)>1·중복·상위·색조 …)이
-  // 불러오지 않은 행까지 걸치면 서버(편집 방의 지금 상태)가 센 표를 쓴다. 칸 값이 바뀌면 리비전을 붙여 다시 물어
-  // (같으면 서버가 표를 다시 보내지 않는다) 편집으로 생기거나 없어진 중복이 반영된다.
-  type CfRemote = { readonly cells: number; readonly values: ReadonlyArray<readonly [string, number]> } | 'skipped';
-  const cfRemote = { sheet: -1, rev: undefined as number | undefined, byKey: new Map<string, CfRemote>(), wanted: new Map<string, CfRect>(), timer: 0, busy: false };
+  // 불러오지 않은 행까지 걸치면 서버가 답한다 — 범위 값 표를 받지 않고 집계와 화면 칸이 물은 COUNTIF 조건의 개수, 통계 규칙의
+  // 문턱값만 받는다. 서버는 방의 규칙에서 뽑은 범위만 답한다(아니면 skipped → "일부 생략"). 칸 값이 바뀌면 아는 것을 다시 묻는다.
+  type CfRemoteAnswerJson = {
+    rev: number;
+    ranges: Array<CfRect & ({ cells: number; agg: CfRangeAgg; crit: Array<[string, number]> } | { skipped: true })>;
+    stats: Record<string, (Omit<CfStats, 'counts'> & { counts?: Array<[string, number]> }) | 'skipped'>;
+  };
+  interface CfRemoteState {
+    agg?: CfRangeAgg;
+    cells: number;
+    crit: Map<string, number>;
+    asked: Map<string, CfVal>;
+    skipped?: boolean;
+  }
+  const cfRemote = {
+    sheet: -1,
+    rev: -1,
+    ranges: new Map<string, { rect: CfRect; st: CfRemoteState }>(),
+    stats: new Map<string, CfStats | 'skipped'>(),
+    wantStats: new Set<string>(),
+    timer: 0,
+    busy: false,
+  };
   const cfRectKey = (r: CfRect) => `${r.r0}:${r.c0}:${r.r1}:${r.c1}`;
   function rowsArrived(r0: number, r1: number): boolean {
     const arrived = arrivedPages.get(activeSheet);
@@ -3456,21 +3466,50 @@ async function main(): Promise<void> {
     for (let page = Math.floor(r0 / PAGE_SIZE_ROWS); page <= Math.floor(Math.max(r0, r1) / PAGE_SIZE_ROWS); page += 1) if (!arrived.has(page)) return false;
     return true;
   }
-  /** 불러온 행 안이면 null(직접 센다), 서버 표가 있으면 그 표, 아직 없으면 물어 두고 undefined */
-  function cfRemoteRange(r0: number, c0: number, r1: number, c1: number): CfRemote | null | undefined {
-    if (r1 < r0 || c1 < c0 || rowsArrived(r0, r1)) return null;
+  function cfRemoteForSheet(): typeof cfRemote {
     if (cfRemote.sheet !== activeSheet) {
       cfRemote.sheet = activeSheet;
-      cfRemote.rev = undefined;
-      cfRemote.byKey.clear();
-      cfRemote.wanted.clear();
+      cfRemote.rev = -1;
+      cfRemote.ranges.clear();
+      cfRemote.stats.clear();
+      cfRemote.wantStats.clear();
     }
+    return cfRemote;
+  }
+  /** 범위 함수의 범위 — 불러온 행 안이면 undefined(직접 센다), 아니면 서버 답으로 계산하는 표 */
+  function cfRemoteTable(r0: number, c0: number, r1: number, c1: number): CfRangeTable | undefined {
+    if (r1 < r0 || c1 < c0 || rowsArrived(r0, r1)) return undefined;
     const rect = { r0, c0, r1, c1 };
-    const hit = cfRemote.byKey.get(cfRectKey(rect));
-    if (hit) return hit;
-    cfRemote.wanted.set(cfRectKey(rect), rect);
+    const remote = cfRemoteForSheet();
+    let hit = remote.ranges.get(cfRectKey(rect));
+    if (!hit) {
+      hit = { rect, st: { cells: 0, crit: new Map(), asked: new Map() } };
+      remote.ranges.set(cfRectKey(rect), hit);
+    }
+    const st = hit.st;
+    if (st.skipped) showCfSkipNotice(); // 서버가 답하지 않는 범위 — 칠하지 않는다(ask가 아무것도 하지 않아 계속 기다림)
+    return {
+      cells: st.cells,
+      remote: {
+        agg: st.agg,
+        crit: st.crit,
+        ask: (crit) => {
+          if (st.skipped || st.asked.size >= 2_000) return;
+          st.asked.set(cfCritKey(crit), crit);
+          scheduleCfRemoteFetch(0);
+        },
+      },
+    };
+  }
+  /** 통계 규칙 — 서버가 보낸 작은 통계(아직 없으면 물어 두고 빈 통계 = 칠하지 않음) */
+  function cfRemoteStats(id: string): CfStats {
+    const remote = cfRemoteForSheet();
+    const st = remote.stats.get(id);
+    if (st === 'skipped') showCfSkipNotice();
+    if (st) return st === 'skipped' ? {} : st;
+    remote.wantStats.add(id);
     scheduleCfRemoteFetch(0);
-    return undefined;
+    return {};
   }
   function scheduleCfRemoteFetch(delay: number): void {
     if (cfRemote.timer) return;
@@ -3485,37 +3524,67 @@ async function main(): Promise<void> {
       return;
     }
     const sheet = cfRemote.sheet;
-    const known = [...cfRemote.byKey.keys()].filter((k) => !cfRemote.wanted.has(k)).map((k) => {
-      const [r0, c0, r1, c1] = k.split(':').map(Number);
-      return { r0, c0, r1, c1 };
-    });
-    const rects = [...cfRemote.wanted.values(), ...known].slice(0, 64);
-    if (rects.length === 0) return;
-    const revalidate = cfRemote.wanted.size === 0 && cfRemote.rev !== undefined;
-    cfRemote.wanted.clear();
+    // 물을 것: 새로 물은 조건 + 이미 아는 조건(값이 바뀌었을 수 있다), 범위마다 집계
+    const ranges = [...cfRemote.ranges.values()].filter(({ st }) => !st.skipped).slice(0, 64);
+    const stats = [...new Set([...cfRemote.wantStats, ...[...cfRemote.stats.keys()]])].slice(0, 64);
+    if (ranges.length === 0 && stats.length === 0) return;
+    let budget = 2_000;
+    let chars = 0;
+    const body = {
+      sheet,
+      ranges: ranges.map(({ rect, st }) => {
+        const crit: CfVal[] = [];
+        for (const [k, c] of [...st.asked, ...[...st.crit.keys()].filter((k) => !st.asked.has(k)).map((k): [string, CfVal] => [k, JSON.parse(k) as CfVal])]) {
+          if (budget <= 0 || chars + k.length > 100_000) break;
+          crit.push(c);
+          budget -= 1;
+          chars += k.length;
+        }
+        return { ...rect, crit };
+      }),
+      stats,
+    };
+    for (const { st } of ranges) st.asked.clear();
+    cfRemote.wantStats.clear();
     cfRemote.busy = true;
     try {
       const res = await fetch(`/api/view/xlsx-cf-ranges?token=${encodeURIComponent(token)}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ sheet, ranges: rects, ...(revalidate ? { rev: cfRemote.rev } : {}) }),
+        body: JSON.stringify(body),
       });
-      const json = (await res.json()) as { data?: { rev: number; ranges?: Array<CfRect & ({ cells: number; values: Array<[string, number]> } | { skipped: true })> } };
+      const json = (await res.json()) as { data?: CfRemoteAnswerJson };
       if (sheet !== cfRemote.sheet) return;
       if (!json.data) {
-        // 물을 수 없으면(편집 방이 없음 등) 그 범위는 불러온 값으로만 칠하고 "일부 생략"을 알린다
-        for (const r of rects) cfRemote.byKey.set(cfRectKey(r), 'skipped');
+        // 물을 수 없으면(편집 방이 없음·요청 제한 등) 그 범위는 칠하지 않고 "일부 생략"을 알린다
+        for (const { st } of ranges) st.skipped = true;
+        for (const id of stats) cfRemote.stats.set(id, 'skipped');
       } else {
-        cfRemote.rev = json.data.rev === -1 ? undefined : json.data.rev;
-        for (const r of json.data.ranges ?? []) cfRemote.byKey.set(cfRectKey(r), 'skipped' in r ? 'skipped' : { cells: r.cells, values: r.values });
-        if (json.data.rev === -1) scheduleCfRemoteFetch(300); // 세는 사이 편집이 들어왔다 — 다시 묻는다
-        if (!json.data.ranges) return; // 바뀐 것 없음
+        const sameRev = json.data.rev === cfRemote.rev;
+        cfRemote.rev = json.data.rev;
+        let learned = false;
+        for (const a of json.data.ranges) {
+          const hit = cfRemote.ranges.get(cfRectKey(a));
+          if (!hit) continue;
+          if ('skipped' in a) hit.st.skipped = true;
+          else {
+            hit.st.cells = a.cells;
+            hit.st.agg = a.agg;
+            if (!sameRev) hit.st.crit = new Map(a.crit);
+            else for (const [k, n] of a.crit) if (!hit.st.crit.has(k)) hit.st.crit.set(k, n);
+          }
+          learned = true;
+        }
+        for (const [id, st] of Object.entries(json.data.stats)) {
+          cfRemote.stats.set(id, st === 'skipped' ? 'skipped' : { ...st, counts: st.counts ? new Map(st.counts) : undefined });
+          learned = true;
+        }
+        if (!learned) return;
       }
       cfStats = null;
       cfEnv = null;
       scheduleCfRepaint();
     } catch {
-      for (const r of rects) cfRemote.wanted.set(cfRectKey(r), r);
       scheduleCfRemoteFetch(5_000);
     } finally {
       cfRemote.busy = false;
@@ -3547,7 +3616,7 @@ async function main(): Promise<void> {
     cfEnv = null;
     cfIndex = null; // 페이지가 도착하면 불러온 행이 늘어 건너뛰던 규칙을 칠할 수 있다
     ensureCfEngine();
-    if (cfRemote.byKey.size > 0 && cfRemote.sheet === activeSheet) scheduleCfRemoteFetch(300);
+    if ((cfRemote.ranges.size > 0 || cfRemote.stats.size > 0) && cfRemote.sheet === activeSheet) scheduleCfRemoteFetch(300);
     scheduleCfRepaint();
   }
   let cfRepaintQueued = false;

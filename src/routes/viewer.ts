@@ -38,8 +38,11 @@ import {
 } from '../docx/import.js';
 import { MarkupValidationError, addMarkup, deleteMarkup, listMarkup, updateMarkup } from '../markup.js';
 import { touchPresence } from '../presence.js';
-import { flushNow, getCfRangeValues, getCurrentBytes, getChangeLog, getFileCharts, getFileExtras, getFileImages } from '../collab/room.js';
-import { isCfRangeRequest } from '../xlsx/cfRangeValues.js';
+import { flushNow, getCfRemoteAnswer, getCurrentBytes, getChangeLog, getFileCharts, getFileExtras, getFileImages } from '../collab/room.js';
+import { parseCfRemoteRequest } from '../xlsx/cfRangeValues.js';
+
+/** 편집 화면 조건부 서식 서버 답 — 편집할 때마다(0.3초 묶음) 다시 묻는다 */
+const CF_REMOTE_RATE_LIMIT = { max: 240, timeWindow: '1 minute' } as const;
 import {
   buildGridFromOriginal,
   computeLineOffsets,
@@ -923,18 +926,19 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
 
   // 편집 화면 조건부 서식 — 범위 전체를 보아야 하는 규칙(COUNTIF($A:$A,$A1)·중복·상위·색조 …)용 범위 값 개수 표.
   // 편집 화면은 보고 있는 페이지만 받으므로 서버(편집 방의 지금 상태)가 만들어 준다(src/xlsx/cfRangeValues.ts).
-  app.post<{ Querystring: TokenQuery; Body: { sheet?: unknown; ranges?: unknown; rev?: unknown } }>(
+  app.post<{ Querystring: TokenQuery; Body: unknown }>(
     '/api/view/xlsx-cf-ranges',
-    { schema: { querystring: tokenQuerySchema }, bodyLimit: 16_384 },
+    { schema: { querystring: tokenQuerySchema }, bodyLimit: 131_072, config: { rateLimit: CF_REMOTE_RATE_LIMIT } },
     async (request, reply) => {
-      const view = await resolveEditorDataView(request.query.token, reply);
+      const view = await resolveView(request.query.token, reply);
       if (!view) return reply;
-      const body = request.body;
-      if (view.meta.ext !== 'xlsx' || !isCfRangeRequest(body)) {
+      // 편집 방 전용 — 편집 권한 토큰만(내려받기만 되는 토큰은 열린 편집 방에 일을 시킬 수 없다)
+      if (!view.claims.perms.canEdit) return reply.code(403).send({ success: false, error: '편집 권한이 없습니다.' });
+      const req = parseCfRemoteRequest(request.body);
+      if (view.meta.ext !== 'xlsx' || !req) {
         return reply.code(400).send({ success: false, error: '잘못된 요청입니다.' });
       }
-      const knownRev = typeof request.body.rev === 'number' ? request.body.rev : undefined;
-      const data = await getCfRangeValues(view.meta.id, body.sheet, body.ranges, knownRev);
+      const data = await getCfRemoteAnswer(view.meta.id, req);
       if (!data) return reply.code(409).send({ success: false, error: '편집 방이 열려 있지 않습니다.' });
       return { success: true, data };
     },

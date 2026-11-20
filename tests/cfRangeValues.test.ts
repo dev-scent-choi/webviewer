@@ -8,6 +8,9 @@ import * as encoding from 'lib0/encoding';
 import * as Y from 'yjs';
 import { messageYjsSyncStep2, messageYjsUpdate, readUpdate, writeSyncStep1, writeUpdate } from 'y-protocols/sync';
 import path from 'node:path';
+import v8 from 'node:v8';
+import vm from 'node:vm';
+import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 /**
@@ -162,16 +165,67 @@ async function flushEventLoop(turns = 50): Promise<void> {
 }
 
 
-async function makeColumnXlsx(rows: number): Promise<Buffer> {
+/** cols열 × rows행. A열은 모두 다른 값이고 맨 끝 행만 첫 행과 같다(편집 화면이 받지 않는 페이지의 중복). 나머지 열도 모두 다른 값 */
+async function makeSheetXlsx(rows: number, cols: number, rules: Array<{ ref: string; formula?: string; dup?: boolean }>): Promise<Buffer> {
   const workbook = new ExcelJS.Workbook();
   const sheet = workbook.addWorksheet('Sheet1');
-  // A열: 모두 다른 값, 맨 끝 행만 첫 행과 같은 값(멀리 떨어진 중복 — 편집 화면이 그 페이지를 받지 않은 상태)
-  for (let r = 1; r <= rows; r += 1) sheet.getCell(r, 1).value = r === rows ? 'K1' : `K${r}`;
-  const buffer = await workbook.xlsx.writeBuffer();
-  return Buffer.from(buffer as ArrayBuffer);
+  for (let r = 1; r <= rows; r += 1) {
+    const line: string[] = [];
+    for (let c = 1; c <= cols; c += 1) line.push(c === 1 ? (r === rows ? 'K1' : `K${r}`) : `v${r}_${c}`);
+    sheet.addRow(line);
+  }
+  const fill = { type: 'pattern' as const, pattern: 'solid' as const, bgColor: { argb: 'FFFFC7CE' } };
+  rules.forEach((rule, i) => {
+    if (!rule.dup) sheet.addConditionalFormatting({ ref: rule.ref, rules: [{ type: 'expression', priority: i + 1, formulae: [rule.formula!], style: { fill } }] });
+  });
+  const zip = unzipSync(new Uint8Array(await workbook.xlsx.writeBuffer()));
+  const dups = rules.filter((r) => r.dup);
+  if (dups.length > 0) {
+    // ExcelJS는 중복 값 규칙을 쓰지 못한다 — 시트 XML에 직접 넣는다
+    const xml = dups.map((r) => `<conditionalFormatting sqref="${r.ref}"><cfRule type="duplicateValues" dxfId="0" priority="1"/></conditionalFormatting>`).join('');
+    zip['xl/worksheets/sheet1.xml'] = strToU8(strFromU8(zip['xl/worksheets/sheet1.xml']).replace('</sheetData>', `</sheetData>${xml}`));
+    zip['xl/styles.xml'] = strToU8(strFromU8(zip['xl/styles.xml']).replace(/<dxfs count="0"\/>|(?=<tableStyles)/, '<dxfs count="1"><dxf><fill><patternFill><bgColor rgb="FFFFC7CE"/></patternFill></fill></dxf></dxfs>'));
+  }
+  return Buffer.from(zipSync(zip));
 }
 
-describe('collab/room.ts: getCfRangeValues (편집 화면 조건부 서식 범위 표)', () => {
+async function openRoom(bytes: Buffer) {
+  const { store } = await import('../src/storage.js');
+  const { joinEditSession } = await import('../src/collab/room.js');
+  const docId = randomUUID();
+  await store.saveOriginal(docId, 'xlsx', bytes);
+  await store.writeMeta({ id: docId, name: 'x.xlsx', ext: 'xlsx', status: 'ready', pageCount: 1, createdAt: new Date().toISOString(), progress: 100, viewKind: 'grid' });
+  const socket = new FakeSocket();
+  await joinEditSession(socket as never, {} as never, docId, 'xlsx', [], false, 'viewer-a');
+  sendSubscribe(socket, 0, [0]); // 편집 화면처럼 첫 페이지(500행)만 받는다
+  await flushEventLoop();
+  return { docId, socket };
+}
+
+/** 힙 정리 — 실행 옵션 없이 이 프로세스에서 켠다 */
+function forceGc(): () => void {
+  v8.setFlagsFromString('--expose-gc');
+  return vm.runInNewContext('gc') as () => void;
+}
+
+/** 이벤트 루프가 얼마나 오래 막혔는지 — 5ms 간격 타이머가 늦은 만큼 */
+function stallMeter(): { stop(): number } {
+  let last = performance.now();
+  let worst = 0;
+  const timer = setInterval(() => {
+    const now = performance.now();
+    worst = Math.max(worst, now - last - 5);
+    last = now;
+  }, 5);
+  return {
+    stop() {
+      clearInterval(timer);
+      return worst;
+    },
+  };
+}
+
+describe('collab/room.ts: getCfRemoteAnswer (편집 화면 조건부 서식 서버 답)', () => {
   let tmpDir: string;
   beforeEach(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'docview-room-cfranges-'));
@@ -190,63 +244,129 @@ describe('collab/room.ts: getCfRangeValues (편집 화면 조건부 서식 범�
   });
 
   for (const rows of [1_500, 20_000]) {
-    test(`${rows}행: 불러오지 않은 행의 중복까지 세고, 편집으로 중복이 생기고 없어지면 반영한다`, async () => {
-      const { store } = await import('../src/storage.js');
-      const { joinEditSession, getCfRangeValues } = await import('../src/collab/room.js');
+    test(`${rows}행 COUNTIF($A:$A,$A1)>1: 받지 않은 행의 중복을 세고, 편집으로 생기고 없어지면 −1/+1로 따라간다`, async () => {
+      const { getCfRemoteAnswer } = await import('../src/collab/room.js');
       const { gridCellKey } = await import('../src/collab/gridShared.js');
-      const { cfRangeTableFromCounts, paintCell } = await import('../src/collab/condFormatShared.js');
-      const docId = randomUUID();
-      await store.saveOriginal(docId, 'xlsx', await makeColumnXlsx(rows));
-      await store.writeMeta({ id: docId, name: 'x.xlsx', ext: 'xlsx', status: 'ready', pageCount: 1, createdAt: new Date().toISOString(), progress: 100, viewKind: 'grid' });
-      const socket = new FakeSocket();
-      await joinEditSession(socket as never, {} as never, docId, 'xlsx', [], false, 'viewer-a');
-      sendSubscribe(socket, 0, [0]); // 편집 화면처럼 첫 페이지(500행)만 받는다
-      await flushEventLoop();
-
-      const range = { r0: 0, c0: 0, r1: 1_048_575, c1: 0 }; // $A:$A — 시트 크기로 잘린다
-      const first = await getCfRangeValues(docId, 0, [range], undefined);
-      expect(first?.ranges?.[0]).toMatchObject({ cells: rows });
-      // 편집 화면과 같은 판정: COUNTIF($A:$A,$A1)>1 — 1행은 맨 끝 행과 중복, 2행은 아니다
-      const rule = { id: 'd', ranges: [{ r0: 0, c0: 0, r1: rows - 1, c1: 0 }], rule: { t: 'expr' as const, f: 'COUNTIF($A:$A,$A1)>1', s: { bg: '#FFC7CE' } } };
-      const painted = (res: typeof first, row: number, value: string) => {
-        const r = res!.ranges![0] as unknown as { cells: number; values: Array<[string, number]> };
-        const table = cfRangeTableFromCounts(r.cells, r.values);
-        const env = { tables: new Map(), extent: () => ({ rows, cols: 1 }), remote: () => table };
+      const { cfCritKey, paintCell } = await import('../src/collab/condFormatShared.js');
+      const { docId, socket } = await openRoom(await makeSheetXlsx(rows, 1, [{ ref: `A1:A${rows}`, formula: 'COUNTIF($A:$A,$A1)>1' }]));
+      const range = { r0: 0, c0: 0, r1: rows - 1, c1: 0 }; // 편집 화면 rangeTableOf 키(시트 크기로 자른 $A:$A)
+      const ask = (crit: string[]) => getCfRemoteAnswer(docId, { sheet: 0, ranges: [{ ...range, crit }] });
+      const painted = async (row: number, value: string) => {
+        const a = (await ask([value]))!.ranges[0];
+        if ('skipped' in a) throw new Error('skipped');
+        const crit = new Map(a.crit);
+        const rule = { id: 'd', ranges: [{ r0: 0, c0: 0, r1: rows - 1, c1: 0 }], rule: { t: 'expr' as const, f: 'COUNTIF($A:$A,$A1)>1', s: { bg: '#FFC7CE' } } };
+        const env = { tables: new Map(), extent: () => ({ rows, cols: 1 }), remote: () => ({ cells: a.cells, remote: { agg: a.agg, crit, ask: () => undefined } }) };
         return paintCell([rule], row, 0, value, new Map(), () => value, env)?.style?.bg;
       };
-      expect(painted(first, 0, 'K1')).toBe('#FFC7CE');
-      expect(painted(first, 1, 'K2')).toBeUndefined();
-
-      // 리비전이 같으면 표를 다시 보내지 않는다
-      expect(await getCfRangeValues(docId, 0, [range], first!.rev)).toEqual({ rev: first!.rev });
-
-      // 편집으로 중복을 만든다: A2 = "K3" → K3이 둘
+      const first = await ask(['K1', 'K2']);
+      expect(first!.ranges[0]).toMatchObject({ cells: rows, crit: [[cfCritKey('K1'), 2], [cfCritKey('K2'), 1]] });
+      expect(await painted(0, 'K1')).toBe('#FFC7CE');
+      expect(await painted(1, 'K2')).toBeUndefined();
+      // 편집으로 중복을 만든다(A2 = K3)
       editCellViaClient(socket, gridCellKey(0, 1, 0), 'K3');
       await flushEventLoop();
-      const second = await getCfRangeValues(docId, 0, [range], first!.rev);
-      expect(second!.rev).not.toBe(first!.rev);
-      expect(painted(second, 2, 'K3')).toBe('#FFC7CE');
-      // 편집으로 중복을 없앤다: 맨 끝 행(받지 않은 페이지)을 지운다 → K1은 하나뿐
+      expect(await painted(2, 'K3')).toBe('#FFC7CE');
+      // 받지 않은 맨 끝 행을 고쳐 K1 중복을 없앤다
       syncMirrorWithRoom(socket);
       editCellViaClient(socket, gridCellKey(0, rows - 1, 0), 'Z');
       await flushEventLoop();
-      const third = await getCfRangeValues(docId, 0, [range], second!.rev);
-      expect(painted(third, 0, 'K1')).toBeUndefined();
-      expect(painted(third, 2, 'K3')).toBe('#FFC7CE');
-    }, 60_000);
+      expect(await painted(0, 'K1')).toBeUndefined();
+      expect((await ask(['Z']))!.ranges[0]).toMatchObject({ crit: [[cfCritKey('Z'), 1]] });
+    }, 120_000);
   }
 
-  test('범위 칸이 너무 많으면 건너뛰고(skipped), 요청 모양이 틀리면 거른다', async () => {
-    const { isCfRangeRequest, CF_RANGE_CELL_CAP } = await import('../src/xlsx/cfRangeValues.js');
-    expect(isCfRangeRequest({ sheet: 0, ranges: [{ r0: 0, c0: 0, r1: 5, c1: 0 }] })).toBe(true);
-    expect(isCfRangeRequest({ sheet: 0, ranges: [{ r0: 5, c0: 0, r1: 1, c1: 0 }] })).toBe(false);
-    expect(isCfRangeRequest({ sheet: -1, ranges: [{ r0: 0, c0: 0, r1: 1, c1: 0 }] })).toBe(false);
-    expect(isCfRangeRequest({ sheet: 0, ranges: Array.from({ length: 65 }, () => ({ r0: 0, c0: 0, r1: 1, c1: 0 })) })).toBe(false);
-    expect(isCfRangeRequest({ sheet: 0, ranges: [{ r0: '0', c0: 0, r1: 1, c1: 0 }] })).toBe(false);
-    const { cfRangeValues } = await import('../src/xlsx/cfRangeValues.js');
-    const fakeStore = { sheetMeta: [{ rowCount: 1_000_000, colCount: 10 }] } as never;
-    const out = await cfRangeValues(fakeStore, 0, [{ r0: 0, c0: 0, r1: 999_999, c1: 9 }], () => undefined, { rev: 0, byKey: new Map(), applying: Promise.resolve() });
-    expect(10_000_000 > CF_RANGE_CELL_CAP).toBe(true);
-    expect(out[0]).toMatchObject({ skipped: true });
+  test('규칙에 없는 범위는 답하지 않는다(skipped) — 범위를 한 행씩 밀어도 세지 않는다', async () => {
+    const { getCfRemoteAnswer } = await import('../src/collab/room.js');
+    const { docId } = await openRoom(await makeSheetXlsx(1_500, 1, [{ ref: 'A1:A1500', formula: 'COUNTIF($A:$A,$A1)>1' }]));
+    const res = await getCfRemoteAnswer(docId, { sheet: 0, ranges: [{ r0: 1, c0: 0, r1: 1_499, c1: 0 }, { r0: 0, c0: 0, r1: 1_499, c1: 0 }] });
+    expect(res!.ranges[0]).toMatchObject({ skipped: true });
+    expect(res!.ranges[1]).toMatchObject({ cells: 1_500 });
+  }, 60_000);
+
+  test('중복 값 규칙: 2개 이상인 값만 보낸다(작은 통계)', async () => {
+    const { getCfRemoteAnswer } = await import('../src/collab/room.js');
+    const { paintCell } = await import('../src/collab/condFormatShared.js');
+    const { docId } = await openRoom(await makeSheetXlsx(1_500, 1, [{ ref: 'A1:A1500', dup: true }]));
+    const { GRID_COND_FORMATS_MAP } = await import('../src/collab/condFormatShared.js');
+    const { getRoomYdocForTest } = await import('../src/collab/room.js');
+    const entries = getRoomYdocForTest(docId)!.getMap<never[]>(GRID_COND_FORMATS_MAP).get('0') as unknown as Array<{ id: string }>;
+    const id = entries[0].id;
+    const res = await getCfRemoteAnswer(docId, { sheet: 0, ranges: [], stats: [id] });
+    const st = res!.stats[id];
+    expect(st).not.toBe('skipped');
+    expect(st).toMatchObject({ dupOnly: true, counts: [['k1', 2]] });
+    const stats = new Map([[id, { counts: new Map((st as { counts: Array<[string, number]> }).counts), dupOnly: true }]]);
+    const rule = entries[0] as never;
+    expect(paintCell([rule], 0, 0, 'K1', stats, () => '')?.style?.bg).toBeDefined();
+    expect(paintCell([rule], 5, 0, 'K6', stats, () => '')).toBeNull();
+  }, 60_000);
+
+  test('C1: 2만 행 × 10열(모두 다른 값) — 64범위 × 동시 4요청이 상한 안(메모리·멈춤)', async () => {
+    const { getCfRemoteAnswer } = await import('../src/collab/room.js');
+    const { CF_ROOM_CELL_CAP, CF_ROOM_DISTINCT_CAP } = await import('../src/xlsx/cfRangeValues.js');
+    const { docId } = await openRoom(await makeSheetXlsx(20_000, 10, [{ ref: 'A1:J20000', formula: 'COUNTIF($A:$J,A1)>1' }]));
+    const gc = forceGc();
+    gc();
+    const heap0 = process.memoryUsage().heapUsed;
+    let peak = heap0;
+    const sampler = setInterval(() => (peak = Math.max(peak, process.memoryUsage().heapUsed)), 10);
+    const meter = stallMeter();
+    // 거의 시트 전체인 범위를 한 행씩 밀어 64개 — 규칙 범위($A:$J, 20만 칸) 하나만 답한다
+    const ranges = Array.from({ length: 64 }, (_, i) => ({ r0: i, c0: 0, r1: 19_999, c1: 9, crit: [`K${i + 1}`] }));
+    const t0 = performance.now();
+    const answers = await Promise.all(Array.from({ length: 4 }, () => getCfRemoteAnswer(docId, { sheet: 0, ranges })));
+    const ms = performance.now() - t0;
+    const stall = meter.stop();
+    clearInterval(sampler);
+    for (const a of answers) {
+      expect(a!.ranges[0]).toMatchObject({ cells: 200_000 });
+      expect(a!.ranges.slice(1).every((r) => 'skipped' in r)).toBe(true);
+      expect(JSON.stringify(a).length).toBeLessThan(20_000); // 범위 값 표를 보내지 않는다
+    }
+    const grew = (peak - heap0) / 1e6;
+    console.log(`C1: 4요청 ${Math.round(ms)}ms, 힙 최고 +${grew.toFixed(1)}MB, 가장 긴 멈춤 ${Math.round(stall)}ms (상한 ${CF_ROOM_CELL_CAP}칸·${CF_ROOM_DISTINCT_CAP}값)`);
+    expect(grew).toBeLessThan(150);
+    expect(stall).toBeLessThan(100);
+  }, 120_000);
+
+  test('I1: 20만 칸 범위에서 편집 50번 — 다시 세지 않고(빠름) 메모리가 늘지 않는다', async () => {
+    const { getCfRemoteAnswer, getRoomCfTallyForTest } = await import('../src/collab/room.js');
+    const { gridCellKey } = await import('../src/collab/gridShared.js');
+    const { docId, socket } = await openRoom(await makeSheetXlsx(20_000, 10, [{ ref: 'A1:J20000', formula: 'COUNTIF($A:$J,A1)>1' }]));
+    const range = { r0: 0, c0: 0, r1: 19_999, c1: 9 };
+    await getCfRemoteAnswer(docId, { sheet: 0, ranges: [{ ...range, crit: ['K1'] }] }); // 처음 한 번 센다
+    const tally = () => [...getRoomCfTallyForTest(docId)!.sheets.get(0)!.rects.values()][0].raw!;
+    const distinct0 = tally().size;
+    const gc = forceGc();
+    gc();
+    const heap0 = process.memoryUsage().heapUsed;
+    let worst = 0;
+    for (let i = 0; i < 50; i += 1) {
+      syncMirrorWithRoom(socket);
+      editCellViaClient(socket, gridCellKey(0, 1 + (i % 10), 1), i % 2 === 0 ? 'K1' : `v${2 + (i % 10)}_2`);
+      await flushEventLoop(5);
+      const t0 = performance.now();
+      const a = await getCfRemoteAnswer(docId, { sheet: 0, ranges: [{ ...range, crit: ['K1'] }] });
+      worst = Math.max(worst, performance.now() - t0);
+      expect(a!.ranges[0]).toMatchObject({ cells: 200_000 });
+    }
+    gc();
+    const grew = (process.memoryUsage().heapUsed - heap0) / 1e6;
+    console.log(`I1: 편집 50번, 답 가장 느린 것 ${Math.round(worst)}ms, 값 종류 ${distinct0}→${tally().size}, 힙 ${grew.toFixed(1)}MB`);
+    expect(tally().size).toBeLessThanOrEqual(distinct0 + 1);
+    expect(worst).toBeLessThan(200);
+    expect(grew).toBeLessThan(20);
+  }, 300_000);
+
+  test('요청 검증: 모양이 틀리거나 너무 크면 거른다', async () => {
+    const { parseCfRemoteRequest } = await import('../src/xlsx/cfRangeValues.js');
+    expect(parseCfRemoteRequest({ sheet: 0, ranges: [{ r0: 0, c0: 0, r1: 5, c1: 0, crit: ['a', 1, null, true] }], stats: ['x'] })).not.toBeNull();
+    expect(parseCfRemoteRequest({ sheet: 0, ranges: [{ r0: 5, c0: 0, r1: 1, c1: 0 }] })).toBeNull();
+    expect(parseCfRemoteRequest({ sheet: -1, ranges: [] })).toBeNull();
+    expect(parseCfRemoteRequest({ sheet: 0, ranges: Array.from({ length: 65 }, () => ({ r0: 0, c0: 0, r1: 1, c1: 0 })) })).toBeNull();
+    expect(parseCfRemoteRequest({ sheet: 0, ranges: [{ r0: 0, c0: 0, r1: 1, c1: 0, crit: Array.from({ length: 2_001 }, () => 'a') }] })).toBeNull();
+    expect(parseCfRemoteRequest({ sheet: 0, ranges: [{ r0: 0, c0: 0, r1: 1, c1: 0, crit: [{}] }] })).toBeNull();
+    expect(parseCfRemoteRequest({ sheet: 0, ranges: [{ r0: '0', c0: 0, r1: 1, c1: 0 }] })).toBeNull();
   });
 });

@@ -230,6 +230,10 @@ export interface CfStats {
   readonly max?: number;
   /** 백분위 문턱값용 — 오름차순 값 */
   readonly sorted?: readonly number[];
+  /** 서버가 보낸 압축형 중복 통계 — counts에는 2개 이상인 값만 있고, 없는 값은 1개(빈 칸 아님) */
+  readonly dupOnly?: boolean;
+  /** 서버가 보낸 압축형 백분위 — 규칙이 쓰는 백분위(문턱값 v)마다 값 하나(sorted 대신) */
+  readonly pct?: Readonly<Record<string, number>>;
 }
 
 export function needsStats(rule: CfRule): boolean {
@@ -238,24 +242,63 @@ export function needsStats(rule: CfRule): boolean {
 
 /** values: 규칙 범위 안의 (불러와 둔) 값들 */
 export function computeStats(rule: CfRule, values: readonly string[]): CfStats {
+  const counts = new Map<string, number>();
+  for (const v of values) counts.set(v, (counts.get(v) ?? 0) + 1);
+  return computeStatsFromCounts(rule, counts);
+}
+
+/** 값 글자 → 개수 표로 통계(서버는 이 표를 칸 편집마다 −1/+1 한다). 색조·막대·아이콘은 sorted를 펼친다 */
+export function computeStatsFromCounts(rule: CfRule, raw: ReadonlyMap<string, number>): CfStats {
   if (rule.t === 'dup') {
     const counts = new Map<string, number>();
-    for (const v of values) {
+    for (const [v, n] of raw) {
       const k = v.trim().toLowerCase();
-      if (k !== '') counts.set(k, (counts.get(k) ?? 0) + 1);
+      if (k !== '') counts.set(k, (counts.get(k) ?? 0) + n);
     }
     return { counts };
   }
-  const nums = values.map(cfNumber).filter((n): n is number => n !== null);
-  if (nums.length === 0) return {};
-  if (rule.t === 'top') {
-    const sorted = [...nums].sort((a, b) => (rule.bottom ? a - b : b - a));
-    const n = rule.percent ? Math.max(1, Math.floor((sorted.length * rule.n) / 100)) : Math.max(1, rule.n);
-    return { threshold: sorted[Math.min(n, sorted.length) - 1] };
+  const pairs: Array<[number, number]> = [];
+  let total = 0;
+  for (const [v, n] of raw) {
+    const x = cfNumber(v);
+    if (x === null || n <= 0) continue;
+    pairs.push([x, n]);
+    total += n;
   }
-  if (rule.t === 'avg') return { mean: nums.reduce((a, b) => a + b, 0) / nums.length };
-  const sorted = [...nums].sort((a, b) => a - b);
+  if (total === 0) return {};
+  if (rule.t === 'top') {
+    pairs.sort((a, b) => (rule.bottom ? a[0] - b[0] : b[0] - a[0]));
+    const want = Math.min(total, rule.percent ? Math.max(1, Math.floor((total * rule.n) / 100)) : Math.max(1, rule.n));
+    let seen = 0;
+    for (const [x, n] of pairs) {
+      seen += n;
+      if (seen >= want) return { threshold: x };
+    }
+    return {};
+  }
+  if (rule.t === 'avg') return { mean: pairs.reduce((a, [x, n]) => a + x * n, 0) / total };
+  pairs.sort((a, b) => a[0] - b[0]);
+  const sorted: number[] = [];
+  for (const [x, n] of pairs) for (let i = 0; i < n; i += 1) sorted.push(x);
   return { min: sorted[0], max: sorted[sorted.length - 1], sorted };
+}
+
+/** 서버 → 편집 화면으로 보낼 작은 통계(값 표·정렬 배열 대신 판정에 쓰는 것만). 중복 값이 maxKeys보다 많으면 null */
+export function compactStats(rule: CfRule, st: CfStats, maxKeys = 20_000): CfStats | null {
+  if (rule.t === 'dup') {
+    const counts = new Map<string, number>();
+    for (const [k, n] of st.counts ?? []) {
+      if (n < 2) continue;
+      if (counts.size >= maxKeys) return null;
+      counts.set(k, n);
+    }
+    return { counts, dupOnly: true };
+  }
+  if (!st.sorted) return st;
+  const pct: Record<string, number> = {};
+  const ths = rule.t === 'scale' || rule.t === 'bar' || rule.t === 'icon' ? (rule.th ?? (rule.t === 'scale' && rule.colors.length === 3 ? DEFAULT_SCALE3 : [])) : [];
+  for (const th of ths) if (th.type === 'percentile') pct[String(th.v ?? 0)] = percentileOf(st.sorted, th.v ?? 0);
+  return { min: st.min, max: st.max, pct };
 }
 
 /** 오름차순 값의 p번째 백분위수(엑셀 PERCENTILE.INC와 같은 보간) */
@@ -283,7 +326,7 @@ function mixHex(a: string, b: string, t: number): string {
 
 /** 수식 엔진(fast-formula-parser)으로 계산하는 대체 경로 — 작은 계산기가 못 하는 범위·함수(COUNTIF($A:$A,$A2) 등)용.
  * formula는 이미 이 칸 기준으로 참조를 옮긴 수식, 결과가 없으면(오류·지원 안 함) undefined. */
-export type CfFormulaFallback = (formula: string, row: number, col: number) => CfVal | undefined;
+export type CfFormulaFallback = (formula: string, row: number, col: number) => CfVal | undefined | typeof CF_CANNOT;
 
 /** 문턱값 하나(cfvo)를 수로 — 최소·최대·수·백분율·백분위·수식, x14의 자동 최소·최대(0을 포함) */
 function thresholdOf(
@@ -308,7 +351,7 @@ function thresholdOf(
     case 'percent':
       return st.min + ((st.max - st.min) * (th.v ?? 0)) / 100;
     case 'percentile':
-      return st.sorted ? percentileOf(st.sorted, th.v ?? 0) : null;
+      return st.sorted ? percentileOf(st.sorted, th.v ?? 0) : (st.pct?.[String(th.v ?? 0)] ?? null);
     case 'formula': {
       const v = th.f && anchor ? evalCfValue(th.f, 0, 0, anchor.r0, anchor.c0, valueAt, env) : undefined;
       return typeof v === 'number' ? v : typeof v === 'string' ? cfNumber(v) : null;
@@ -359,7 +402,7 @@ export function paintCell(
       case 'dup': {
         const k = value.trim().toLowerCase();
         if (k !== '') {
-          const n = st.counts?.get(k) ?? 0;
+          const n = st.counts?.get(k) ?? (st.dupOnly ? 1 : 0);
           matched = rule.unique ? n === 1 : n > 1;
         }
         break;
@@ -648,15 +691,49 @@ export function evalCfValue(
   // 상수(숫자·글자·논리값)는 수식마다 한 번만 읽는다 — 칸마다 같은 "10"을 다시 해석하지 않게
   const constant = constantOperand(formula);
   if (constant !== NOT_CONSTANT) return constant;
-  const src = formula.trim().replace(/^=/, '');
+  const src = rewriteSumproduct(formula.trim().replace(/^=/, ''));
   try {
     return evalSmall(src, dr, dc, row, col, valueAt, env);
   } catch (error) {
+    if (error === CF_PENDING) return undefined; // 서버 범위 값 답을 기다리는 중 — 오면 다시 칠한다
     // 작은 계산기가 모르는 것(다른 시트·모르는 함수·못 읽는 문법)만 수식 엔진으로 — 계산 오류(#VALUE! 등)는 안 맞음
     const unsupported = error === UNSUPPORTED || (error instanceof Error && error.message === 'cf formula');
     if (!unsupported || !env?.fallback) return undefined;
-    return env.fallback(shiftFormulaRefs(`=${src}`, dr, dc).slice(1), row, col);
+    const v = env.fallback(shiftFormulaRefs(`=${src}`, dr, dc).slice(1), row, col);
+    if (v === CF_CANNOT) {
+      env.unsupported?.(); // 엔진도 계산하지 못하는 규칙 — 칠하지 않고 "일부 생략"을 알린다
+      return undefined;
+    }
+    return v;
   }
+}
+
+/** 수식 엔진이 계산하지 못한다는 표시(모르는 함수·배열 비교 등) — 오류값(#N/A 등, 안 맞음)과 다르다 */
+export const CF_CANNOT: unique symbol = Symbol('cf-cannot');
+/** 범위 값 표를 서버에 물었고 아직 답이 없다 */
+const CF_PENDING = new Error('cf: pending');
+
+const sumproductMemo = new Map<string, string>();
+const SP_RANGE = String.raw`\$?[A-Za-z]{1,3}\$?\d*:\$?[A-Za-z]{1,3}\$?\d*`;
+const SP_ARG = String.raw`\$?[A-Za-z]{1,3}\$?\d+|"[^"]*"|-?\d+(?:\.\d+)?`;
+const SP_PATTERN = new RegExp(
+  String.raw`SUMPRODUCT\(\s*(?:--|1\s*\*\s*)?\(\s*(?:(${SP_RANGE})\s*=\s*(${SP_ARG})|(${SP_ARG})\s*=\s*(${SP_RANGE}))\s*\)\s*(?:\*\s*1\s*)?\)`,
+  'gi',
+);
+/**
+ * SUMPRODUCT((범위=값)*1)·SUMPRODUCT(--(범위=값))는 "범위에서 값과 같은 칸 수"다 — COUNTIF(범위,값)으로 바꿔 범위 값 표(서버 표 포함)로
+ * 계산한다(수식 엔진은 이 배열 비교를 못 한다).
+ * shortcut: 값이 "<5"·"a*"처럼 비교 기호·와일드카드로 시작하는 글자면 COUNTIF는 조건으로 읽는다(SUMPRODUCT는 글자 그대로) — 그런 값이 실제로 나오면 정확 비교 함수를 따로 둔다.
+ */
+export function rewriteSumproduct(src: string): string {
+  if (!/SUMPRODUCT/i.test(src)) return src;
+  let out = sumproductMemo.get(src);
+  if (out === undefined) {
+    out = src.replace(SP_PATTERN, (_m, r1: string | undefined, a1: string | undefined, a2: string | undefined, r2: string | undefined) => `COUNTIF(${r1 ?? r2},${a1 ?? a2})`);
+    if (sumproductMemo.size > 1_000) sumproductMemo.clear();
+    sumproductMemo.set(src, out);
+  }
+  return out;
 }
 
 const NOT_CONSTANT = Symbol('not-constant');
@@ -876,8 +953,10 @@ export interface CfEnv {
   /** 범위 키 → 값 표. 칸 값이 바뀌면 새 Map으로 */
   readonly tables?: Map<string, CfRangeTable>;
   readonly extent?: () => { rows: number; cols: number };
-  /** 범위 값 표를 밖(편집 화면 — 서버의 범위 값 개수 표)에서 받는다. undefined면 valueAt으로 만든다 */
+  /** 범위 값 표를 밖(편집 화면 — 서버가 답하는 범위)에서 받는다. undefined면 valueAt으로 만든다 */
   readonly remote?: (r0: number, c0: number, r1: number, c1: number) => CfRangeTable | undefined;
+  /** 수식 엔진도 계산하지 못한 규칙이 있었다 — "일부 생략" 알림 */
+  readonly unsupported?: () => void;
 }
 
 interface CfRange {
@@ -889,9 +968,50 @@ interface CfRange {
 
 export interface CfRangeTable {
   readonly cells: number;
-  readonly values: readonly CfVal[];
+  /** 칸 값(이 화면에서 직접 센 표). 서버 개수 표로 만든 표는 counts·sorted만 있다 */
+  readonly values?: readonly CfVal[];
   counts?: Map<string, number>;
   sorted?: number[];
+  /** 편집 화면 — 서버가 답한 집계와 물어본 조건별 개수(범위 값 표 전체를 받지 않는다) */
+  readonly remote?: CfRemoteRange;
+}
+
+/** 범위 집계(COUNT·COUNTA·SUM·MIN·MAX — AVERAGE는 SUM/COUNT) */
+export interface CfRangeAgg {
+  readonly count: number;
+  readonly counta: number;
+  readonly sum: number;
+  readonly min: number;
+  readonly max: number;
+}
+/** 서버 답 — 아직 없는 조건은 ask로 물어 두고 CF_PENDING(나중에 다시 칠한다) */
+export interface CfRemoteRange {
+  readonly agg?: CfRangeAgg;
+  readonly crit: ReadonlyMap<string, number>;
+  ask(crit: CfVal): void;
+}
+/** COUNTIF 조건 하나의 키(서버·편집 화면 공용) */
+export const cfCritKey = (crit: CfVal): string => JSON.stringify(crit);
+
+/** 서버 — 범위 값 표에서 집계와 물어본 조건들의 개수만 답한다 */
+export function cfRangeAnswer(t: CfRangeTable, crits: readonly CfVal[]): { agg: CfRangeAgg; crit: Array<[string, number]> } {
+  const s = sortedOf(t);
+  const agg = { count: s.length, counta: [...countsOf(t).values()].reduce((a, b) => a + b, 0), sum: s.reduce((x, y) => x + y, 0), min: s[0] ?? 0, max: s[s.length - 1] ?? 0 };
+  return { agg, crit: crits.map((c) => [cfCritKey(c), countIf(t, c)]) };
+}
+
+/** 값 글자 → 개수 표(빈 칸 제외)와 칸 수 → 범위 값 표(서버) */
+export function cfRangeTableFromRaw(cells: number, raw: ReadonlyMap<string, number>): CfRangeTable {
+  const counts = new Map<string, number>();
+  const sorted: number[] = [];
+  for (const [v, n] of raw) {
+    const cv = cellVal(v);
+    if (cv === null || n <= 0) continue;
+    counts.set(countKey(cv), (counts.get(countKey(cv)) ?? 0) + n);
+    if (typeof cv === 'number') for (let i = 0; i < n; i += 1) sorted.push(cv);
+  }
+  sorted.sort((a, b) => a - b);
+  return { cells, counts, sorted };
 }
 
 const COL_RANGE_TOKEN = /^(\$?)([A-Za-z]{1,3}):(\$?)([A-Za-z]{1,3})(?![\w(])/;
@@ -919,26 +1039,32 @@ function rangeTableOf(range: CfRange, valueAt: (row: number, col: number) => str
   return table;
 }
 
-/** 값 개수 표([값 글자, 개수][], 빈 칸 제외)와 칸 수 → 범위 값 표(서버 /api/view/xlsx-cf-ranges 응답용) */
-export function cfRangeTableFromCounts(cells: number, counts: ReadonlyArray<readonly [string, number]>): CfRangeTable {
-  const values: CfVal[] = [];
-  for (const [v, n] of counts) {
-    const cv = cellVal(v);
-    for (let i = 0; i < n; i += 1) values.push(cv);
-  }
-  return { cells, values };
+/** 서버 — 칸 편집으로 값 하나가 늘거나 줄었다. 표를 다시 만들지 않고 고친다(개수 표 −1/+1, 정렬된 수는 이진 탐색으로 넣고 뺀다) */
+export function cfRangeTableAdjust(t: CfRangeTable, text: string, delta: 1 | -1): void {
+  const cv = cellVal(text);
+  if (cv === null) return;
+  const counts = countsOf(t);
+  const k = countKey(cv);
+  const n = (counts.get(k) ?? 0) + delta;
+  if (n > 0) counts.set(k, n);
+  else counts.delete(k);
+  if (typeof cv !== 'number') return;
+  const sorted = sortedOf(t);
+  const i = countBelow(sorted, cv, false);
+  if (delta > 0) sorted.splice(i, 0, cv);
+  else if (sorted[i] === cv) sorted.splice(i, 1);
 }
 
 const countKey = (v: CfVal): string => (typeof v === 'number' ? `n${v}` : typeof v === 'boolean' ? `b${v}` : `s${String(v ?? '').toLowerCase()}`);
 function countsOf(t: CfRangeTable): Map<string, number> {
   if (!t.counts) {
     t.counts = new Map();
-    for (const v of t.values) if (v !== null) t.counts.set(countKey(v), (t.counts.get(countKey(v)) ?? 0) + 1);
+    for (const v of t.values ?? []) if (v !== null) t.counts.set(countKey(v), (t.counts.get(countKey(v)) ?? 0) + 1);
   }
   return t.counts;
 }
 function sortedOf(t: CfRangeTable): number[] {
-  if (!t.sorted) t.sorted = t.values.filter((v): v is number => typeof v === 'number').sort((a, b) => a - b);
+  if (!t.sorted) t.sorted = (t.values ?? []).filter((v): v is number => typeof v === 'number').sort((a, b) => a - b);
   return t.sorted;
 }
 /** 오름차순 배열에서 x보다 작은(strict) 또는 작거나 같은 값의 개수 */
@@ -966,7 +1092,8 @@ function countIf(t: CfRangeTable, crit: CfVal): number {
     if (operand === '') eq = t.cells - [...countsOf(t).values()].reduce((a, b) => a + b, 0);
     else if (/[*?]/.test(operand)) {
       const re = new RegExp(`^${operand.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.')}$`, 'i');
-      eq = t.values.filter((v) => typeof v === 'string' && re.test(v)).length;
+      eq = 0;
+      for (const [k, n] of countsOf(t)) if (k.startsWith('s') && re.test(k.slice(1))) eq += n;
     } else eq = (countsOf(t).get(`s${operand.toLowerCase()}`) ?? 0) + (n !== null ? (countsOf(t).get(`n${n}`) ?? 0) : 0);
     return op === '=' ? eq : t.cells - eq;
   }
@@ -978,18 +1105,35 @@ function countIf(t: CfRangeTable, crit: CfVal): number {
   return s.length - countBelow(s, n, false);
 }
 
+/** 서버 답에서 — 없으면 물어 두고 기다린다 */
+function remoteAgg(t: CfRangeTable): CfRangeAgg | null {
+  if (!t.remote) return null;
+  if (!t.remote.agg) {
+    t.remote.ask(null);
+    throw CF_PENDING;
+  }
+  return t.remote.agg;
+}
 const CF_RANGE_FUNCS: Readonly<Record<string, (t: CfRangeTable, args: CfVal[]) => CfVal>> = {
-  COUNTIF: (t, a) => countIf(t, a[0] ?? null),
-  COUNT: (t) => sortedOf(t).length,
-  COUNTA: (t) => t.values.filter((v) => v !== null).length,
-  SUM: (t) => sortedOf(t).reduce((x, y) => x + y, 0),
-  AVERAGE: (t) => {
-    const s = sortedOf(t);
-    if (s.length === 0) throw new Error('#DIV/0!');
-    return s.reduce((x, y) => x + y, 0) / s.length;
+  COUNTIF: (t, a) => {
+    if (!t.remote) return countIf(t, a[0] ?? null);
+    const n = t.remote.crit.get(cfCritKey(a[0] ?? null));
+    if (n !== undefined) return n;
+    t.remote.ask(a[0] ?? null);
+    throw CF_PENDING;
   },
-  MIN: (t) => sortedOf(t)[0] ?? 0,
-  MAX: (t) => sortedOf(t)[sortedOf(t).length - 1] ?? 0,
+  COUNT: (t) => remoteAgg(t)?.count ?? sortedOf(t).length,
+  COUNTA: (t) => remoteAgg(t)?.counta ?? [...countsOf(t).values()].reduce((a, b) => a + b, 0),
+  SUM: (t) => remoteAgg(t)?.sum ?? sortedOf(t).reduce((x, y) => x + y, 0),
+  AVERAGE: (t) => {
+    const a = remoteAgg(t);
+    const s = a ? null : sortedOf(t);
+    const count = a ? a.count : s!.length;
+    if (count === 0) throw new Error('#DIV/0!');
+    return (a ? a.sum : s!.reduce((x, y) => x + y, 0)) / count;
+  },
+  MIN: (t) => remoteAgg(t)?.min ?? sortedOf(t)[0] ?? 0,
+  MAX: (t) => remoteAgg(t)?.max ?? sortedOf(t)[sortedOf(t).length - 1] ?? 0,
 };
 
 /** 행 순서대로 그 행에 걸린 규칙을 내 준다(행마다 배열을 미리 만들지 않는다 — 규칙 수에 비례하는 메모리). rows는 오름차순으로만 물어야 한다 */
@@ -1035,7 +1179,8 @@ const cfCellsIn = (e: CondFormatEntry, rows: number, cols: number) =>
 export function cfEngineRanges(e: CondFormatEntry, rows: number, cols: number): Array<{ r0: number; r1: number; cols: number }> {
   const formulas = e.rule.t === 'expr' ? [e.rule.f] : e.rule.t === 'cell' ? [e.rule.v1, e.rule.v2 ?? ''] : [];
   const out: Array<{ r0: number; r1: number; cols: number }> = [];
-  for (const f of formulas) {
+  for (const f0 of formulas) {
+    const f = rewriteSumproduct(f0);
     const engineOnly = /\b(?!(?:COUNTIF|SUM|AVERAGE|MIN|MAX|COUNT|COUNTA)\s*\()[A-Z][A-Z0-9.]*\s*\(/i.test(f.replace(/\b(AND|OR|NOT|IF|ISBLANK|ISNUMBER|ISTEXT|LEN|ABS|INT|ROUND|MOD|ROW|COLUMN|LEFT|RIGHT|UPPER|LOWER|TRIM|TODAY|NOW|DATE)\s*\(/gi, '')) || f.includes('!');
     if (!engineOnly) continue;
     for (const m of f.matchAll(/\$?([A-Z]{1,3})\$?(\d*):\$?([A-Z]{1,3})\$?(\d*)/gi)) {
@@ -1054,4 +1199,51 @@ export function cfEngineRanges(e: CondFormatEntry, rows: number, cols: number): 
 export function cfRuleTooCostly(e: CondFormatEntry, rows: number, cols: number): boolean {
   const perCell = cfEngineRanges(e, rows, cols).reduce((sum, r) => sum + (r.r1 - r.r0 + 1) * r.cols, 0);
   return perCell > CF_FALLBACK_RANGE_CAP || cfCellsIn(e, rows, cols) * perCell > CF_FALLBACK_COST_CAP;
+}
+
+/**
+ * 규칙 수식이 범위 함수에 쓰는 범위 중 행이 고정된 것($A$1:$A$500)·열 전체($A:$A) — 서버가 편집 화면에 답해도 되는 범위다
+ * (편집 화면 rangeTableOf가 만드는 키와 같은 모양: 시트 크기로 자른 r0·c0·r1·c1). 열이 상대 참조면 규칙이 걸친 열마다 옮긴다.
+ * 행이 상대 참조인 범위($A$1:$A1 — 칸마다 다름)는 넣지 않는다(편집 화면은 불러온 행으로 세거나 건너뛴다).
+ */
+export function cfRuleRanges(entries: readonly CondFormatEntry[], rows: number, cols: number, maxRects = 256): CfRect[] {
+  const out = new Map<string, CfRect>();
+  for (const e of entries) {
+    const r = e.rule;
+    const formulas = r.t === 'expr' ? [r.f] : r.t === 'cell' ? [r.v1, r.v2 ?? ''] : r.t === 'scale' || r.t === 'bar' || r.t === 'icon' ? (r.th ?? []).map((th) => th.f ?? '') : [];
+    const anchor = e.ranges[0];
+    if (!anchor) continue;
+    const colSet = new Set<number>();
+    for (const rect of e.ranges) for (let c = rect.c0; c <= Math.min(rect.c1, cols - 1) && colSet.size < 256; c += 1) colSet.add(c);
+    for (const f0 of formulas) {
+      const f = rewriteSumproduct(f0.replace(/^=/, ''));
+      if (!f.includes(':')) continue;
+      for (const col of colSet) {
+        const dc = col - anchor.c0;
+        for (let i = 0; i < f.length; i += 1) {
+          if (i > 0 && /[A-Za-z0-9_.$]/.test(f[i - 1])) continue;
+          const rest = f.slice(i);
+          const cr = COL_RANGE_TOKEN.exec(rest);
+          let rect: CfRect | null = null;
+          if (cr) {
+            const a = colNumber(cr[2]) - 1 + (cr[1] ? 0 : dc);
+            const b = colNumber(cr[4]) - 1 + (cr[3] ? 0 : dc);
+            rect = { r0: 0, r1: rows - 1, c0: Math.min(a, b), c1: Math.min(Math.max(a, b), cols - 1) };
+          } else {
+            const m = CELL_RANGE_TOKEN.exec(rest);
+            if (m && m[3] && m[7]) {
+              const a = colNumber(m[2]) - 1 + (m[1] ? 0 : dc);
+              const b = colNumber(m[6]) - 1 + (m[5] ? 0 : dc);
+              const r0 = Math.min(Number(m[4]), Number(m[8])) - 1;
+              rect = { r0, r1: Math.min(Math.max(Number(m[4]), Number(m[8])) - 1, rows - 1), c0: Math.min(a, b), c1: Math.min(Math.max(a, b), cols - 1) };
+            }
+          }
+          if (!rect || rect.c0 < 0 || rect.r1 < rect.r0 || rect.c1 < rect.c0) continue;
+          out.set(`${rect.r0}:${rect.c0}:${rect.r1}:${rect.c1}`, rect);
+          if (out.size >= maxRects) return [...out.values()];
+        }
+      }
+    }
+  }
+  return [...out.values()];
 }
