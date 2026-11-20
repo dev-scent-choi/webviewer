@@ -44,7 +44,8 @@
     "verify:pdf-sign": "node scripts/verify-pdf-sign-e2e.mjs",
     "verify:view-only": "node scripts/verify-view-only-e2e.mjs",
     "verify:view-shell": "node scripts/verify-view-shell-e2e.mjs",
-    "verify:legacy-edit": "node scripts/verify-legacy-edit-e2e.mjs"
+    "verify:legacy-edit": "node scripts/verify-legacy-edit-e2e.mjs",
+    "audit:office": "node audit/office/run.mjs"
   },
   "dependencies": {
     "@cantoo/pdf-lib": "^2.11.1",

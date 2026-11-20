@@ -1,0 +1,17 @@
+{
+  "_설명": "사람이 Office에서 보는 것 중 우리 화면에도 보여야 하는 것. where: view(보기 화면 — docx/pptx는 LibreOffice PDF 글자, xlsx는 보기 격자 글자) / edit(편집 화면 글자) / editImages(docx 편집기 안 그림 개수 이상). has: 있어야 할 글자, not: 없어야 할 글자. id는 REPORT.md 결함 번호와 같다.",
+  "items": [
+    { "id": "X1", "doc": "x01-number-formats", "where": ["view", "edit"], "has": ["(4,321)", "1.23E+08", "3/4", "2026년 11월 20일", "(금)", "14:05:09", "PM 2:05", "00042", "12,346천원", "많음 1,500", "-₩"], "not": ["1899-12-30"] },
+    { "id": "X2", "doc": "x05-formulas", "where": ["view", "edit"], "has": ["#DIV/0!"], "not": ["[object Object]"] },
+    { "id": "X3", "doc": "x08-korean-quotation", "where": ["view", "edit"], "has": ["일금 9,108,000원정", "900,000", "3,840,000"] },
+    { "id": "D1", "doc": "d04-images", "where": ["editImages"], "min": 3 },
+    { "id": "D1", "doc": "a1-korean-report", "where": ["editImages"], "min": 1 },
+    { "id": "D1", "doc": "d08-korean-official-letter", "where": ["editImages"], "min": 1 },
+    { "id": "D3", "doc": "d05-header-footer-sections", "where": ["view", "edit"], "has": ["대외비", "2 / 5"] },
+    { "id": "D4", "doc": "d06-columns-footnotes", "where": ["view", "edit"], "has": ["각주 1: 관련 법령"] },
+    { "id": "D5", "doc": "d07-tabs-textbox-breaks", "where": ["view", "edit"], "has": ["글상자: 주의 사항", "점검 전 전원 차단"] },
+    { "id": "D2", "doc": "d02-numbering", "where": ["view", "edit"], "has": ["1.1.1.", "가)", "(ㄱ)"] },
+    { "id": "P1", "doc": "p08-korean-business-slide", "where": ["view"], "has": ["1단계(12월)", "연간 에너지 비용"] },
+    { "id": "P1", "doc": "p08-korean-business-slide", "where": ["edit"], "has": ["1단계(12월)"] }
+  ]
+}
