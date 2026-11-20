@@ -26,6 +26,8 @@ export interface SheetLink {
   readonly location?: string;
   /** 마우스를 올렸을 때 보일 설명 */
   readonly tooltip?: string;
+  /** 웹 화면에서 열 수 없는 주소(file:·UNC·로컬 경로 등) — 열지 않고 안내만 한다(글자로만 보인다) */
+  readonly blocked?: string;
   /** 주소를 칸 값으로 만드는 수식 링크 — =HYPERLINK("#'"&$A2&"'!A1", …)의 첫 인자. 편집 화면이 누른 칸 기준으로 푼다
    * (anchor는 수식이 적힌 칸 — 아래로 복사한 공유 수식이면 상대 참조를 그만큼 옮긴다) */
   readonly expr?: string;
@@ -87,7 +89,10 @@ export function hyperlinkFirstArg(formula: string): string | undefined {
 function linkOf(sheetName: string, ref: { r1: number; c1: number; r2: number; c2: number }, target: string, tooltip?: string): SheetLink | null {
   if (target.startsWith('#')) return { sheetName, ...ref, location: target.slice(1), ...(tooltip ? { tooltip } : {}) };
   const url = safeUrl(target);
-  return url ? { sheetName, ...ref, url, ...(tooltip ? { tooltip } : {}) } : null;
+  if (url) return { sheetName, ...ref, url, ...(tooltip ? { tooltip } : {}) };
+  // 스크립트 주소(javascript:·data:·vbscript:)는 버리고, 파일·네트워크 경로는 "열 수 없음" 안내용으로 남긴다
+  if (!target.trim() || /^\s*(javascript|data|vbscript):/i.test(target)) return null;
+  return { sheetName, ...ref, blocked: target.trim().slice(0, 300), ...(tooltip ? { tooltip } : {}) };
 }
 
 export function parseSheetExtras(sheetName: string, sheetXml: string, sheetRelsXml: string | undefined): Pick<SheetExtras, 'links' | 'lists'> {
