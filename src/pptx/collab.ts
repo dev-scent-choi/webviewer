@@ -401,6 +401,9 @@ export interface ExportedPptx {
  * 현재 슬라이드 배열 상태 + 원본 pptx bytes로 새 pptx를 조립한다
  * (room.ts의 flushToStore/getCurrentBytes에서 호출).
  */
+/** 저장 파일 zip 엔트리 시각(고정) — exportPptxFromSlides 참고 */
+const ZIP_ENTRY_TIME = new Date(2000, 0, 1);
+
 export function exportPptxFromSlides(
   pptxBytes: Uint8Array,
   slidesArray: Y.Array<SlideEntry>,
@@ -774,5 +777,7 @@ export function exportPptxFromSlides(
   for (const [path, data] of Object.entries(zipEntries)) {
     zippableEntries[path] = isPrecompressedMediaPath(path) ? [data, { level: 0 }] : data;
   }
-  return { bytes: zipSync(zippableEntries), finalParts, survivingEntryIds };
+  // 엔트리 시각을 고정해 같은 내용이면 같은 바이트 — 넣지 않으면 fflate가 지금 시각(2초 단위)을 적어, 두 번 내보내는
+  // 사이에 2초 경계를 넘으면 바이트가 달라졌다(검토 Minor 1: "시딩 후 바이트 동일" 시험이 가끔 실패)
+  return { bytes: zipSync(zippableEntries, { mtime: ZIP_ENTRY_TIME }), finalParts, survivingEntryIds };
 }

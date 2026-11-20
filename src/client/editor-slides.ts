@@ -244,6 +244,11 @@ function buildSlideKeymap(): Record<string, Command> {
     // splitBlock은 문단 끝에서 Enter를 치면 속성 없는 새 문단을 만들어, 하위 글머리 목록에서 다음
     // 항목이 최상위 수준으로 튀어나왔다.
     Enter: splitBlockAs((node) => ({ type: node.type, attrs: node.attrs })),
+    // PowerPoint처럼 Shift+Enter는 문단을 나누지 않는 줄 바꿈(<a:br/>)
+    'Shift-Enter': (state, dispatch) => {
+      dispatch?.(state.tr.replaceSelectionWith(pptxTextSchema.nodes.br.create()).scrollIntoView());
+      return true;
+    },
   };
 }
 

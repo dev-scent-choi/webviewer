@@ -353,3 +353,26 @@ describe('검토 I5: 슬라이드 최상위 mc:AlternateContent 개체는 대체
     expect(parseSlideVisuals(zip, 'slide1.xml')).toEqual([{ kind: 'snapshot', x: 500000, y: 0, w: 100000, h: 50000, snapshot: true }]);
   });
 });
+
+describe('검토 Minor 1: 저장 zip은 시각과 무관하게 같은 내용이면 같은 바이트', () => {
+  test('두 번 내보내는 사이 시계가 1분 지나도 바이트 동일', async () => {
+    const { vi } = await import('vitest');
+    const Y = await import('yjs');
+    const { exportPptxFromSlides, seedSlidesFromPptx } = await import('../src/pptx/collab.js');
+    const { makeSamplePptx } = await import('./helpers.js');
+    const { PPTX_SLIDES_ARRAY } = await import('../src/collab/pptxShared.js');
+    const original = makeSamplePptx(['A', 'B']);
+    const slides = new Y.Doc().getArray(PPTX_SLIDES_ARRAY) as never;
+    seedSlidesFromPptx(original, slides);
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(2026, 10, 20, 12, 0, 0));
+      const a = exportPptxFromSlides(original, slides).bytes;
+      vi.setSystemTime(new Date(2026, 10, 20, 12, 1, 1));
+      const b = exportPptxFromSlides(original, slides).bytes;
+      expect(Buffer.from(a).equals(Buffer.from(b))).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
