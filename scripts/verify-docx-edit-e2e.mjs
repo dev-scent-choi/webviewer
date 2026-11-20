@@ -227,6 +227,20 @@ try {
     await page.close();
   }
 
+  // I8: 브라우저가 못 그리는 그림(EMF)·차트는 서버가 LibreOffice로 그린 그림으로 보이고, 저장 땐 원본 조각 그대로
+  {
+    const file = 'tests/fixtures/docx-review/H-emf-chart.docx';
+    const tok = await upload(file);
+    const page = await openEditor(context, tok);
+    await page.waitForFunction(() => [...document.querySelectorAll('.ProseMirror img.docx-img')].every((i) => i.complete), null, { timeout: 60000 }).catch(() => {});
+    const imgs = await page.evaluate(() => [...document.querySelectorAll('.ProseMirror img.docx-img')].map((i) => ({ drawn: i.src.includes('docx-drawing'), w: i.naturalWidth })));
+    const saved = await saveAndDownload(page, tok);
+    const original = documentXmlOf(fs.readFileSync(file));
+    rec('I8 EMF·차트 그림으로 표시 + 저장 유지', imgs.filter((i) => i.drawn).length === 2 && imgs.every((i) => i.w > 0) && count(saved, 'c:chart') === count(original, 'c:chart') && count(saved, 'w:drawing') === count(original, 'w:drawing'),
+      JSON.stringify(imgs));
+    await page.close();
+  }
+
   // I1: 글꼴 이름으로 CSS를 넣은 문서 — 보통 문단이 빨갛게 되지 않는다
   {
     const tok = await upload('tests/fixtures/docx-review/E-css.docx');

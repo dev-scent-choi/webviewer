@@ -284,10 +284,13 @@ const baseNodes: Record<string, NodeSpec> = {
   },
 };
 
-/** 그림 주소를 만드는 함수 — 편집기가 열람 토큰으로 정한다(서버 쪽 가져오기에선 쓰지 않는다). */
+/** 그림 주소를 만드는 함수 — 편집기가 열람 토큰으로 정한다(서버 쪽 가져오기에선 쓰지 않는다). media: word/media/ 그림,
+ * drawing: 브라우저가 못 그리는 조각(EMF·차트·도형)을 서버가 LibreOffice로 그린 그림(src/docx/drawingImage.ts) */
 let mediaUrlOf: (mediaPath: string) => string | null = () => null;
-export function setDocxMediaUrl(fn: (mediaPath: string) => string | null): void {
-  mediaUrlOf = fn;
+let drawingUrlOf: (ref: string) => string | null = () => null;
+export function setDocxMediaUrl(media: (mediaPath: string) => string | null, drawing: (ref: string) => string | null): void {
+  mediaUrlOf = media;
+  drawingUrlOf = drawing;
 }
 
 /** PM JSON 블록 목록(글상자 안·보존 블록·머리글 등)을 읽기 전용 DOM으로 — 스키마가 걸러 그리므로 문서 내용이 HTML로 새지 않는다. */
@@ -314,7 +317,7 @@ function ooxmlToDOM(node: PMNode): DOMOutputSpec {
   const float = a.float === 'left' || a.float === 'right' ? ` float: ${a.float as string};` : '';
   const base = { contenteditable: 'false', 'data-kind': String(a.kind), 'data-docx-node': 'ooxml', 'data-docx': JSON.stringify(a) };
   if (a.kind === 'image') {
-    const src = typeof a.media === 'string' ? mediaUrlOf(a.media) : null;
+    const src = typeof a.media === 'string' ? mediaUrlOf(a.media) : typeof a.ref === 'string' && a.ref ? drawingUrlOf(a.ref) : null;
     if (src) return ['img', { ...base, class: 'docx-ooxml docx-img', src, alt: String(a.text ?? ''), style: `${size}${float}` }];
     return ['span', { ...base, class: 'docx-ooxml docx-img-missing', style: `${size}${float}` }, String(a.text ?? '')];
   }

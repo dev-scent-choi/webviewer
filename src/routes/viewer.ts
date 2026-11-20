@@ -36,6 +36,7 @@ import {
   getDocxPageSetup,
   getDocxRenderExtras,
 } from '../docx/import.js';
+import { renderDocxDrawingPng } from '../docx/drawingImage.js';
 import { MarkupValidationError, addMarkup, deleteMarkup, listMarkup, updateMarkup } from '../markup.js';
 import { touchPresence } from '../presence.js';
 import { flushNow, getCurrentBytes, getChangeLog, getFileCharts, getFileExtras, getFileImages } from '../collab/room.js';
@@ -940,6 +941,28 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
       } catch (error) {
         request.log.error(error, 'slide media fetch failed');
         return reply.code(500).send({ success: false, error: '이미지를 불러오지 못했습니다.' });
+      }
+    },
+  );
+
+  /** docx 편집기의 브라우저가 못 그리는 그림 조각(EMF/WMF·차트·도형) — 이 문서에 있는 조각만 LibreOffice로 그려 PNG로(무거운 작업이라 분당 상한) */
+  app.get<{ Querystring: { token?: string; ref: string } }>(
+    '/api/view/docx-drawing',
+    {
+      schema: { querystring: { type: 'object', required: ['ref'], properties: { token: { type: 'string' }, ref: { type: 'string', pattern: '^[A-Za-z0-9:._-]{1,64}@[A-Za-z0-9_-]{20}(#\d+)?$' } } } },
+      config: { rateLimit: { max: 120, timeWindow: '1 minute' } },
+    },
+    async (request, reply) => {
+      const view = await resolveEditorDataView(request.query.token, reply);
+      if (!view) return reply;
+      if (view.meta.ext !== 'docx') return reply.code(400).send({ success: false, error: 'docx 문서가 아닙니다.' });
+      try {
+        const png = await renderDocxDrawingPng(await store.readOriginal(view.meta.id, 'docx'), request.query.ref, view.meta.id);
+        if (!png) return reply.code(404).send({ success: false, error: '그림을 찾을 수 없습니다.' });
+        return await reply.type('image/png').header('cache-control', 'private, max-age=3600').header('content-security-policy', SANDBOX_CSP).send(png);
+      } catch (error) {
+        request.log.error(error, 'docx drawing render failed');
+        return reply.code(500).send({ success: false, error: '그림을 그리지 못했습니다.' });
       }
     },
   );

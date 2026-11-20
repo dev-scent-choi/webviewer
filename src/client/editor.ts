@@ -615,7 +615,10 @@ async function main(): Promise<void> {
   applyDefaultParagraphSpacing(info.defaultParagraphSpacing ?? null);
   applyWatermark(info.viewer);
   // 문서 안 그림은 원본 docx의 word/media/에서 바로 받는다(토큰 확인은 서버가 한다)
-  setDocxMediaUrl((mediaPath) => `/api/view/slide-media?token=${encodeURIComponent(token)}&path=${encodeURIComponent(mediaPath)}`);
+  setDocxMediaUrl(
+    (mediaPath) => `/api/view/slide-media?token=${encodeURIComponent(token)}&path=${encodeURIComponent(mediaPath)}`,
+    (ref) => `/api/view/docx-drawing?token=${encodeURIComponent(token)}&ref=${encodeURIComponent(ref)}`,
+  );
   numberingDefs = info.docxRender?.numbering ?? null;
   if (info.docxRender) {
     // 규칙 하나씩 넣는다 — 문서에서 온 값이 규칙을 깨면 그 규칙만 버려진다(값 자체도 docxLayout.ts에서 걸러 쓴다)
