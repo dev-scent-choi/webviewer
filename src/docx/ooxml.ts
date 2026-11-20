@@ -101,8 +101,30 @@ export const PR_ORDER: Readonly<Record<string, readonly string[]>> = {
  */
 export type FragmentStore = Map<string, string>;
 
+function escapeAttrValue(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+/** 감싸개(w:hyperlink·w:ins 등)의 속성 XML — 이름이 XML 이름 꼴인 것만(다른 참여자가 보낸 값으로 XML을 깨지 못하게) */
+export function wrapAttrsXml(attrs: Readonly<Record<string, unknown>> | null | undefined): string {
+  return Object.entries(attrs ?? {})
+    .filter(([name]) => /^[A-Za-z][\w.-]*(:[A-Za-z][\w.-]*)?$/.test(name))
+    .map(([name, value]) => ` ${name}="${escapeAttrValue(String(value))}"`)
+    .join('');
+}
+
+/**
+ * 변경 추적 삽입(w:ins·w:moveTo) 감싸개 표지 — 가져오기 때 원본에 있던 감싸개(작성자·날짜·id 그대로)를 이 모양(빈 요소)으로 조각
+ * 저장소에 넣어 두고, 저장 때 이것과 똑같은 감싸개만 쓴다. 다른 참여자가 지어낸 작성자 감싸개는 저장소에 없으니 빼고 글자만 쓴다.
+ */
+export const TRACKED_WRAP_TAGS: ReadonlySet<string> = new Set(['w:ins', 'w:moveTo']);
+export const trackedWrapKey = (tag: string, attrs: Readonly<Record<string, unknown>> | null | undefined): string => `<${tag}${wrapAttrsXml(attrs)}/>`;
+
+/** 조각 해시(참조의 @ 뒤) — 내용에서 바로 나오므로 저장해 둔 조각을 다시 읽을 때 맞는지 확인할 수 있다 */
+export const fragmentHash = (xml: string): string => createHash('sha256').update(xml).digest('base64url').slice(0, 20);
+
 export function fragmentRef(store: FragmentStore, tag: string, xml: string, unique?: number): string {
-  const hash = createHash('sha256').update(xml).digest('base64url').slice(0, 20);
+  const hash = fragmentHash(xml);
   store.set(hash, xml);
   return `${tag}@${hash}${unique === undefined ? '' : `#${unique}`}`;
 }

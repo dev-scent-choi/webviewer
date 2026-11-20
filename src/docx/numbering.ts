@@ -118,6 +118,10 @@ function letters(n: number): string {
   return ch.repeat(Math.floor((n - 1) / 26) + 1);
 }
 
+/**
+ * 가나다·ㄱㄴㄷ 번호는 14개(하·ㅎ) 다음 처음(가·ㄱ)으로 돌아간다. ECMA-376(17.18.59 ST_NumberFormat ganada/chosung)은 15번째부터를
+ * 정하지 않고, Word 실제 출력과 맞춰 보지 못했다(미검증 — 이 PC에서 Word를 띄우지 않는다). 시험(docxFidelity.test.ts)이 이 동작을 못 박는다.
+ */
 const cycle = (set: string, n: number) => set[(n - 1) % set.length];
 
 /** 숫자 하나를 Word 번호 형식(w:numFmt)으로 */

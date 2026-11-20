@@ -2,7 +2,7 @@ import { strFromU8, strToU8, zipSync } from 'fflate';
 import { guardedUnzipSync } from '../zipGuard.js';
 import type { Mark, Node as PMNode } from 'prosemirror-model';
 import { extractSectPrXml, importDocx } from './import.js';
-import { prXml, refHashOf, refTagOf, type FragmentStore } from './ooxml.js';
+import { fragmentHash, prXml, refHashOf, refTagOf, TRACKED_WRAP_TAGS, trackedWrapKey, wrapAttrsXml, type FragmentStore } from './ooxml.js';
 import { BUILTIN_LISTS, builtinAbstractNumXml, isBuiltinNumId } from './numbering.js';
 import {
   GALLERY_PARAGRAPH_STYLES,
@@ -246,11 +246,7 @@ const WRAP_TAGS = new Set(['w:hyperlink', 'w:ins', 'w:moveTo', 'w:smartTag', 'w:
 
 /** 감싸는 요소 여는 태그 — 원본 속성 이름 그대로(이름은 XML 이름 모양만, 값은 이스케이프)와 원본 속성 자식(w:smartTagPr 등) */
 function wrapOpenXml(mark: Mark): string {
-  const attrs = (mark.attrs.attrs ?? {}) as Record<string, unknown>;
-  const list = Object.entries(attrs)
-    .filter(([name]) => /^[A-Za-z][\w.-]*(:[A-Za-z][\w.-]*)?$/.test(name))
-    .map(([name, value]) => ` ${name}="${escapeAttr(String(value))}"`)
-    .join('');
+  const list = wrapAttrsXml(mark.attrs.attrs as Record<string, unknown> | null);
   return `<${String(mark.attrs.tag)}${list}>${typeof mark.attrs.pr === 'string' ? (resolveRef(mark.attrs.pr) ?? '') : ''}`;
 }
 
@@ -258,6 +254,8 @@ function wrapOpenXml(mark: Mark): string {
 function wrapsOf(marks: readonly Mark[]): Mark[] {
   return marks
     .filter((mark) => mark.type.name === 'wrap' && WRAP_TAGS.has(String(mark.attrs.tag)))
+    // 변경 추적 삽입은 원본에 있던 감싸개(작성자·날짜 그대로)만 — 지어낸 작성자는 빼고 글자만 쓴다(m4)
+    .filter((mark) => !TRACKED_WRAP_TAGS.has(String(mark.attrs.tag)) || activeStore.has(fragmentHash(trackedWrapKey(String(mark.attrs.tag), mark.attrs.attrs as Record<string, unknown> | null))))
     .filter((mark) => {
       const rid = (mark.attrs.attrs as Record<string, unknown> | null)?.['r:id'];
       return mark.attrs.tag !== 'w:hyperlink' || rid === undefined || (typeof rid === 'string' && (activeRelIds?.has(rid) ?? true));

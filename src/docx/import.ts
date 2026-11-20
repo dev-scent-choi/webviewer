@@ -22,8 +22,11 @@ import {
   deepTextOf,
   extrasOf,
   findAll,
+  fragmentHash,
   fragmentRef,
   refHashOf,
+  TRACKED_WRAP_TAGS,
+  trackedWrapKey,
   type FragmentStore,
   findDeep,
   findFirst,
@@ -523,6 +526,10 @@ function wrapMarkOf(el: XmlNode, ctx: ImportCtx, depth: number): Mark {
   const rel = tag === 'w:hyperlink' && attrs['r:id'] ? ctx.rels.get(attrs['r:id']) : undefined;
   const href = tag !== 'w:hyperlink' ? null : rel?.external ? rel.target : attrs['w:anchor'] ? `#${attrs['w:anchor']}` : null;
   const prEl = childrenOf(el).find((c) => /^w:(smartTagPr|customXmlPr)$/.test(tagOf(c) ?? ''));
+  if (TRACKED_WRAP_TAGS.has(tag)) {
+    const key = trackedWrapKey(tag, attrs);
+    ctx.fragments.set(fragmentHash(key), key);
+  }
   return docxSchema.marks.wrap.create({ tag, attrs, pr: prEl ? elementRef(prEl, ctx) : null, depth, href });
 }
 

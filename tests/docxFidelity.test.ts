@@ -32,6 +32,9 @@ describe('numbering (word/numbering.xml)', () => {
   test('formats Korean and Latin numbering styles', () => {
     expect(formatNumber(1, 'ganada')).toBe('가');
     expect(formatNumber(2, 'chosung')).toBe('ㄴ');
+    // 14개 다음은 처음으로(Word 출력과는 미검증 — numbering.ts cycle 설명)
+    expect([14, 15, 29].map((n) => formatNumber(n, 'ganada'))).toEqual(['하', '가', '가']);
+    expect(formatNumber(15, 'chosung')).toBe('ㄱ');
     expect(formatNumber(4, 'upperRoman')).toBe('IV');
     expect(formatNumber(28, 'lowerLetter')).toBe('bb');
     expect(formatNumber(3, 'decimalEnclosedCircle')).toBe('③');
@@ -317,5 +320,39 @@ describe('N3: 같은 문서 안에서 복사한 각주', () => {
     // 복사본을 지우고 저장 → 복제 각주도 사라진다
     const cleaned = strFromU8(unzipSync(save(third, doc))['word/footnotes.xml']);
     expect((cleaned.match(/각주 1: 관련 법령/g) ?? []).length).toBe(1);
+  });
+});
+
+describe('3차 검토(m4·Minor 5)', () => {
+  const tracked = '<w:p><w:ins w:id="7" w:author="원래 작성자" w:date="2026-01-01T00:00:00Z"><w:r><w:t>추적 삽입</w:t></w:r></w:ins></w:p>';
+
+  test('m4: 원본에 있던 변경 추적 삽입 감싸개만 저장 — 지어낸 작성자는 빼고 글자만', () => {
+    const original = withBody(tracked);
+    const { doc, pageSetup, fragments } = importDocx(original);
+    const text = nodesOf(doc, (n) => n.isText)[0];
+    const wrap = text.marks.find((m) => m.type.name === 'wrap')!;
+    // 그대로 저장하면 감싸개가 남는다
+    const kept = strFromU8(unzipSync(exportDocx(original, doc, pageSetup, [], fragments))['word/document.xml']);
+    expect(kept).toContain('w:author="원래 작성자"');
+    // 다른 참여자가 작성자를 바꾼 감싸개(Yjs로 온 값)는 저장하지 않는다 — 글자는 남는다
+    const forgedMark = wrap.type.create({ ...wrap.attrs, attrs: { ...(wrap.attrs.attrs as object), 'w:author': '가짜 작성자' } });
+    const forged = doc.copy(doc.content.replaceChild(0, doc.firstChild!.copy(doc.firstChild!.content.replaceChild(0, text.mark([forgedMark])))));
+    const xml = strFromU8(unzipSync(exportDocx(original, forged, pageSetup, [], fragments))['word/document.xml']);
+    expect(xml).not.toContain('가짜 작성자');
+    expect(xml).not.toContain('<w:ins');
+    expect(xml).toContain('추적 삽입');
+  });
+
+  test('Minor 5: 글꼴별 1줄 — 표에 있는 글꼴 런은 자기 1줄 × 문단 배수, 고정 줄 간격은 px 그대로', () => {
+    const span = docxSchema.marks.fontFamily.create({ eastAsia: '바탕', ascii: null });
+    const spec = docxSchema.marks.fontFamily.spec.toDOM!(span, true) as [string, Record<string, string>];
+    expect(spec[1].class).toBe('docx-font-lh');
+    expect(spec[1].style).toContain('--doc-single-line: 1.148');
+    const unknown = docxSchema.marks.fontFamily.spec.toDOM!(docxSchema.marks.fontFamily.create({ eastAsia: '나눔고딕', ascii: null }), true) as [string, Record<string, string>];
+    expect(unknown[1].class).toBeUndefined();
+    const para = (spacing: object) => docxSchema.nodes.paragraph.spec.toDOM!(docxSchema.nodes.paragraph.create({ spacing: { before: null, after: null, ...spacing } }, docxSchema.text('가', [span]))) as [string, Record<string, string>];
+    expect(para({ line: 360, lineRule: 'auto' })[1].style).toContain('--line-mult: 1.5');
+    expect(para({ line: 360, lineRule: 'auto' })[1].style).toContain('--doc-single-line: 1.148');
+    expect(para({ line: 300, lineRule: 'exact' })[1].style).toContain('--run-line-height: 20px');
   });
 });
