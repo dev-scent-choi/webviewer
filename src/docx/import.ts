@@ -1564,6 +1564,8 @@ export interface DocxSectionInfo {
   /** 쪽 위 끝에서 머리글까지, 아래 끝에서 바닥글까지(px) */
   readonly headerPx: number;
   readonly footerPx: number;
+  /** 이 구역의 종이 크기·여백(px) — 편집 화면의 구역별 본문 폭·넘침 쪽 나눔 */
+  readonly page: PageSetup | null;
 }
 
 export interface DocxRenderExtras {
@@ -1574,6 +1576,20 @@ export interface DocxRenderExtras {
   readonly notes: Readonly<Record<'footnote' | 'endnote', Readonly<Record<string, unknown[]>>>>;
   /** 기본 탭 간격(dxa, word/settings.xml w:defaultTabStop) */
   readonly defaultTabStopDxa: number;
+  /** 짝수 쪽에 짝수 쪽 머리글·바닥글(word/settings.xml w:evenAndOddHeaders) */
+  readonly evenAndOddHeaders: boolean;
+}
+
+/** 구역 나눔(w:sectPr) 목록 — 본문 직속 문단의 것(문서 순서) + 본문 끝 것. importDocx(blocksOf)가 매기는 구역 번호와 같은 규칙이다. */
+function sectionNodesOf(bodyChildren: readonly XmlNode[]): XmlNode[] {
+  const out: XmlNode[] = [];
+  for (const p of findAll(bodyChildren, 'w:p')) {
+    const sectPr = findFirst(childrenOf(findFirst(childrenOf(p), 'w:pPr') ?? {}), 'w:sectPr');
+    if (sectPr) out.push(sectPr);
+  }
+  const last = findFirst(bodyChildren, 'w:sectPr');
+  if (last) out.push(last);
+  return out;
 }
 
 /** 스타일 사슬(기반부터)을 합친 화면 모양 */
@@ -1659,20 +1675,20 @@ export function getDocxRenderExtras(docxBytes: Uint8Array): DocxRenderExtras {
     return blocksOf(children, ctx, false).map((n) => n.toJSON());
   };
 
-  // 구역: 문단 안 w:sectPr들(문서 순서) + 본문 끝 w:sectPr — importDocx의 sect 번호와 같은 순서
-  const sectXmls = documentXml.match(/<w:sectPr\b[^>]*(?:\/>|>[\s\S]*?<\/w:sectPr>)/g) ?? [];
+  // 구역: importDocx와 같은 규칙(본문 직속 문단의 w:sectPr + 본문 끝) — 문서 파서로 센다(내용 컨트롤 안·변경 기록 안 sectPr는 세지 않는다)
+  const body = findFirst(childrenOf(findFirst(parser.parse(documentXml) as XmlNode[], 'w:document') ?? {}), 'w:body');
   const sections: DocxSectionInfo[] = [];
   const parts = new Map<string, unknown[] | null>();
   const partFor = (rId: string | undefined, rootTag: string): unknown[] | null => {
     const rel = rId ? docRels.get(rId) : undefined;
     if (!rel || rel.external) return null;
-    const path = `word/${rel.target}`;
+    // 대상은 보통 word/ 기준 상대 경로, 가끔 패키지 절대 경로("/word/header1.xml")
+    const path = rel.target.startsWith('/') ? rel.target.slice(1) : `word/${rel.target}`;
     if (!parts.has(path)) parts.set(path, blocksFromPart(path, rootTag));
     return parts.get(path) ?? null;
   };
-  for (const xml of sectXmls) {
-    const sect = findFirst(parser.parse(xml) as XmlNode[], 'w:sectPr');
-    const children = childrenOf(sect ?? {});
+  for (const sect of sectionNodesOf(childrenOf(body ?? {}))) {
+    const children = childrenOf(sect);
     const prev = sections[sections.length - 1];
     const refs = (tag: string, rootTag: string, inherited: DocxSectionInfo['header'] | undefined) => {
       const out: Record<'default' | 'first' | 'even', unknown[] | null> = { default: inherited?.default ?? null, first: inherited?.first ?? null, even: inherited?.even ?? null };
@@ -1691,6 +1707,7 @@ export function getDocxRenderExtras(docxBytes: Uint8Array): DocxRenderExtras {
       footer: refs('w:footerReference', 'w:ftr', prev?.footer),
       headerPx: dxaToPx(Number(pgMar['@_w:header'] ?? 720)),
       footerPx: dxaToPx(Number(pgMar['@_w:footer'] ?? 720)),
+      page: pageSetupOf(sect),
     });
   }
 
@@ -1720,5 +1737,6 @@ export function getDocxRenderExtras(docxBytes: Uint8Array): DocxRenderExtras {
     sections,
     notes,
     defaultTabStopDxa: Number.isFinite(tabStop) && tabStop > 0 ? tabStop : 720,
+    evenAndOddHeaders: /<w:evenAndOddHeaders\b(?![^>]*w:val="(0|false|off)")/.test(settings),
   };
 }

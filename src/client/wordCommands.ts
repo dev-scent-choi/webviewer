@@ -448,7 +448,9 @@ export const splitParagraphKeepFormat: Command = (state, dispatch) => {
   const extras = Array.isArray(node.attrs.pPrExtra) ? (node.attrs.pPrExtra as unknown[]) : [];
   const sectRefs = extras.filter(isRefOf('w:sectPr'));
   const withoutSect = extras.filter((x) => !isRefOf('w:sectPr')(x));
-  const second = node.type === nodes.heading
+  // 제목 끝에서 Enter면 다음은 보통 문단(Word의 "다음 스타일"), 제목 가운데·앞이면 뒤쪽도 제목
+  const atEnd = $from.parentOffset === node.content.size;
+  const second = node.type === nodes.heading && atEnd
     ? { type: nodes.paragraph, attrs: { sect: node.attrs.sect, pPrExtra: sectRefs.length > 0 ? sectRefs : null } }
     : { type: node.type, attrs: { ...node.attrs, breakBefore: false } };
   let tr: Transaction | null = null;

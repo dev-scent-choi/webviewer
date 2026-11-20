@@ -74,6 +74,7 @@ import {
 } from './wordCommands.js';
 import { officeAlert } from './officeDialog.js';
 import { docxLayoutPlugin, docxStyleSheetText } from './docxLayout.js';
+import { docxPastePlugin } from './docxPaste.js';
 import type { DocxRenderExtras } from '../docx/import.js';
 import type { NumberingDefs } from '../docx/numbering.js';
 
@@ -606,7 +607,9 @@ async function main(): Promise<void> {
 
   titleEl.textContent = info.name;
   document.title = `${info.name} — DocView 편집`;
-  applyPageSetup(info.pageSetup);
+  // 종이 폭은 가장 넓은 구역(가로 쪽 등) — 좁은 구역의 블록은 docxLayout.ts가 그 구역 본문 폭으로 줄인다
+  const sectionPages = (info.docxRender?.sections ?? []).flatMap((s) => (s.page ? [s.page] : []));
+  applyPageSetup(sectionPages.reduce<PageSetup | null>((wide, p) => (!wide || p.widthPx > wide.widthPx ? p : wide), null) ?? info.pageSetup);
   applyDefaultFontSize(info.defaultFontSizePt);
   applyDefaultFontFamily(info.defaultFontFamily);
   applyDefaultParagraphSpacing(info.defaultParagraphSpacing ?? null);
@@ -615,9 +618,16 @@ async function main(): Promise<void> {
   setDocxMediaUrl((mediaPath) => `/api/view/slide-media?token=${encodeURIComponent(token)}&path=${encodeURIComponent(mediaPath)}`);
   numberingDefs = info.docxRender?.numbering ?? null;
   if (info.docxRender) {
+    // 규칙 하나씩 넣는다 — 문서에서 온 값이 규칙을 깨면 그 규칙만 버려진다(값 자체도 docxLayout.ts에서 걸러 쓴다)
     const styleEl = document.createElement('style');
-    styleEl.textContent = docxStyleSheetText(info.docxRender.styles);
     document.head.append(styleEl);
+    for (const rule of docxStyleSheetText(info.docxRender.styles)) {
+      try {
+        styleEl.sheet?.insertRule(rule, styleEl.sheet.cssRules.length);
+      } catch {
+        // 잘못된 규칙은 버린다
+      }
+    }
   }
 
   const ydoc = new Y.Doc();
@@ -675,6 +685,7 @@ async function main(): Promise<void> {
       tableEditing(),
       buildSearchPlugin(),
       ...(info.docxRender ? [docxLayoutPlugin(info.docxRender, info.pageCount ?? null)] : []),
+      docxPastePlugin(() => void officeAlert('다른 문서에서 붙여넣은 그림·글상자·번호 같은 Word 요소 일부는 이 문서에 저장할 수 없어 빼고 붙였습니다(글자는 그대로).')),
     ],
   });
 

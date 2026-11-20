@@ -163,6 +163,17 @@ describe('Enter: Word처럼 번호·서식을 이어받는다', () => {
     expect(first.attrs.pPrExtra).toEqual([keep]);
   });
 
+  test('제목 맨 앞에서 Enter → 앞에 빈 제목, 원래 제목은 그대로 제목(제목 끝에서만 다음 문단이 보통 문단)', () => {
+    const heading = nodes.heading.create({ level: 1 }, docxSchema.text('가로 방향 구역'));
+    let state = EditorState.create({ schema: docxSchema, doc: nodes.doc.create(null, [heading]) });
+    state = state.apply(state.tr.setSelection(TextSelection.create(state.doc, 1)));
+    const atStart = run(state, splitParagraphKeepFormat);
+    expect(atStart.doc.child(1).type.name).toBe('heading');
+    expect(atStart.doc.child(1).textContent).toBe('가로 방향 구역');
+    const endState = state.apply(state.tr.setSelection(TextSelection.create(state.doc, heading.nodeSize - 1)));
+    expect(run(endState, splitParagraphKeepFormat).doc.child(1).type.name).toBe('paragraph');
+  });
+
   test('빈 번호 문단에서 Enter → 수준이 있으면 한 수준 올리고, 맨 위면 번호를 끝낸다(스타일 번호는 numId 0으로 덮는다, REVIEW Minor 6)', () => {
     const up = run(numbered('', [keep], { numId: '3', ilvl: 2, fromStyle: false }), splitParagraphKeepFormat);
     expect(up.doc.childCount).toBe(1);
