@@ -3,7 +3,7 @@
  * 화면에 그리지 못하는 종류(수식·아이콘 집합·날짜 등)도 `t: 'other'`로 목록에 남긴다 — 순서(우선순위)와 행/열 이동을
  * 함께 관리해야 저장 때 잃지 않는다(condFormatShared.ts 머리 주석 참고).
  */
-import { parseSqref, type CfCellOp, type CfRule, type CfStyle, type CondFormatEntry } from '../collab/condFormatShared.js';
+import { parseSqref, type CfCellOp, type CfIconThreshold, type CfRule, type CfStyle, type CondFormatEntry } from '../collab/condFormatShared.js';
 import { MAX_COLS, MAX_ROWS, resolveColor } from '../spreadsheet.js';
 
 function decodeXml(value: string): string {
@@ -117,6 +117,26 @@ function ruleOf(attrs: string, body: string, dxfs: readonly CfStyle[], themeColo
       const color = colorOf(body.match(/<color\b[^>]*\/?>/)?.[0], themeColors);
       return color ? { t: 'bar', color } : { t: 'other' };
     }
+    case 'iconSet': {
+      const tag = body.match(/<iconSet\b[^>]*>/)?.[0] ?? '';
+      const cfvos = [...body.matchAll(/<cfvo\b([^>]*?)\/?>/g)].map((m) => m[1]);
+      const th: CfIconThreshold[] = [];
+      for (const cfvo of cfvos.slice(1)) {
+        const kind = attr(cfvo, 'type');
+        const v = Number(attr(cfvo, 'val'));
+        if (!Number.isFinite(v) || (kind !== 'percent' && kind !== 'percentile' && kind !== 'num')) return { t: 'other' };
+        th.push({ type: kind, v, ...(/^(0|false)$/.test(attr(cfvo, 'gte') ?? '') ? { gt: 1 as const } : {}) });
+      }
+      return {
+        t: 'icon',
+        set: attr(tag, 'iconSet') ?? '3TrafficLights1',
+        th,
+        ...(/^(1|true)$/.test(attr(tag, 'reverse') ?? '') ? { reverse: 1 as const } : {}),
+        ...(/^(0|false)$/.test(attr(tag, 'showValue') ?? '') ? { hide: 1 as const } : {}),
+      };
+    }
+    case 'expression':
+      return formulas[0] ? { t: 'expr', f: formulas[0], s } : { t: 'other' };
     default:
       return { t: 'other' };
   }

@@ -42,6 +42,7 @@ import {
 } from '../collab/condFormatShared.js';
 import type { CellRangeRef, ChartKind } from '../xlsx/chartModel.js';
 import { EXCEL_DEFAULT_FONT_PX, RowLayout } from '../xlsx/sheetGeometry.js';
+import { borderSideCss, cellBoxCss } from '../collab/cellBoxCss.js';
 import { compareCells, filteredRows, GRID_FILTERS_MAP, shiftFormulaRows, sortOrder, type SheetFilter } from './gridSort.js';
 import { officeAlert, officeConfirm } from './officeDialog.js';
 
@@ -201,11 +202,6 @@ function cellRefLabel(row: number, col: number): string {
 /** 엑셀처럼 숫자로 보이는 값은 서식이 따로 없으면 기본적으로 오른쪽 정렬로 보여준다. */
 const NUMERIC_VALUE = /^-?\d+(\.\d+)?$/;
 
-/** 엑셀 테두리 굵기(1=가는 선, 2=굵은 선)를 CSS로. 지정이 없으면 빈 문자열 —
- * 그러면 스타일시트의 기본 점선 격자(.grid-edit-table td)가 그대로 보인다. */
-function borderCss(weight: 1 | 2 | undefined): string {
-  return weight ? `${weight}px solid var(--v-text)` : '';
-}
 
 const VALIGN_TO_CSS: Record<'t' | 'm' | 'b', string> = { t: 'top', m: 'middle', b: 'bottom' };
 
@@ -237,10 +233,16 @@ function applyStyleToTd(td: HTMLTableCellElement, style: CellStyleAttrs | undefi
   // 이웃 칸의 경계선 위에 겹쳐 그린다(CSS .g-bord-tl::before).
   td.style.borderTop = '';
   td.style.borderLeft = '';
-  td.style.borderRight = borderCss(style?.br);
-  td.style.borderBottom = borderCss(style?.bb);
-  td.style.setProperty('--g-bt', borderCss(style?.bt) || 'none');
-  td.style.setProperty('--g-bl', borderCss(style?.bl) || 'none');
+  // 선 종류·색은 보기 화면과 같은 규칙(collab/cellBoxCss.ts) — 지정 없는 변은 기본 점선 격자가 그대로 보인다
+  td.style.borderRight = borderSideCss(style, 'r');
+  td.style.borderBottom = borderSideCss(style, 'b');
+  td.style.setProperty('--g-bt', borderSideCss(style, 't') || 'none');
+  td.style.setProperty('--g-bl', borderSideCss(style, 'l') || 'none');
+  // 무늬 채우기·들여쓰기(무늬는 위 background 대입이 이미 지웠다 — 들여쓰기만 지난 값을 지운다)
+  td.style.removeProperty('padding-left');
+  td.style.removeProperty('padding-right');
+  for (const [prop, value] of Object.entries(cellBoxCss(style).td)) td.style.setProperty(prop, value);
+  td.classList.toggle('g-shrink', style?.shr === 1);
   td.classList.toggle('g-bord-tl', Boolean(style?.bt || style?.bl));
   td.classList.toggle('g-locked', style?.lk === 1);
   condFormatOverlay?.(td);
@@ -518,6 +520,15 @@ async function main(): Promise<void> {
     return formatValueText(text, style);
   }
 
+  /** 셀에 맞춤 — 글자가 칸보다 넓으면 글자 크기를 줄인다(엑셀처럼). 이런 칸은 드물어 칸마다 한 번 재도 된다 */
+  function shrinkToFit(td: HTMLTableCellElement, span: HTMLSpanElement): void {
+    span.style.fontSize = '';
+    requestAnimationFrame(() => {
+      const room = td.clientWidth - 6;
+      if (span.scrollWidth > room && room > 0) span.style.fontSize = `${(parseFloat(getComputedStyle(span).fontSize) * room) / span.scrollWidth}px`;
+    });
+  }
+
   function colWidthOfSheet(sheetIdx: number, col: number): number {
     const sheet = structure.get(String(sheetIdx));
     return sheet?.colWidths?.[col] ?? sheet?.defaultColWidth ?? DEFAULT_COL_WIDTH_PX;
@@ -620,11 +631,16 @@ async function main(): Promise<void> {
     span.textContent = text;
     span.style.width = '';
     span.style.marginLeft = '';
+    // 글자 회전·세로쓰기(보기 화면과 같은 규칙 — collab/cellBoxCss.ts)
+    const inner = cellBoxCss(styles.get(key)).inner;
+    for (const prop of ['writing-mode', 'text-orientation', 'letter-spacing', 'display', 'transform', 'transform-origin']) span.style.removeProperty(prop);
+    for (const [prop, value] of Object.entries(inner)) span.style.setProperty(prop, value);
+    if (styles.get(key)?.shr) shrinkToFit(td, span);
     if (!text.trim() || td.colSpan > 1) return; // 병합 칸은 이미 colspan으로 넓어져 있어 스필이 필요 없다
     // 줄 바꿈 칸은 넘치지 않고 자기 칸 안에서 줄을 바꾼다(엑셀과 같다). 가운데 정렬 글자는 양옆 빈 칸으로
     // 고르게, 오른쪽 정렬 글자(숫자 아님)는 왼쪽 빈 칸으로 넘친다.
     const cellStyle = styles.get(key);
-    if (cellStyle?.wrap) return;
+    if (cellStyle?.wrap || cellStyle?.shr) return; // 셀에 맞춤 칸도 넘치지 않는다(글자를 줄인다)
     const spillMode: 'right' | 'left' | 'center' | null =
       cellStyle?.a === 'c' ? 'center' : cellStyle?.a === 'r' ? (NUMERIC_VALUE.test(text.trim()) ? null : 'left') : isSpillEligible(cellStyle, text) ? 'right' : null;
     if (!spillMode) return;
@@ -3245,7 +3261,13 @@ async function main(): Promise<void> {
       td.style.backgroundSize = `${Math.round(paint.bar.ratio * 100)}% 76%`;
       td.style.backgroundRepeat = 'no-repeat';
       td.style.backgroundPosition = 'left center';
-    }
+    } else td.style.backgroundImage = '';
+    // 아이콘 집합 — 칸 왼쪽에 기호(CSS .grid-edit-table td[data-cf-icon]::after)
+    if (paint?.icon) {
+      td.dataset.cfIcon = paint.icon.ch;
+      td.style.setProperty('--cf-icon-color', paint.icon.color);
+    } else delete td.dataset.cfIcon;
+    td.classList.toggle('g-cf-hide-value', Boolean(paint?.icon?.hide));
     if (paint) td.dataset.cf = '1';
     else delete td.dataset.cf;
   }
@@ -3462,6 +3484,8 @@ async function main(): Promise<void> {
           const isLeft = c === c0;
           const isRight = c === c1;
           const weight = preset === 'outside-thick' ? 2 : 1;
+          // 파일의 선 종류·색(bd)은 버린다 — 남아 있으면 그 변이 새로 고른 실선 대신 예전 점선·색으로 그려진다
+          delete next.bd;
           switch (preset) {
             case 'none':
               delete next.bt; delete next.br; delete next.bb; delete next.bl;

@@ -93,6 +93,7 @@ describe('cellTexts — 칸의 표시·값 글자', () => {
 describe('hashIfTooWide', () => {
   test('들어가면 그대로, 넘치면 #', () => {
     expect(hashIfTooWide('1,234', 64, 15)).toBe('1,234');
-    expect(hashIfTooWide('123,456,789,012', 40, 15)).toBe('####');
+    expect(hashIfTooWide('123,456,789,012', 40, 15)).toMatch(/^#+$/);
+    expect(hashIfTooWide('2026-07-12', 64, 14.67)).toBe('2026-07-12'); // 기본 열 폭의 날짜는 엑셀처럼 그대로
   });
 });

@@ -131,12 +131,16 @@ export function formatValueText(raw: string, style: NumFmtStyle | undefined): Fo
 }
 
 /** 서식이 걸린 숫자·날짜 글자가 칸 폭에 안 들어가면 엑셀처럼 '#'으로 채운다(일반 서식·글자는 엑셀도 그대로 둔다).
- * 너비는 어림(숫자·기호 = 글자 크기의 0.5배, 한글 등 = 1배, 칸 안쪽 여백 4px) — 보기·편집 화면이 같은 어림을 쓴다. */
+ * 너비는 보수적인 어림(숫자 0.45em, 쉼표·마침표·하이픈 등 0.27em, 한글 등 1em, 그 밖 0.55em, 여백 2px) — 실제보다 좁게 잡아
+ * 들어가는 값을 #으로 가리는 일이 없게 한다. 보기·편집 화면이 같은 어림을 쓴다. */
 export function hashIfTooWide(text: string, widthPx: number, fontPx: number): string {
-  let width = 4;
-  for (const ch of text) width += (ch.codePointAt(0) ?? 0) >= 0x2e80 ? fontPx : fontPx * 0.5;
+  let width = 2;
+  for (const ch of text) {
+    const code = ch.codePointAt(0) ?? 0;
+    width += fontPx * (code >= 0x2e80 ? 1 : /[0-9]/.test(ch) ? 0.45 : /[-,.:/ ()]/.test(ch) ? 0.27 : 0.55);
+  }
   if (width <= widthPx || widthPx <= 0) return text;
-  return '#'.repeat(Math.max(1, Math.floor((widthPx - 4) / (fontPx * 0.5))));
+  return '#'.repeat(Math.max(1, Math.floor((widthPx - 2) / (fontPx * 0.45))));
 }
 
 /** 숫자·날짜 값인지(서식이 걸리면 '#' 채움·오른쪽 정렬 대상) */

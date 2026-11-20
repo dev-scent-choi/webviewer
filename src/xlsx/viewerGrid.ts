@@ -17,10 +17,12 @@ import {
   yieldToEventLoop,
   YIELD_EVERY_N_ROWS,
   type GridCell,
+  type GridDocument,
   type GridHeader,
   type GridStyle,
 } from '../spreadsheet.js';
 import { numFmtCodeOf, formatValueText } from '../collab/numberFormat.js';
+import { bakeCondFormats } from './viewerCondFormat.js';
 import { declaredEntrySizes } from '../zipGuard.js';
 import { closeLazyGridStore, getRowCells, ingestXlsxLazily, type LazyGridStore } from './lazyGridStore.js';
 
@@ -87,10 +89,16 @@ export async function serializeGridFromLazyStore(store: LazyGridStore): Promise<
   return { buffer: Buffer.concat(parts), sheetCount: store.sheetMeta.length };
 }
 
+/** 보기 화면용 그리드 — 조건부 서식까지 칸 서식에 구워 둔다.
+ * shortcut: 큰 파일(스트리밍 경로)에는 조건부 서식을 굽지 않는다 — 범위 통계를 위해 행을 두 번 읽어야 해서. 필요해지면 serializeGridFromLazyStore에서 sheetMeta.condFormats로 */
+export async function parseViewerGrid(xlsxBytes: Uint8Array): Promise<GridDocument> {
+  return bakeCondFormats(await parseXlsxToGrid(Buffer.from(xlsxBytes)), xlsxBytes);
+}
+
 /** xlsx 바이트 → 그리드 파일. 큰 파일은 스트리밍 읽기로 */
 export async function buildViewerGridFile(xlsxBytes: Buffer): Promise<{ buffer: Buffer; sheetCount: number }> {
   if (!isLargeXlsx(xlsxBytes)) {
-    const grid = await parseXlsxToGrid(xlsxBytes);
+    const grid = await parseViewerGrid(xlsxBytes);
     return { buffer: serializeGrid(grid), sheetCount: grid.sheets.length };
   }
   const store = await ingestXlsxLazily(`viewer-${randomUUID()}`, xlsxBytes);

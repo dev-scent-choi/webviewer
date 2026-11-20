@@ -2005,6 +2005,17 @@ body.home-hidden .doclist-link { display: none !important; }
 /* 칸 서식의 위·왼쪽 테두리 — 이웃 칸의 경계선(아래·오른쪽) 위에 겹쳐 그려, 맞닿은 두 칸의 테두리가
    두 배로 굵어지지 않게 한다(grid-editor.ts applyStyleToTd). */
 .grid-edit-table td.g-bord-tl { position: relative; }
+/* 조건부 서식 아이콘 집합 — 칸 왼쪽 아래에 기호(엑셀처럼 값은 그대로 오른쪽에) */
+.grid-edit-table td[data-cf-icon] { position: relative; }
+.grid-edit-table td[data-cf-icon]::after {
+  content: attr(data-cf-icon);
+  color: var(--cf-icon-color);
+  position: absolute;
+  left: 3px;
+  bottom: 1px;
+  pointer-events: none;
+}
+.grid-edit-table td.g-cf-hide-value > .g-cell-spill { visibility: hidden; }
 .grid-edit-table td.g-bord-tl::before {
   content: '';
   position: absolute;

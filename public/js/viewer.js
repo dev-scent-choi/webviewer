@@ -1173,7 +1173,21 @@ function injectGridStyles(styles) {
     // 화면에 전혀 반영되지 않았다). `.grid-table td.gs{N}`(클래스 2개+태그 1개 = 특이도 (0,2,1))로
     // 올려야 기본 격자 shorthand의 해당 변을 확실히 덮어쓴다. 폰트/색/정렬 등 다른 선언은 애초에
     // `.grid-table td`와 겹치는 규칙이 없어 특이도 경합이 없으므로 그대로 `.gs{N}`만으로 둔다.
+    // 조건부 서식(서버가 구운 결과 — xlsx/viewerCondFormat.ts): 데이터 막대, 아이콘 집합(편집 화면 grid-editor.ts와 같은 모양)
+    if (style.cb) {
+      const [barColor, pct] = style.cb;
+      cellParts.push(`background-image:linear-gradient(90deg,${barColor} 0%,${barColor}33 100%);background-size:${Number(pct)}% 76%;background-repeat:no-repeat;background-position:left center`);
+    }
+    // 테두리 선 종류·색, 무늬 채우기, 들여쓰기(x)와 글자 회전·세로쓰기(xi) — 서버가 편집 화면과 같은 함수(collab/cellBoxCss.ts)로 만든다
+    if (style.x) cellParts.push(style.x);
     const cssForStyle = [`.gs${i}{${parts.join(';')}}`];
+    if (style.xi) cssForStyle.push(`.grid-table td.gs${i}>.g-cell-spill{${style.xi}}`);
+    if (style.ci) {
+      const [ch, iconColor, hideValue] = style.ci;
+      cellParts.push('position:relative');
+      cssForStyle.push(`.grid-table td.gs${i}::after{content:${JSON.stringify(String(ch))};color:${iconColor};position:absolute;left:3px;bottom:1px;pointer-events:none}`);
+      if (hideValue) cssForStyle.push(`.grid-table td.gs${i}>.g-cell-spill{visibility:hidden}`);
+    }
     if (borderParts.length > 0 || cellParts.length > 0) cssForStyle.push(`.grid-table td.gs${i}{${[...borderParts, ...cellParts].join(';')}}`);
     return cssForStyle.join('\n');
   });
@@ -1435,7 +1449,8 @@ function renderGridViewport() {
       let spillStyle = '';
       // 가운데 정렬 글자는 양옆 빈 칸으로 고르게, 오른쪽 정렬 글자(숫자 아님)는 왼쪽 빈 칸으로 넘친다(엑셀과 같다)
       const align = cellStyleObj && cellStyleObj.a;
-      const spillMode = isEmpty || merge || (cellStyleObj && cellStyleObj.w)
+      if (cellStyleObj && cellStyleObj.shr) classes.push('g-shrink');
+      const spillMode = isEmpty || merge || (cellStyleObj && (cellStyleObj.w || cellStyleObj.shr))
         ? null
         : align === 'c'
           ? 'center'
@@ -1477,6 +1492,12 @@ function renderGridViewport() {
 
   const table = document.getElementById('grid-table');
   table.innerHTML = cols + rowsHtml.join('');
+  // 셀에 맞춤 — 칸보다 넓은 글자는 글자 크기를 줄인다(편집 화면 shrinkToFit과 같은 규칙, 이런 칸은 드물다)
+  for (const td of table.querySelectorAll('td.g-shrink')) {
+    const span = td.querySelector('.g-cell-spill');
+    const room = td.clientWidth - 6;
+    if (span && room > 0 && span.scrollWidth > room) span.style.fontSize = `${(parseFloat(getComputedStyle(span).fontSize) * room) / span.scrollWidth}px`;
+  }
   table.style.width = `${totalColWidthPx}px`;
   table.style.transform = `translateY(${layout.top(renderFirst - 1)}px)`;
 }

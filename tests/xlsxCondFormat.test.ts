@@ -35,8 +35,8 @@ describe('파일의 조건부 서식 읽기', () => {
 <extLst><ext><x14:conditionalFormattings><x14:conditionalFormatting><x14:cfRule type="dataBar" id="{X}"/></x14:conditionalFormatting></x14:conditionalFormattings></ext></extLst>
 </worksheet>`;
   const entries = parseCondFormats(sheet, dxfs, THEME);
-  test('우선순위 순, 종류별 형식, 화면에 못 그리는 수식 규칙은 other, extLst는 읽지 않음', () => {
-    expect(entries.map((e) => [e.p, e.rule.t])).toEqual([[1, 'dup'], [2, 'cell'], [3, 'top'], [4, 'scale'], [5, 'other'], [6, 'text']]);
+  test('우선순위 순, 종류별 형식, 수식 규칙은 expr, extLst는 읽지 않음', () => {
+    expect(entries.map((e) => [e.p, e.rule.t])).toEqual([[1, 'dup'], [2, 'cell'], [3, 'top'], [4, 'scale'], [5, 'expr'], [6, 'text']]);
     expect(entries[1]).toMatchObject({ ranges: [{ r0: 0, r1: 9, c0: 0, c1: 0 }, { r0: 0, r1: 4, c0: 2, c1: 2 }], rule: { t: 'cell', op: 'gt', v1: '10', s: { bg: '#FFC7CE', col: '#9C0006' } } });
     expect(entries[2].rule).toEqual({ t: 'top', n: 3, bottom: 1, s: { bg: '#FFC7CE', col: '#9C0006' } });
     expect(entries[3].rule).toEqual({ t: 'scale', colors: ['#F8696B', '#63BE7B'] });

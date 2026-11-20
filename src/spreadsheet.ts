@@ -4,6 +4,7 @@ import type { DocumentMeta } from './types.js';
 import { buildSheetNameIndex, computeGridCellDisplay } from './xlsx/formulas.js';
 import { dateToDateText, isDateNumFmt, serialToDateText } from './collab/cellValueShared.js';
 import { formatNumberCode, hashIfTooWide, isNumberOrDateValue, isTextNumFmt } from './collab/numberFormat.js';
+import type { BorderSpec } from './collab/cellBoxCss.js';
 import { stripDrawings } from './xlsx/drawingPassthrough.js';
 import { unzipSync, strFromU8 } from 'fflate';
 import {
@@ -107,6 +108,9 @@ export interface GridStyle {
   readonly fmt?: string;
   /** 서식 코드가 값에 따라 정한 글자 색([Red] 등) — 보기 화면 전용(편집 화면은 값마다 다시 계산한다) */
   readonly fc?: string;
+  /** 보기 화면 전용 — 조건부 서식을 구운 결과(xlsx/viewerCondFormat.ts): 데이터 막대 [색, 길이 %], 아이콘 [기호, 색, 값 숨김] */
+  readonly cb?: readonly [string, number];
+  readonly ci?: readonly [string, string, 1?];
   /** 시트 보호가 걸려 있고 이 셀이 잠겨 있음(=편집 불가) */
   readonly lk?: 1;
   /** 엑셀 데이터 유효성 검사(정수/소수)가 걸려 있음 */
@@ -115,6 +119,16 @@ export interface GridStyle {
   readonly br?: BorderWeight;
   readonly bb?: BorderWeight;
   readonly bl?: BorderWeight;
+  /** 굵기(bt…)만으로 못 나타내는 테두리 변 — [엑셀 선 종류, 색] (collab/cellBoxCss.ts) */
+  readonly bd?: { readonly t?: BorderSpec; readonly r?: BorderSpec; readonly b?: BorderSpec; readonly l?: BorderSpec };
+  /** 무늬 채우기 [무늬, 무늬 색, 바탕색](solid 아닌 것) */
+  readonly pat?: readonly [string, string?, string?];
+  /** 글자 회전(엑셀 textRotation, 255 = 세로쓰기) */
+  readonly rot?: number;
+  /** 들여쓰기 단계 */
+  readonly ind?: number;
+  /** 셀에 맞춤(글자 크기를 줄여 칸에 맞춘다) */
+  readonly shr?: 1;
 }
 
 export interface GridDocument {
@@ -671,6 +685,11 @@ export function extractStyle(
     // 흰색이어도 캡처한다 — 잠긴 칸은 기본적으로 회색으로 렌더링되는데, 셀에 명시적으로 흰 배경을
     // 지정해두면(이 커넥션-현황 시트의 1행처럼) 그 지정이 잠금 회색보다 우선해야 한다.
     if (bg) style.bg = bg;
+  } else if (fill && fill.type === 'pattern' && fill.pattern && fill.pattern !== 'none') {
+    // 무늬 채우기(gray125·darkGrid·lightTrellis …) — 무늬 색(fg)·바탕색(bg). 색이 없으면 엑셀처럼 검정 무늬·흰 바탕
+    const fg = resolveColor(fill.fgColor, themeColors);
+    const bg = resolveColor(fill.bgColor, themeColors);
+    style.pat = bg ? [fill.pattern, fg ?? '#000000', bg] : fg ? [fill.pattern, fg] : [fill.pattern];
   }
   const horizontal = cell.alignment?.horizontal;
   if (horizontal === 'center') style.a = 'c';
@@ -688,6 +707,11 @@ export function extractStyle(
   else if (vertical === 'middle') style.va = 'm';
   else if (vertical === 'bottom') style.va = 'b';
   if (cell.alignment?.wrapText) style.w = 1;
+  const rotation = cell.alignment?.textRotation;
+  if (rotation === 'vertical') style.rot = 255;
+  else if (typeof rotation === 'number' && rotation !== 0) style.rot = rotation < 0 ? 90 - rotation : rotation; // ExcelJS는 시계 방향을 음수로 준다
+  if (cell.alignment?.indent) style.ind = cell.alignment.indent;
+  if (cell.alignment?.shrinkToFit) style.shr = 1;
   // 날짜 먼저 — "yyyy\"년\"" 같은 글자 붙은 날짜 서식이 통화로 분류되지 않게
   const numFmt = numFmtOf(cell);
   const { nf, nd } = isDateNumFmt(numFmt) ? {} : classifyNumFmt(numFmt);
@@ -714,6 +738,16 @@ export function extractStyle(
   if (bb) style.bb = bb;
   const bl = borderWeight(border?.left);
   if (bl) style.bl = bl;
+  // 굵기로 못 나타내는 변(색 있는 선·점선·이중선 …)은 선 종류와 색을 그대로 남긴다
+  const bd: { t?: BorderSpec; r?: BorderSpec; b?: BorderSpec; l?: BorderSpec } = {};
+  for (const [key, side] of [['t', border?.top], ['r', border?.right], ['b', border?.bottom], ['l', border?.left]] as const) {
+    if (!side?.style) continue;
+    const color = resolveColor(side.color, themeColors)?.toUpperCase();
+    const plainColor = !color || color === '#000000';
+    if (side.style !== 'thin' && side.style !== 'medium') bd[key] = plainColor ? [side.style] : [side.style, color];
+    else if (!plainColor) bd[key] = [side.style, color];
+  }
+  if (Object.keys(bd).length > 0) style.bd = bd;
   return palette.register(style);
 }
 

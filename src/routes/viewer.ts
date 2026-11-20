@@ -57,6 +57,7 @@ import { buildViewerGridFile, saveGridFile } from '../xlsx/viewerGrid.js';
 import type { GridChart } from '../xlsx/chartModel.js';
 import { chartDataOf, renderChartSvg } from '../xlsx/chartSvg.js';
 import { rowTopPx } from '../xlsx/sheetGeometry.js';
+import { cellBoxCssText } from '../collab/cellBoxCss.js';
 
 export interface ViewContext {
   readonly claims: ViewClaims;
@@ -1019,7 +1020,9 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
         return reply.code(400).send({ success: false, error: '그리드 뷰 문서가 아닙니다.' });
       }
       const grid = await loadGrid(view.meta.id);
-      return { success: true, data: grid.header };
+      // 테두리 선 종류·색, 무늬 채우기, 글자 회전·들여쓰기 CSS는 편집 화면과 같은 함수(collab/cellBoxCss.ts)로 만들어 함께 보낸다
+      const styles = grid.header.styles.map((style) => ({ ...style, ...cellBoxCssText(style) }));
+      return { success: true, data: { ...grid.header, styles } };
     },
   );
 

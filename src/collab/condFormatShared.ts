@@ -36,7 +36,52 @@ export type CfRule =
   | { readonly t: 'avg'; readonly below?: 1; readonly s: CfStyle }
   | { readonly t: 'scale'; readonly colors: readonly string[] }
   | { readonly t: 'bar'; readonly color: string }
+  /** 아이콘 집합 — th: 둘째 아이콘부터의 문턱값(첫 cfvo는 엑셀도 보지 않는다), gt: 이상(>=)이 아니라 초과(>) */
+  | { readonly t: 'icon'; readonly set: string; readonly th: readonly CfIconThreshold[]; readonly reverse?: 1; readonly hide?: 1 }
+  /** 수식 규칙 — 범위 왼쪽 위 칸 기준으로 쓴 수식(상대 참조는 칸마다 옮긴다) */
+  | { readonly t: 'expr'; readonly f: string; readonly s: CfStyle }
   | { readonly t: 'other' };
+
+export interface CfIconThreshold {
+  readonly type: 'percent' | 'percentile' | 'num';
+  readonly v: number;
+  readonly gt?: 1;
+}
+
+/** 아이콘 집합 모양(낮은 값 → 높은 값) — 엑셀 아이콘을 글자 기호와 색으로 흉내 낸다 */
+const RED = '#E5322D';
+const YELLOW = '#F2B800';
+const GREEN = '#2E9D44';
+const GRAY = '#7F7F7F';
+const BLUE = '#2F6EBA';
+function arrows(n: 3 | 4 | 5, gray = false): Array<{ ch: string; color: string }> {
+  const c = (color: string) => (gray ? GRAY : color);
+  const marks = n === 3 ? ['↓', '→', '↑'] : n === 4 ? ['↓', '↘', '↗', '↑'] : ['↓', '↘', '→', '↗', '↑'];
+  return marks.map((ch, i) => ({ ch, color: c(i === 0 ? RED : i === marks.length - 1 ? GREEN : YELLOW) }));
+}
+const dots = (colors: readonly string[]) => colors.map((color) => ({ ch: '●', color }));
+export const CF_ICON_SETS: Readonly<Record<string, ReadonlyArray<{ readonly ch: string; readonly color: string }>>> = {
+  '3Arrows': arrows(3),
+  '3ArrowsGray': arrows(3, true),
+  '4Arrows': arrows(4),
+  '4ArrowsGray': arrows(4, true),
+  '5Arrows': arrows(5),
+  '5ArrowsGray': arrows(5, true),
+  '3TrafficLights1': dots([RED, YELLOW, GREEN]),
+  '3TrafficLights2': dots([RED, YELLOW, GREEN]),
+  '4TrafficLights': dots(['#3F3F3F', RED, YELLOW, GREEN]),
+  '4RedToBlack': dots(['#3F3F3F', GRAY, '#F4A6A6', RED]),
+  '3Signs': [{ ch: '◆', color: RED }, { ch: '▲', color: YELLOW }, { ch: '●', color: GREEN }],
+  '3Symbols': [{ ch: '✖', color: RED }, { ch: '!', color: YELLOW }, { ch: '✔', color: GREEN }],
+  '3Symbols2': [{ ch: '✖', color: RED }, { ch: '!', color: YELLOW }, { ch: '✔', color: GREEN }],
+  '3Flags': [{ ch: '⚑', color: RED }, { ch: '⚑', color: YELLOW }, { ch: '⚑', color: GREEN }],
+  '3Stars': [{ ch: '☆', color: YELLOW }, { ch: '★', color: '#F7D57A' }, { ch: '★', color: YELLOW }],
+  '3Triangles': [{ ch: '▼', color: RED }, { ch: '▬', color: YELLOW }, { ch: '▲', color: GREEN }],
+  '4Rating': ['▂', '▄', '▆', '█'].map((ch) => ({ ch, color: BLUE })),
+  '5Rating': ['▁', '▂', '▄', '▆', '█'].map((ch) => ({ ch, color: BLUE })),
+  '5Quarters': ['○', '◔', '◑', '◕', '●'].map((ch) => ({ ch, color: '#404040' })),
+  '5Boxes': ['□', '▫', '◧', '◩', '■'].map((ch) => ({ ch, color: BLUE })),
+};
 
 export interface CondFormatEntry {
   readonly id: string;
@@ -181,10 +226,12 @@ export interface CfStats {
   readonly min?: number;
   readonly max?: number;
   readonly mid?: number;
+  /** 아이콘 집합의 백분위 문턱값용 — 오름차순 값 */
+  readonly sorted?: readonly number[];
 }
 
 export function needsStats(rule: CfRule): boolean {
-  return rule.t === 'dup' || rule.t === 'top' || rule.t === 'avg' || rule.t === 'scale' || rule.t === 'bar';
+  return rule.t === 'dup' || rule.t === 'top' || rule.t === 'avg' || rule.t === 'scale' || rule.t === 'bar' || rule.t === 'icon';
 }
 
 /** values: 규칙 범위 안의 (불러와 둔) 값들 */
@@ -209,12 +256,17 @@ export function computeStats(rule: CfRule, values: readonly string[]): CfStats {
   const max = Math.max(...nums);
   if (rule.t === 'scale') {
     const sorted = [...nums].sort((a, b) => a - b);
-    const pos = (sorted.length - 1) * 0.5; // 50번째 백분위수(엑셀 3색 색조 기본)
-    const lo = Math.floor(pos);
-    const mid = sorted[lo] + (sorted[Math.min(lo + 1, sorted.length - 1)] - sorted[lo]) * (pos - lo);
-    return { min, max, mid };
+    return { min, max, mid: percentileOf(sorted, 50) }; // 50번째 백분위수(엑셀 3색 색조 기본)
   }
+  if (rule.t === 'icon') return { min, max, sorted: [...nums].sort((a, b) => a - b) };
   return { min: Math.min(0, min), max: Math.max(0, max) }; // 데이터 막대: 엑셀 "자동" 최소·최대는 0을 포함한다
+}
+
+/** 오름차순 값의 p번째 백분위수(엑셀 PERCENTILE.INC와 같은 보간) */
+function percentileOf(sorted: readonly number[], p: number): number {
+  const pos = ((sorted.length - 1) * Math.max(0, Math.min(100, p))) / 100;
+  const lo = Math.floor(pos);
+  return sorted[lo] + (sorted[Math.min(lo + 1, sorted.length - 1)] - sorted[lo]) * (pos - lo);
 }
 
 function cellRuleMatches(op: CfCellOp, value: string, a: string | null, b: string | null): boolean {
@@ -251,6 +303,8 @@ export interface CfPaint {
   bar?: { color: string; ratio: number };
   /** 색조: 칸 배경 */
   scale?: string;
+  /** 아이콘 집합: 칸 왼쪽에 그릴 기호와 색(hide면 값은 숨긴다) */
+  icon?: { ch: string; color: string; hide?: true };
 }
 
 function mixHex(a: string, b: string, t: number): string {
@@ -330,10 +384,269 @@ export function paintCell(
         paint = { ...(paint ?? {}), bar: { color: rule.color, ratio: Math.max(0, Math.min(1, (n - st.min) / (st.max - st.min))) } };
         break;
       }
+      case 'icon': {
+        const n = cfNumber(value);
+        const icons = CF_ICON_SETS[rule.set] ?? CF_ICON_SETS['3TrafficLights1'];
+        if (n === null || st.min === undefined || st.max === undefined || !st.sorted) break;
+        let level = 0;
+        for (let k = Math.min(rule.th.length, icons.length - 1); k >= 1; k -= 1) {
+          const th = rule.th[k - 1];
+          const at = th.type === 'num' ? th.v : th.type === 'percentile' ? percentileOf(st.sorted, th.v) : st.min + ((st.max - st.min) * th.v) / 100;
+          if (th.gt ? n > at : n >= at) {
+            level = k;
+            break;
+          }
+        }
+        const icon = icons[rule.reverse ? icons.length - 1 - level : level];
+        paint = { ...(paint ?? {}), icon: { ...icon, ...(rule.hide ? { hide: true as const } : {}) } };
+        break;
+      }
+      case 'expr': {
+        const anchor = entry.ranges[0];
+        if (anchor && evalCfFormula(rule.f, row - anchor.r0, col - anchor.c0, row, col, valueAt)) hit = rule.s;
+        break;
+      }
       default:
         break;
     }
     if (hit) paint = { ...(paint ?? {}), style: { ...(paint?.style ?? {}), ...hit } };
   }
   return paint;
+}
+
+// ---------- 수식 규칙(type="expression") 계산 ----------
+// 조건부 서식 수식은 짧다($C2>=1, MOD(ROW(),2)=0, AND($D2="완료",$E2>0) …). 편집기 번들에 수식 엔진 전체를 싣지 않고
+// 비교·산술·연결·자주 쓰는 함수만 여기서 계산한다. 모르는 함수나 범위·다른 시트 참조가 나오면 규칙이 안 맞는 것으로 본다.
+type CfVal = number | string | boolean | null; // null = 빈 칸
+
+function truthy(v: CfVal): boolean {
+  return typeof v === 'boolean' ? v : typeof v === 'number' ? v !== 0 : false;
+}
+function num(v: CfVal): number {
+  if (v === null || v === '') return 0;
+  if (typeof v === 'boolean') return v ? 1 : 0;
+  if (typeof v === 'number') return v;
+  const n = cfNumber(v);
+  if (n === null) throw new Error('#VALUE!');
+  return n;
+}
+function text(v: CfVal): string {
+  return v === null ? '' : typeof v === 'boolean' ? (v ? 'TRUE' : 'FALSE') : String(v);
+}
+/** 비교 — 빈 칸은 상대가 숫자면 0, 글자면 ""(엑셀과 같다). 종류가 다르면 숫자 < 글자 < 논리값 */
+function compare(a: CfVal, b: CfVal): number {
+  const x = a === null ? (typeof b === 'string' ? '' : 0) : a;
+  const y = b === null ? (typeof a === 'string' ? '' : 0) : b;
+  if (typeof x === 'number' && typeof y === 'number') return x - y;
+  if (typeof x === typeof y) {
+    const sx = text(x).toLowerCase();
+    const sy = text(y).toLowerCase();
+    return sx < sy ? -1 : sx > sy ? 1 : 0;
+  }
+  const rank = (v: CfVal) => (typeof v === 'number' ? 0 : typeof v === 'string' ? 1 : 2);
+  return rank(x) - rank(y);
+}
+
+const CF_FUNCS: Readonly<Record<string, (args: CfVal[], at: { row: number; col: number }) => CfVal>> = {
+  AND: (a) => a.every((v) => truthy(v)),
+  OR: (a) => a.some((v) => truthy(v)),
+  NOT: (a) => !truthy(a[0] ?? null),
+  IF: (a) => (truthy(a[0] ?? null) ? (a[1] ?? true) : (a[2] ?? false)),
+  ISBLANK: (a) => a[0] === null,
+  ISNUMBER: (a) => typeof a[0] === 'number',
+  ISTEXT: (a) => typeof a[0] === 'string',
+  LEN: (a) => text(a[0] ?? null).length,
+  ABS: (a) => Math.abs(num(a[0] ?? null)),
+  INT: (a) => Math.floor(num(a[0] ?? null)),
+  ROUND: (a) => {
+    const f = 10 ** num(a[1] ?? 0);
+    return Math.round(num(a[0] ?? null) * f) / f;
+  },
+  MOD: (a) => {
+    const n = num(a[0] ?? null);
+    const d = num(a[1] ?? null);
+    if (d === 0) throw new Error('#DIV/0!');
+    return n - d * Math.floor(n / d);
+  },
+  ROW: (_a, at) => at.row + 1,
+  COLUMN: (_a, at) => at.col + 1,
+  LEFT: (a) => text(a[0] ?? null).slice(0, a.length > 1 ? num(a[1]) : 1),
+  RIGHT: (a) => {
+    const t = text(a[0] ?? null);
+    const n = a.length > 1 ? num(a[1]) : 1;
+    return n <= 0 ? '' : t.slice(-n);
+  },
+  UPPER: (a) => text(a[0] ?? null).toUpperCase(),
+  LOWER: (a) => text(a[0] ?? null).toLowerCase(),
+  TRIM: (a) => text(a[0] ?? null).trim().replace(/\s+/g, ' '),
+  TODAY: () => Math.floor((Date.now() - Date.UTC(1899, 11, 30)) / 86_400_000),
+};
+
+const NUM_TOKEN = /^(\d+(\.\d*)?|\.\d+)([eE][-+]?\d+)?/;
+const REF_TOKEN = /^(\$?)([A-Za-z]{1,3})(\$?)(\d+)(?![\w(:!])/;
+const FUNC_TOKEN = /^([A-Za-z][A-Za-z0-9.]*)\s*\(/;
+const BOOL_TOKEN = /^(TRUE|FALSE)(?![\w(])/i;
+const CMP_TOKEN = /^(<>|<=|>=|=|<|>)/;
+
+/**
+ * 조건부 서식 수식 하나를 칸 (row, col)에 대해 계산해 참/거짓을 낸다. dr/dc: 범위 왼쪽 위에서 이 칸까지 — $ 없는 참조를 이만큼 옮긴다.
+ * 계산할 수 없으면(모르는 함수, 범위·다른 시트 참조, 문법 오류) false.
+ */
+export function evalCfFormula(
+  formula: string,
+  dr: number,
+  dc: number,
+  row: number,
+  col: number,
+  valueAt: (row: number, col: number) => string,
+): boolean {
+  const src = formula.trim().replace(/^=/, '');
+  let i = 0;
+  const rest = () => src.slice(i);
+  const peek = () => {
+    while (src[i] === ' ') i += 1;
+    return src[i] ?? '';
+  };
+  const fail = (): never => {
+    throw new Error('cf formula');
+  };
+  const expect = (ch: string) => {
+    if (peek() !== ch) fail();
+    i += 1;
+  };
+  const cellValue = (r: number, c: number): CfVal => {
+    if (r < 0 || c < 0) fail();
+    const v = valueAt(r, c);
+    if (v === '') return null;
+    const n = cfNumber(v);
+    if (n !== null) return n;
+    if (v === 'TRUE' || v === 'FALSE') return v === 'TRUE';
+    return v;
+  };
+  const primary = (): CfVal => {
+    const ch = peek();
+    if (ch === '(') {
+      i += 1;
+      const v = comparison();
+      expect(')');
+      return v;
+    }
+    if (ch === '"') {
+      let out = '';
+      i += 1;
+      for (;;) {
+        if (i >= src.length) fail();
+        if (src[i] === '"') {
+          if (src[i + 1] !== '"') {
+            i += 1;
+            return out;
+          }
+          i += 1;
+        }
+        out += src[i];
+        i += 1;
+      }
+    }
+    const numMatch = NUM_TOKEN.exec(rest());
+    if (numMatch) {
+      i += numMatch[0].length;
+      return Number(numMatch[0]);
+    }
+    const bool = BOOL_TOKEN.exec(rest());
+    if (bool) {
+      i += bool[0].length;
+      return bool[1].toUpperCase() === 'TRUE';
+    }
+    const ref = REF_TOKEN.exec(rest());
+    if (ref) {
+      i += ref[0].length;
+      let c = 0;
+      for (const l of ref[2].toUpperCase()) c = c * 26 + (l.charCodeAt(0) - 64);
+      return cellValue(Number(ref[4]) - 1 + (ref[3] ? 0 : dr), c - 1 + (ref[1] ? 0 : dc));
+    }
+    const name = FUNC_TOKEN.exec(rest());
+    if (name) {
+      i += name[0].length;
+      const fn = CF_FUNCS[name[1].toUpperCase()] ?? fail();
+      const args: CfVal[] = [];
+      if (peek() !== ')') {
+        for (;;) {
+          args.push(comparison());
+          if (peek() !== ',') break;
+          i += 1;
+        }
+      }
+      expect(')');
+      return fn(args, { row, col });
+    }
+    return fail();
+  };
+  const unary = (): CfVal => {
+    if (peek() === '-') {
+      i += 1;
+      return -num(unary());
+    }
+    if (peek() === '+') {
+      i += 1;
+      return unary();
+    }
+    let v = primary();
+    while (peek() === '%') {
+      i += 1;
+      v = num(v) / 100;
+    }
+    return v;
+  };
+  const power = (): CfVal => {
+    let v = unary();
+    while (peek() === '^') {
+      i += 1;
+      v = num(v) ** num(unary());
+    }
+    return v;
+  };
+  const product = (): CfVal => {
+    let v = power();
+    for (let op = peek(); op === '*' || op === '/'; op = peek()) {
+      i += 1;
+      const r = num(power());
+      if (op === '/' && r === 0) fail();
+      v = op === '*' ? num(v) * r : num(v) / r;
+    }
+    return v;
+  };
+  const sum = (): CfVal => {
+    let v = product();
+    for (let op = peek(); op === '+' || op === '-'; op = peek()) {
+      i += 1;
+      const r = num(product());
+      v = op === '+' ? num(v) + r : num(v) - r;
+    }
+    return v;
+  };
+  const concat = (): CfVal => {
+    let v = sum();
+    while (peek() === '&') {
+      i += 1;
+      v = text(v) + text(sum());
+    }
+    return v;
+  };
+  function comparison(): CfVal {
+    let v = concat();
+    for (;;) {
+      peek();
+      const op = CMP_TOKEN.exec(rest())?.[1];
+      if (!op) return v;
+      i += op.length;
+      const d = compare(v, concat());
+      v = op === '=' ? d === 0 : op === '<>' ? d !== 0 : op === '<' ? d < 0 : op === '>' ? d > 0 : op === '<=' ? d <= 0 : d >= 0;
+    }
+  }
+  try {
+    const v = comparison();
+    return peek() === '' && truthy(v);
+  } catch {
+    return false;
+  }
 }

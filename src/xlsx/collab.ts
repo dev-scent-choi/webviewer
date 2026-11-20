@@ -22,7 +22,9 @@ import {
   type SheetStructure,
 } from '../collab/gridShared.js';
 import type { GridCell, GridDocument, GridStyle } from '../spreadsheet.js';
-import { gridCellValue, parseXlsxToGrid, yieldToEventLoop, YIELD_EVERY_N_ROWS } from '../spreadsheet.js';
+import { gridCellValue, yieldToEventLoop, YIELD_EVERY_N_ROWS } from '../spreadsheet.js';
+import { parseViewerGrid } from './viewerGrid.js';
+import type { BorderSpec } from '../collab/cellBoxCss.js';
 import type { LazyGridSheetMeta, LazyGridStore } from './lazyGridStore.js';
 import { GRID_COND_FORMATS_MAP, type CondFormatEntry } from '../collab/condFormatShared.js';
 import { applyEditedCondFormats, preserveUnsupportedCfRules } from './condFormatExport.js';
@@ -53,6 +55,11 @@ export function toCellStyleAttrs(style: GridStyle): CellStyleAttrs {
   if (style.br) attrs.br = style.br;
   if (style.bb) attrs.bb = style.bb;
   if (style.bl) attrs.bl = style.bl;
+  if (style.bd) attrs.bd = style.bd;
+  if (style.pat) attrs.pat = style.pat;
+  if (style.rot) attrs.rot = style.rot;
+  if (style.ind) attrs.ind = style.ind;
+  if (style.shr) attrs.shr = 1;
   return attrs;
 }
 
@@ -89,6 +96,11 @@ export function fromCellStyleAttrs(attrs: CellStyleAttrs): GridStyle {
   if (attrs.br) style.br = attrs.br;
   if (attrs.bb) style.bb = attrs.bb;
   if (attrs.bl) style.bl = attrs.bl;
+  if (attrs.bd) style.bd = attrs.bd;
+  if (attrs.pat) style.pat = attrs.pat;
+  if (attrs.rot) style.rot = attrs.rot;
+  if (attrs.ind) style.ind = attrs.ind;
+  if (attrs.shr) style.shr = 1;
   return style;
 }
 
@@ -550,19 +562,33 @@ export function applyStyleToCell(cell: ExcelJS.Cell, style: CellStyleAttrs | und
     name: style.ff,
     size: style.fs ? Math.round(style.fs * PX_TO_PT) : undefined,
   };
+  const argbOf = (css: string) => ({ argb: `FF${css.replace('#', '').toUpperCase()}` });
   cell.fill = style.bg
-    ? { type: 'pattern', pattern: 'solid', fgColor: { argb: `FF${style.bg.replace('#', '').toUpperCase()}` } }
-    : { type: 'pattern', pattern: 'none' };
+    ? { type: 'pattern', pattern: 'solid', fgColor: argbOf(style.bg) }
+    : style.pat
+      ? {
+          type: 'pattern',
+          pattern: style.pat[0] as ExcelJS.FillPatterns,
+          ...(style.pat[1] ? { fgColor: argbOf(style.pat[1]) } : {}),
+          ...(style.pat[2] ? { bgColor: argbOf(style.pat[2]) } : {}),
+        }
+      : { type: 'pattern', pattern: 'none' };
   cell.alignment = {
     horizontal: style.a ? ALIGN_TO_EXCEL[style.a] : undefined,
     vertical: style.va ? VALIGN_TO_EXCEL[style.va] : undefined,
     wrapText: style.wrap === 1,
+    ...(style.rot ? { textRotation: style.rot === 255 ? ('vertical' as const) : style.rot > 90 ? 90 - style.rot : style.rot } : {}),
+    ...(style.ind ? { indent: style.ind } : {}),
+    ...(style.shr ? { shrinkToFit: true } : {}),
   };
+  // 선 종류·색(bd)이 있으면 그대로, 없으면 굵기(1=thin, 2=medium) — 파일에서 읽은 점선·색 테두리가 저장 때 실선이 되지 않게
+  const side = (weight: 1 | 2 | undefined, spec: BorderSpec | undefined): Partial<ExcelJS.Border> | undefined =>
+    weight ? { style: (spec?.[0] as ExcelJS.BorderStyle | undefined) ?? BORDER_WEIGHT_TO_EXCEL[weight], ...(spec?.[1] ? { color: argbOf(spec[1]) } : {}) } : undefined;
   cell.border = {
-    top: style.bt ? { style: BORDER_WEIGHT_TO_EXCEL[style.bt] } : undefined,
-    right: style.br ? { style: BORDER_WEIGHT_TO_EXCEL[style.br] } : undefined,
-    bottom: style.bb ? { style: BORDER_WEIGHT_TO_EXCEL[style.bb] } : undefined,
-    left: style.bl ? { style: BORDER_WEIGHT_TO_EXCEL[style.bl] } : undefined,
+    top: side(style.bt, style.bd?.t),
+    right: side(style.br, style.bd?.r),
+    bottom: side(style.bb, style.bd?.b),
+    left: side(style.bl, style.bd?.l),
   };
   cell.numFmt = numFmtStringFor(style) ?? 'General';
 }
@@ -983,5 +1009,5 @@ function applySheetDisplayOrder(
 
 /** 저장 직후 뷰어용 그리드(읽기전용 열람 캐시)를 새 xlsx 바이트에서 다시 뽑아낸다. */
 export function reparseGridForViewer(newXlsxBytes: Uint8Array): Promise<GridDocument> {
-  return parseXlsxToGrid(Buffer.from(newXlsxBytes));
+  return parseViewerGrid(newXlsxBytes);
 }

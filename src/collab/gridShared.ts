@@ -8,6 +8,8 @@
  * 시트 구조(행/열 개수, 이름)는 별도 Y.Map에 시트 인덱스별로 통짜 JSON을 둔다 — 행/열
  * 추가·삭제 같은 구조 변경은 셀 편집보다 훨씬 드물어 세밀한 CRDT가 필요 없다.
  */
+import type { BorderSpec } from './cellBoxCss.js';
+
 export const GRID_CELLS_MAP = 'cells';
 /** 수식 셀의 계산된 표시값만 담는 Y.Map — "시트:행:열" 키(gridCellKey와 동일 형식). 수식이
  * 아닌 셀은 이 맵에 항목이 없다. cells는 항상 원본 텍스트(수식이면 수식 자체)만 담고, 여기에
@@ -134,6 +136,16 @@ export interface CellStyleAttrs {
   readonly br?: BorderWeight;
   readonly bb?: BorderWeight;
   readonly bl?: BorderWeight;
+  /** 굵기(bt…)만으로 못 나타내는 테두리 변 — [엑셀 선 종류, 색] (collab/cellBoxCss.ts) */
+  readonly bd?: { readonly t?: BorderSpec; readonly r?: BorderSpec; readonly b?: BorderSpec; readonly l?: BorderSpec };
+  /** 무늬 채우기 [무늬, 무늬 색, 바탕색](solid 아닌 것) */
+  readonly pat?: readonly [string, string?, string?];
+  /** 글자 회전(엑셀 textRotation, 255 = 세로쓰기) */
+  readonly rot?: number;
+  /** 들여쓰기 단계 */
+  readonly ind?: number;
+  /** 셀에 맞춤(글자 크기를 줄여 칸에 맞춘다) */
+  readonly shr?: 1;
 }
 
 /**
