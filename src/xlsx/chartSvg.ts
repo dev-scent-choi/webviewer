@@ -257,9 +257,12 @@ export function renderChartSvg(kind: ChartKind, data: ChartData, width: number, 
     if (horizontal) left += 18;
     else bottom -= 16;
   }
-  left += horizontal ? 64 : tickW(ax1, fmt1) + 4;
+  // 축을 숨긴 파일(c:delete·tickLblPos none)은 눈금 글자 자리를 비우지 않는다(엑셀은 그림 영역을 넓힌다)
+  const valLabels = !look?.valHidden;
+  const catLabels = !look?.catHidden;
+  left += horizontal ? (catLabels ? 64 : 6) : valLabels ? tickW(ax1, fmt1) + 4 : 6;
   if (ax2) right -= tickW(ax2, look?.val2Fmt) + (look?.val2Title ? 18 : 0);
-  bottom -= horizontal ? 18 : 20;
+  bottom -= (horizontal ? valLabels : catLabels) ? (horizontal ? 18 : 20) : 4;
   const plotW = Math.max(10, right - left);
   const plotH = Math.max(10, bottom - top);
   const scale = (ax: { min: number; max: number }, v: number) => (v - ax.min) / (ax.max - ax.min || 1);
@@ -269,11 +272,11 @@ export function renderChartSvg(kind: ChartKind, data: ChartData, width: number, 
     if (horizontal) {
       const x = left + scale(ax1, v) * plotW;
       if (gridlines) parts.push(`<line x1="${x}" y1="${top}" x2="${x}" y2="${bottom}" stroke="#d9d9d9"/>`);
-      parts.push(text(x, bottom + 14, label, 'text-anchor="middle"'));
+      if (valLabels) parts.push(text(x, bottom + 14, label, 'text-anchor="middle"'));
     } else {
       const y = bottom - scale(ax1, v) * plotH;
       if (gridlines) parts.push(`<line x1="${left}" y1="${y}" x2="${right}" y2="${y}" stroke="#d9d9d9"/>`);
-      parts.push(text(left - 6, y + 3.5, label, 'text-anchor="end"'));
+      if (valLabels) parts.push(text(left - 6, y + 3.5, label, 'text-anchor="end"'));
     }
   }
   if (ax2) {
@@ -293,7 +296,7 @@ export function renderChartSvg(kind: ChartKind, data: ChartData, width: number, 
     parts.push(
       horizontal
         ? text(12, (top + bottom) / 2, look.catTitle, `text-anchor="middle" transform="rotate(-90 12 ${(top + bottom) / 2})"`)
-        : text((left + right) / 2, bottom + 34, look.catTitle, 'text-anchor="middle"'),
+        : text((left + right) / 2, bottom + (catLabels ? 34 : 16), look.catTitle, 'text-anchor="middle"'),
     );
   }
   const band = (horizontal ? plotH : plotW) / n;
@@ -306,6 +309,7 @@ export function renderChartSvg(kind: ChartKind, data: ChartData, width: number, 
   data.categories.forEach((label, i) => {
     if (i >= n) return;
     const t = String(label).slice(0, 10);
+    if (!catLabels) return;
     if (horizontal) parts.push(text(left - 6, top + band * (i + 0.5) + 3.5, t, 'text-anchor="end"'));
     else if (!xNumeric) parts.push(text(left + band * (i + 0.5), bottom + 16, t, 'text-anchor="middle"'));
   });

@@ -56,4 +56,15 @@ describe('차트 세부 모양(검토 13)', () => {
     expect(line.look?.palette?.[0]).toBe('#4F81BD');
     expect(line.series.some((s) => s.look?.smooth)).toBe(true);
   });
+  test('x06: 축을 지운 파일(c:delete)은 눈금 글자를 그리지 않는다(엑셀처럼), 축 제목은 그린다', () => {
+    const charts = readSheetCharts(fs.readFileSync('audit/office/corpus/xlsx/x06-charts.xlsx'));
+    const bar = charts.find((c) => c.kind === 'column')!;
+    expect(bar.look).toMatchObject({ valHidden: 1, catHidden: 1, gridlines: 1 });
+    const svg = renderChartSvg(bar.kind, { title: bar.title, categories: bar.categories.cache, series: bar.series.map((s) => ({ name: s.name, values: s.values.cache, look: s.look })), look: bar.look }, 480, 300);
+    expect(svg).not.toContain('>200<');
+    expect(svg).not.toContain('>1월<');
+    expect(svg).toContain('>MWh<');
+    const shown = renderChartSvg(bar.kind, { title: '', categories: ['1월'], series: [{ name: 'a', values: [200] }], look: { ...bar.look, valHidden: undefined, catHidden: undefined } }, 480, 300);
+    expect(shown).toContain('>1월<');
+  });
 });

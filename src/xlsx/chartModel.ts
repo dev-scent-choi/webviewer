@@ -74,6 +74,9 @@ export interface ChartLook {
   readonly valMax?: number;
   /** 값 축 눈금선 */
   readonly gridlines?: 1;
+  /** 값 축·항목 축을 숨김(c:delete val="1" 또는 c:tickLblPos val="none") — 눈금 글자를 그리지 않는다(축 제목은 그린다) */
+  readonly valHidden?: 1;
+  readonly catHidden?: 1;
   /** 기본 계열 색(문서 테마의 강조 1~6) */
   readonly palette?: readonly string[];
   /** 차트 전체 데이터 레이블 */
@@ -314,6 +317,11 @@ const KIND_OF_GROUP = (type: string, body: string): ChartKind =>
             ? 'scatter'
             : 'line';
 
+/** 축을 숨겼는지(지움 또는 눈금 글자 위치 없음) */
+function axisHidden(axXml: string): boolean {
+  return /<delete val="(1|true)"\/>/.test(axXml) || /<tickLblPos val="none"\/>/.test(axXml);
+}
+
 /** chart XML 하나 → 종류·제목·계열·모양(지원하지 않는 종류면 null). theme: chartThemeOf 결과 */
 export function parseChartXml(source: string, theme: Readonly<Record<string, string>> = {}): Pick<GridChart, 'kind' | 'title' | 'categories' | 'series' | 'look'> | null {
   const xml = unprefixed(source);
@@ -394,6 +402,8 @@ export function parseChartXml(source: string, theme: Readonly<Record<string, str
     ...(axisFmt(0) ? { valFmt: axisFmt(0) } : {}),
     ...(axisFmt(1) ? { val2Fmt: axisFmt(1) } : {}),
     ...(/<majorGridlines/.test(valAx) ? { gridlines: 1 as const } : {}),
+    ...(axisHidden(valAx) ? { valHidden: 1 as const } : {}),
+    ...(axisHidden(/<(?:catAx|dateAx)>([\s\S]*?)<\/(?:catAx|dateAx)>/.exec(xml)?.[1] ?? '') ? { catHidden: 1 as const } : {}),
     ...(accents.length === 6 ? { palette: accents } : {}),
     ...(Number.isFinite(hole) ? { hole } : {}),
     ...(Number.isFinite(valMin) ? { valMin } : {}),
@@ -539,6 +549,8 @@ function safeChartLook(v: unknown): ChartLook | undefined {
     ...num('valMin'),
     ...num('valMax'),
     ...(l.gridlines === 1 ? { gridlines: 1 as const } : {}),
+    ...(l.valHidden === 1 ? { valHidden: 1 as const } : {}),
+    ...(l.catHidden === 1 ? { catHidden: 1 as const } : {}),
     ...(palette && palette.length > 0 ? { palette } : {}),
     ...(labels ? { labels } : {}),
     ...(typeof l.hole === 'number' ? { hole: safeNum(l.hole, 10, 90, 50) } : {}),
