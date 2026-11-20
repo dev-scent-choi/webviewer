@@ -113,18 +113,30 @@ function paragraphDOMAttrs(attrs: Record<string, unknown>): Record<string, strin
   }
   if (attrs.styleId) out['data-style'] = attrs.styleId as string;
   if (Array.isArray(attrs.tabs) && attrs.tabs.length > 0) out['data-tabs'] = JSON.stringify(attrs.tabs);
+  // 잘라내기·붙여넣기(클립보드는 HTML로 오간다)에서 번호·보존 조각·구역이 떨어지지 않게 — parseDOM이 되읽는다
+  const keep = Object.fromEntries(PRESERVED_PARAGRAPH_ATTRS.filter((key) => attrs[key]).map((key) => [key, attrs[key]]));
+  if (Object.keys(keep).length > 0) out['data-docx'] = JSON.stringify(keep);
   if (styles.length > 0) out.style = styles.join('; ');
   return out;
 }
 
+const PRESERVED_PARAGRAPH_ATTRS = ['pPrExtra', 'num', 'sect', 'breakBefore', 'tabs'] as const;
+
 function paragraphAttrsFromDOM(dom: HTMLElement): Record<string, unknown> {
   const shading = dom.getAttribute('data-shading');
+  const kept = parseJsonAttr<Record<string, unknown>>(dom, 'data-docx') ?? {};
   return {
     align: dom.style.textAlign || null,
     indent: parseJsonAttr<ParagraphIndent>(dom, 'data-indent'),
     spacing: parseJsonAttr<ParagraphSpacing>(dom, 'data-spacing'),
     shading: shading && /^#[0-9a-fA-F]{6}$/.test(shading) ? shading : null,
+    ...Object.fromEntries(PRESERVED_PARAGRAPH_ATTRS.filter((key) => key in kept).map((key) => [key, kept[key]])),
   };
+}
+
+/** 노드·마크 속성 전부를 data-docx 하나에 JSON으로 — 같은 문서 안 잘라내기·붙여넣기·끌어 옮기기에서 되살린다 */
+function allAttrsFromDOM(dom: HTMLElement): Record<string, unknown> | false {
+  return parseJsonAttr<Record<string, unknown>>(dom, 'data-docx') ?? false;
 }
 
 /** 탭 정지 하나(dxa) — 문단 스타일 것과 문단 자신의 것을 합친 실제 값(화면 배치용, docxLayout.ts). */
@@ -222,7 +234,8 @@ const baseNodes: Record<string, NodeSpec> = {
     group: 'inline',
     atom: true,
     attrs: {
-      xml: { default: '' },
+      /** 원본 조각 참조("태그@해시", 원본 XML은 서버 조각 저장소에) */
+      ref: { default: '' },
       kind: { default: 'hidden' },
       text: { default: null },
       media: { default: null },
@@ -236,7 +249,7 @@ const baseNodes: Record<string, NodeSpec> = {
       noteId: { default: null },
     },
     leafText: (node) => (node.attrs.kind === 'hidden' || node.attrs.kind === 'image' ? '' : String(node.attrs.text ?? '')),
-    parseDOM: [],
+    parseDOM: [{ tag: '[data-docx-node="ooxml"]', priority: 100, getAttrs: (dom) => allAttrsFromDOM(dom as HTMLElement) }],
     toDOM: (node) => ooxmlToDOM(node),
   },
 
@@ -244,13 +257,15 @@ const baseNodes: Record<string, NodeSpec> = {
   ooxml_block: {
     group: 'block',
     atom: true,
-    attrs: { xml: { default: '' }, content: { default: null }, text: { default: null } },
+    attrs: { ref: { default: '' }, content: { default: null }, text: { default: null } },
     leafText: (node) => String(node.attrs.text ?? ''),
-    parseDOM: [],
+    parseDOM: [{ tag: '[data-docx-node="ooxml_block"]', priority: 100, getAttrs: (dom) => allAttrsFromDOM(dom as HTMLElement) }],
     toDOM: (node) => {
       const dom = blocksDOM(node.attrs.content, 'div');
       dom.className = 'docx-preserved-block';
       dom.contentEditable = 'false';
+      dom.dataset.docxNode = 'ooxml_block';
+      dom.dataset.docx = JSON.stringify(node.attrs);
       return dom;
     },
   },
@@ -260,11 +275,11 @@ const baseNodes: Record<string, NodeSpec> = {
     group: 'block',
     content: 'block+',
     attrs: { count: { default: 2 }, spacePx: { default: 48 }, sep: { default: false } },
-    parseDOM: [],
+    parseDOM: [{ tag: 'div.docx-columns[data-docx]', getAttrs: (dom) => allAttrsFromDOM(dom as HTMLElement) }],
     toDOM: (node) => {
       const count = Math.max(1, Math.min(6, Number(node.attrs.count) || 1));
       const gap = Math.max(0, Number(node.attrs.spacePx) || 0);
-      return ['div', { class: 'docx-columns', style: `column-count: ${count}; column-gap: ${gap}px;${node.attrs.sep ? ' column-rule: 1px solid #000;' : ''}` }, 0];
+      return ['div', { class: 'docx-columns', 'data-docx': JSON.stringify(node.attrs), style: `column-count: ${count}; column-gap: ${gap}px;${node.attrs.sep ? ' column-rule: 1px solid #000;' : ''}` }, 0];
     },
   },
 };
@@ -297,7 +312,7 @@ function ooxmlToDOM(node: PMNode): DOMOutputSpec {
   const h = positive(a.heightPx);
   const size = `${w ? `width: ${w}px;` : ''}${h ? ` height: ${h}px;` : ''}`;
   const float = a.float === 'left' || a.float === 'right' ? ` float: ${a.float as string};` : '';
-  const base = { contenteditable: 'false', 'data-kind': String(a.kind) };
+  const base = { contenteditable: 'false', 'data-kind': String(a.kind), 'data-docx-node': 'ooxml', 'data-docx': JSON.stringify(a) };
   if (a.kind === 'image') {
     const src = typeof a.media === 'string' ? mediaUrlOf(a.media) : null;
     if (src) return ['img', { ...base, class: 'docx-ooxml docx-img', src, alt: String(a.text ?? ''), style: `${size}${float}` }];
@@ -308,6 +323,8 @@ function ooxmlToDOM(node: PMNode): DOMOutputSpec {
     dom.className = 'docx-ooxml docx-textbox';
     dom.contentEditable = 'false';
     dom.dataset.kind = 'textbox';
+    dom.dataset.docxNode = 'ooxml';
+    dom.dataset.docx = JSON.stringify(a);
     const box = (a.box ?? {}) as { fill?: unknown; line?: unknown; lineW?: unknown };
     const fill = typeof box.fill === 'string' && HEX_COLOR.test(box.fill) ? ` background: ${box.fill};` : '';
     const line = typeof box.line === 'string' && HEX_COLOR.test(box.line) ? ` border: ${positive(box.lineW) ?? 1}px solid ${box.line};` : '';
@@ -348,8 +365,10 @@ export function safeCssColor(value: unknown): boolean {
   return typeof value === 'string' && /^(#[0-9a-f]{3,8}|rgba?\([\d\s.,%]+\)|[a-z]{3,20})$/i.test(value.trim());
 }
 
+/** 글꼴 이름 — 글자·숫자·공백과 몇 가지 기호만 남긴다(64자). 문서(styles.xml)나 다른 참여자가 보낸 값이 CSS 문자열을 끊고
+ * 규칙을 덧붙이지 못하게(줄바꿈·중괄호·따옴표·역슬래시·@ 등은 모두 버린다). */
 export function safeFontName(value: unknown): string {
-  return String(value ?? '').replace(/["';<>\\]/g, '').trim();
+  return String(value ?? '').replace(/[^\p{L}\p{N} _.\-()&+]/gu, '').replace(/\s+/g, ' ').trim().slice(0, 64);
 }
 
 /** 한글 글꼴의 영문 이름(macOS·영문 Windows는 이 이름으로만 찾는다) */
@@ -452,16 +471,30 @@ const marks: Record<string, MarkSpec> = {
   /** 우리가 모델링하지 않는 w:rPr 자식(문자 스타일 w:rStyle·자간·글자 위치·언어 등) 원본 XML — 저장 때 되돌린다.
    * 문자 스타일은 data-rstyle로 표시해 편집기가 그 스타일 모양(docxLayout.ts의 스타일 CSS)을 입힌다. */
   runExtra: {
-    attrs: { xml: { default: null }, rStyle: { default: null } },
-    parseDOM: [],
-    toDOM: (mark) => ['span', mark.attrs.rStyle ? { 'data-rstyle': String(mark.attrs.rStyle) } : {}, 0],
+    attrs: { refs: { default: null }, rStyle: { default: null } },
+    parseDOM: [{ tag: 'span[data-docx-run]', getAttrs: (dom) => parseJsonAttr<Record<string, unknown>>(dom as HTMLElement, 'data-docx-run') ?? false }],
+    toDOM: (mark) => [
+      'span',
+      { 'data-docx-run': JSON.stringify(mark.attrs), ...(mark.attrs.rStyle ? { 'data-rstyle': String(mark.attrs.rStyle) } : {}) },
+      0,
+    ],
   },
-  /** w:hyperlink — attrs는 원본 요소의 속성(r:id·w:anchor 등), href는 화면 풍선 도움말용 주소. 편집 중이라 눌러도 이동하지 않는다. */
-  link: {
-    attrs: { attrs: { default: {} }, href: { default: null } },
+  /**
+   * 글자를 감싸는 원본 요소 — 하이퍼링크(w:hyperlink), 변경 내용 삽입·이동(w:ins·w:moveTo), 스마트 태그·사용자 XML. attrs는 원본 요소의
+   * 속성 그대로, pr은 속성 자식(w:smartTagPr 등) 참조, depth는 겹친 순서(바깥이 작다), href는 링크 풍선 도움말용(눌러도 이동하지 않는다).
+   */
+  wrap: {
+    attrs: { tag: {}, attrs: { default: {} }, pr: { default: null }, depth: { default: 0 }, href: { default: null } },
     inclusive: false,
-    parseDOM: [],
-    toDOM: (mark) => ['span', { class: 'docx-link', title: typeof mark.attrs.href === 'string' ? mark.attrs.href : '' }, 0],
+    excludes: '',
+    parseDOM: [{ tag: 'span[data-docx-wrap]', getAttrs: (dom) => parseJsonAttr<Record<string, unknown>>(dom as HTMLElement, 'data-docx-wrap') ?? false }],
+    toDOM: (mark) => {
+      const tag = String(mark.attrs.tag);
+      const cls = tag === 'w:hyperlink' ? 'docx-link' : tag === 'w:ins' || tag === 'w:moveTo' ? 'docx-ins' : 'docx-wrap';
+      const author = (mark.attrs.attrs as Record<string, unknown> | null)?.['w:author'];
+      const title = typeof mark.attrs.href === 'string' ? mark.attrs.href : typeof author === 'string' ? `${author} 삽입` : '';
+      return ['span', { class: cls, title, 'data-docx-wrap': JSON.stringify(mark.attrs) }, 0];
+    },
   },
   fontSize: {
     /** 포인트(pt) 단위로 저장 — docx의 w:sz(하프포인트)와는 export/import 시 ×2/÷2 변환한다 */
@@ -499,8 +532,8 @@ export interface RowHeight {
 }
 
 function rowHeightToDOMStyle(height: unknown): Record<string, string> {
-  const h = height as RowHeight | null;
-  return h ? { style: `height: ${h.px}px;` } : {};
+  const px = Number((height as RowHeight | null)?.px);
+  return Number.isFinite(px) && px > 0 ? { style: `height: ${px}px;` } : {};
 }
 
 function rowHeightFromDOM(dom: HTMLElement): RowHeight | null {
@@ -528,12 +561,12 @@ function tableWidthPx(node: PMNode): number | null {
   let total = 0;
   let ok = true;
   firstRow.forEach((cell) => {
-    const colwidth = cell.attrs.colwidth as number[] | null;
-    if (!Array.isArray(colwidth) || colwidth.length === 0) {
+    const colwidth = cell.attrs.colwidth as unknown[] | null;
+    if (!Array.isArray(colwidth) || colwidth.length === 0 || colwidth.some((w) => typeof w !== 'number' || !Number.isFinite(w))) {
       ok = false;
       return;
     }
-    total += colwidth.reduce((sum, w) => sum + w, 0);
+    total += (colwidth as number[]).reduce((sum, w) => sum + w, 0);
   });
   return ok && total > 0 ? total : null;
 }
@@ -556,7 +589,11 @@ export interface CellBorders {
 
 const BORDER_SIDES = ['top', 'right', 'bottom', 'left'] as const;
 
+const CSS_BORDER_STYLES = new Set(['solid', 'double', 'dashed', 'dotted']);
+
 function borderSideToCSS(side: CellBorderSide | null): string {
+  // 다른 참여자(Yjs)가 보낸 값일 수 있다 — 숫자·정해진 선 종류·색만
+  if (side && (!Number.isFinite(side.widthPx) || !CSS_BORDER_STYLES.has(side.style) || !safeCssColor(side.color))) return 'none';
   // 이중선은 3px보다 가늘면 브라우저가 한 줄로 그린다 — Word의 이중선(가는 선 두 줄)처럼 보이게 화면에서만 넓힌다
   return side ? `${side.style === 'double' ? Math.max(3, side.widthPx) : side.widthPx}px ${side.style} ${side.color}` : 'none';
 }
@@ -651,7 +688,13 @@ const tableNodeSpecs = tableNodes({
       },
     },
     /** 우리가 모델링하지 않는 w:tcPr 자식 원본 XML(글자 방향·줄 바꿈 안 함 등) — 저장 때 되돌린다 */
-    tcPrExtra: { default: null, getFromDOM: () => null, setDOMAttr: () => undefined },
+    tcPrExtra: {
+      default: null,
+      getFromDOM: (dom) => parseJsonAttr<string[]>(dom as HTMLElement, 'data-docx-tc'),
+      setDOMAttr: (value, attrs) => {
+        if (Array.isArray(value)) attrs['data-docx-tc'] = JSON.stringify(value);
+      },
+    },
   },
 });
 
@@ -665,20 +708,21 @@ const patchedTableNodeSpecs: Record<string, NodeSpec> = {
     ...tableNodeSpecs.table,
     /** tblPrExtra: 원본 w:tblPr 자식(표 스타일 w:tblStyle·w:tblLook·너비·들여쓰기 등) — 저장 때 되돌린다 */
     attrs: { align: { default: null }, tblPrExtra: { default: null } },
+    parseDOM: [{ tag: 'table', getAttrs: (dom) => parseJsonAttr<Record<string, unknown>>(dom as HTMLElement, 'data-docx') ?? {} }],
     toDOM: (node) => {
       const widthPx = tableWidthPx(node);
       const alignStyle = tableAlignToDOMStyle(node.attrs.align).style ?? '';
       const widthStyle = widthPx ? `width: ${widthPx}px;` : '';
       const style = `${widthStyle}${alignStyle}`;
-      return ['table', style ? { style } : {}, ['tbody', 0]];
+      return ['table', { ...(style ? { style } : {}), 'data-docx': JSON.stringify(node.attrs) }, ['tbody', 0]];
     },
   },
   table_row: {
     ...tableNodeSpecs.table_row,
     /** trPrExtra: 원본 w:trPr 자식(제목 행 반복 w:tblHeader·행 나눔 금지 등) — 저장 때 되돌린다 */
     attrs: { height: { default: null }, trPrExtra: { default: null } },
-    parseDOM: [{ tag: 'tr', getAttrs: (dom) => ({ height: rowHeightFromDOM(dom as HTMLElement) }) }],
-    toDOM: (node) => ['tr', rowHeightToDOMStyle(node.attrs.height), 0],
+    parseDOM: [{ tag: 'tr', getAttrs: (dom) => ({ height: rowHeightFromDOM(dom as HTMLElement), trPrExtra: parseJsonAttr<string[]>(dom as HTMLElement, 'data-docx-tr') }) }],
+    toDOM: (node) => ['tr', { ...rowHeightToDOMStyle(node.attrs.height), ...(Array.isArray(node.attrs.trPrExtra) ? { 'data-docx-tr': JSON.stringify(node.attrs.trPrExtra) } : {}) }, 0],
   },
 };
 

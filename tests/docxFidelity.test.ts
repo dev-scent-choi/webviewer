@@ -7,6 +7,7 @@ import { exportDocx } from '../src/docx/export.js';
 import { getDocxRenderExtras, importDocx } from '../src/docx/import.js';
 import { NumberingCounter, formatNumber, parseNumberingXml } from '../src/docx/numbering.js';
 import { docxSchema } from '../src/docx/schema.js';
+import { refHashOf } from '../src/docx/ooxml.js';
 import { makeSampleDocx } from './helpers.js';
 
 /** 품질 점검용 합성 문서(audit/office/corpus) — 고객 문서가 아니다 */
@@ -101,7 +102,7 @@ describe('docx import: content that used to be dropped', () => {
   });
 
   test('table style (Light Grid Accent 1): borders, bold first row/column, tcW column widths', () => {
-    const { doc } = importDocx(corpus('d03-tables.docx'));
+    const { doc, fragments } = importDocx(corpus('d03-tables.docx'));
     const tables = nodesOf(doc, (n) => n.type.name === 'table');
     const first = tables[0];
     // python-docx 표: tblGrid는 균등이지만 칸 너비(tcW)가 실제 값 — 구분 열 1134dxa ≈ 76px
@@ -111,8 +112,8 @@ describe('docx import: content that used to be dropped', () => {
     const header = grid.child(0).child(0);
     expect(header.attrs.borders.bottom.widthPx).toBe(3); // firstRow 아래 굵은 선(sz 18)
     expect(header.firstChild!.firstChild!.marks.map((m) => m.type.name)).toContain('strong');
-    expect(grid.attrs.tblPrExtra.some((x: string) => x.includes('LightGrid-Accent1'))).toBe(true);
-    expect(grid.child(0).attrs.trPrExtra).toEqual(['<w:tblHeader/>']);
+    expect(grid.attrs.tblPrExtra.some((ref: string) => fragments.get(refHashOf(ref))?.includes('LightGrid-Accent1'))).toBe(true);
+    expect(grid.child(0).attrs.trPrExtra.map((ref: string) => fragments.get(refHashOf(ref)))).toEqual(['<w:tblHeader/>']);
   });
 
   test('Korean heading style ids ("1" named "heading 1") become headings and keep their id', () => {

@@ -2,7 +2,7 @@ import { baseKeymap, chainCommands, selectAll, toggleMark } from 'prosemirror-co
 import { keymap } from 'prosemirror-keymap';
 import { EditorState, Plugin, PluginKey, Selection, TextSelection, type Command } from 'prosemirror-state';
 import { Decoration, DecorationSet, EditorView } from 'prosemirror-view';
-import { liftListItem, sinkListItem, splitListItem, wrapInList } from 'prosemirror-schema-list';
+import { liftListItem, sinkListItem, splitListItem } from 'prosemirror-schema-list';
 import {
   addColumnAfter,
   addColumnBefore,
@@ -57,6 +57,9 @@ import {
   setSpacingSide,
   splitParagraphKeepFormat,
   multilevelList,
+  numberLevelTab,
+  toggleWordNumbering,
+  currentNumberingKind,
   pasteFormat,
   replaceAll,
   replaceRange,
@@ -72,6 +75,7 @@ import {
 import { officeAlert } from './officeDialog.js';
 import { docxLayoutPlugin, docxStyleSheetText } from './docxLayout.js';
 import type { DocxRenderExtras } from '../docx/import.js';
+import type { NumberingDefs } from '../docx/numbering.js';
 
 /** 레이아웃 탭 용지 크기(dxa, 세로 기준) */
 const PAPER_SIZES = {
@@ -137,7 +141,6 @@ interface ViewInfo {
   readonly name: string;
   readonly viewer: string;
   readonly permissions: Permissions;
-  readonly editHasUnsupportedContent: boolean;
   readonly pageSetup: PageSetup | null;
   /** 보기 화면(LibreOffice)이 센 쪽 수 — 바닥글의 전체 쪽 수(NUMPAGES) */
   readonly pageCount?: number | null;
@@ -169,11 +172,13 @@ const token = params.get('token') ?? '';
  * 깨져도 실제 쓰기가 반영되지는 않는다. */
 let canEdit = true;
 
+/** 문서의 Word 번호 정의(numbering.xml) — 번호 단추가 번호 종류를 알아보고 켤 번호를 고르는 데 쓴다. main()이 채운다. */
+let numberingDefs: NumberingDefs | null = null;
+
 const titleEl = document.getElementById('doc-title') as HTMLElement;
 const statusEl = document.getElementById('conn-status') as HTMLElement;
 const readonlyBadgeEl = document.getElementById('readonly-badge') as HTMLElement;
 const presenceEl = document.getElementById('presence-list') as HTMLElement;
-const warningEl = document.getElementById('unsupported-warning') as HTMLElement;
 const editorHost = document.getElementById('editor') as HTMLElement;
 const errorScreen = document.getElementById('error-screen') as HTMLElement;
 const errorMessage = document.getElementById('error-message') as HTMLElement;
@@ -382,8 +387,8 @@ function buildKeymap(defaultSizePt: number): Record<string, Command> {
     'Mod-Alt-3': setHeading(3),
     'Mod-Alt-0': setParagraphStyle(null),
     'Mod-Shift-n': setParagraphStyle(null),
-    Tab: chainCommands(sinkListItem(nodes.list_item), goToNextCell(1)),
-    'Shift-Tab': chainCommands(liftListItem(nodes.list_item), goToNextCell(-1)),
+    Tab: chainCommands(numberLevelTab(1), sinkListItem(nodes.list_item), goToNextCell(1)),
+    'Shift-Tab': chainCommands(numberLevelTab(-1), liftListItem(nodes.list_item), goToNextCell(-1)),
     Enter: chainCommands(splitListItem(nodes.list_item), splitParagraphKeepFormat, baseKeymap.Enter),
   };
 }
@@ -497,8 +502,9 @@ function syncToolbarState(state: EditorState, defaultSizePt: number, defaultFont
   setPressed('btn-align-center', align === 'center');
   setPressed('btn-align-right', align === 'right');
   setPressed('btn-align-justify', align === 'justify');
-  setPressed('btn-bullet-list', isBlockActive(state, docxSchema.nodes.paragraph) && inList(state, docxSchema.nodes.bullet_list));
-  setPressed('btn-ordered-list', isBlockActive(state, docxSchema.nodes.paragraph) && inList(state, docxSchema.nodes.ordered_list));
+  const numbering = currentNumberingKind(state, numberingDefs);
+  setPressed('btn-bullet-list', numbering === 'bullet' || (isBlockActive(state, docxSchema.nodes.paragraph) && inList(state, docxSchema.nodes.bullet_list)));
+  setPressed('btn-ordered-list', numbering === 'decimal' || (isBlockActive(state, docxSchema.nodes.paragraph) && inList(state, docxSchema.nodes.ordered_list)));
   const style = currentParagraphStyle(state) ?? 'Normal';
   for (const item of document.querySelectorAll<HTMLElement>('.style-gallery-item[data-style]')) {
     item.setAttribute('aria-pressed', String(item.dataset.style === style));
@@ -600,9 +606,6 @@ async function main(): Promise<void> {
 
   titleEl.textContent = info.name;
   document.title = `${info.name} — DocView 편집`;
-  if (info.editHasUnsupportedContent) {
-    warningEl.hidden = false;
-  }
   applyPageSetup(info.pageSetup);
   applyDefaultFontSize(info.defaultFontSizePt);
   applyDefaultFontFamily(info.defaultFontFamily);
@@ -610,6 +613,7 @@ async function main(): Promise<void> {
   applyWatermark(info.viewer);
   // 문서 안 그림은 원본 docx의 word/media/에서 바로 받는다(토큰 확인은 서버가 한다)
   setDocxMediaUrl((mediaPath) => `/api/view/slide-media?token=${encodeURIComponent(token)}&path=${encodeURIComponent(mediaPath)}`);
+  numberingDefs = info.docxRender?.numbering ?? null;
   if (info.docxRender) {
     const styleEl = document.createElement('style');
     styleEl.textContent = docxStyleSheetText(info.docxRender.styles);
@@ -837,9 +841,10 @@ async function main(): Promise<void> {
   );
 
   // ---------- 홈: 단락 ----------
-  bind('btn-bullet-list', wrapInList(n.bullet_list));
-  bind('btn-ordered-list', wrapInList(n.ordered_list));
-  bind('btn-multilevel-list', multilevelList);
+  // Word 번호(w:numPr) 켜기/끄기 — 저장본에서도 진짜 Word 번호다
+  bind('btn-bullet-list', toggleWordNumbering('bullet', numberingDefs));
+  bind('btn-ordered-list', toggleWordNumbering('decimal', numberingDefs));
+  bind('btn-multilevel-list', multilevelList(numberingDefs));
   bind('btn-indent', changeIndent(1));
   bind('btn-outdent', changeIndent(-1));
   bind('btn-align-left', setAlign('left'));

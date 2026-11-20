@@ -16,6 +16,7 @@ import {
   setParagraphStyle,
   setShading,
   splitParagraphKeepFormat,
+  toggleWordNumbering,
   stepFontSize,
 } from '../src/client/wordCommands.js';
 
@@ -142,29 +143,46 @@ describe('Word 레이아웃 탭 명령', () => {
 });
 
 describe('Enter: Word처럼 번호·서식을 이어받는다', () => {
-  const numPr = '<w:numPr><w:ilvl w:val="0"/><w:numId w:val="3"/></w:numPr>';
-  const sectPr = '<w:sectPr><w:type w:val="continuous"/></w:sectPr>';
-  function numbered(text: string, extra: string[] = [numPr]): EditorState {
-    const para = nodes.paragraph.create({ num: { numId: '3', ilvl: 0 }, pPrExtra: extra, indent: { left: 720, hanging: 360, firstLine: 0 }, sect: extra.includes(sectPr) ? 0 : null }, text ? docxSchema.text(text) : []);
+  const keep = 'w:keepNext@aaa';
+  const sectPr = 'w:sectPr@bbb#0';
+  function numbered(text: string, extra: string[] = [keep], num: Record<string, unknown> = { numId: '3', ilvl: 0, fromStyle: false }): EditorState {
+    const para = nodes.paragraph.create({ num, pPrExtra: extra, indent: { left: 720, hanging: 360, firstLine: 0 }, sect: extra.includes(sectPr) ? 0 : null }, text ? docxSchema.text(text) : []);
     const state = EditorState.create({ schema: docxSchema, doc: nodes.doc.create(null, [para]) });
     return state.apply(state.tr.setSelection(TextSelection.create(state.doc, 1 + text.length)));
   }
 
-  test('문단 끝 Enter → 새 문단도 같은 번호(num·numPr)·들여쓰기, 구역 나눔은 원래 문단에만', () => {
-    const next = run(numbered('항목', [numPr, sectPr]), splitParagraphKeepFormat);
+  test('문단 끝 Enter → 새 문단도 같은 번호·들여쓰기, 구역 나눔은 뒤(새) 문단으로 옮겨 두 문단 모두 같은 구역에 남는다(REVIEW I4)', () => {
+    const next = run(numbered('항목', [keep, sectPr]), splitParagraphKeepFormat);
     expect(next.doc.childCount).toBe(2);
     const [first, second] = [next.doc.child(0), next.doc.child(1)];
-    expect(second.attrs.num).toEqual({ numId: '3', ilvl: 0 });
-    expect(second.attrs.pPrExtra).toEqual([numPr]);
+    expect(second.attrs.num).toEqual({ numId: '3', ilvl: 0, fromStyle: false });
     expect(second.attrs.indent).toEqual(first.attrs.indent);
-    expect(second.attrs.sect).toBeNull();
-    expect(first.attrs.pPrExtra).toEqual([numPr, sectPr]);
+    expect(second.attrs.sect).toBe(0);
+    expect(second.attrs.pPrExtra).toEqual([keep, sectPr]);
+    expect(first.attrs.sect).toBeNull();
+    expect(first.attrs.pPrExtra).toEqual([keep]);
   });
 
-  test('빈 번호 문단에서 Enter → 번호를 끝낸다(문단은 나누지 않는다)', () => {
-    const next = run(numbered(''), splitParagraphKeepFormat);
-    expect(next.doc.childCount).toBe(1);
-    expect(next.doc.child(0).attrs.num).toBeNull();
-    expect(next.doc.child(0).attrs.pPrExtra).toBeNull();
+  test('빈 번호 문단에서 Enter → 수준이 있으면 한 수준 올리고, 맨 위면 번호를 끝낸다(스타일 번호는 numId 0으로 덮는다, REVIEW Minor 6)', () => {
+    const up = run(numbered('', [keep], { numId: '3', ilvl: 2, fromStyle: false }), splitParagraphKeepFormat);
+    expect(up.doc.childCount).toBe(1);
+    expect(up.doc.child(0).attrs.num).toEqual({ numId: '3', ilvl: 1, fromStyle: false });
+    expect(run(numbered(''), splitParagraphKeepFormat).doc.child(0).attrs.num).toBeNull();
+    expect(run(numbered('', [], { numId: '7', ilvl: 0, fromStyle: true }), splitParagraphKeepFormat).doc.child(0).attrs.num).toEqual({ numId: '0', ilvl: 0, fromStyle: false });
+  });
+
+  test('번호 단추는 Word 번호를 켜고 끈다(REVIEW I3) — 앞 번호를 이어 받고, 없으면 편집기 기본 번호, 다시 누르면 끈다', () => {
+    const plain = (text: string) => nodes.paragraph.create(null, docxSchema.text(text));
+    const doc = nodes.doc.create(null, [nodes.paragraph.create({ num: { numId: '3', ilvl: 0, fromStyle: false } }, docxSchema.text('앞')), plain('뒤')]);
+    let state = EditorState.create({ schema: docxSchema, doc });
+    state = state.apply(state.tr.setSelection(TextSelection.create(state.doc, state.doc.child(0).nodeSize + 2)));
+    const defs = { nums: { '3': [{ start: 1, numFmt: 'decimal', lvlText: '%1.', restart: null, isLgl: false, suff: 'tab' as const, left: 720, hanging: 360, firstLine: 0, bold: false, color: null }] } };
+    state = run(state, toggleWordNumbering('decimal', defs));
+    expect(state.doc.child(1).attrs.num).toEqual({ numId: '3', ilvl: 0, fromStyle: false });
+    state = run(state, toggleWordNumbering('decimal', defs));
+    expect(state.doc.child(1).attrs.num).toBeNull();
+    state = run(state, toggleWordNumbering('bullet', defs));
+    expect(state.doc.child(1).attrs.num).toEqual({ numId: 'docview:bullet', ilvl: 0, fromStyle: false });
+    expect(state.doc.child(1).type.name).toBe('paragraph'); // 목록 노드로 감싸지 않는다 — 저장본에 "1. " 글자가 붙지 않는다
   });
 });

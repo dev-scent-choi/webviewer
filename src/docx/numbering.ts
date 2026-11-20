@@ -24,6 +24,60 @@ export interface NumberingLevel {
 export interface NumberingDefs {
   /** numId → 수준 9개(빈 자리는 null) */
   readonly nums: Readonly<Record<string, ReadonlyArray<NumberingLevel | null>>>;
+  /** numId → 그 번호가 쓰는 abstractNum — 같은 abstractNum을 쓰는 번호들은 번호를 이어 센다(Word와 같다) */
+  readonly abstractOf?: Readonly<Record<string, string>>;
+  /** numId → 처음 쓰일 때 다시 시작하는 수준(w:lvlOverride/w:startOverride) */
+  readonly restartsOf?: Readonly<Record<string, readonly number[]>>;
+}
+
+/**
+ * 편집기 번호 단추가 새로 켜는 번호 — 문서에 알맞은 정의가 없을 때 쓰고, 저장 때 numbering.xml에 정의를 더한다(export.ts).
+ * 번호: 1. / 가. / 1) / 가) / ① …, 글머리: ● ■ ◆ …
+ */
+const BUILTIN_NUMBER_FORMATS: ReadonlyArray<[string, string]> = [
+  ['decimal', '%1.'], ['ganada', '%2.'], ['decimal', '%3)'], ['ganada', '%4)'], ['decimalEnclosedCircle', '%5'],
+  ['lowerLetter', '%6.'], ['lowerRoman', '%7.'], ['decimal', '%8.'], ['decimal', '%9.'],
+];
+const BUILTIN_BULLETS = ['●', '■', '◆', '●', '■', '◆', '●', '■', '◆'];
+
+function builtinLevels(kind: 'decimal' | 'bullet'): NumberingLevel[] {
+  return Array.from({ length: 9 }, (_, i) => ({
+    start: 1,
+    numFmt: kind === 'bullet' ? 'bullet' : BUILTIN_NUMBER_FORMATS[i][0],
+    lvlText: kind === 'bullet' ? BUILTIN_BULLETS[i] : BUILTIN_NUMBER_FORMATS[i][1],
+    restart: null,
+    isLgl: false,
+    suff: 'tab',
+    left: 400 * (i + 1),
+    hanging: 400,
+    firstLine: 0,
+    bold: false,
+    color: null,
+  }));
+}
+
+export const BUILTIN_LISTS: ReadonlyArray<{ readonly id: string; readonly kind: 'decimal' | 'bullet' }> = [
+  { id: 'docview:decimal', kind: 'decimal' },
+  { id: 'docview:bullet', kind: 'bullet' },
+];
+export const isBuiltinNumId = (numId: string): boolean => BUILTIN_LISTS.some((l) => l.id === numId);
+
+/** 새로 켠 번호의 numbering.xml 정의(w:abstractNum) */
+export function builtinAbstractNumXml(numId: string, abstractId: number): string {
+  const kind = BUILTIN_LISTS.find((l) => l.id === numId)?.kind ?? 'decimal';
+  const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+  const levels = builtinLevels(kind)
+    .map((l, i) =>
+      `<w:lvl w:ilvl="${i}"><w:start w:val="1"/><w:numFmt w:val="${l.numFmt}"/><w:lvlText w:val="${esc(l.lvlText)}"/><w:lvlJc w:val="left"/>` +
+      `<w:pPr><w:ind w:left="${l.left}" w:hanging="${l.hanging}"/></w:pPr></w:lvl>`)
+    .join('');
+  return `<w:abstractNum w:abstractNumId="${abstractId}"><w:multiLevelType w:val="hybridMultilevel"/>${levels}</w:abstractNum>`;
+}
+
+/** 수준 정의 — 문서 정의, 없으면 편집기 기본 번호 */
+export function numberingLevelsOf(defs: NumberingDefs | null, numId: string): ReadonlyArray<NumberingLevel | null> | undefined {
+  const builtin = BUILTIN_LISTS.find((l) => l.id === numId);
+  return builtin ? builtinLevels(builtin.kind) : defs?.nums[numId];
 }
 
 /** 기호 글꼴(Symbol·Wingdings)의 사설 영역 글자 → 화면 글꼴로 그릴 수 있는 같은 모양 */
@@ -37,6 +91,17 @@ const CHOSUNG = 'ㄱㄴㄷㄹㅁㅂㅅㅇㅈㅊㅋㅌㅍㅎ';
 const KOREAN_DIGITS = ['영', '일', '이', '삼', '사', '오', '육', '칠', '팔', '구'];
 const KOREAN_COUNTING = ['', '하나', '둘', '셋', '넷', '다섯', '여섯', '일곱', '여덟', '아홉', '열'];
 const CJK_DIGITS = ['〇', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十'];
+
+/** 한자어 수사를 한글로(일, 이, …, 십, 십일, 이십, 백) — 한국어 Word의 koreanLegal */
+function koreanSino(n: number): string {
+  if (n <= 0 || n >= 10000) return String(n);
+  const units = ['', '십', '백', '천'];
+  return String(n).split('').reverse().map((d, i) => {
+    const v = Number(d);
+    if (v === 0) return '';
+    return `${v === 1 && i > 0 ? '' : KOREAN_DIGITS[v]}${units[i]}`;
+  }).reverse().join('');
+}
 
 function roman(n: number): string {
   const table: ReadonlyArray<[number, string]> = [[1000, 'M'], [900, 'CM'], [500, 'D'], [400, 'CD'], [100, 'C'], [90, 'XC'], [50, 'L'], [40, 'XL'], [10, 'X'], [9, 'IX'], [5, 'V'], [4, 'IV'], [1, 'I']];
@@ -77,25 +142,34 @@ export function formatNumber(n: number, numFmt: string): string {
     case 'japaneseCounting':
     case 'chineseCounting':
     case 'chineseCountingThousand':
-    case 'koreanLegal': return n <= 10 ? CJK_DIGITS[n] : String(n);
+    case 'koreanLegal': return koreanSino(n);
     case 'none': return '';
     default: return String(n); // decimal·ordinal 등
   }
 }
 
-/** 문서 순서대로 번호를 매기는 셈 상태 — numId마다 수준별 현재 값을 따로 센다(Word와 같다). */
+/**
+ * 문서 순서대로 번호를 매기는 셈 상태 — abstractNum마다 수준별 현재 값을 센다: 같은 abstractNum을 쓰는 다른 numId는 번호를 이어 세고,
+ * w:startOverride가 있는 numId는 처음 쓰일 때 그 수준부터 다시 센다(Word·ECMA-376 17.9.24와 같다).
+ */
 export class NumberingCounter {
   private readonly counts = new Map<string, number[]>();
+  private readonly seen = new Set<string>();
 
-  constructor(private readonly defs: NumberingDefs) {}
+  constructor(private readonly defs: NumberingDefs | null) {}
 
   /** 이 문단의 번호 글자와 수준 정의. 정의가 없으면 null. */
   next(numId: string, ilvl: number): { label: string; level: NumberingLevel } | null {
-    const levels = this.defs.nums[numId];
+    const levels = numberingLevelsOf(this.defs, numId);
     const level = levels?.[ilvl];
     if (!levels || !level) return null;
-    const counts = this.counts.get(numId) ?? [];
-    this.counts.set(numId, counts);
+    const key = this.defs?.abstractOf?.[numId] ?? `num:${numId}`;
+    const counts = this.counts.get(key) ?? [];
+    this.counts.set(key, counts);
+    if (!this.seen.has(numId)) {
+      this.seen.add(numId);
+      for (const restart of this.defs?.restartsOf?.[numId] ?? []) counts[restart] = undefined as unknown as number;
+    }
     counts[ilvl] = counts[ilvl] === undefined ? level.start : counts[ilvl] + 1;
     // 이 수준보다 깊은 수준은 다시 처음부터 센다(w:lvlRestart로 막은 수준은 그대로)
     for (let deeper = ilvl + 1; deeper < 9; deeper += 1) {
@@ -152,6 +226,8 @@ export function parseNumberingXml(xml: string): NumberingDefs {
     abstract.set(m[1], { levels: parseLevels(m[2]), styleLink: attr(m[2], 'w:numStyleLink') });
   }
   const nums: Record<string, Array<NumberingLevel | null>> = {};
+  const abstractOf: Record<string, string> = {};
+  const restartsOf: Record<string, number[]> = {};
   const numByStyleLink = new Map<string, string>();
   for (const m of xml.matchAll(/<w:abstractNum\b[^>]*w:abstractNumId="(\d+)"[^>]*>([\s\S]*?)<\/w:abstractNum>/g)) {
     const link = attr(m[2], 'w:styleLink');
@@ -159,10 +235,13 @@ export function parseNumberingXml(xml: string): NumberingDefs {
   }
   for (const m of xml.matchAll(/<w:num\b[^>]*w:numId="(\d+)"[^>]*>([\s\S]*?)<\/w:num>/g)) {
     const absId = attr(m[2], 'w:abstractNumId');
-    let base = absId ? abstract.get(absId) : undefined;
+    let baseId = absId;
     // numStyleLink: 정의가 다른 abstractNum(styleLink)에 있다
-    if (base?.styleLink && numByStyleLink.has(base.styleLink)) base = abstract.get(numByStyleLink.get(base.styleLink)!);
-    if (!base) continue;
+    const linked = absId ? abstract.get(absId)?.styleLink : undefined;
+    if (linked && numByStyleLink.has(linked)) baseId = numByStyleLink.get(linked);
+    const base = baseId ? abstract.get(baseId) : undefined;
+    if (!base || !baseId) continue;
+    abstractOf[m[1]] = baseId;
     const levels = [...base.levels];
     for (const o of m[2].matchAll(/<w:lvlOverride\b[^>]*w:ilvl="(\d)"[^>]*>([\s\S]*?)<\/w:lvlOverride>/g)) {
       const i = Number(o[1]);
@@ -170,10 +249,11 @@ export function parseNumberingXml(xml: string): NumberingDefs {
       const startOverride = attr(o[2], 'w:startOverride');
       if (overridden) levels[i] = overridden;
       else if (startOverride !== undefined && levels[i]) levels[i] = { ...levels[i]!, start: Number(startOverride) };
+      if (startOverride !== undefined || overridden) (restartsOf[m[1]] ??= []).push(i);
     }
     nums[m[1]] = levels;
   }
-  return { nums };
+  return { nums, abstractOf, restartsOf };
 }
 
 function decodeXmlText(s: string): string {

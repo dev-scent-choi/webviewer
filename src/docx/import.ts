@@ -22,6 +22,8 @@ import {
   deepTextOf,
   extrasOf,
   findAll,
+  fragmentRef,
+  type FragmentStore,
   findDeep,
   findFirst,
   onOff,
@@ -46,6 +48,8 @@ interface ImportCtx {
   readonly noteCount: { footnote: number; endnote: number };
   /** 각주·미주 본문을 읽는 중이면 그 번호(w:footnoteRef가 보여 줄 글자) */
   readonly noteLabel: string | null;
+  /** 보존 조각 저장소(해시 → 원본 XML) — ooxml.ts fragmentRef */
+  readonly fragments: FragmentStore;
 }
 
 /** 표 스타일이 칸 안 글자에 물려주는 값(굵게·색·글꼴)과 문단 간격 */
@@ -163,6 +167,7 @@ function paragraphLayoutOf(pPrChildren: readonly XmlNode[], styles: readonly Xml
   const levels = [...chainPr(styleChainOf(styles, 'paragraph', styleId), 'w:pPr'), pPrChildren];
   let numId: string | null = null;
   let ilvl: number | null = null;
+  let fromStyle = true;
   const tabs = new Map<number, TabStop>();
   let breakBefore = false;
   for (const level of levels) {
@@ -172,6 +177,7 @@ function paragraphLayoutOf(pPrChildren: readonly XmlNode[], styles: readonly Xml
       const lv = attrsOf(findFirst(childrenOf(numPr), 'w:ilvl') ?? {})['@_w:val'];
       if (id !== undefined) numId = id;
       if (lv !== undefined) ilvl = Number(lv);
+      fromStyle = level !== pPrChildren;
     }
     const pbb = onOff(level, 'w:pageBreakBefore');
     if (pbb !== undefined) breakBefore = pbb;
@@ -184,7 +190,8 @@ function paragraphLayoutOf(pPrChildren: readonly XmlNode[], styles: readonly Xml
       else tabs.set(pos, { pos, val: a['@_w:val'] ?? 'left', leader: a['@_w:leader'] && a['@_w:leader'] !== 'none' ? a['@_w:leader'] : null });
     }
   }
-  const num = numId && numId !== '0' ? { numId, ilvl: ilvl ?? 0 } : null;
+  // 번호 {numId, ilvl, fromStyle}: 직접 지정(fromStyle=false)은 저장 때 w:numPr로 다시 쓴다(numId "0" = 스타일 번호 끄기)
+  const num = numId && (numId !== '0' || !fromStyle) ? { numId, ilvl: ilvl ?? 0, fromStyle } : null;
   const tabList = [...tabs.values()].filter((t) => t.val !== 'num' && t.val !== 'bar').sort((a, b) => a.pos - b.pos);
   return { num, breakBefore, tabs: tabList.length > 0 ? tabList : null };
 }
@@ -202,9 +209,10 @@ interface RunMarks {
   readonly vertAlign: 'subscript' | 'superscript' | null;
   readonly highlight: string | null;
   /** 모델링하지 않는 w:rPr 자식(원본 XML)과 문자 스타일 */
-  readonly extra: { readonly xml: string[] | null; readonly rStyle: string | null } | null;
+  readonly extra: { readonly refs: string[] | null; readonly rStyle: string | null } | null;
   readonly comments?: readonly string[];
-  readonly link?: Mark | null;
+  /** 감싸는 요소(하이퍼링크·변경 내용 삽입·스마트 태그 등) — 저장 때 같은 요소로 다시 감싼다 */
+  readonly wraps?: readonly Mark[];
 }
 
 const NO_MARKS: RunMarks = {
@@ -217,7 +225,7 @@ function shadingFillOf(children: readonly XmlNode[]): string | null {
   return hexColor(shd ? attrsOf(shd)['@_w:fill'] : undefined);
 }
 
-function runMarksOf(runChildren: readonly XmlNode[], inherited: RunDefaults): RunMarks {
+function runMarksOf(runChildren: readonly XmlNode[], inherited: RunDefaults, ctx: ImportCtx): RunMarks {
   const rPr = findFirst(runChildren, 'w:rPr');
   const rPrChildren = rPr ? childrenOf(rPr) : [];
   const underline = findFirst(rPrChildren, 'w:u');
@@ -253,7 +261,7 @@ function runMarksOf(runChildren: readonly XmlNode[], inherited: RunDefaults): Ru
   if (shdHighlight) modeled.add('w:shd');
   if (underlineOn) modeled.add('w:u');
   if (vertAlignVal === 'subscript' || vertAlignVal === 'superscript') modeled.add('w:vertAlign');
-  const extraXml = extrasOf(rPrChildren, modeled);
+  const extraRefs = extrasOf(rPrChildren, modeled, ctx.fragments);
   const rStyle = attrsOf(findFirst(rPrChildren, 'w:rStyle') ?? {})['@_w:val'] ?? null;
   return {
     strong: bold ?? inherited.strong ?? false,
@@ -265,7 +273,7 @@ function runMarksOf(runChildren: readonly XmlNode[], inherited: RunDefaults): Ru
     font: fontMark ?? inherited.font ?? null,
     vertAlign: vertAlignVal === 'subscript' || vertAlignVal === 'superscript' ? vertAlignVal : null,
     highlight: namedHighlight ?? shdHighlight,
-    extra: extraXml || rStyle ? { xml: extraXml, rStyle } : null,
+    extra: extraRefs || rStyle ? { refs: extraRefs, rStyle } : null,
   };
 }
 
@@ -282,7 +290,7 @@ function marksOf(marks: RunMarks): Mark[] {
     marks.vertAlign ? m[marks.vertAlign].create() : null,
     marks.highlight ? m.highlight.create({ color: marks.highlight }) : null,
     marks.extra ? m.runExtra.create(marks.extra) : null,
-    marks.link ?? null,
+    ...(marks.wraps ?? []),
     ...(marks.comments ?? []).map((id) => m.comment.create({ id })),
   ].filter((mark): mark is Mark => mark !== null);
 }
@@ -379,13 +387,16 @@ function vmlAttrsOf(el: XmlNode, ctx: ImportCtx): OoxmlAttrs {
   return { kind: 'image', widthPx: pt('width'), heightPx: pt('height'), float, media: mediaPathOf(ctx, imagedata ? attrsOf(imagedata)['@_r:id'] : undefined), text: '그림' };
 }
 
-/** 원본 실행문(w:r)의 rPr과 자식 하나만 담은 원본 XML — 실행문 속성(xmlns 선언 포함)을 그대로 지닌다 */
-function runPieceXml(run: XmlNode, child: XmlNode): string {
+/** 원본 실행문(w:r)의 rPr과 자식 하나만 담은 조각의 참조 — 실행문 속성(xmlns 선언 포함)을 그대로 지닌다. 참조 태그는 그 자식의 태그. */
+function runPieceRef(run: XmlNode, child: XmlNode, ctx: ImportCtx): string {
   const rPr = findFirst(childrenOf(run), 'w:rPr');
   const node: XmlNode = { 'w:r': rPr ? [rPr, child] : [child] };
   if (run[':@']) node[':@'] = run[':@'];
-  return xmlOf(node);
+  return fragmentRef(ctx.fragments, tagOf(child) ?? 'w:r', xmlOf(node));
 }
+
+/** 문단 자식 하나(책갈피·단순 필드·삭제분 등)를 통째로 보존하는 참조 */
+const elementRef = (el: XmlNode, ctx: ImportCtx): string => fragmentRef(ctx.fragments, tagOf(el) ?? '', xmlOf(el));
 
 function ooxmlNode(attrs: OoxmlAttrs, marks: RunMarks): PMNode {
   return docxSchema.nodes.ooxml.create(attrs, null, marksOf(marks));
@@ -397,30 +408,30 @@ const DROPPED_RUN_CHILDREN = new Set(['w:rPr', 'w:lastRenderedPageBreak', 'w:com
 /** 실행문의 텍스트·줄바꿈·탭이 아닌 자식 하나 → 원본 그대로 보존하는 ooxml 노드 */
 function preservedRunChild(run: XmlNode, child: XmlNode, marks: RunMarks, ctx: ImportCtx): PMNode {
   const tag = tagOf(child) ?? '';
-  const xml = runPieceXml(run, child);
-  if (tag === 'w:drawing') return ooxmlNode({ xml, ...drawingAttrsOf(child, ctx) }, marks);
+  const ref = runPieceRef(run, child, ctx);
+  if (tag === 'w:drawing') return ooxmlNode({ ref, ...drawingAttrsOf(child, ctx) }, marks);
   if (tag === 'mc:AlternateContent') {
     const choiceDrawing = findDeep(childrenOf(findFirst(childrenOf(child), 'mc:Choice') ?? {}), 'w:drawing');
     const fallbackPict = findDeep(childrenOf(findFirst(childrenOf(child), 'mc:Fallback') ?? {}), 'w:pict');
-    if (choiceDrawing) return ooxmlNode({ xml, ...drawingAttrsOf(choiceDrawing, ctx) }, marks);
-    if (fallbackPict) return ooxmlNode({ xml, ...vmlAttrsOf(fallbackPict, ctx) }, marks);
+    if (choiceDrawing) return ooxmlNode({ ref, ...drawingAttrsOf(choiceDrawing, ctx) }, marks);
+    if (fallbackPict) return ooxmlNode({ ref, ...vmlAttrsOf(fallbackPict, ctx) }, marks);
   }
-  if (tag === 'w:pict' || tag === 'w:object') return ooxmlNode({ xml, ...vmlAttrsOf(child, ctx) }, marks);
+  if (tag === 'w:pict' || tag === 'w:object') return ooxmlNode({ ref, ...vmlAttrsOf(child, ctx) }, marks);
   if (tag === 'w:footnoteReference' || tag === 'w:endnoteReference') {
     const noteType = tag === 'w:footnoteReference' ? 'footnote' : 'endnote';
     ctx.noteCount[noteType] += 1;
-    return ooxmlNode({ xml, kind: 'note', noteType, noteId: attrsOf(child)['@_w:id'] ?? null, text: String(ctx.noteCount[noteType]) }, marks);
+    return ooxmlNode({ ref, kind: 'note', noteType, noteId: attrsOf(child)['@_w:id'] ?? null, text: String(ctx.noteCount[noteType]) }, marks);
   }
-  if (tag === 'w:footnoteRef' || tag === 'w:endnoteRef') return ooxmlNode({ xml, kind: 'note', text: ctx.noteLabel ?? '' }, marks);
+  if (tag === 'w:footnoteRef' || tag === 'w:endnoteRef') return ooxmlNode({ ref, kind: 'note', text: ctx.noteLabel ?? '' }, marks);
   if (tag === 'w:sym') {
     const code = parseInt(attrsOf(child)['@_w:char'] ?? '', 16);
-    return ooxmlNode({ xml, kind: 'text', text: Number.isFinite(code) ? String.fromCharCode(code >= 0xf000 ? code - 0xf000 : code) : '' }, marks);
+    return ooxmlNode({ ref, kind: 'text', text: Number.isFinite(code) ? String.fromCharCode(code >= 0xf000 ? code - 0xf000 : code) : '' }, marks);
   }
-  if (tag === 'w:noBreakHyphen') return ooxmlNode({ xml, kind: 'text', text: '‑' }, marks);
-  if (tag === 'w:ptab') return ooxmlNode({ xml, kind: 'text', text: '\t' }, marks);
+  if (tag === 'w:noBreakHyphen') return ooxmlNode({ ref, kind: 'text', text: '‑' }, marks);
+  if (tag === 'w:ptab') return ooxmlNode({ ref, kind: 'text', text: '\t' }, marks);
   const hiddenTags = ['w:softHyphen', 'w:fldChar', 'w:instrText', 'w:separator', 'w:continuationSeparator', 'w:delInstrText'];
-  if (hiddenTags.includes(tag)) return ooxmlNode({ xml, kind: 'hidden' }, marks);
-  return ooxmlNode({ xml, kind: 'text', text: deepTextOf([child]) }, marks);
+  if (hiddenTags.includes(tag)) return ooxmlNode({ ref, kind: 'hidden' }, marks);
+  return ooxmlNode({ ref, kind: 'text', text: deepTextOf([child]) }, marks);
 }
 
 /**
@@ -481,34 +492,42 @@ function fieldNodeOf(items: readonly XmlNode[], inherited: RunDefaults, ctx: Imp
       } else if (tag === 'w:instrText' && depth === 1 && !afterSeparate) instr += textOf(childrenOf(child));
       else if (afterSeparate && depth === 1 && (tag === 'w:t' || tag === 'w:tab')) {
         result += tag === 'w:t' ? textOf(childrenOf(child)) : '\t';
-        resultMarks ??= runMarksOf(childrenOf(item), inherited);
+        resultMarks ??= runMarksOf(childrenOf(item), inherited, ctx);
       }
     }
   }
   const field = /^\s*([A-Z]+)/i.exec(instr)?.[1]?.toUpperCase() ?? null;
-  return ooxmlNode({ xml: items.map(xmlOf).join(''), kind: 'field', field, text: result }, resultMarks ?? NO_MARKS);
+  return ooxmlNode({ ref: fragmentRef(ctx.fragments, 'w:fldChar', items.map(xmlOf).join('')), kind: 'field', field, text: result }, resultMarks ?? NO_MARKS);
 }
 
-/** w:hyperlink의 속성(원본 이름 그대로) — 저장 때 같은 속성으로 다시 감싼다 */
-function linkMarkOf(el: XmlNode, ctx: ImportCtx): Mark {
+/** 글자를 감싸는 요소 — 하이퍼링크, 변경 내용 삽입·이동(w:ins·w:moveTo), 스마트 태그·사용자 XML(w:smartTag·w:customXml) */
+const WRAPPER_TAGS = new Set(['w:hyperlink', 'w:ins', 'w:moveTo', 'w:smartTag', 'w:customXml']);
+
+/**
+ * 감싸는 요소의 속성(원본 이름 그대로)과 속성 자식(w:smartTagPr·w:customXmlPr, 원본 그대로 참조)을 wrap 마크로 — 저장 때 같은 요소로
+ * 다시 감싼다(depth: 겹친 순서, 바깥이 작다). 예전엔 풀어서 일반 글자로 저장해 하이퍼링크가 사라지고 변경 내용 삽입이 "수락"됐다.
+ */
+function wrapMarkOf(el: XmlNode, ctx: ImportCtx, depth: number): Mark {
+  const tag = tagOf(el)!;
   const attrs: Record<string, string> = {};
   for (const [key, value] of Object.entries(attrsOf(el))) attrs[key.replace(/^@_/, '')] = String(value);
-  const rel = attrs['r:id'] ? ctx.rels.get(attrs['r:id']) : undefined;
-  const href = rel?.external ? rel.target : attrs['w:anchor'] ? `#${attrs['w:anchor']}` : null;
-  return docxSchema.marks.link.create({ attrs, href });
+  const rel = tag === 'w:hyperlink' && attrs['r:id'] ? ctx.rels.get(attrs['r:id']) : undefined;
+  const href = tag !== 'w:hyperlink' ? null : rel?.external ? rel.target : attrs['w:anchor'] ? `#${attrs['w:anchor']}` : null;
+  const prEl = childrenOf(el).find((c) => /^w:(smartTagPr|customXmlPr)$/.test(tagOf(c) ?? ''));
+  return docxSchema.marks.wrap.create({ tag, attrs, pr: prEl ? elementRef(prEl, ctx) : null, depth, href });
 }
 
 /**
  * 문단 자식을 문서 순서대로 훑는다 — 실행문·하이퍼링크(링크 마크로)·변경 내용 삽입 안의 글자를 읽고, 메모 범위로 메모 마크를 달고,
  * 그 밖의 문단 자식(책갈피·단순 필드·내용 컨트롤·수식·변경 내용 삭제분 등)은 원본 그대로 담는다.
  */
-function inlineContentOf(pChildren: readonly XmlNode[], inherited: RunDefaults, ctx: ImportCtx, link: Mark | null = null): PMNode[] {
+function inlineContentOf(pChildren: readonly XmlNode[], inherited: RunDefaults, ctx: ImportCtx, wraps: readonly Mark[] = []): PMNode[] {
   const nodes: PMNode[] = [];
   let field: XmlNode[] | null = null;
   let depth = 0;
   const plainRun = (run: XmlNode) => {
-    const marks = runMarksOf(childrenOf(run), inherited);
-    nodes.push(...runInlineNodesOf(run, { ...marks, link, comments: [...openCommentIds] }, ctx));
+    const marks = runMarksOf(childrenOf(run), inherited, ctx);
+    nodes.push(...runInlineNodesOf(run, { ...marks, wraps, comments: [...openCommentIds] }, ctx));
   };
   for (const child of pChildren) {
     const tag = tagOf(child);
@@ -532,10 +551,9 @@ function inlineContentOf(pChildren: readonly XmlNode[], inherited: RunDefaults, 
         }
       }
       plainRun(child);
-    } else if (tag === 'w:hyperlink') {
-      nodes.push(...inlineContentOf(childrenOf(child), inherited, ctx, linkMarkOf(child, ctx)));
-    } else if (tag === 'w:ins' || tag === 'w:moveTo' || tag === 'w:smartTag' || tag === 'w:customXml') {
-      nodes.push(...inlineContentOf(childrenOf(child), inherited, ctx, link));
+    } else if (WRAPPER_TAGS.has(tag)) {
+      const inner = childrenOf(child).filter((c) => !/^w:(smartTagPr|customXmlPr)$/.test(tagOf(c) ?? ''));
+      nodes.push(...inlineContentOf(inner, inherited, ctx, [...wraps, wrapMarkOf(child, ctx, wraps.length)]));
     } else if (tag === 'w:commentRangeStart') {
       const id = attrsOf(child)['@_w:id'];
       if (id !== undefined) openCommentIds.add(String(id));
@@ -544,23 +562,23 @@ function inlineContentOf(pChildren: readonly XmlNode[], inherited: RunDefaults, 
     } else if (tag === 'w:proofErr') {
       // 맞춤법 검사 표시 — Word가 다시 만든다
     } else if (tag === 'w:del' || tag === 'w:moveFrom') {
-      nodes.push(ooxmlNode({ xml: xmlOf(child), kind: 'del', text: deepTextOf(childrenOf(child)) }, NO_MARKS));
+      nodes.push(ooxmlNode({ ref: elementRef(child, ctx), kind: 'del', text: deepTextOf(childrenOf(child)) }, { ...NO_MARKS, wraps }));
     } else if (tag === 'w:fldSimple') {
       const field2 = /^\s*([A-Z]+)/i.exec(attrsOf(child)['@_w:instr'] ?? '')?.[1]?.toUpperCase() ?? null;
       const firstRun = findFirst(childrenOf(child), 'w:r');
-      const marks = firstRun ? runMarksOf(childrenOf(firstRun), inherited) : NO_MARKS;
-      nodes.push(ooxmlNode({ xml: xmlOf(child), kind: 'field', field: field2, text: deepTextOf(childrenOf(child)) }, marks));
+      const marks = firstRun ? runMarksOf(childrenOf(firstRun), inherited, ctx) : NO_MARKS;
+      nodes.push(ooxmlNode({ ref: elementRef(child, ctx), kind: 'field', field: field2, text: deepTextOf(childrenOf(child)) }, marks));
     } else if (/^w:(bookmarkStart|bookmarkEnd|permStart|permEnd|moveFromRangeStart|moveFromRangeEnd|moveToRangeStart|moveToRangeEnd)$/.test(tag)) {
-      nodes.push(ooxmlNode({ xml: xmlOf(child), kind: 'hidden' }, NO_MARKS));
+      nodes.push(ooxmlNode({ ref: elementRef(child, ctx), kind: 'hidden' }, { ...NO_MARKS, wraps }));
     } else {
       // 내용 컨트롤(w:sdt)·수식(m:oMath) 등 — 원본 그대로, 화면엔 그 안의 글자
-      nodes.push(ooxmlNode({ xml: xmlOf(child), kind: 'text', text: deepTextOf(childrenOf(child)) }, NO_MARKS));
+      nodes.push(ooxmlNode({ ref: elementRef(child, ctx), kind: 'text', text: deepTextOf(childrenOf(child)) }, { ...NO_MARKS, wraps }));
     }
   }
   // 문단 안에서 끝나지 않은 필드(목차처럼 여러 문단에 걸친 것) — 묶지 않고 하나씩(필드 문자는 숨은 조각으로) 읽는다
   if (field) for (const item of field) {
     if (tagOf(item) === 'w:r') plainRun(item);
-    else nodes.push(...inlineContentOf([item], inherited, ctx, link));
+    else nodes.push(...inlineContentOf([item], inherited, ctx, wraps));
   }
   return nodes;
 }
@@ -590,9 +608,14 @@ function paragraphFrom(pNode: XmlNode, ctx: ImportCtx, cell: CellDefaults, sect:
   if (shading) modeled.add('w:shd');
   if (!alignOf(pPrChildren) && findFirst(pPrChildren, 'w:jc')) modeled.delete('w:jc'); // left·start 등 — 원본 그대로
   const layout = paragraphLayoutOf(pPrChildren, ctx.styles, pStyleId);
+  // 직접 번호(w:numPr에 ilvl·numId만)는 num 속성으로 모델링한다 — 편집기 번호 단추가 켜고 끄고, 저장 때 다시 쓴다
+  const numPr = findFirst(pPrChildren, 'w:numPr');
+  if (numPr && layout.num && !layout.num.fromStyle && childrenOf(numPr).every((c) => /^w:(ilvl|numId)$/.test(tagOf(c) ?? '') || '#text' in c)) modeled.add('w:numPr');
+  // 구역 나눔은 내용이 같아도 구역마다 따로 — 참조에 구역 번호를 붙인다(같은 참조가 두 문단에 생기면 편집으로 나뉜 것)
+  const pPrExtra = extrasOf(pPrChildren, modeled, ctx.fragments)?.map((ref) => (ref.startsWith('w:sectPr@') && sect !== null ? `${ref}#${sect}` : ref)) ?? null;
   const format = {
     align, indent, spacing, shading,
-    pPrExtra: extrasOf(pPrChildren, modeled),
+    pPrExtra,
     num: layout.num,
     breakBefore: layout.breakBefore,
     tabs: layout.tabs,
@@ -673,12 +696,11 @@ function blocksOf(children: readonly XmlNode[], ctx: ImportCtx, topLevel: boolea
       blocks.push(paragraphFrom(child, ctx, cell, sectPr && sections ? sections.length - 1 : null));
     } else if (tag === 'w:tbl') {
       blocks.push(tableFrom(child, ctx));
-    } else if (tag === 'w:customXml') {
-      blocks.push(...blocksOf(childrenOf(child), ctx, topLevel, cell, sections));
     } else {
-      const sdtContent = tag === 'w:sdt' ? findFirst(childrenOf(child), 'w:sdtContent') : undefined;
-      const content = sdtContent ? blocksOf(childrenOf(sdtContent), ctx, false, cell).map((n) => n.toJSON()) : null;
-      blocks.push(docxSchema.nodes.ooxml_block.create({ xml: xmlOf(child), content, text: deepTextOf(childrenOf(child)) }));
+      // 내용 컨트롤(w:sdt)·사용자 XML(w:customXml) 등 — 원본 그대로, 화면엔 안의 블록을 읽기 전용으로
+      const inner = tag === 'w:sdt' ? findFirst(childrenOf(child), 'w:sdtContent') : tag === 'w:customXml' ? child : undefined;
+      const content = inner ? blocksOf(childrenOf(inner).filter((c) => tagOf(c) !== 'w:customXmlPr'), ctx, false, cell).map((n) => n.toJSON()) : null;
+      blocks.push(docxSchema.nodes.ooxml_block.create({ ref: elementRef(child, ctx), content, text: deepTextOf(childrenOf(child)) }));
     }
   }
   return blocks;
@@ -1091,7 +1113,7 @@ function tableFrom(tblNode: XmlNode, ctx: ImportCtx): PMNode {
   const rows = rowPlacements.map((placements, row) => {
     const trPrChildren = childrenOf(findFirst(childrenOf(trNodes[row]), 'w:trPr') ?? {});
     return docxSchema.nodes.table_row.create(
-      { height: rowHeightOf(trPrChildren), trPrExtra: extrasOf(trPrChildren, new Set(['w:trHeight'])) },
+      { height: rowHeightOf(trPrChildren), trPrExtra: extrasOf(trPrChildren, new Set(['w:trHeight']), ctx.fragments) },
       placements.map((p) => {
         const widths = colWidths.slice(p.col, p.col + p.colspan);
         const colwidth = widths.length === p.colspan && widths.every((w) => w > 0) ? widths : null;
@@ -1125,7 +1147,7 @@ function tableFrom(tblNode: XmlNode, ctx: ImportCtx): PMNode {
             borders,
             verticalAlign: verticalAlignOf(tcPrChildren),
             cellPadding,
-            tcPrExtra: extrasOf(tcPrChildren, TC_MODELED),
+            tcPrExtra: extrasOf(tcPrChildren, TC_MODELED, ctx.fragments),
           },
           content.length > 0 ? content : [docxSchema.nodes.paragraph.create()],
         );
@@ -1133,7 +1155,7 @@ function tableFrom(tblNode: XmlNode, ctx: ImportCtx): PMNode {
     );
   });
   return docxSchema.nodes.table.create(
-    { align: tableAlignOf(tblPrChildren), tblPrExtra: extrasOf(tblPrChildren, new Set(['w:jc'])) },
+    { align: tableAlignOf(tblPrChildren), tblPrExtra: extrasOf(tblPrChildren, new Set(['w:jc']), ctx.fragments) },
     rows,
   );
 }
@@ -1171,25 +1193,12 @@ function commentsOf(xml: string): DocxComment[] {
 
 export interface DocxImportResult {
   readonly doc: PMNode;
-  /** 저장하면 모양이 바뀌는 요소(변경 내용 추적 삽입 표시)가 있는지 — LOSSY_ON_SAVE */
-  readonly hasUnsupportedContent: boolean;
   /** 페이지 크기·여백(w:sectPr/w:pgSz·w:pgMar) — 화면에 실제 Word 페이지 비율로 그리기 위함. 없으면 null. */
   readonly pageSetup: PageSetup | null;
   /** 원본 word/comments.xml의 메모 — 본문에 범위가 남아 있는 것만. */
   readonly comments: readonly DocxComment[];
-}
-
-/** 저장하면 모양이 바뀌는 요소 — 변경 내용 추적의 삽입 표시(w:ins·w:moveTo)는 글자로만 읽어 저장 때 "수락된" 글자가 된다. */
-const LOSSY_ON_SAVE = /<w:ins\b|<w:moveTo\b/;
-
-/**
- * 편집기 진입 전 경고용 빠른 검사(전체 파싱 없이, src/routes/viewer.ts). 그림·글상자·필드 등은 이제 원본 그대로 보존되어
- * 저장해도 남는다 — 남은 손실은 변경 내용 추적의 삽입 표시뿐이다.
- */
-export function docxHasUnsupportedContent(docxBytes: Uint8Array): boolean {
-  const entries = guardedUnzipSync(docxBytes, 'docxHasUnsupportedContent', { filter: (f) => f.name === 'word/document.xml' });
-  const documentXmlBytes = entries['word/document.xml'];
-  return documentXmlBytes ? LOSSY_ON_SAVE.test(strFromU8(documentXmlBytes)) : false;
+  /** 보존 조각 저장소(해시 → 원본 XML) — 방이 열려 있는 동안 유지해 저장 때 넘긴다(export.ts) */
+  readonly fragments: FragmentStore;
 }
 
 /** w:sectPr(파싱된 트리)에서 페이지 크기·여백을 읽는다. w:pgSz가 없으면(비정상 문서) null.
@@ -1455,6 +1464,7 @@ function baseCtxOf(entries: Record<string, Uint8Array>, partPath: string, conten
     themeXml: themeBytes ? strFromU8(themeBytes) : undefined,
     noteCount: { footnote: 0, endnote: 0 },
     noteLabel: null,
+    fragments: new Map(),
   };
 }
 
@@ -1521,7 +1531,7 @@ export function importDocx(docxBytes: Uint8Array): DocxImportResult {
     for (const mark of node.marks) if (mark.type === docxSchema.marks.comment) used.add(mark.attrs.id as string);
   });
   const comments = commentsXml ? commentsOf(strFromU8(commentsXml)).filter((c) => used.has(c.id)) : [];
-  return { doc, hasUnsupportedContent: LOSSY_ON_SAVE.test(documentXml), pageSetup, comments };
+  return { doc, pageSetup, comments, fragments: ctx.fragments };
 }
 
 // ── 편집기 화면용 부가 정보(머리글·바닥글·각주·번호·스타일) ─────────────────────

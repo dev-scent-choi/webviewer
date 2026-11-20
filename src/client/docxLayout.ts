@@ -74,7 +74,6 @@ function pageStartDOM(extras: DocxRenderExtras, cur: PageCursor, total: number, 
 
 /** 번호 글자 + 번호 수준의 들여쓰기(문단에 직접 들여쓰기가 없을 때) */
 function numberingDecorations(doc: PMNode, defs: NumberingDefs | null, out: Decoration[]): void {
-  if (!defs) return;
   const counter = new NumberingCounter(defs);
   doc.descendants((node, pos) => {
     if (!node.isTextblock) return true;

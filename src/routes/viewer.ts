@@ -30,7 +30,6 @@ import { InvalidTokenError, verifyViewToken } from '../security.js';
 import { extractPdfText, searchPdfText, type PageText } from '../search.js';
 import { detectNearbyTextStyle } from '../textStyle.js';
 import {
-  docxHasUnsupportedContent,
   getDocxDefaultFontFamily,
   getDocxDefaultParagraphSpacing,
   getDocxDefaultFontSizePt,
@@ -629,14 +628,7 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
       // catch로 감싼 채 병렬로 돌린다.
       const docxBytes =
         view.meta.ext === 'docx' ? await store.readOriginal(view.meta.id, view.meta.ext).catch(() => null) : null;
-      const [editHasUnsupportedContent, pageSetup, defaultFontSizePt, defaultFontFamily, defaultParagraphSpacing, docxRender] = await Promise.all([
-        // "저장하면 변경 내용 추적 표시가 수락된다" 경고를 띄우기 위한 사전 검사 — canEdit 토큰일 때만 계산한다
-        // (파일은 이미 읽었지만, 이 함수 자체를 돌리는 CPU 비용은 필요할 때만 쓴다).
-        docxBytes && view.claims.perms.canEdit
-          ? Promise.resolve()
-              .then(() => docxHasUnsupportedContent(docxBytes))
-              .catch(() => false)
-          : Promise.resolve(false),
+      const [pageSetup, defaultFontSizePt, defaultFontFamily, defaultParagraphSpacing, docxRender] = await Promise.all([
         // docx 에디터가 실제 Word 페이지 크기·여백 비율로 화면을 그리기 위한 값(src/client/editor.ts).
         docxBytes ? Promise.resolve().then(() => getDocxPageSetup(docxBytes)).catch(() => null) : Promise.resolve(null),
         // 직접 서식도 스타일도 없는 실행문이 상속받는 문서 기본 폰트 크기(w:docDefaults) —
@@ -677,7 +669,6 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
           pages,
           permissions: view.claims.perms,
           viewer: view.claims.viewer,
-          editHasUnsupportedContent,
           pageSetup,
           defaultFontSizePt,
           defaultFontFamily,

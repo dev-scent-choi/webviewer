@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { XMLBuilder, XMLParser } from 'fast-xml-parser';
 
 /**
@@ -93,22 +94,39 @@ export const PR_ORDER: Readonly<Record<string, readonly string[]>> = {
     'headers', 'cellIns', 'cellDel', 'cellMerge', 'tcPrChange'],
 };
 
-/** 속성 묶음(w:pPr 등)의 자식 중 우리가 모델링하지 않는 것들을 원본 XML 그대로 — 저장할 때 잃지 않게 노드 속성에 담아 둔다. */
-export function extrasOf(children: readonly XmlNode[], modeled: ReadonlySet<string>): string[] | null {
+/**
+ * 보존 조각 참조 — 원본 XML은 서버의 조각 저장소(해시 → XML, 방이 열려 있는 동안 유지)에만 두고 문서 노드에는 "태그@해시"만 싣는다.
+ * 그래서 다른 참여자가 Yjs로 임의 XML을 보낼 길이 없고(저장소에 없는 해시는 저장 때 버려진다), 지웠다가 되돌린 조각도 저장소에 남아 있어
+ * 다시 저장된다. unique: 내용이 같아도 따로 세야 하는 조각(구역 나눔)에 붙이는 순번("#3").
+ */
+export type FragmentStore = Map<string, string>;
+
+export function fragmentRef(store: FragmentStore, tag: string, xml: string, unique?: number): string {
+  const hash = createHash('sha256').update(xml).digest('base64url').slice(0, 20);
+  store.set(hash, xml);
+  return `${tag}@${hash}${unique === undefined ? '' : `#${unique}`}`;
+}
+
+/** 참조의 태그("w:numPr@…" → "w:numPr") — 브라우저 쪽(wordCommands)도 같은 모양을 쓴다 */
+export const refTagOf = (ref: string): string => ref.slice(0, Math.max(0, ref.indexOf('@')));
+export const refHashOf = (ref: string): string => ref.slice(ref.indexOf('@') + 1).replace(/#.*$/, '');
+
+/** 속성 묶음(w:pPr 등)의 자식 중 우리가 모델링하지 않는 것들 — 원본 그대로 저장소에 두고 참조 목록을 노드 속성에 담는다. */
+export function extrasOf(children: readonly XmlNode[], modeled: ReadonlySet<string>, store: FragmentStore): string[] | null {
   const extras = children.filter((node) => {
     const tag = tagOf(node);
     return tag !== undefined && tag !== '#text' && !modeled.has(tag);
   });
-  return extras.length > 0 ? extras.map(xmlOf) : null;
+  return extras.length > 0 ? extras.map((node) => fragmentRef(store, tagOf(node)!, xmlOf(node))) : null;
 }
 
 const tagNameOf = (xml: string): string => /^<([\w:.-]+)/.exec(xml)?.[1] ?? '';
 
 /**
  * 모델링한 값(우리가 새로 만든 XML 조각)과 보존한 원본 조각을 합쳐 스키마 순서로 정렬한 속성 묶음 하나를 만든다.
- * allowRaw: 보존 조각이 원본 문서에 실제로 있던 것인지 확인한다(다른 참여자가 Yjs로 임의 XML을 끼워 넣는 것을 막는다).
+ * resolve: 참조 → 원본 XML(저장소에 없는 참조는 undefined — 버린다).
  */
-export function prXml(wrapper: keyof typeof PR_ORDER, parts: readonly string[], extras: unknown, allowRaw: (xml: string) => boolean): string {
+export function prXml(wrapper: keyof typeof PR_ORDER, parts: readonly string[], extras: unknown, resolve: (ref: string) => string | undefined): string {
   const order = PR_ORDER[wrapper];
   const rank = (xml: string) => {
     const i = order.indexOf(tagNameOf(xml).replace(/^w:/, ''));
@@ -118,7 +136,9 @@ export function prXml(wrapper: keyof typeof PR_ORDER, parts: readonly string[], 
   const modeledTags = new Set(modeled.map(tagNameOf));
   // 편집으로 새로 생긴 값(예: 끄기였던 굵게를 켬)과 같은 요소의 원본 조각은 뺀다 — 같은 요소가 두 번 나오면 Word가 파일을 못 연다
   const raw = Array.isArray(extras)
-    ? extras.filter((x): x is string => typeof x === 'string' && allowRaw(x) && !modeledTags.has(tagNameOf(x)))
+    ? extras
+        .map((ref) => (typeof ref === 'string' ? resolve(ref) : undefined))
+        .filter((x): x is string => typeof x === 'string' && !modeledTags.has(tagNameOf(x)))
     : [];
   const all = [...modeled, ...raw].map((xml, index) => ({ xml, index, rank: rank(xml) }));
   all.sort((a, b) => a.rank - b.rank || a.index - b.index);
