@@ -240,3 +240,39 @@ describe('무거운 규칙 어림(보기·편집 화면 공통 — 검토 r3 E1)
     expect(cfRuleTooCostly(entry('SUMPRODUCT(($A:$C=$A1)*1)>1', 0), 200_000, 5)).toBe(true);
   });
 });
+
+describe('검토 r4 — 엔진이 못 하는 규칙은 알리고, SUMPRODUCT 배열 비교·COUNTIFS는 칠한다', () => {
+  const vals = ['a', 'b', 'a', 'c', 'a'];
+  const valueAt = (r: number, c: number) => (c === 0 ? (vals[r] ?? '') : c === 1 ? String(r + 1) : '');
+  const ext = () => ({ rows: 5, cols: 2 });
+  const rule = (f: string): CondFormatEntry[] => [{ id: 'x', ranges: [{ r0: 0, c0: 0, r1: 4, c1: 0 }], rule: { t: 'expr', f, s: { bg: '#FF0000' } } }];
+  const paintWith = (f: string, row: number) => {
+    let unsupported = 0;
+    const env = { fallback: createCfFormulaFallback(valueAt, ext), tables: new Map(), extent: ext, unsupported: () => (unsupported += 1) };
+    return { bg: paintCell(rule(f), row, 0, valueAt(row, 0), new Map(), valueAt, env)?.style?.bg, unsupported };
+  };
+  test('SUMPRODUCT((범위=값)*1)·SUMPRODUCT(--(범위=값))는 COUNTIF로 바꿔 칠한다', async () => {
+    const { rewriteSumproduct } = await import('../src/collab/condFormatShared.js');
+    expect(rewriteSumproduct('SUMPRODUCT(($A$1:$A$5=$A1)*1)>1')).toBe('COUNTIF($A$1:$A$5,$A1)>1');
+    expect(rewriteSumproduct('SUMPRODUCT(--($A1=$A$1:$A$5))>1')).toBe('COUNTIF($A$1:$A$5,$A1)>1');
+    expect(paintWith('SUMPRODUCT(($A$1:$A$5=$A1)*1)>1', 0)).toEqual({ bg: '#FF0000', unsupported: 0 });
+    expect(paintWith('SUMPRODUCT(--($A$1:$A$5=$A1))>1', 1)).toEqual({ bg: undefined, unsupported: 0 });
+  });
+  test('COUNTIFS는 수식 엔진으로 계산한다', () => {
+    expect(paintWith('COUNTIFS($A$1:$A$5,$A1,$B$1:$B$5,">2")>0', 0).bg).toBe('#FF0000'); // a는 3·5행에도(B>2)
+    expect(paintWith('COUNTIFS($A$1:$A$5,$A1,$B$1:$B$5,">4")>0', 1).bg).toBeUndefined();
+  });
+  test('엔진도 못 하는 규칙(다른 배열 비교·모르는 함수)은 칠하지 않고 "일부 생략"을 알린다', () => {
+    expect(paintWith('SUMPRODUCT(($A$1:$A$5=$A1)*($B$1:$B$5>2))>0', 0)).toEqual({ bg: undefined, unsupported: 1 });
+    expect(paintWith('NOSUCHFUNC($A1)>0', 0)).toEqual({ bg: undefined, unsupported: 1 });
+    // 오류값(#N/A — 못 찾음)은 "안 맞음"일 뿐 알리지 않는다
+    expect(paintWith('MATCH("zz",$A$1:$A$5,0)>0', 0)).toEqual({ bg: undefined, unsupported: 0 });
+  });
+  test('보기 화면 굽기: 엔진이 못 하는 규칙이 있으면 cfSkipped', async () => {
+    const { bakeSheetCondFormats, CfBakeBudget, styleRegistry } = await import('../src/xlsx/viewerCondFormat.js');
+    const budget = new CfBakeBudget();
+    const lines = vals.map((v, r) => [{ v }, { v: String(r + 1) }] as const);
+    await bakeSheetCondFormats(rule('NOSUCHFUNC($A1)>0'), { rows: 5, cols: 2 }, async (onRow) => lines.forEach((l, r) => onRow(r, l)), valueAt, styleRegistry([]), budget, () => undefined);
+    expect(budget.skipped).toBe(true);
+  });
+});

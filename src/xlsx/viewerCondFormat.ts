@@ -207,7 +207,7 @@ export async function bakeSheetCondFormats(
     }
   }
   // 2차: 칠하기
-  const env: CfEnv = { fallback: createCfFormulaFallback(valueAt, () => extent), tables: new Map<string, CfRangeTable>(), extent: () => extent };
+  const env: CfEnv = { fallback: createCfFormulaFallback(valueAt, () => extent), tables: new Map<string, CfRangeTable>(), extent: () => extent, unsupported: () => (budget.skipped = true) };
   const sweep = cfRowSweeper(usable);
   // 칸(열)마다 걸리는 규칙 — 규칙 목록이 같은 행끼리는 다시 고르지 않는다(범위가 하나인 규칙만이면 열로만 정해진다)
   let lastRowEntries: readonly CondFormatEntry[] | null = null;
