@@ -10,6 +10,9 @@ import excelBuiltinNumFmts from 'exceljs/lib/xlsx/defaultnumformats.js';
  * 파일에 서식 코드 없이 번호(numFmtId)만 적힌 기본 서식 — 엑셀은 번호의 뜻을 사용자 로캘로 정한다. ExcelJS는 미국식 코드만 알고
  * 한국어 엑셀의 통화(5~8)·회계(41~44)·한글 날짜(27~36, 50~58)는 아예 몰라 "일반"(날짜는 일련번호)이 됐다.
  * 우리 사용자는 한국어 엑셀이므로 ExcelJS의 기본 서식 표를 한국어 엑셀 코드로 채운다(읽기 전에 한 번 — 모든 경로가 이 모듈을 거친다).
+ * 주의: 이 표는 ExcelJS 모듈 전역이다 — 이 프로세스에서 ExcelJS로 읽는 모든 파일이 기본 서식 번호를 한국어 엑셀 뜻으로 읽는다
+ * (다른 로캘 파일을 그 로캘 뜻으로 읽어야 할 일이 생기면 여기를 바꿔야 한다). 쓰기용 번호 표(defaultFmtHash)는 ExcelJS가
+ * 모듈을 불러올 때 영어 코드로 이미 만들어 두므로, 저장할 때 이 한국어 코드가 기본 번호로 바뀌어 들어가지는 않는다.
  */
 const KO_BUILTIN_NUMFMTS: Readonly<Record<number, string>> = {
   5: '"₩"#,##0;\\-"₩"#,##0',

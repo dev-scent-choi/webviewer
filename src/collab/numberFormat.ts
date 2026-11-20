@@ -80,7 +80,8 @@ function mapOutsideLiterals(code: string, fn: (plain: string) => string): string
 
 /** 날짜 구역인지(y·m·d·h·s가 있고 숫자 자리 0·#·?가 없다) */
 const isDateSection = (section: string) => {
-  const plain = mapOutsideLiterals(section, (p) => p).replace(/"[^"]*"|\[[^\]]*\]|\\./g, '');
+  // 초 뒤의 \.0(이스케이프된 초 소수)은 소수점으로 보고 판정한다
+  const plain = mapOutsideLiterals(section.replace(/(?<=s)\\\.(?=0)/gi, '.'), (p) => p).replace(/"[^"]*"|\[[^\]]*\]|\\./g, '');
   return /[ymdhs]/i.test(plain) && !/[0#?]/.test(plain.replace(/s+\.0+/gi, ''));
 };
 
@@ -97,7 +98,8 @@ function normalizeForSsf(code: string): string {
     .split(/;(?=(?:[^"]*"[^"]*")*[^"]*$)/)
     .map((section) => {
       const date = isDateSection(section);
-      let s = date ? section.replace(/\\\.(?!0)/g, '"."') : section;
+      // 초 뒤의 \.0(초 소수, hh:mm:ss\.000)은 소수점으로, 나머지 \.은 글자 "."로
+      let s = date ? section.replace(/(?<=s)\\\.(?=0)/gi, '.').replace(/\\\./g, '"."') : section;
       s = mapOutsideLiterals(s, (plain) => {
         let p = plain.replace(/[^\x00-\x7f]+/g, (m) => `"${m}"`);
         if (date) p = p.replace(/(?<!s)\.(?!0)/gi, '"."');
