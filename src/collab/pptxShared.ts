@@ -5,6 +5,8 @@
  * 묶는다 — 서버와 클라이언트 번들 둘 다 이 파일을 이미 가져다 쓴다. */
 export const SLIDE_WIDTH_EMU = 12192000;
 export const SLIDE_HEIGHT_EMU = 6858000;
+/** PowerPoint 기본 글상자 안쪽 여백(EMU) [왼, 위, 오른, 아래] — 좌우 0.1", 위아래 0.05" */
+export const DEFAULT_INSETS_EMU: readonly [number, number, number, number] = [91440, 45720, 91440, 45720];
 
 /**
  * pptx 동시편집이 쓰는 Y.Doc 최상위 공유 타입 이름 — 서버(room.ts, src/pptx/collab.ts)와
@@ -61,15 +63,56 @@ export interface SlideShapeMeta {
   readonly insets?: readonly [number, number, number, number];
   readonly defaultSizePt?: number;
   readonly defaultAlign?: 'l' | 'ctr' | 'r' | 'just';
-  /** 목록 수준 0~8의 글머리·들여쓰기(pt)·크기(pt) — inheritance.ts LevelLook과 같은 모양. */
-  readonly levels?: ReadonlyArray<{
-    readonly marLPt: number;
-    readonly indentPt: number;
-    readonly bullet: string | null;
-    readonly sizePt: number;
-    /** 기본 글자 색(테마 색 해석 결과). 예전 시딩 데이터엔 없을 수 있다. */
-    readonly color?: string | null;
-  }>;
+  /** 목록 수준 0~8의 글머리·들여쓰기·크기·간격·글꼴(src/pptx/inheritance.ts가 레이아웃·마스터까지 풀어 둔 값). */
+  readonly levels?: ReadonlyArray<SlideLevelLook>;
+  /** 자동 맞춤(normAutofit) — 글자 배율·줄 간격 줄임(0~1). PowerPoint가 저장해 둔 값을 그대로 쓴다. */
+  readonly autofit?: { readonly fontScale: number; readonly lnSpcReduction: number };
+  /** 세로 쓰기(bodyPr vert) — vert·vert270·eaVert 등. 없으면 가로. */
+  readonly vert?: string;
+  /** 하이퍼링크 글자 색(테마 hlink, '#RRGGBB') */
+  readonly hlinkColor?: string;
+  /** 도형 회전(도, 시계 방향)·뒤집기 — 그룹 회전까지 합친 값. 글자도 같이 돈다. */
+  readonly rot?: number;
+  readonly flipH?: boolean;
+  readonly flipV?: boolean;
+  /** 원본 도형의 프리셋 모양(prstGeom) — 글자 칸(text rect)을 모양 안쪽으로 줄이는 데만 쓴다(저장과 무관, geom과 다름). */
+  readonly presetGeom?: string;
+}
+
+/** 줄 간격(pct 배수 또는 pts 고정)과 단락 앞·뒤 간격 — OOXML a:lnSpc/a:spcBef/a:spcAft. */
+export type SpacingValue = { readonly pct: number } | { readonly pts: number };
+export interface ParagraphSpacing {
+  readonly line?: SpacingValue;
+  readonly before?: SpacingValue;
+  readonly after?: SpacingValue;
+}
+
+/** 목록 수준 하나의 보이는 모양(lvlNpPr을 슬라이드 → 레이아웃 → 마스터 → txStyles 순으로 푼 결과). */
+export interface SlideLevelLook {
+  /** 왼쪽 여백(pt). */
+  readonly marLPt: number;
+  /** 첫 줄 들여쓰기(pt, 음수면 내어쓰기 — 글머리 기호가 그 자리에 온다). */
+  readonly indentPt: number;
+  /** 글머리 문자. null = 글머리 없음. */
+  readonly bullet: string | null;
+  readonly sizePt: number;
+  /** 기본 글자 색(테마 색 해석 결과). 예전 시딩 데이터엔 없을 수 있다. */
+  readonly color?: string | null;
+  readonly spacing?: ParagraphSpacing;
+  readonly bold?: boolean;
+  readonly italic?: boolean;
+  readonly caps?: boolean;
+  /** eaLnBrk="0" — 한글(동아시아) 단어를 중간에서 끊지 않는다(어절 단위 줄 바꿈) */
+  readonly keepWords?: boolean;
+  /** 기본 글꼴(라틴·동아시아) — 테마 글꼴(+mj-lt 등)은 실제 이름으로 푼 값 */
+  readonly fontLatin?: string;
+  readonly fontEa?: string;
+  /** 글머리 꾸밈 — 글꼴(buFont), 색(buClr), 크기(buSzPct 비율 또는 buSzPts pt) */
+  readonly bulletFont?: string;
+  readonly bulletColor?: string;
+  readonly bulletSize?: { readonly pct: number } | { readonly pts: number };
+  /** 자동 번호(buAutoNum) — 있으면 글머리 문자 대신 번호. scheme은 OOXML ST_TextAutonumberScheme. */
+  readonly autoNum?: { readonly scheme: string; readonly startAt: number };
 }
 
 export type NewShapeGeom = 'rect' | 'roundRect' | 'ellipse';
@@ -118,6 +161,14 @@ export interface SlideVisual {
   /** kind:'shape' — 둥근 모서리 반지름(EMU) [왼위, 오른위, 오른아래, 왼아래]. 둥근 사각형 계열만 갖는다.
    * 원본 조정값(<a:gd name="adj">)으로 계산한다 — adj 0이면 직각(예전엔 비율로 늘 둥글게 그렸다). */
   readonly corners?: readonly [number, number, number, number];
+  /** kind:'image'·'shape' — 회전(도, 시계 방향, 그룹 회전 포함)·뒤집기 */
+  readonly rot?: number;
+  readonly flipH?: boolean;
+  readonly flipV?: boolean;
+  /** kind:'image' — 그림 자르기(srcRect) 비율 [왼, 위, 오른, 아래](0~1) — 원본 그림에서 잘라 내고 남은 부분을 상자에 채운다 */
+  readonly crop?: readonly [number, number, number, number];
+  /** kind:'image'·'shape' — 바깥 그림자(직접 효과 또는 테마 effectRef). dx·dy·blur는 EMU, color는 rgba() */
+  readonly shadow?: { readonly color: string; readonly dx: number; readonly dy: number; readonly blur: number };
   /** kind:'table' — 행 단위 셀 텍스트(행렬, 서식 없이 텍스트만) */
   readonly rows?: readonly (readonly string[])[];
   /** kind:'placeholder' — 표시할 라벨(예: "차트", "스마트아트") */

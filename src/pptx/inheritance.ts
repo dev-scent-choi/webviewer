@@ -1,5 +1,6 @@
 import { XMLParser } from 'fast-xml-parser';
 import { loadThemeColors } from './theme.js';
+import { DEFAULT_INSETS_EMU as DEFAULT_INSETS, type ParagraphSpacing, type SlideLevelLook } from '../collab/pptxShared.js';
 
 /**
  * 슬라이드 도형의 "보이는 모양" 중 슬라이드 XML이 아니라 레이아웃·마스터에서 물려받는 값을 푼다 —
@@ -19,18 +20,8 @@ import { loadThemeColors } from './theme.js';
 export type Anchor = 't' | 'ctr' | 'b';
 export type Align = 'l' | 'ctr' | 'r' | 'just';
 
-/** 목록 수준(0~8) 하나의 보이는 모양 — 글머리 기호·들여쓰기·글자 크기. */
-export interface LevelLook {
-  /** 왼쪽 여백(pt). */
-  readonly marLPt: number;
-  /** 첫 줄 들여쓰기(pt, 음수면 내어쓰기 — 글머리 기호가 그 자리에 온다). */
-  readonly indentPt: number;
-  /** 글머리 문자. null = 글머리 없음. */
-  readonly bullet: string | null;
-  readonly sizePt: number;
-  /** 기본 글자 색('#RRGGBB', 테마 색 해석 결과). 없으면 검정. */
-  readonly color: string | null;
-}
+/** 목록 수준(0~8) 하나의 보이는 모양 — 편집 화면과 같은 타입(pptxShared). */
+export type LevelLook = SlideLevelLook;
 
 export interface InheritedShapeLook {
   readonly x: number | null;
@@ -48,6 +39,12 @@ export interface InheritedShapeLook {
   readonly defaultAlign: Align;
   /** 수준 0~8(lvl1pPr~lvl9pPr)의 글머리·들여쓰기·크기. */
   readonly levels: readonly LevelLook[];
+  /** 자동 맞춤(bodyPr normAutofit) — 글자 배율·줄 간격 줄임(0~1). 없으면 맞춤 없음. */
+  readonly autofit?: { readonly fontScale: number; readonly lnSpcReduction: number };
+  /** 세로 쓰기(bodyPr vert: vert·vert270·eaVert·wordArtVert·mongolianVert·wordArtVertRtl). 가로면 없음. */
+  readonly vert?: string;
+  /** 하이퍼링크 글자 색(테마 hlink) */
+  readonly hlinkColor?: string;
 }
 
 type XmlNode = Record<string, unknown>;
@@ -116,13 +113,14 @@ interface ShapeLook {
   readonly levels: readonly PartialLevel[];
   /** 도형 스타일 <p:style><a:fontRef>의 색 노드 — 기본 도형의 글자 색(대개 흰색 lt1)이 여기서 온다 */
   readonly fontRefColor?: XmlNode;
-  /** 개체 틀도 글상자(txBox="1")도 아닌 "그린 도형"인지 — 정렬이 아무 데도 없으면 글자를 가운데에 둔다 */
-  readonly drawnShape: boolean;
+  /** 도형 스타일 <p:style><a:fontRef idx="major|minor"> — 글꼴 지정이 없을 때 쓰는 테마 글꼴 */
+  readonly fontRefIdx?: string;
+  /** bodyPr 자동 맞춤: undefined = 언급 없음(상속), null = 맞춤 없음(noAutofit/spAutoFit) */
+  readonly autofit: { readonly fontScale: number; readonly lnSpcReduction: number } | null | undefined;
+  readonly vert: string | undefined;
 }
 
 const ANCHORS = new Set(['t', 'ctr', 'b']);
-/** PowerPoint 기본 글상자 안쪽 여백(EMU) — 좌우 0.1", 위아래 0.05" */
-export const DEFAULT_INSETS: readonly [number, number, number, number] = [91440, 45720, 91440, 45720];
 const ALIGNS = new Set(['l', 'ctr', 'r', 'just']);
 
 function num(value: unknown): number | null {
@@ -140,7 +138,33 @@ interface PartialLevel {
   readonly bullet?: string | null;
   /** <a:defRPr><a:solidFill>…</a:solidFill> 원본 노드 — 테마를 알아야 풀리므로 노드째 들고 간다 */
   readonly colorFill?: Record<string, unknown>;
+  /** 자동 번호 — bullet과 같은 "글머리 종류" 칸이라 bullet이 적힌 수준에선 함께 정해진다 */
+  readonly autoNum?: { readonly scheme: string; readonly startAt: number } | null;
+  readonly line?: { readonly pct: number } | { readonly pts: number };
+  readonly before?: { readonly pct: number } | { readonly pts: number };
+  readonly after?: { readonly pct: number } | { readonly pts: number };
+  readonly bold?: boolean;
+  readonly italic?: boolean;
+  readonly caps?: boolean;
+  readonly eaLnBrk?: boolean;
+  /** 원본 글꼴 이름(테마 참조 +mj-lt 그대로) — 테마를 알아야 풀린다 */
+  readonly latin?: string;
+  readonly ea?: string;
+  readonly buFont?: string;
+  readonly buClr?: Record<string, unknown>;
+  readonly buSize?: { readonly pct: number } | { readonly pts: number };
 }
+
+/** <a:lnSpc>/<a:spcBef>/<a:spcAft> 하나 — spcPct(1/1000%) → pct 비율, spcPts(1/100pt) → pts */
+function spacingOf(node: unknown): { pct: number } | { pts: number } | undefined {
+  if (!node || typeof node !== 'object') return undefined;
+  const pct = num(((node as XmlNode)['a:spcPct'] as XmlNode | undefined)?.['@_val']);
+  if (pct !== null) return { pct: pct / 100000 };
+  const pts = num(((node as XmlNode)['a:spcPts'] as XmlNode | undefined)?.['@_val']);
+  return pts !== null ? { pts: pts / 100 } : undefined;
+}
+
+const onOff = (v: unknown): boolean | undefined => (v === undefined ? undefined : v === '1' || v === 'true');
 
 const EMU_PER_PT = 12700;
 
@@ -153,9 +177,45 @@ export function partialLevelFrom(node: XmlNode | undefined): PartialLevel {
   const marL = num(node['@_marL']);
   const indent = num(node['@_indent']);
   const buChar = (node['a:buChar'] as XmlNode | undefined)?.['@_char'];
+  const autoNumNode = node['a:buAutoNum'] as XmlNode | undefined;
+  // 그림 글머리(buBlip)는 그림 대신 •로 보인다(그림 파일을 따라가지 않는다 — FIX-PPTX.md 참고)
   const bullet =
-    node['a:buNone'] !== undefined ? null : buChar !== undefined ? String(buChar) : node['a:buAutoNum'] !== undefined ? '•' : undefined;
+    node['a:buNone'] !== undefined ? null : buChar !== undefined ? String(buChar) : autoNumNode !== undefined || node['a:buBlip'] !== undefined ? '•' : undefined;
+  const autoNum =
+    autoNumNode !== undefined
+      ? { scheme: String((autoNumNode as XmlNode)['@_type'] ?? 'arabicPeriod'), startAt: num((autoNumNode as XmlNode)['@_startAt']) ?? 1 }
+      : bullet !== undefined
+        ? null
+        : undefined;
+  const defRPr = typeof node['a:defRPr'] === 'object' ? (node['a:defRPr'] as XmlNode) : undefined;
+  const face = (tag: string) => {
+    const v = (defRPr?.[tag] as XmlNode | undefined)?.['@_typeface'];
+    return typeof v === 'string' && v ? v : undefined;
+  };
+  const buSzPct = num((node['a:buSzPct'] as XmlNode | undefined)?.['@_val']);
+  const buSzPts = num((node['a:buSzPts'] as XmlNode | undefined)?.['@_val']);
+  const buClr = node['a:buClr'];
+  const buFont = (node['a:buFont'] as XmlNode | undefined)?.['@_typeface'];
+  const line = spacingOf(node['a:lnSpc']);
+  const before = spacingOf(node['a:spcBef']);
+  const after = spacingOf(node['a:spcAft']);
+  const bold = onOff(defRPr?.['@_b']);
+  const italic = onOff(defRPr?.['@_i']);
+  const cap = defRPr?.['@_cap'];
   return {
+    ...(autoNum !== undefined ? { autoNum } : {}),
+    ...(line ? { line } : {}),
+    ...(before ? { before } : {}),
+    ...(after ? { after } : {}),
+    ...(bold !== undefined ? { bold } : {}),
+    ...(italic !== undefined ? { italic } : {}),
+    ...(cap !== undefined ? { caps: cap === 'all' } : {}),
+    ...(node['@_eaLnBrk'] !== undefined ? { eaLnBrk: onOff(node['@_eaLnBrk']) } : {}),
+    ...(face('a:latin') ? { latin: face('a:latin') } : {}),
+    ...(face('a:ea') ? { ea: face('a:ea') } : {}),
+    ...(typeof buFont === 'string' && buFont ? { buFont } : {}),
+    ...(typeof buClr === 'object' && buClr ? { buClr: buClr as XmlNode } : {}),
+    ...(buSzPct !== null ? { buSize: { pct: buSzPct / 100000 } } : buSzPts !== null ? { buSize: { pts: buSzPts / 100 } } : {}),
     ...(sz !== null ? { sizePt: sz / 100 } : {}),
     ...(algn && ALIGNS.has(algn) ? { align: algn as Align } : {}),
     ...(marL !== null ? { marLPt: marL / EMU_PER_PT } : {}),
@@ -202,13 +262,25 @@ function shapeLooks(root: XmlNode | null, rootTag: string): ShapeLook[] {
     const levels = levelsOf(txBody?.['a:lstStyle'] as XmlNode | undefined);
     const { sizePt, align } = levels[0];
     const inset = (key: string) => (typeof bodyPr === 'object' ? num(bodyPr[key]) ?? undefined : undefined);
+    const fontRef = (sp['p:style'] as XmlNode | undefined)?.['a:fontRef'] as XmlNode | undefined;
+    const norm = typeof bodyPr === 'object' ? bodyPr['a:normAutofit'] : undefined;
+    const pct = (v: unknown, fallback: number) => (num(v) ?? fallback) / 100000;
+    const autofit =
+      norm !== undefined
+        ? {
+            fontScale: pct(typeof norm === 'object' ? (norm as XmlNode)['@_fontScale'] : undefined, 100000),
+            lnSpcReduction: pct(typeof norm === 'object' ? (norm as XmlNode)['@_lnSpcReduction'] : undefined, 0),
+          }
+        : typeof bodyPr === 'object' && (bodyPr['a:noAutofit'] !== undefined || bodyPr['a:spAutoFit'] !== undefined)
+          ? null
+          : undefined;
+    const vertRaw = typeof bodyPr === 'object' ? (bodyPr['@_vert'] as string | undefined) : undefined;
     return {
       levels,
-      fontRefColor: (sp['p:style'] as XmlNode | undefined)?.['a:fontRef'] as XmlNode | undefined,
-      drawnShape:
-        ph === null &&
-        ((nvSpPr?.['p:cNvSpPr'] as XmlNode | undefined)?.['@_txBox'] ?? '0') !== '1' &&
-        String((nvSpPr?.['p:cNvSpPr'] as XmlNode | undefined)?.['@_txBox'] ?? '') !== 'true',
+      fontRefColor: fontRef,
+      fontRefIdx: typeof fontRef?.['@_idx'] === 'string' ? (fontRef['@_idx'] as string) : undefined,
+      autofit,
+      vert: vertRaw,
       ph,
       id: String((nvSpPr?.['p:cNvPr'] as XmlNode | undefined)?.['@_id'] ?? ''),
       x: num(off?.['@_x']),
@@ -289,7 +361,11 @@ export function resolveSlideShapeLooks(
     const master = shape.ph ? matchMaster(shape.ph, masterShapes) : undefined;
     const cls = shape.ph ? phClass(shape.ph.type) : 'other';
     const chain = [shape, layout, master];
-    const pick = <K extends 'anchor' | 'wrap' | 'sizePt' | 'align' | 'lIns' | 'tIns' | 'rIns' | 'bIns'>(key: K) => chain.find((s) => s?.[key] !== undefined)?.[key];
+    const pick = <K extends 'anchor' | 'wrap' | 'sizePt' | 'align' | 'lIns' | 'tIns' | 'rIns' | 'bIns' | 'autofit' | 'vert'>(key: K) =>
+      chain.find((s) => s?.[key] !== undefined)?.[key];
+    const autofit = pick('autofit') as ShapeLook['autofit'];
+    const vert = pick('vert') as string | undefined;
+    const hlinkColor = theme.resolve({ 'a:schemeClr': { '@_val': 'hlink' } });
     // 위치는 네 값을 한 묶음으로 물려받는다(슬라이드가 위치만 바꾸고 크기는 안 쓰는 경우는 없다).
     const positioned = chain.find((s) => s && s.x !== null && s.y !== null && s.w !== null && s.h !== null);
     result.set(shape.id, {
@@ -308,23 +384,49 @@ export function resolveSlideShapeLooks(
       ],
       defaultSizePt:
         (pick('sizePt') as number | undefined) ?? classStyle[cls].sizePt ?? defaultText.sizePt ?? 18,
-      // 그린 도형(사각형·화살표 등, 글상자 아님)은 도형·개체 틀 어디에도 정렬이 없으면 가운데 —
-      // 마스터 otherStyle의 algn="l"보다 우선한다(PowerPoint·LibreOffice 모두 도형 글자를 가운데에
-      // 그린다. 실제 Office 템플릿 파일로 확인: 왼쪽 정렬로 그리면 별 모양 안 흰 글자가 별 바깥의
-      // 흰 바탕에 놓여 아예 안 보였다).
-      defaultAlign:
-        (pick('align') as Align | undefined) ??
-        (shape.drawnShape ? 'ctr' : undefined) ??
-        classStyle[cls].align ??
-        defaultText.align ??
-        'l',
+      // 정렬이 도형·개체 틀 어디에도 없으면 마스터 txStyles(그린 도형·글상자는 otherStyle, 대개 왼쪽) —
+      // PowerPoint가 도형을 새로 그릴 때는 algn="ctr"을 직접 적어 넣으므로, 적힌 것이 없으면 왼쪽이 맞다
+      // (MS Office 정답 PDF p07: 정렬 없는 도형 글자 전부 왼쪽). 별·타원처럼 글자 칸이 도형보다 좁은 모양은
+      // 편집기가 프리셋의 글자 칸(text rect)으로 여백을 줘서 글자가 도형 안에 놓인다.
+      defaultAlign: (pick('align') as Align | undefined) ?? classStyle[cls].align ?? defaultText.align ?? 'l',
+      ...(autofit && (autofit.fontScale < 1 || autofit.lnSpcReduction > 0) ? { autofit } : {}),
+      ...(vert && vert !== 'horz' ? { vert } : {}),
+      ...(hlinkColor ? { hlinkColor } : {}),
       levels: Array.from({ length: 9 }, (_, i): LevelLook => {
         const sources = [shape.levels[i], layout?.levels[i], master?.levels[i], classLevels[cls][i], defaultLevels[i]];
         const first = <K extends keyof PartialLevel>(k: K) => sources.find((s) => s && s[k] !== undefined)?.[k];
+        // 글머리 "종류"(문자·없음·자동 번호)는 처음 언급한 수준에서 한꺼번에 정해진다
+        const bulletSource = sources.find((s) => s && (s.bullet !== undefined || s.autoNum !== undefined));
+        const autoNum = bulletSource?.autoNum ?? undefined;
+        // 테마 글꼴: 수준 defRPr의 글꼴 → 도형 스타일 fontRef(major/minor) — 둘 다 없으면 편집기 기본(맑은 고딕)
+        const refSlot = shape.fontRefIdx === 'major' ? 'mj' : shape.fontRefIdx === 'minor' ? 'mn' : undefined;
+        const fontLatin = theme.font((first('latin') as string | undefined) ?? (refSlot ? `+${refSlot}-lt` : undefined));
+        const fontEa = theme.font((first('ea') as string | undefined) ?? (refSlot ? `+${refSlot}-ea` : undefined));
+        const line = first('line') as ParagraphSpacing['line'];
+        const before = first('before') as ParagraphSpacing['before'];
+        const after = first('after') as ParagraphSpacing['after'];
+        const bold = first('bold') as boolean | undefined;
+        const italic = first('italic') as boolean | undefined;
+        const caps = first('caps') as boolean | undefined;
+        const keepWords = first('eaLnBrk') === false;
+        const bulletFont = first('buFont') as string | undefined;
+        const bulletColor = theme.resolve(first('buClr') as XmlNode | undefined);
+        const bulletSize = first('buSize') as LevelLook['bulletSize'];
         return {
           marLPt: (first('marLPt') as number | undefined) ?? 0,
           indentPt: (first('indentPt') as number | undefined) ?? 0,
-          bullet: (first('bullet') as string | null | undefined) ?? null,
+          bullet: bulletSource?.bullet ?? null,
+          ...(autoNum ? { autoNum } : {}),
+          ...(line || before || after ? { spacing: { ...(line ? { line } : {}), ...(before ? { before } : {}), ...(after ? { after } : {}) } } : {}),
+          ...(bold ? { bold } : {}),
+          ...(italic ? { italic } : {}),
+          ...(caps ? { caps } : {}),
+          ...(keepWords ? { keepWords } : {}),
+          ...(fontLatin ? { fontLatin } : {}),
+          ...(fontEa ? { fontEa } : {}),
+          ...(bulletFont ? { bulletFont: theme.font(bulletFont) ?? bulletFont } : {}),
+          ...(bulletColor ? { bulletColor } : {}),
+          ...(bulletSize ? { bulletSize } : {}),
           sizePt: (first('sizePt') as number | undefined) ?? 18,
           // 색 우선순위(PowerPoint와 같음): 도형·레이아웃·마스터 개체 틀의 목록 스타일 → 도형 스타일의
           // 글꼴 색(fontRef, 기본 도형의 흰 글자가 여기서 온다) → 마스터 txStyles/기본 텍스트 스타일.

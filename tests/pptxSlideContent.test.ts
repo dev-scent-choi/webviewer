@@ -64,7 +64,7 @@ describe('parseSlideShapes', () => {
     const shapes = parseSlideShapes(xml);
     const para = shapes[0].doc.child(0);
     expect(para.child(0).text).toBe('Bold');
-    expect(para.child(0).marks.map((m) => m.type.name)).toEqual(['strong']);
+    expect(para.child(0).marks.map((m) => m.type.name)).toEqual(['strong', 'runProps']); // runProps = 원본 rPr 보관(저장용)
     expect(para.child(1).text).toBe(' plain');
     expect(para.child(1).marks).toHaveLength(0);
   });
@@ -247,7 +247,7 @@ describe('serializeTxBodyXml + spliceShapeTxBody (export)', () => {
     const shapeA = reparsed.find((s) => s.shapeId === '2')!;
     const shapeB = reparsed.find((s) => s.shapeId === '3')!;
     expect(shapeA.doc.child(0).child(0).text).toBe('Edited ');
-    expect(shapeA.doc.child(0).child(0).marks.map((m) => m.type.name)).toEqual(['strong']);
+    expect(shapeA.doc.child(0).child(0).marks.map((m) => m.type.name)).toEqual(['strong', 'runProps']); // runProps = 원본 rPr 보관(저장용)
     expect(shapeB.doc.textContent).toBe('Untouched'); // 다른 도형은 안 건드림
   });
 

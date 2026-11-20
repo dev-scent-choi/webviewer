@@ -17,8 +17,8 @@ import {
 import type { ParsedShape } from './slideContent.js';
 import { pptxTextSchema } from './textSchema.js';
 import type { NewShapeGeom, SlideEntry, SlideShapeMeta } from '../collab/pptxShared.js';
-import { NEW_SHAPE_GEOMS } from '../collab/pptxShared.js';
-import { DEFAULT_INSETS, resolveSlideShapeLooks, type InheritedShapeLook } from './inheritance.js';
+import { DEFAULT_INSETS_EMU, NEW_SHAPE_GEOMS } from '../collab/pptxShared.js';
+import { resolveSlideShapeLooks, type InheritedShapeLook } from './inheritance.js';
 import { loadThemeColors, type ThemeColors } from './theme.js';
 
 const SLIDE_TARGET = /Target="(?:[^"]*\/)?(slide\d+\.xml)"/;
@@ -274,12 +274,19 @@ export function seedSlideContentFromXml(
             ? {
                 anchor: look.anchor,
                 ...(look.wrapNone ? { wrapNone: true } : {}),
-                ...(look.insets.some((v, i) => v !== DEFAULT_INSETS[i]) ? { insets: look.insets } : {}),
+                ...(look.insets.some((v, i) => v !== DEFAULT_INSETS_EMU[i]) ? { insets: look.insets } : {}),
                 defaultSizePt: look.defaultSizePt,
                 defaultAlign: look.defaultAlign,
                 levels: look.levels,
+                ...(look.autofit ? { autofit: look.autofit } : {}),
+                ...(look.vert ? { vert: look.vert } : {}),
+                ...(look.hlinkColor ? { hlinkColor: look.hlinkColor } : {}),
               }
             : {}),
+          ...(shape.rot ? { rot: shape.rot } : {}),
+          ...(shape.flipH ? { flipH: true } : {}),
+          ...(shape.flipV ? { flipV: true } : {}),
+          ...(shape.presetGeom ? { presetGeom: shape.presetGeom } : {}),
         };
         shapeMap.set('meta', meta);
         const fragment = new Y.XmlFragment();

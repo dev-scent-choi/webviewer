@@ -1,5 +1,6 @@
 import { Schema, type MarkSpec, type NodeSpec } from 'prosemirror-model';
 import { safeCssColor } from '../docx/schema.js';
+import { gapCss, lineHeightCss, pPrLook } from './paragraphLook.js';
 
 /**
  * pptx 텍스트박스 전용 최소 ProseMirror 스키마. docx의 docxSchema(src/docx/schema.ts)와
@@ -7,6 +8,9 @@ import { safeCssColor } from '../docx/schema.js';
  * 재사용하기 위해서다. 다만 텍스트박스는 표·목록·제목이 필요 없어 노드는 doc/paragraph/text만
  * 남긴다(docxSchema 그대로 재사용하면 안 쓸 커맨드·키맵까지 끌고 들어온다).
  */
+/** 글자 크기 1pt의 화면 길이 — 슬라이드 축척(--slide-pt)에 자동 맞춤 글자 배율까지 곱한 값(--slide-fpt, 글상자가 지정). */
+export const FONT_PT = 'var(--slide-fpt, var(--slide-pt, 1pt))';
+
 const nodes: Record<string, NodeSpec> = {
   doc: { content: 'paragraph+' },
   paragraph: {
@@ -19,7 +23,8 @@ const nodes: Record<string, NodeSpec> = {
      * 예전엔 글자를 한 자만 고쳐도 저장에서 전부 사라졌다). lvl·bu는 화면 표시용으로 pPr에서 뽑아 둔
      * 값(목록 수준 0~8, 글머리 재정의: 문자 / 'none' / null=상속).
      */
-    attrs: { align: { default: null }, pPr: { default: null }, lvl: { default: 0 }, bu: { default: null } },
+    /** endRPr: 원본 <a:endParaRPr …/>(문단 끝 글자 속성 — 빈 문단의 높이를 정한다) 문자열 그대로, 저장 때 되돌린다. */
+    attrs: { align: { default: null }, pPr: { default: null }, lvl: { default: 0 }, bu: { default: null }, endRPr: { default: null } },
     content: 'inline*',
     group: 'block',
     parseDOM: [
@@ -51,13 +56,41 @@ const nodes: Record<string, NodeSpec> = {
         if (typeof size === 'number' && size > 0) maxSize = Math.max(maxSize, size);
         else allSized = false;
       });
-      if (allSized && maxSize > 0) styles.push(`font-size: calc(${maxSize} * var(--slide-pt, 1pt))`);
+      if (allSized && maxSize > 0) styles.push(`font-size: calc(${maxSize} * ${FONT_PT})`);
+      // 문단에 직접 적힌 줄·단락 간격과 글머리 꾸밈(<a:pPr>) — 상속값(수준별 --lN-*)보다 우선(CSS 변수로 넘긴다)
+      const look = pPrLook(node.attrs.pPr as string | null);
+      if (look.marLPt !== undefined) styles.push(`--marl: ${look.marLPt}`);
+      if (look.indentPt !== undefined) styles.push(`--ind: ${look.indentPt}`);
+      if (look.keepWords !== undefined) styles.push(`word-break: ${look.keepWords ? 'keep-all' : 'normal'}`);
+      if (look.line) styles.push(`--p-lh: ${lineHeightCss(look.line)}`);
+      if (look.before) styles.push(`--p-sb: ${gapCss(look.before)}`);
+      if (look.after) styles.push(`--p-sa: ${gapCss(look.after)}`);
+      if (look.bulletColor) styles.push(`--p-bu-color: ${look.bulletColor}`);
+      if (look.bulletSizePct) styles.push(`--p-bu-size: ${look.bulletSizePct}em`);
+      if (look.bulletFont) styles.push(`--p-bu-ff: '${look.bulletFont.replace(/["';<>\\]/g, '')}'`);
       if (styles.length > 0) attrs.style = styles.join('; ');
       if (node.attrs.bu !== null && node.attrs.bu !== undefined) attrs['data-bu'] = String(node.attrs.bu);
       return ['p', attrs, 0];
     },
   },
   text: { group: 'inline' },
+  /** 문단 안 줄 바꿈(<a:br>, PowerPoint Shift+Enter) — rPr: 원본 <a:rPr>(있으면) 문자열, 저장 때 되돌린다. */
+  br: {
+    inline: true,
+    group: 'inline',
+    selectable: false,
+    attrs: { rPr: { default: null } },
+    parseDOM: [{ tag: 'br' }],
+    toDOM: () => ['br'],
+  },
+  /** 필드(<a:fld> — 쪽 번호·날짜 등): 원본 XML(raw)을 통째로 보관해 저장 때 그대로 되돌리고, 화면엔 저장된 값(text)을 보인다. */
+  field: {
+    inline: true,
+    group: 'inline',
+    atom: true,
+    attrs: { raw: {}, text: { default: '' } },
+    toDOM: (node) => ['span', { class: 'slide-field', contenteditable: 'false' }, String(node.attrs.text ?? '')],
+  },
 };
 
 const marks: Record<string, MarkSpec> = {
@@ -98,7 +131,14 @@ const marks: Record<string, MarkSpec> = {
     // 캔버스는 실제 슬라이드를 축소/확대해 그리므로 글자도 같은 비율이어야 한다 — CSS의 pt(=1.333px)를
     // 그대로 쓰면 캔버스 축척과 어긋나 글자만 33% 크게 보여 PowerPoint에선 한 줄인 제목이 줄바꿈됐다.
     // --slide-pt(캔버스 1pt의 실제 px)는 편집기가 슬라이드 크기에 맞춰 .slide-canvas에 지정한다.
-    toDOM: (mark) => ['span', { style: `font-size: calc(${Number(mark.attrs.size) || 18} * var(--slide-pt, 1pt))` }, 0],
+    toDOM: (mark) => ['span', { style: `font-size: calc(${Number(mark.attrs.size) || 18} * ${FONT_PT})` }, 0],
+  },
+  /** 원본 <a:rPr> 전체(문자열) — 이 편집기가 모델링하지 않는 글자 속성(lang, 자간 spc, 하이퍼링크 hlinkClick, 강조색,
+   * 테마 글꼴 참조 등)을 저장 때 그대로 되돌리기 위해 보관한다(slideContent.ts rPrXmlFor가 위 마크들과 합친다).
+   * 화면엔 하이퍼링크만 보인다(테마 하이퍼링크 색 + 밑줄). */
+  runProps: {
+    attrs: { raw: {} },
+    toDOM: (mark) => (/<a:hlinkClick\b/.test(String(mark.attrs.raw)) ? ['span', { class: 'slide-hlink' }, 0] : ['span', 0]),
   },
   fontFamily: {
     /** 글꼴 이름 — pptx의 <a:rPr><a:latin typeface=".."/>(한글 글리프용 <a:ea>도 같이 내보낸다,

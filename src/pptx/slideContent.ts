@@ -11,6 +11,12 @@ export interface ParsedShape {
   readonly y: number | null;
   readonly w: number | null;
   readonly h: number | null;
+  /** 회전(도)·뒤집기 — 그룹 회전까지 합친 값, 없으면 생략 */
+  readonly rot?: number;
+  readonly flipH?: boolean;
+  readonly flipV?: boolean;
+  /** 프리셋 모양(사각형 제외) — 편집기가 글자 칸을 모양 안쪽으로 줄이는 데 쓴다 */
+  readonly presetGeom?: string;
   readonly doc: PMNode;
 }
 
@@ -34,13 +40,15 @@ const parser = new XMLParser({
   parseTagValue: false,
   // <a:r>가 하나뿐이면 배열이 아니라 객체로 파싱되는 fast-xml-parser의 기본 동작을 막는다 —
   // 문단 하나에 런이 하나뿐인 경우가 흔해서, 이 옵션 없이는 매번 "배열인지 객체인지" 분기해야 한다.
-  isArray: (name) => ['a:p', 'a:r', 'p:sp'].includes(name),
+  isArray: (name) => ['a:p', 'a:r', 'a:br', 'a:fld', 'p:sp'].includes(name),
 });
 
 type XmlNode = Record<string, unknown>;
 
 /** 원본 색 노드(<a:solidFill>의 내용)를 XML 문자열로 되돌린다 — 테마 색을 저장에서 그대로 유지하기 위함 */
 const colorBuilder = new XMLBuilder({ ignoreAttributes: false, attributeNamePrefix: '@_', suppressEmptyNode: true });
+/** 원본 조각(<a:rPr>·<a:fld>·<a:endParaRPr>)을 문자열로 되돌리는 빌더 — colorBuilder와 같은 설정 */
+const xmlBuilder = colorBuilder;
 
 function asArray<T>(value: T | T[] | undefined): T[] {
   if (value === undefined) return [];
@@ -48,8 +56,8 @@ function asArray<T>(value: T | T[] | undefined): T[] {
 }
 
 /** <a:rPr>에서 마크(굵게/기울임/밑줄/색/크기)를 뽑아 그 런의 텍스트에 적용한다. */
-function marksFromRPr(rPr: XmlNode | undefined, theme?: ThemeColors): ReturnType<typeof schema.marks.strong.create>[] {
-  if (!rPr) return [];
+function marksFromRPr(rPr: XmlNode | undefined, theme?: ThemeColors, withRaw = true): ReturnType<typeof schema.marks.strong.create>[] {
+  if (!rPr || typeof rPr !== 'object') return [];
   const marks = [];
   if (rPr['@_b'] === '1') marks.push(schema.marks.strong.create());
   if (rPr['@_i'] === '1') marks.push(schema.marks.em.create());
@@ -73,21 +81,38 @@ function marksFromRPr(rPr: XmlNode | undefined, theme?: ThemeColors): ReturnType
     ((rPr['a:ea'] as XmlNode | undefined)?.['@_typeface'] as string | undefined) ??
     ((rPr['a:latin'] as XmlNode | undefined)?.['@_typeface'] as string | undefined);
   if (typeface && !typeface.startsWith('+')) marks.push(schema.marks.fontFamily.create({ family: typeface }));
+  // 모델링하지 않는 글자 속성(lang·자간·하이퍼링크·테마 글꼴 참조 등)까지 저장에 남기도록 원본 rPr 전체를 보관한다
+  if (withRaw) marks.push(schema.marks.runProps.create({ raw: xmlBuilder.build({ 'a:rPr': rPr }) as string }));
   return marks;
 }
 
 const ALIGN_VALUES = new Set(['l', 'ctr', 'r', 'just']);
 
+/** 문단 자식(<a:r>·<a:br>·<a:fld>)을 원문 순서대로 — 파서는 이름별로 묶어 순서를 잃으므로 parseSlideShapes가
+ * 미리 붙여 둔 순번 속성(ORDER_ATTR)으로 다시 줄 세운다. */
+const ORDER_ATTR = '@__o';
+function withoutOrder(node: XmlNode): XmlNode {
+  const { [ORDER_ATTR]: _o, ...rest } = node;
+  return rest;
+}
+
 function paragraphFromXml(pNode: XmlNode, theme?: ThemeColors): PMNode {
-  const runs = asArray<XmlNode>(pNode['a:r'] as XmlNode | XmlNode[] | undefined);
-  const inline = runs
-    .map((run) => {
-      const text = (run['a:t'] as string | number | undefined) ?? '';
-      const textStr = String(text);
+  const items = (['a:r', 'a:br', 'a:fld'] as const)
+    .flatMap((tag) => asArray<XmlNode>(pNode[tag] as XmlNode | XmlNode[] | undefined).map((node) => ({ tag, node: typeof node === 'object' ? node : {} })))
+    .sort((a, b) => Number(a.node[ORDER_ATTR] ?? 0) - Number(b.node[ORDER_ATTR] ?? 0));
+  const inline = items
+    .map(({ tag, node }) => {
+      if (tag === 'a:br') {
+        const rPr = node['a:rPr'];
+        return schema.nodes.br.create({ rPr: rPr && typeof rPr === 'object' ? (xmlBuilder.build({ 'a:rPr': rPr }) as string) : null });
+      }
+      const textStr = String((node['a:t'] as string | number | undefined) ?? '');
+      if (tag === 'a:fld') return schema.nodes.field.create({ raw: xmlBuilder.build({ 'a:fld': withoutOrder(node) }) as string, text: textStr });
       if (textStr === '') return null;
-      return schema.text(textStr, marksFromRPr(run['a:rPr'] as XmlNode | undefined, theme));
+      return schema.text(textStr, marksFromRPr(node['a:rPr'] as XmlNode | undefined, theme));
     })
     .filter((n): n is NonNullable<typeof n> => n !== null);
+  const endRPr = pNode['a:endParaRPr'];
   const pPrNode = pNode['a:pPr'] as XmlNode | string | undefined;
   const pPr = typeof pPrNode === 'object' ? pPrNode : undefined; // <a:pPr/>(속성 없음)는 파서가 ''를 준다
   const algn = pPr?.['@_algn'] as string | undefined;
@@ -100,6 +125,7 @@ function paragraphFromXml(pNode: XmlNode, theme?: ThemeColors): PMNode {
       pPr: pPr ? pPrXmlWithoutAlgn(pPr) : null,
       lvl: Number.isInteger(lvl) && lvl >= 0 && lvl <= 8 ? lvl : 0,
       bu: bullet === null ? 'none' : (bullet ?? null),
+      endRPr: endRPr !== undefined ? (xmlBuilder.build({ 'a:endParaRPr': typeof endRPr === 'object' ? endRPr : {} }) as string) : null,
     },
     inline,
   );
@@ -131,9 +157,8 @@ function emuAttr(xfrmChild: XmlNode | undefined, attr: '@_x' | '@_y' | '@_cx' | 
 /** <p:grpSp>(그룹 도형) 하나의 좌표 변환 — 그룹 안 자식 도형의 <a:xfrm>은 그룹의 "자식 좌표계"
  * (<a:chOff>/<a:chExt>)로 표현되는데, 이는 그룹 자신의 겉보기 위치/크기(<a:off>/<a:ext>, 부모
  * 좌표계 기준)와 다를 수 있다(PowerPoint가 그룹을 늘이거나 줄이면 어긋난다) — 그래서 자식 좌표를
- * 그대로 쓰면 그룹을 옮기거나 늘였을 때 안의 도형들이 엉뚱한 자리에 보인다. 회전(rot=)은 이
- * 파일이 최상위 도형에서도 다루지 않는 것과 같은 이유로 무시한다(완전히 틀린 자리보다 약간 어긋난
- * 자리가 낫다는 이 파일의 기존 단순화 방침과 일관됨). */
+ * 그대로 쓰면 그룹을 옮기거나 늘였을 때 안의 도형들이 엉뚱한 자리에 보인다. 그룹의 회전·뒤집기도
+ * 자식에게 옮긴다(자식 중심을 그룹 중심 기준으로 돌리고, 자식 회전각에 더한다 — PowerPoint와 같다). */
 interface GroupTransform {
   readonly scaleX: number;
   readonly scaleY: number;
@@ -141,7 +166,25 @@ interface GroupTransform {
   readonly chOffY: number;
   readonly offX: number;
   readonly offY: number;
+  readonly extCx: number;
+  readonly extCy: number;
+  readonly rot: number;
+  readonly flipH: boolean;
+  readonly flipV: boolean;
 }
+
+/** 슬라이드 위 개체 하나의 자리 — 회전(도, 시계 방향)·뒤집기 포함. 위치를 모르면 x~h가 null. */
+interface Placement {
+  readonly x: number | null;
+  readonly y: number | null;
+  readonly w: number | null;
+  readonly h: number | null;
+  readonly rot: number;
+  readonly flipH: boolean;
+  readonly flipV: boolean;
+}
+
+const isOn = (v: unknown) => v === '1' || v === 'true';
 
 function groupTransformFromGrpSpPr(grpSpPr: XmlNode | undefined): GroupTransform | null {
   const xfrm = grpSpPr?.['a:xfrm'] as XmlNode | undefined;
@@ -161,34 +204,58 @@ function groupTransformFromGrpSpPr(grpSpPr: XmlNode | undefined): GroupTransform
     chOffY: emuAttr(chOff, '@_y') ?? 0,
     offX: emuAttr(off, '@_x') ?? 0,
     offY: emuAttr(off, '@_y') ?? 0,
+    extCx,
+    extCy,
+    rot: Number(xfrm['@_rot'] ?? 0) / 60000 || 0,
+    flipH: isOn(xfrm['@_flipH']),
+    flipV: isOn(xfrm['@_flipV']),
   };
 }
 
-/** 중첩된 그룹을 거슬러 올라가며(가장 안쪽 그룹부터 바깥쪽 순서로) 로컬 좌표를 슬라이드 절대
- * 좌표로 누적 변환한다. transforms는 바깥쪽부터 안쪽 순서로 쌓이므로(재귀가 바깥 그룹부터 먼저
- * 방문하기 때문) 뒤에서부터(안쪽부터) 적용해야 한다. 네 값 중 하나라도 원본에 없으면(null)
- * 변환하지 않고 그대로 null을 돌려준다 — 이 파일 전체의 "모르면 null, 억지로 계산하지 않는다"
- * 원칙과 일관된다. */
-function applyGroupTransforms(
-  transforms: readonly GroupTransform[],
-  x: number | null,
-  y: number | null,
-  w: number | null,
-  h: number | null,
-): { x: number | null; y: number | null; w: number | null; h: number | null } {
-  if (x === null || y === null || w === null || h === null) return { x: null, y: null, w: null, h: null };
-  let px = x;
-  let py = y;
+/** 개체의 <a:xfrm>(또는 graphicFrame의 <p:xfrm>)을 중첩 그룹을 거슬러 올라가며(가장 안쪽 그룹부터) 슬라이드
+ * 절대 자리로 바꾼다. transforms는 바깥쪽부터 안쪽 순서로 쌓인다. 네 값 중 하나라도 원본에 없으면(null)
+ * 위치는 null로 둔다 — 이 파일 전체의 "모르면 null, 억지로 계산하지 않는다" 원칙. */
+function placeXfrm(transforms: readonly GroupTransform[], xfrm: XmlNode | undefined): Placement {
+  const off = xfrm?.['a:off'] as XmlNode | undefined;
+  const ext = xfrm?.['a:ext'] as XmlNode | undefined;
+  const [x, y, w, h] = [emuAttr(off, '@_x'), emuAttr(off, '@_y'), emuAttr(ext, '@_cx'), emuAttr(ext, '@_cy')];
+  let rot = Number(xfrm?.['@_rot'] ?? 0) / 60000 || 0;
+  let flipH = isOn(xfrm?.['@_flipH']);
+  let flipV = isOn(xfrm?.['@_flipV']);
+  if (x === null || y === null || w === null || h === null) return { x: null, y: null, w: null, h: null, rot, flipH, flipV };
+  let cx = x + w / 2;
+  let cy = y + h / 2;
   let pw = w;
   let ph = h;
   for (let i = transforms.length - 1; i >= 0; i--) {
     const t = transforms[i];
-    px = (px - t.chOffX) * t.scaleX + t.offX;
-    py = (py - t.chOffY) * t.scaleY + t.offY;
-    pw = pw * t.scaleX;
-    ph = ph * t.scaleY;
+    cx = (cx - t.chOffX) * t.scaleX + t.offX;
+    cy = (cy - t.chOffY) * t.scaleY + t.offY;
+    pw *= t.scaleX;
+    ph *= t.scaleY;
+    const gcx = t.offX + t.extCx / 2;
+    const gcy = t.offY + t.extCy / 2;
+    if (t.flipH) cx = 2 * gcx - cx;
+    if (t.flipV) cy = 2 * gcy - cy;
+    if (t.flipH !== t.flipV) rot = -rot; // 한 번 뒤집힌 거울 안에서는 회전 방향이 반대로 보인다
+    if (t.rot) {
+      const rad = (t.rot * Math.PI) / 180;
+      const dx = cx - gcx;
+      const dy = cy - gcy;
+      cx = gcx + dx * Math.cos(rad) - dy * Math.sin(rad);
+      cy = gcy + dx * Math.sin(rad) + dy * Math.cos(rad);
+    }
+    rot += t.rot;
+    flipH = flipH !== t.flipH;
+    flipV = flipV !== t.flipV;
   }
-  return { x: Math.round(px), y: Math.round(py), w: Math.round(pw), h: Math.round(ph) };
+  rot = ((rot % 360) + 360) % 360;
+  return { x: Math.round(cx - pw / 2), y: Math.round(cy - ph / 2), w: Math.round(pw), h: Math.round(ph), rot, flipH, flipV };
+}
+
+/** 저장 메타·표시 요소에 실을 회전·뒤집기(없으면 빈 객체 — 예전 데이터와 같은 모양) */
+function turnOf(place: Placement): { rot?: number; flipH?: boolean; flipV?: boolean } {
+  return { ...(place.rot ? { rot: Math.round(place.rot * 100) / 100 } : {}), ...(place.flipH ? { flipH: true } : {}), ...(place.flipV ? { flipV: true } : {}) };
 }
 
 function collectShapesRecursive(
@@ -204,10 +271,9 @@ function collectShapesRecursive(
     const cNvPr = (sp['p:nvSpPr'] as XmlNode)['p:cNvPr'] as XmlNode;
     const shapeId = String(cNvPr['@_id']);
 
-    const xfrm = (sp['p:spPr'] as XmlNode | undefined)?.['a:xfrm'] as XmlNode | undefined;
-    const off = xfrm?.['a:off'] as XmlNode | undefined;
-    const ext = xfrm?.['a:ext'] as XmlNode | undefined;
-    const pos = applyGroupTransforms(transforms, emuAttr(off, '@_x'), emuAttr(off, '@_y'), emuAttr(ext, '@_cx'), emuAttr(ext, '@_cy'));
+    const spPr = sp['p:spPr'] as XmlNode | undefined;
+    const place = placeXfrm(transforms, spPr?.['a:xfrm'] as XmlNode | undefined);
+    const geom = (spPr?.['a:prstGeom'] as XmlNode | undefined)?.['@_prst'];
 
     const paragraphs = asArray<XmlNode>(txBody['a:p'] as XmlNode | XmlNode[] | undefined).map((p) => paragraphFromXml(p, theme));
     const doc = schema.node(
@@ -216,7 +282,16 @@ function collectShapesRecursive(
       paragraphs.length > 0 ? paragraphs : [schema.node('paragraph', null, [])],
     );
 
-    shapes.push({ shapeId, ...pos, doc });
+    shapes.push({
+      shapeId,
+      x: place.x,
+      y: place.y,
+      w: place.w,
+      h: place.h,
+      ...turnOf(place),
+      ...(typeof geom === 'string' && geom !== 'rect' ? { presetGeom: geom } : {}),
+      doc,
+    });
   }
 
   for (const grp of asArray<XmlNode>(node['p:grpSp'] as XmlNode | XmlNode[] | undefined)) {
@@ -233,7 +308,9 @@ function collectShapesRecursive(
  * 텍스트 기반 매칭은 이 중첩 여부와 무관하게 이미 그대로 동작한다, 이 함수만 읽기 전용으로 몰랐을
  * 뿐이다). */
 export function parseSlideShapes(slideXml: string, theme?: ThemeColors): ParsedShape[] {
-  const parsed = parser.parse(slideXml) as XmlNode;
+  // 문단 안 <a:r>·<a:br>·<a:fld>의 원문 순서를 남긴다(paragraphFromXml 참고) — 파싱용 사본에만 붙는 속성
+  let order = 0;
+  const parsed = parser.parse(slideXml.replace(/<a:(r|br|fld)(?=[\s>/])/g, (_m, tag: string) => `<a:${tag} _o="${order++}"`)) as XmlNode;
   const sld = parsed['p:sld'] as XmlNode;
   const spTree = (sld['p:cSld'] as XmlNode)['p:spTree'] as XmlNode;
   const shapes: ParsedShape[] = [];
@@ -247,7 +324,61 @@ function escapeXmlText(text: string): string {
 
 /** 텍스트 노드의 마크를 <a:rPr>로 되돌린다. schema.marks 순서와 무관하게 항상 같은 속성
  * 순서로 내보내 스냅샷/디버깅이 안정적이게 한다. */
+/** 원본 <a:rPr>(runProps 마크)에 지금 마크를 합친다 — 원본에서 읽은 마크와 같은 속성은 원문 그대로 두고, 바뀐 것만
+ * 다시 쓴다. 자식 순서는 스키마(CT_TextCharacterProperties) 순서로 맞춘다. */
+const RPR_CHILD_ORDER = ['a:ln', 'a:noFill', 'a:solidFill', 'a:gradFill', 'a:blipFill', 'a:pattFill', 'a:grpFill', 'a:effectLst', 'a:effectDag', 'a:highlight', 'a:uLnTx', 'a:uLn', 'a:uFillTx', 'a:uFill', 'a:latin', 'a:ea', 'a:cs', 'a:sym', 'a:hlinkClick', 'a:hlinkMouseOver', 'a:rtl', 'a:extLst'];
+const FILL_TAGS = ['a:noFill', 'a:solidFill', 'a:gradFill', 'a:blipFill', 'a:pattFill', 'a:grpFill'];
+
+function mergedRPrXml(raw: string, node: PMNode): string {
+  const parsedRoot = parser.parse(raw) as XmlNode;
+  const original = parsedRoot['a:rPr'];
+  const rPr: XmlNode = original && typeof original === 'object' ? { ...(original as XmlNode) } : {};
+  const before = marksFromRPr(rPr, undefined, false);
+  const now = (name: string) => node.marks.find((m) => m.type.name === name);
+  const was = (name: string) => before.find((m) => m.type.name === name);
+  const toggle = (name: string, attr: string, on: string) => {
+    if (Boolean(now(name)) === Boolean(was(name))) return;
+    if (now(name)) rPr[attr] = on;
+    else delete rPr[attr];
+  };
+  toggle('strong', '@_b', '1');
+  toggle('em', '@_i', '1');
+  toggle('underline', '@_u', 'sng');
+  const size = now('fontSize')?.attrs.size as number | undefined;
+  if (size !== (was('fontSize')?.attrs.size as number | undefined)) {
+    if (size) rPr['@_sz'] = String(Math.round(size * 100));
+    else delete rPr['@_sz'];
+  }
+  const color = now('textColor');
+  const oldColor = was('textColor');
+  const sameColor = color && oldColor ? (color.attrs.raw ? color.attrs.raw === oldColor.attrs.raw : !oldColor.attrs.raw && color.attrs.color === oldColor.attrs.color) : !color && !oldColor;
+  if (!sameColor) {
+    for (const tag of FILL_TAGS) delete rPr[tag];
+    if (color) Object.assign(rPr, (parser.parse(`<w>${solidFillXml(color)}</w>`) as XmlNode).w as XmlNode);
+  }
+  const family = now('fontFamily')?.attrs.family as string | undefined;
+  if (family !== (was('fontFamily')?.attrs.family as string | undefined)) {
+    delete rPr['a:latin'];
+    delete rPr['a:ea'];
+    if (family) Object.assign(rPr, { 'a:latin': { '@_typeface': family }, 'a:ea': { '@_typeface': family } });
+  }
+  const ordered: XmlNode = {};
+  for (const key of Object.keys(rPr).filter((k) => k.startsWith('@_'))) ordered[key] = rPr[key];
+  for (const key of RPR_CHILD_ORDER) if (key in rPr) ordered[key] = rPr[key];
+  for (const key of Object.keys(rPr)) if (!(key in ordered)) ordered[key] = rPr[key];
+  return xmlBuilder.build({ 'a:rPr': ordered }) as string;
+}
+
+/** 글자 색 마크 → <a:solidFill>(원본 테마 색이면 그대로, 새로 고른 색이면 RGB). 쓸 수 없는 값이면 '' */
+function solidFillXml(colorMark: { attrs: Record<string, unknown> }): string {
+  if (colorMark.attrs.raw) return `<a:solidFill>${colorMark.attrs.raw as string}</a:solidFill>`;
+  const hex = colorMark.attrs.color as string;
+  return /^#[0-9A-Fa-f]{6}$/.test(hex) ? `<a:solidFill><a:srgbClr val="${hex.replace('#', '').toUpperCase()}"/></a:solidFill>` : '';
+}
+
 function rPrXmlFor(node: PMNode): string {
+  const runProps = node.marks.find((m) => m.type.name === 'runProps');
+  if (runProps) return mergedRPrXml(runProps.attrs.raw as string, node);
   const b = node.marks.some((m) => m.type.name === 'strong') ? ' b="1"' : '';
   const i = node.marks.some((m) => m.type.name === 'em') ? ' i="1"' : '';
   const u = node.marks.some((m) => m.type.name === 'underline') ? ' u="sng"' : '';
@@ -258,13 +389,7 @@ function rPrXmlFor(node: PMNode): string {
   const attrs = `${b}${i}${u}${sz}`;
   // CT_TextCharacterProperties의 자식 순서: ... solidFill ... latin, ea, cs ... (스키마상 고정)
   // 원본 테마 색(raw)이 있으면 그대로 되돌리고, 리본으로 새로 고른 색이면 RGB로 쓴다.
-  const fill = !colorMark
-    ? ''
-    : colorMark.attrs.raw
-      ? `<a:solidFill>${colorMark.attrs.raw as string}</a:solidFill>`
-      : /^#[0-9A-Fa-f]{6}$/.test(colorMark.attrs.color as string)
-        ? `<a:solidFill><a:srgbClr val="${(colorMark.attrs.color as string).replace('#', '').toUpperCase()}"/></a:solidFill>`
-        : '';
+  const fill = colorMark ? solidFillXml(colorMark) : '';
   const face = familyMark
     ? (() => {
         const name = escapeXmlAttr(familyMark.attrs.family as string);
@@ -284,12 +409,22 @@ export function serializeTxBodyXml(doc: PMNode): string {
   const paragraphsXml: string[] = [];
   doc.forEach((paragraph) => {
     const runsXml: string[] = [];
-    paragraph.forEach((textNode) => {
-      if (!textNode.isText || !textNode.text) return;
-      const rPr = rPrXmlFor(textNode);
-      runsXml.push(`<a:r>${rPr}<a:t>${escapeXmlText(textNode.text)}</a:t></a:r>`);
+    paragraph.forEach((child) => {
+      if (child.type.name === 'br') {
+        const rPr = child.attrs.rPr as string | null;
+        runsXml.push(rPr ? `<a:br>${rPr}</a:br>` : '<a:br/>');
+        return;
+      }
+      if (child.type.name === 'field') {
+        runsXml.push(child.attrs.raw as string);
+        return;
+      }
+      if (!child.isText || !child.text) return;
+      const rPr = rPrXmlFor(child);
+      runsXml.push(`<a:r>${rPr}<a:t>${escapeXmlText(child.text)}</a:t></a:r>`);
     });
-    paragraphsXml.push(`<a:p>${pPrXmlFor(paragraph)}${runsXml.join('')}</a:p>`);
+    const endRPr = (paragraph.attrs.endRPr as string | null) ?? '';
+    paragraphsXml.push(`<a:p>${pPrXmlFor(paragraph)}${runsXml.join('')}${endRPr}</a:p>`);
   });
   // CT_TextBody(OOXML 스키마)는 <a:p>가 최소 1개 있어야 한다(minOccurs="1") — 문단이 하나도 없는
   // <p:txBody>는 PowerPoint가 열 수 없는 손상된 파일이다(FINAL REVIEW C2). pptxTextSchema는
@@ -614,32 +749,38 @@ function presetGeomFromSpPr(spPr: XmlNode | undefined): string | undefined {
 }
 
 /**
- * 도형의 보이는 채우기 색. 우선순위는 PowerPoint와 같다: 명시적 <a:noFill/> → 없음, <a:solidFill> →
- * 그 색, <a:gradFill> → 첫 색 지점(그라데이션은 근사), 그 밖엔 도형 스타일 <p:style><a:fillRef idx>의
- * 테마 색(기본 도형은 대부분 이 경로로 accent1 같은 색을 갖는다 — 예전엔 이걸 몰라 기본 도형이
- * 투명하게 그려졌다). 테마를 모르면 직접 지정 RGB만 푼다.
+ * 도형의 보이는 채우기(CSS background 값). 우선순위는 PowerPoint와 같다: 명시적 <a:noFill/> → 없음, <a:solidFill> →
+ * 그 색, <a:gradFill> → CSS 그라데이션, 그 밖엔 도형 스타일 <p:style><a:fillRef idx>가 가리키는 테마 채우기(fmtScheme
+ * fillStyleLst — 기본 도형은 대개 idx 3의 그라데이션이고 phClr 자리에 fillRef의 색이 들어간다). 테마를 모르면
+ * 직접 지정 RGB만 푼다. ph는 테마 채우기 안 phClr의 색.
  */
-function fillColorFromSpPr(spPr: XmlNode | undefined, theme?: ThemeColors, style?: XmlNode): string | undefined {
+function fillColorFromSpPr(spPr: XmlNode | undefined, theme?: ThemeColors, style?: XmlNode, ph?: string): string | undefined {
   if (spPr?.['a:noFill'] !== undefined) return undefined;
   const solid = spPr?.['a:solidFill'] as XmlNode | undefined;
   if (solid !== undefined) {
-    if (theme) return theme.resolve(solid);
+    if (theme) return theme.resolve(solid, ph);
     const val = (solid['a:srgbClr'] as XmlNode | undefined)?.['@_val'] as string | undefined;
     return val ? `#${val}` : undefined;
   }
   const grad = spPr?.['a:gradFill'] as XmlNode | undefined;
-  if (grad && theme) return gradientCss(grad, theme);
+  if (grad && theme) return gradientCss(grad, theme, ph);
   if (spPr?.['a:blipFill'] !== undefined || spPr?.['a:pattFill'] !== undefined) return undefined;
   const fillRef = style?.['a:fillRef'] as XmlNode | undefined;
-  if (fillRef && theme && Number(fillRef['@_idx'] ?? 0) > 0) return theme.resolve(fillRef);
+  const idx = Number(fillRef?.['@_idx'] ?? 0);
+  if (fillRef && theme && idx > 0) {
+    const refColor = theme.resolve(fillRef);
+    const themed = theme.fillStyle(idx);
+    // 테마 채우기 목록이 없거나 그림·무늬 채우기면 참조 색 단색(예전 동작)
+    return (themed ? fillColorFromSpPr(themed, theme, undefined, refColor) : undefined) ?? refColor;
+  }
   return undefined;
 }
 
 /** <a:gradFill> → CSS 그라데이션. 정지점은 파일에 적힌 순서가 아니라 위치(pos) 순으로 정렬한다
  * (PowerPoint는 끝 정지점을 먼저 적기도 한다). 선형 각도: OOXML 0°=왼→오른쪽, CSS 90°=to right. */
-function gradientCss(grad: XmlNode, theme: ThemeColors): string | undefined {
+function gradientCss(grad: XmlNode, theme: ThemeColors, ph?: string): string | undefined {
   const stops = asArray<XmlNode>((grad['a:gsLst'] as XmlNode | undefined)?.['a:gs'] as XmlNode | XmlNode[] | undefined)
-    .map((gs) => ({ pos: Number(gs['@_pos'] ?? 0) / 1000, color: theme.resolve(gs) }))
+    .map((gs) => ({ pos: Number(gs['@_pos'] ?? 0) / 1000, color: theme.resolve(gs, ph) }))
     .filter((stop): stop is { pos: number; color: string } => Boolean(stop.color))
     .sort((a, b) => a.pos - b.pos);
   if (stops.length === 0) return undefined;
@@ -649,6 +790,56 @@ function gradientCss(grad: XmlNode, theme: ThemeColors): string | undefined {
   if (grad['a:path'] !== undefined) return `radial-gradient(${list})`;
   const deg = Number((grad['a:lin'] as XmlNode | undefined)?.['@_ang'] ?? 0) / 60000;
   return `linear-gradient(${round((deg + 90) % 360)}deg, ${list})`;
+}
+
+/** 그림 자르기(<a:srcRect l t r b>, 1/1000%) → 원본 그림에서 잘라 낸 비율 [왼, 위, 오른, 아래](0~1, 음수 = 여백). 없으면 undefined. */
+function cropOf(blipFill: XmlNode | undefined): readonly [number, number, number, number] | undefined {
+  const rect = blipFill?.['a:srcRect'];
+  if (!rect || typeof rect !== 'object') return undefined;
+  const v = (k: string) => (Number((rect as XmlNode)[`@_${k}`] ?? 0) || 0) / 100000;
+  const crop = [v('l'), v('t'), v('r'), v('b')] as const;
+  return crop.some((c) => c !== 0) && crop[0] + crop[2] < 1 && crop[1] + crop[3] < 1 ? crop : undefined;
+}
+
+/** 색 노드의 투명도(<a:alpha val>, 0~1) — 없으면 1 */
+function alphaOf(container: XmlNode | undefined): number {
+  for (const key of ['a:srgbClr', 'a:schemeClr', 'a:sysClr', 'a:prstClr']) {
+    const node = container?.[key] as XmlNode | undefined;
+    if (node && typeof node === 'object') {
+      const alpha = (node['a:alpha'] as XmlNode | undefined)?.['@_val'];
+      return alpha === undefined ? 1 : Math.max(0, Math.min(1, Number(alpha) / 100000));
+    }
+  }
+  return 1;
+}
+
+/** 바깥 그림자(<a:outerShdw>) — spPr의 <a:effectLst>가 있으면 그것(빈 목록 = 효과 없음), 없으면 도형 스타일
+ * <a:effectRef idx>가 가리키는 테마 효과(fmtScheme effectStyleLst). 거리·흐림은 EMU, 색은 rgba(). */
+function shadowOf(spPr: XmlNode | undefined, theme?: ThemeColors, style?: XmlNode): SlideVisual['shadow'] {
+  if (!theme) return undefined;
+  let effectLst = spPr?.['a:effectLst'];
+  let ph: string | undefined;
+  if (effectLst === undefined) {
+    const ref = style?.['a:effectRef'] as XmlNode | undefined;
+    const idx = Number(ref?.['@_idx'] ?? 0);
+    if (!ref || idx <= 0) return undefined;
+    ph = theme.resolve(ref);
+    effectLst = theme.effectStyle(idx)?.['a:effectLst'];
+  }
+  const shdw = effectLst && typeof effectLst === 'object' ? ((effectLst as XmlNode)['a:outerShdw'] as XmlNode | undefined) : undefined;
+  if (!shdw || typeof shdw !== 'object') return undefined;
+  const color = theme.resolve(shdw, ph);
+  const alpha = alphaOf(shdw);
+  if (!color || alpha <= 0) return undefined;
+  const dist = Number(shdw['@_dist'] ?? 0) || 0;
+  const dir = ((Number(shdw['@_dir'] ?? 0) || 0) / 60000) * (Math.PI / 180);
+  const n = parseInt(color.slice(1), 16);
+  return {
+    color: `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${Math.round(alpha * 100) / 100})`,
+    dx: Math.round(dist * Math.cos(dir)),
+    dy: Math.round(dist * Math.sin(dir)),
+    blur: Number(shdw['@_blurRad'] ?? 0) || 0,
+  };
 }
 
 /** 색이 완전히 투명(<a:alpha val="0"/>)한지 — 그런 선은 PowerPoint에서도 안 보인다 */
@@ -681,25 +872,30 @@ function strokeFromSpPr(spPr: XmlNode | undefined, theme?: ThemeColors, style?: 
       const rgb = (solid['a:srgbClr'] as XmlNode | undefined)?.['@_val'];
       color = typeof rgb === 'string' && /^[0-9A-Fa-f]{6}$/.test(rgb) ? `#${rgb.toUpperCase()}` : undefined;
     }
-  } else {
-    const lnRef = style?.['a:lnRef'] as XmlNode | undefined;
-    if (lnRef && theme && Number(lnRef['@_idx'] ?? 0) > 0 && !isFullyTransparent(lnRef)) color = theme.resolve(lnRef);
+  }
+  // 도형 스타일 <a:lnRef idx>가 가리키는 테마 선(fmtScheme lnStyleLst) — 두께·점선 모양, phClr 자리에 lnRef의 색
+  const lnRef = style?.['a:lnRef'] as XmlNode | undefined;
+  const themeLine = lnRef && theme && Number(lnRef['@_idx'] ?? 0) > 0 ? theme.lineStyle(Number(lnRef['@_idx'])) : undefined;
+  if (solid === undefined && lnRef && theme && Number(lnRef['@_idx'] ?? 0) > 0 && !isFullyTransparent(lnRef)) {
+    const refColor = theme.resolve(lnRef);
+    const themeSolid = themeLine?.['a:solidFill'] as XmlNode | undefined;
+    color = (themeSolid ? theme.resolve(themeSolid, refColor) : undefined) ?? refColor;
   }
   if (!color) return undefined;
-  const width = Number(ln?.['@_w'] ?? 9525) || 9525;
-  const prstDash = String((ln?.['a:prstDash'] as XmlNode | undefined)?.['@_val'] ?? 'solid');
+  const width = Number(ln?.['@_w'] ?? themeLine?.['@_w'] ?? 9525) || 9525;
+  const prstDash = String(((ln?.['a:prstDash'] ?? themeLine?.['a:prstDash']) as XmlNode | undefined)?.['@_val'] ?? 'solid');
   const dash = prstDash === 'solid' ? 'solid' : /dot/i.test(prstDash) && !/dash/i.test(prstDash) ? 'dotted' : 'dashed';
   return { color, width, dash, ...(prstDash === 'solid' ? {} : { prstDash }) };
 }
 
-/** 회전(<a:xfrm rot>, 1/60000도)이 걸린 개체가 실제로 차지하는 영역 — 원본 렌더링에서 잘라 올 때 쓴다.
+/** 회전(도 — <a:xfrm rot>를 그룹까지 합친 값)이 걸린 개체가 실제로 차지하는 영역 — 원본 렌더링에서 잘라 올 때 쓴다.
  * 회전 전 상자를 그대로 쓰면(예: 90° 돌린 가로 연결선 = 실제로는 세로선) 엉뚱한 곳을 잘라 와 선이 사라졌다. */
 function rotatedBounds(
   pos: { x: number | null; y: number | null; w: number | null; h: number | null },
-  rot: number,
+  rotDeg: number,
 ): { x: number | null; y: number | null; w: number | null; h: number | null } {
-  if (!rot || pos.x === null || pos.y === null || pos.w === null || pos.h === null) return pos;
-  const rad = ((rot / 60000) * Math.PI) / 180;
+  if (!rotDeg || pos.x === null || pos.y === null || pos.w === null || pos.h === null) return { x: pos.x, y: pos.y, w: pos.w, h: pos.h };
+  const rad = (rotDeg * Math.PI) / 180;
   const cos = Math.abs(Math.cos(rad));
   const sin = Math.abs(Math.sin(rad));
   const w = pos.w * cos + pos.h * sin;
@@ -724,13 +920,6 @@ function hasVisibleText(txBody: XmlNode | undefined): boolean {
     }
   }
   return false;
-}
-
-function graphicFrameXfrm(gf: XmlNode) {
-  const xfrm = gf['p:xfrm'] as XmlNode | undefined; // 다른 도형과 달리 p:spPr 없이 바로 p:xfrm
-  const off = xfrm?.['a:off'] as XmlNode | undefined;
-  const ext = xfrm?.['a:ext'] as XmlNode | undefined;
-  return { x: emuAttr(off, '@_x'), y: emuAttr(off, '@_y'), w: emuAttr(ext, '@_cx'), h: emuAttr(ext, '@_cy') };
 }
 
 /** <a:tc>(표 셀) 하나의 텍스트만 뽑는다 — 서식은 버리고 문단은 줄바꿈으로 잇는다(표는 편집
@@ -850,30 +1039,37 @@ export function parseSlideVisuals(zipEntries: Record<string, Uint8Array>, source
     for (const pic of asArray<XmlNode>(node['p:pic'] as XmlNode | XmlNode[] | undefined)) {
       if (template && isPlaceholder(pic, 'p:nvPicPr')) continue;
       const spPr = pic['p:spPr'] as XmlNode | undefined;
-      const xfrm = spPr?.['a:xfrm'] as XmlNode | undefined;
-      const off = xfrm?.['a:off'] as XmlNode | undefined;
-      const ext = xfrm?.['a:ext'] as XmlNode | undefined;
-      const blip = (pic['p:blipFill'] as XmlNode | undefined)?.['a:blip'] as XmlNode | undefined;
+      const blipFill = pic['p:blipFill'] as XmlNode | undefined;
+      const blip = blipFill?.['a:blip'] as XmlNode | undefined;
       const mediaPath = resolveImageMediaPath(owner, blip?.['@_r:embed'] as string | undefined);
-      const pos = applyGroupTransforms(transforms, emuAttr(off, '@_x'), emuAttr(off, '@_y'), emuAttr(ext, '@_cx'), emuAttr(ext, '@_cy'));
+      const place = placeXfrm(transforms, spPr?.['a:xfrm'] as XmlNode | undefined);
+      const pos = { x: place.x, y: place.y, w: place.w, h: place.h };
       // 브라우저가 못 그리는 포맷(EMF/WMF — 한글에서 붙여넣은 도식에 흔함)이면 원본 렌더링에서 잘라 쓴다
       if (!mediaPath) {
-        push(pic, 'p:nvPicPr', { kind: 'snapshot', ...pos, snapshot: true });
+        push(pic, 'p:nvPicPr', { kind: 'snapshot', ...rotatedBounds(pos, place.rot), snapshot: true });
         continue;
       }
       // 그림에 직접 준 테두리(스크린샷 강조용 빨간 테두리 등)
       const picStroke = strokeFromSpPr(spPr, theme, pic['p:style'] as XmlNode | undefined);
-      push(pic, 'p:nvPicPr', { kind: 'image', ...pos, mediaPath, ...(picStroke ? { stroke: picStroke } : {}) });
+      const crop = cropOf(blipFill);
+      const picShadow = shadowOf(spPr, theme, pic['p:style'] as XmlNode | undefined);
+      push(pic, 'p:nvPicPr', {
+        kind: 'image',
+        ...pos,
+        mediaPath,
+        ...turnOf(place),
+        ...(crop ? { crop } : {}),
+        ...(picStroke ? { stroke: picStroke } : {}),
+        ...(picShadow ? { shadow: picShadow } : {}),
+      });
     }
 
     for (const sp of asArray<XmlNode>(node['p:sp'] as XmlNode | XmlNode[] | undefined)) {
       if (template && isPlaceholder(sp, 'p:nvSpPr')) continue; // 레이아웃·마스터의 개체 틀은 보이지 않는 "틀"
       const spPr = sp['p:spPr'] as XmlNode | undefined;
       const fill = fillColorFromSpPr(spPr, theme, sp['p:style'] as XmlNode | undefined);
-      const xfrm = spPr?.['a:xfrm'] as XmlNode | undefined;
-      const off = xfrm?.['a:off'] as XmlNode | undefined;
-      const ext = xfrm?.['a:ext'] as XmlNode | undefined;
-      const pos = applyGroupTransforms(transforms, emuAttr(off, '@_x'), emuAttr(off, '@_y'), emuAttr(ext, '@_cx'), emuAttr(ext, '@_cy'));
+      const place = placeXfrm(transforms, spPr?.['a:xfrm'] as XmlNode | undefined);
+      const pos = { x: place.x, y: place.y, w: place.w, h: place.h };
       // 레이아웃·마스터의 글자 도형(꼬리말 문구, 쪽 번호 등)은 편집 대상이 아니다 — 글자(쪽 번호는
       // 슬라이드마다 다르다)까지 원본 렌더링에서 잘라 그대로 보여준다.
       if (template && hasVisibleText(sp['p:txBody'] as XmlNode | undefined) && pos.x !== null && pos.y !== null) {
@@ -895,7 +1091,7 @@ export function parseSlideVisuals(zipEntries: Record<string, Uint8Array>, source
       if (!sp['p:txBody'] && pos.x !== null && pos.y !== null && needsSnapshot) {
         // 선만 있는 모양(직선·곡선 화살표 등)은 선 두께·화살촉이 상자 밖으로 나간다 — 연결선처럼 넓혀 자른다
         const pad = stroke && !fill ? Math.max(LINE_SNAPSHOT_PAD_EMU, stroke.width * 3) : 0;
-        const area = rotatedBounds(pos, Number(xfrm?.['@_rot'] ?? 0));
+        const area = rotatedBounds(pos, place.rot);
         push(sp, 'p:nvSpPr', {
           kind: 'snapshot',
           x: (area.x ?? 0) - pad,
@@ -908,20 +1104,23 @@ export function parseSlideVisuals(zipEntries: Record<string, Uint8Array>, source
       }
       if (!fill && !(stroke && STROKABLE_GEOMS.has(geom) && !custom)) continue;
       const corners = custom ? undefined : cornerRadiiOf(geom, spPr, pos.w, pos.h);
+      const shadow = shadowOf(spPr, theme, sp['p:style'] as XmlNode | undefined);
       push(sp, 'p:nvSpPr', {
         kind: 'shape',
         ...pos,
         fill,
+        ...turnOf(place),
         ...(geom ? { geom } : {}),
         ...(corners ? { corners } : {}),
         ...(stroke && STROKABLE_GEOMS.has(geom) && !custom ? { stroke } : {}),
+        ...(shadow ? { shadow } : {}),
       });
     }
 
     for (const gf of asArray<XmlNode>(node['p:graphicFrame'] as XmlNode | XmlNode[] | undefined)) {
       if (template && isPlaceholder(gf, 'p:nvGraphicFramePr')) continue;
-      const raw = graphicFrameXfrm(gf);
-      const { x, y, w, h } = applyGroupTransforms(transforms, raw.x, raw.y, raw.w, raw.h);
+      const place = placeXfrm(transforms, gf['p:xfrm'] as XmlNode | undefined); // 다른 도형과 달리 p:spPr 없이 바로 p:xfrm
+      const { x, y, w, h } = rotatedBounds(place, place.rot);
       const graphicData = (gf['a:graphic'] as XmlNode | undefined)?.['a:graphicData'] as XmlNode | undefined;
       const uri = graphicData?.['@_uri'] as string | undefined;
       if (uri === TABLE_GRAPHIC_URI) {
@@ -939,13 +1138,8 @@ export function parseSlideVisuals(zipEntries: Record<string, Uint8Array>, source
     // 선·연결선(<p:cxnSp>) — 예전엔 아예 그리지 않았다(도형 사이 화살표·구분선이 사라짐)
     for (const cxn of asArray<XmlNode>(node['p:cxnSp'] as XmlNode | XmlNode[] | undefined)) {
       if (template && isPlaceholder(cxn, 'p:nvCxnSpPr')) continue;
-      const xfrm = (cxn['p:spPr'] as XmlNode | undefined)?.['a:xfrm'] as XmlNode | undefined;
-      const off = xfrm?.['a:off'] as XmlNode | undefined;
-      const ext = xfrm?.['a:ext'] as XmlNode | undefined;
-      const pos = rotatedBounds(
-        applyGroupTransforms(transforms, emuAttr(off, '@_x'), emuAttr(off, '@_y'), emuAttr(ext, '@_cx'), emuAttr(ext, '@_cy')),
-        Number(xfrm?.['@_rot'] ?? 0),
-      );
+      const place = placeXfrm(transforms, (cxn['p:spPr'] as XmlNode | undefined)?.['a:xfrm'] as XmlNode | undefined);
+      const pos = rotatedBounds(place, place.rot);
       if (pos.x === null || pos.y === null) continue;
       // 선은 상자 테두리 위에 그려지고 화살촉·두께가 상자 밖으로 나간다 — 똑바른 세로/가로선은 상자 폭(높이)이
       // 0이라 잘라 낸 조각이 비어 버렸다. 사방으로 조금 넓혀 잘라 온다.

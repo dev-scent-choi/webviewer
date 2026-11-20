@@ -27,6 +27,7 @@ import {
 import { DOC_META_MAP, DOC_META_SAVED_AT_KEY, DOC_META_SAVE_ERROR_AT_KEY } from '../collab/gridShared.js';
 import { pickPresenceColorForName, renderPresenceAvatars } from './presence.js';
 import { pptxTextSchema } from '../pptx/textSchema.js';
+import { applyTextboxLook, autoNumberPlugin, curvedShapePath, ensureLevelRules, turnCss } from './slideTextLook.js';
 
 /** src/pptx/collab.ts가 서버 쪽에서 선언한 것과 같은 모양이지만, 그 파일은 node:crypto/fflate 등
  * 서버 전용 의존성을 끌고 있어 클라이언트 번들에 그대로 import할 수 없다 — Yjs 공유 타입 자체는
@@ -412,20 +413,54 @@ function renderSlideVisual(visual: SlideVisual, pageImageUrl: string | null): HT
   el.style.top = `${emuToPx(visual.y ?? 0)}px`;
   el.style.width = `${emuToPx(visual.w ?? 0)}px`;
   el.style.height = `${emuToPx(visual.h ?? 0)}px`;
+  // 회전·뒤집기(그룹 회전 포함) — 그림·도형은 거울로 뒤집는다
+  const turn = turnCss(visual, true);
+  if (turn) el.style.transform = turn;
+  const shadow = visual.shadow
+    ? `${emuToPx(visual.shadow.dx)}px ${emuToPx(visual.shadow.dy)}px ${emuToPx(visual.shadow.blur)}px ${visual.shadow.color}`
+    : '';
 
   if (visual.kind === 'image' && visual.mediaPath) {
     const img = document.createElement('img');
     img.src = `/api/view/slide-media?token=${encodeURIComponent(token ?? '')}&path=${encodeURIComponent(visual.mediaPath)}`;
     img.alt = '';
+    // 그림 자르기(srcRect): 남은 부분이 상자를 채우도록 원본을 키워 잘린 만큼 밀어 둔다(상자가 overflow:hidden)
+    if (visual.crop) {
+      const [l, t, r, b] = visual.crop;
+      const w = emuToPx(visual.w ?? 0) / (1 - l - r);
+      const h = emuToPx(visual.h ?? 0) / (1 - t - b);
+      img.classList.add('slide-visual-cropped');
+      Object.assign(img.style, { width: `${w}px`, height: `${h}px`, left: `${-l * w}px`, top: `${-t * h}px` });
+    }
     el.append(img);
     applyVisualStroke(el, visual);
+    if (shadow) el.style.boxShadow = shadow;
   } else if (visual.kind === 'shape') {
+    if (visual.geom) el.dataset.geom = visual.geom;
     if (visual.fill) el.style.background = visual.fill;
     applyVisualStroke(el, visual);
-    if (visual.geom) {
-      const clip = PRESET_CLIP[visual.geom];
-      if (clip) el.style.clipPath = clip;
-      else el.classList.add(`slide-shape-${ROUNDED_ALIAS[visual.geom] ?? visual.geom}`);
+    const curved = curvedShapePath(visual.geom, emuToPx(visual.w ?? 0), emuToPx(visual.h ?? 0));
+    const clip = curved ? `path('${curved}')` : visual.geom ? PRESET_CLIP[visual.geom] : undefined;
+    if (clip) {
+      // 잘라 낸 모양의 그림자는 모양을 따라야 한다 — clip-path는 자기 그림자까지 자르므로 바깥 껍데기에 drop-shadow
+      const fillEl = document.createElement('div');
+      fillEl.className = 'slide-shape-fill';
+      fillEl.style.background = el.style.background;
+      fillEl.style.clipPath = clip;
+      el.style.background = '';
+      el.style.overflow = 'visible';
+      if (shadow) el.style.filter = `drop-shadow(${shadow})`;
+      el.append(fillEl);
+      if (visual.geom === 'can') {
+        // 캔 윗면(밝은 타원) — PowerPoint가 윗면을 한 단계 밝게 칠한다
+        const top = document.createElement('div');
+        top.className = 'slide-shape-can-top';
+        top.style.height = `${(Math.min(emuToPx(visual.w ?? 0), emuToPx(visual.h ?? 0)) / 8) * 2}px`;
+        el.append(top);
+      }
+    } else {
+      if (visual.geom) el.classList.add(`slide-shape-${ROUNDED_ALIAS[visual.geom] ?? visual.geom}`);
+      if (shadow) el.style.boxShadow = shadow;
     }
     // 둥근 사각형 계열은 원본 조정값으로 계산한 실제 반지름 — 클래스의 비율 반지름보다 우선한다
     // (adj 0인 "둥근 사각형"은 직각으로 보여야 한다). 예전 시딩 데이터엔 없어 클래스 값을 쓴다.
@@ -531,6 +566,7 @@ function renderCanvasForSlideInner(entryId: string): void {
   canvasEl.style.width = `${emuToPx(SLIDE_W_EMU)}px`;
   canvasEl.style.height = `${emuToPx(SLIDE_H_EMU)}px`;
   canvasEl.style.setProperty('--slide-pt', `${slidePtPx()}px`);
+  ensureLevelRules();
   canvasEl.replaceChildren();
 
   // 이미지·단순 도형·표/차트·스마트아트 자리표시자 — 편집 대상이 아니라 텍스트박스보다 먼저
@@ -617,7 +653,7 @@ function renderCanvasForSlideInner(entryId: string): void {
     const view = new EditorView(box, {
       state: EditorState.create({
         schema: pptxTextSchema,
-        plugins: [ySyncPlugin(fragment), yCursorPlugin(provider.awareness), yUndoPlugin(), keymap(buildSlideKeymap())],
+        plugins: [ySyncPlugin(fragment), yCursorPlugin(provider.awareness), yUndoPlugin(), keymap(buildSlideKeymap()), autoNumberPlugin(meta.levels)],
       }),
       editable: () => canEdit,
       // 커서가 움직이거나 서식이 바뀔 때마다 리본의 눌림 상태(굵게/정렬 등)와 글꼴·크기 칸을
@@ -662,17 +698,10 @@ function renderCanvasForSlideInner(entryId: string): void {
     if (meta.w !== null && meta.h !== null && meta.w !== undefined && meta.h !== undefined && meta.w < TINY_SHAPE_EMU && meta.h < TINY_SHAPE_EMU) {
       box.classList.add('slide-textbox-tiny');
     }
-    if (meta.defaultSizePt) view.dom.style.fontSize = `calc(${meta.defaultSizePt} * var(--slide-pt, 1pt))`;
     const alignCss = { ctr: 'center', r: 'right', just: 'justify', l: '' }[meta.defaultAlign ?? 'l'];
     if (alignCss) view.dom.style.textAlign = alignCss;
-    // 목록 수준별 글머리·들여쓰기·크기 — CSS(.slide-textbox p[data-lvl])가 이 변수들을 읽는다.
-    meta.levels?.forEach((level, i) => {
-      view.dom.style.setProperty(`--l${i}-marl`, String(level.marLPt));
-      view.dom.style.setProperty(`--l${i}-ind`, String(level.indentPt));
-      view.dom.style.setProperty(`--l${i}-bu`, level.bullet === null ? 'none' : JSON.stringify(level.bullet));
-      view.dom.style.setProperty(`--l${i}-sz`, `calc(${level.sizePt} * var(--slide-pt, 1pt))`);
-      if (level.color && /^#[0-9A-Fa-f]{6}$/.test(level.color)) view.dom.style.setProperty(`--l${i}-color`, level.color);
-    });
+    // 수준별 글머리·들여쓰기·크기·간격·글꼴, 자동 맞춤, 세로 쓰기, 회전, 모양 안 글자 칸(slideTextLook.ts)
+    applyTextboxLook(box, view.dom, meta, emuToPx);
     viewDefaults.set(view, { sizePt: meta.defaultSizePt ?? DEFAULT_TEXT_PT, align: meta.defaultAlign ?? 'l' });
     mountedViews.set(shapeId, view);
   }
