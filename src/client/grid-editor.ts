@@ -1376,6 +1376,7 @@ async function main(): Promise<void> {
     const rowHeight = rowLayout.height(r);
     tr.style.height = `${rowHeight}px`;
     if (rowHeight === 0) tr.classList.add('g-hidden-row');
+    else if (rowHeight < 20) tr.classList.add('g-row-short'); // 기본보다 낮은 행 — 칸 여백·행 번호 글자 때문에 커지지 않게(CSS)
     const rowHead = document.createElement('th');
     rowHead.className = 'g-edit-rownum';
     rowHead.textContent = String(r + 1);

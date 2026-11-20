@@ -1506,7 +1506,8 @@ function renderGridViewport() {
       const clsSticky = classes.length > 0 ? ` class="${classes.join(' ')}"` : '';
       cells.push(`<td data-r="${r}" data-c="${c}"${clsSticky}${span}${stick ? ` style="${stick}"` : ''}>${content}</td>`);
     }
-    rowsHtml.push(`<tr${rowH === 0 ? ' class="g-hidden-row"' : ''} style="height:${rowH}px">${cells.join('')}</tr>`);
+    // 기본보다 낮은 행(g-row-short) — 행 번호 글자 높이 때문에 행이 커지지 않게(CSS)
+    rowsHtml.push(`<tr${rowH === 0 ? ' class="g-hidden-row"' : rowH < 20 ? ' class="g-row-short"' : ''} style="height:${rowH}px">${cells.join('')}</tr>`);
   }
 
   const table = document.getElementById('grid-table');

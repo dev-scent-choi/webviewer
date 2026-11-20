@@ -38,6 +38,30 @@ async function shotPagesView(page, base, name) {
   fs.writeFileSync(path.join(OUT, 'lo', `${name}.pdf`), Buffer.from(await pdf.arrayBuffer()));
 }
 
+// 점검표(checklist.json)의 DOM 항목(viewDom/editDom) — 글자로는 못 재는 차트·조건부 서식·테두리 등을 화면 요소로 센다
+const checklist = JSON.parse(fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/(\w:)/, '$1')), 'checklist.json'), 'utf8')).items;
+function domProbes(page, mode) {
+  return page.evaluate(([mode]) => {
+    const tds = [...document.querySelectorAll(mode === 'view' ? '#grid-table td[data-r]' : '#grid-edit-table td[data-row]')];
+    const cs = (el, pseudo) => getComputedStyle(el, pseudo);
+    const isRed = (c) => /rgb\(192, 0, 0\)/.test(c);
+    return {
+      charts: mode === 'view' ? document.querySelectorAll('#grid-image-layer img[src^="data:image/svg"]').length : document.querySelectorAll('.grid-chart').length,
+      dataBars: tds.filter((td) => /linear-gradient/.test(cs(td).backgroundImage) && !/repeating/.test(cs(td).backgroundImage)).length,
+      cfIcons: tds.filter((td) => !['none', 'normal', '""', ''].includes(cs(td, '::after').content) && !td.classList.contains('g-header-dropdown')).length,
+      redBorders: tds.filter((td) => isRed(cs(td).borderRightColor) && cs(td).borderRightStyle !== 'none').length,
+      styledBorders: tds.filter((td) => isRed(cs(td).borderRightColor) && /dashed|dotted|double/.test(cs(td).borderRightStyle)).length,
+      patternFills: tds.filter((td) => /repeating-linear-gradient/.test(cs(td).backgroundImage)).length,
+      rotated: [...document.querySelectorAll((mode === 'view' ? '#grid-table' : '#grid-edit-table') + ' .g-cell-spill')].filter((s) => cs(s).transform !== 'none' || cs(s).writingMode.startsWith('vertical')).length,
+      frozen: mode === 'view' ? document.querySelectorAll('#grid-table td.g-frozen').length : document.querySelectorAll('#grid-edit-table .g-frozen-pane').length,
+      lowRow: (() => {
+        const td = document.querySelector(mode === 'view' ? '#grid-table td[data-r="3"][data-c="1"]' : '#grid-edit-table td[data-row="2"][data-col="0"]');
+        return td ? Math.round(td.getBoundingClientRect().height) : -1;
+      })(),
+    };
+  }, [mode]);
+}
+
 async function shotGrid(page, url, ready, name, mode) {
   await page.goto(BASE + url);
   await page.waitForSelector(ready, { timeout: 120000 });
@@ -49,7 +73,8 @@ async function shotGrid(page, url, ready, name, mode) {
     const file = path.join(OUT, mode, `${name}-s${i + 1}.png`);
     await page.screenshot({ path: file });
     const text = await page.locator(mode === 'view' ? '#grid-table' : '#grid-edit-table').innerText().catch(() => '');
-    shots.push({ file, tab: n ? (await page.locator('.grid-sheet-tab').nth(i).innerText()).trim() : '', text });
+    const dom = checklist.some((it) => it.doc === name && it.where.some((w) => w.endsWith('Dom'))) ? await domProbes(page, mode) : undefined;
+    shots.push({ file, tab: n ? (await page.locator('.grid-sheet-tab').nth(i).innerText()).trim() : '', text, dom });
   }
   return shots;
 }

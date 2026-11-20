@@ -1331,6 +1331,12 @@ h2 {
 
 /* 틀 고정 칸 — 뒤로 스크롤된 칸이 비치지 않게 불투명(칸 서식 배경 .gsN은 나중에 붙어 이긴다) */
 .g-frozen { background-color: #fff; }
+/* 사용자가 기본보다 낮게 정한 행(엑셀 8pt 등) — 칸 여백·행 번호 글자 높이 때문에 행이 커지지 않게 */
+.grid-table tr.g-row-short > td,
+.grid-edit-table tr.g-row-short > td,
+.grid-edit-table tr.g-row-short > th { padding-top: 0; padding-bottom: 0; line-height: 1; }
+.grid-table tr.g-row-short > .g-rownum,
+.grid-edit-table tr.g-row-short > .g-edit-rownum { font-size: 9px; overflow: hidden; }
 .g-head-cell.g-head-frozen { position: relative; z-index: 1; background: #f3f4f7; }
 
 /* 읽기 전용 뷰어의 셀 선택 표시 — 수정은 못 해도 "지금 이 칸을 보고 있다"는 참조용
