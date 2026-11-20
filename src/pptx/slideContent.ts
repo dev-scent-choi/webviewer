@@ -1237,6 +1237,29 @@ export function parseSlideVisuals(zipEntries: Record<string, Uint8Array>, source
       });
     }
 
+    // mc:AlternateContent로 감싼 개체(PowerPoint 2010+ 수식 글상자·잉크·새 차트·3D 모델 등) — 대체 표시(Fallback, 없으면
+    // Choice)의 각 개체 자리를 원본 렌더링(LibreOffice) 조각으로 보인다. 편집 대상이 아니라(parseSlideShapes는 안으로
+    // 들어가지 않는다) 저장 때 원문이 그대로 남는다(검토 I5: 예전엔 편집 화면에 통째로 안 보였다).
+    for (const ac of asArray<XmlNode>(node['mc:AlternateContent'] as XmlNode | XmlNode[] | undefined)) {
+      const alt = asArray<XmlNode>(ac['mc:Fallback'] as XmlNode | XmlNode[] | undefined)[0] ?? asArray<XmlNode>(ac['mc:Choice'] as XmlNode | XmlNode[] | undefined)[0];
+      if (!alt || typeof alt !== 'object') continue;
+      const kinds: ReadonlyArray<[string, string, (el: XmlNode) => unknown]> = [
+        ['p:sp', 'p:nvSpPr', (el) => (el['p:spPr'] as XmlNode | undefined)?.['a:xfrm']],
+        ['p:pic', 'p:nvPicPr', (el) => (el['p:spPr'] as XmlNode | undefined)?.['a:xfrm']],
+        ['p:cxnSp', 'p:nvCxnSpPr', (el) => (el['p:spPr'] as XmlNode | undefined)?.['a:xfrm']],
+        ['p:graphicFrame', 'p:nvGraphicFramePr', (el) => el['p:xfrm']],
+        ['p:grpSp', 'p:nvGrpSpPr', (el) => (el['p:grpSpPr'] as XmlNode | undefined)?.['a:xfrm']],
+      ];
+      for (const [tag, nvTag, xfrmOf] of kinds) {
+        for (const el of asArray<XmlNode>(alt[tag] as XmlNode | XmlNode[] | undefined)) {
+          if (template && isPlaceholder(el, nvTag)) continue;
+          const place = placeXfrm(transforms, xfrmOf(el) as XmlNode | undefined);
+          if (place.x === null || place.y === null) continue;
+          push(el, nvTag, { kind: 'snapshot', ...rotatedBounds(place, place.rot), snapshot: true });
+        }
+      }
+    }
+
     for (const grp of asArray<XmlNode>(node['p:grpSp'] as XmlNode | XmlNode[] | undefined)) {
       const groupTransform = groupTransformFromGrpSpPr(grp['p:grpSpPr'] as XmlNode | undefined);
       const nextTransforms = groupTransform ? [...transforms, groupTransform] : transforms;

@@ -342,3 +342,14 @@ describe('검토 I4: 문단 안 수식(mc:AlternateContent/a14:m)은 원문째 �
     expect(out).not.toContain('_o=');
   });
 });
+
+describe('검토 I5: 슬라이드 최상위 mc:AlternateContent 개체는 대체 표시 자리에 원본 렌더링 조각으로 보이고, 편집 대상이 아니다', () => {
+  test('Fallback 도형 자리 → snapshot, 글상자 목록엔 없음(저장은 원문 그대로)', () => {
+    const box = (id: number, x: number, text: string) =>
+      `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="s"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr><p:spPr>${xfrm(x, 0, 100000, 50000)}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>${text}</a:t></a:r></a:p></p:txBody></p:sp>`;
+    const inner = `${box(2, 0, '보통')}<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><mc:Choice xmlns:a14="http://schemas.microsoft.com/office/drawing/2010/main" Requires="a14">${box(3, 500000, '수식(Choice)')}</mc:Choice><mc:Fallback>${box(3, 500000, '수식 그림(Fallback)')}</mc:Fallback></mc:AlternateContent>`;
+    const zip = deck(inner);
+    expect(parseSlideShapes(new TextDecoder().decode(zip['ppt/slides/slide1.xml'])).map((s) => s.shapeId)).toEqual(['2']);
+    expect(parseSlideVisuals(zip, 'slide1.xml')).toEqual([{ kind: 'snapshot', x: 500000, y: 0, w: 100000, h: 50000, snapshot: true }]);
+  });
+});
