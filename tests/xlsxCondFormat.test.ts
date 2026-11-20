@@ -35,11 +35,11 @@ describe('파일의 조건부 서식 읽기', () => {
 <extLst><ext><x14:conditionalFormattings><x14:conditionalFormatting><x14:cfRule type="dataBar" id="{X}"/></x14:conditionalFormatting></x14:conditionalFormattings></ext></extLst>
 </worksheet>`;
   const entries = parseCondFormats(sheet, dxfs, THEME);
-  test('우선순위 순, 종류별 형식, 수식 규칙은 expr, extLst는 읽지 않음', () => {
+  test('우선순위 순, 종류별 형식(색조 문턱값 포함), 수식 규칙은 expr, 짝 없는 x14 확장은 무시', () => {
     expect(entries.map((e) => [e.p, e.rule.t])).toEqual([[1, 'dup'], [2, 'cell'], [3, 'top'], [4, 'scale'], [5, 'expr'], [6, 'text']]);
     expect(entries[1]).toMatchObject({ ranges: [{ r0: 0, r1: 9, c0: 0, c1: 0 }, { r0: 0, r1: 4, c0: 2, c1: 2 }], rule: { t: 'cell', op: 'gt', v1: '10', s: { bg: '#FFC7CE', col: '#9C0006' } } });
     expect(entries[2].rule).toEqual({ t: 'top', n: 3, bottom: 1, s: { bg: '#FFC7CE', col: '#9C0006' } });
-    expect(entries[3].rule).toEqual({ t: 'scale', colors: ['#F8696B', '#63BE7B'] });
+    expect(entries[3].rule).toEqual({ t: 'scale', colors: ['#F8696B', '#63BE7B'], th: [{ type: 'min' }, { type: 'max' }] });
     expect(entries[5].rule).toEqual({ t: 'text', op: 'begins', text: '가&나', s: { bg: '#FFC7CE', col: '#9C0006' } });
   });
   test('열 전체(E:E) 범위는 편집기 최대 행·열까지', () => {
@@ -81,7 +81,7 @@ describe('칸 판정(화면 표시)', () => {
     expect(computeStats({ t: 'top', n: 2, s: red }, values).threshold).toBe(7);
     expect(computeStats({ t: 'top', n: 1, bottom: 1, s: red }, values).threshold).toBe(3);
     expect(computeStats({ t: 'avg', s: red }, values).mean).toBeCloseTo(6.75);
-    expect(computeStats({ t: 'bar', color: '#638EC6' }, values)).toEqual({ min: 0, max: 10 });
+    expect(computeStats({ t: 'bar', color: '#638EC6' }, values)).toEqual({ min: 3, max: 10, sorted: [3, 7, 7, 10] });
     const bar: CondFormatEntry[] = [{ id: 'b', ranges: A, rule: { t: 'bar', color: '#638EC6' } }];
     expect(paint(bar, 0, 0, new Map([['b', { min: 0, max: 10 }]]))?.bar).toEqual({ color: '#638EC6', ratio: 0.5 });
     const scale: CondFormatEntry[] = [{ id: 's', ranges: A, rule: { t: 'scale', colors: ['#000000', '#FFFFFF'] } }];

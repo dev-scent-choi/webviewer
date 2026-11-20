@@ -54,6 +54,7 @@ import { LEGACY_EDIT_TARGET, legacyDownload } from '../legacyOffice.js';
 import { isViewOnly, type DocumentMeta, type ViewClaims } from '../types.js';
 import { isOpenable, waitForInitialConversion } from '../conversionGate.js';
 import { buildViewerGridFile, saveGridFile } from '../xlsx/viewerGrid.js';
+import { localDayKey } from '../xlsx/viewerCondFormat.js';
 import type { GridChart } from '../xlsx/chartModel.js';
 import { chartDataOf, renderChartSvg } from '../xlsx/chartSvg.js';
 import { rowTopPx } from '../xlsx/sheetGeometry.js';
@@ -203,15 +204,20 @@ function offsetsLookValid(buffer: Buffer, lineOffsets: readonly number[]): boole
 /** grid.json 헤더 한 줄만 값싸게 들여다본다(버퍼 전체를 다시 스캔하지 않는다) — formatVersion
  * 확인 전용. 파싱이 실패하면(손상 등) undefined를 돌려줘 "버전을 알 수 없음"으로 취급한다 —
  * 어차피 아래 loadGridUncached의 자가치유(gridindex 재스캔) 경로가 이런 손상을 이미 다룬다. */
-function peekGridHeaderVersion(buffer: Buffer): number | undefined {
+function peekGridHeader(buffer: Buffer): Pick<GridHeader, 'formatVersion' | 'cfDay'> {
   try {
     const newline = buffer.indexOf(10);
     const headerEnd = newline === -1 ? buffer.length : newline;
     const header = JSON.parse(buffer.toString('utf8', 0, headerEnd)) as GridHeader;
-    return header.formatVersion;
+    return { formatVersion: header.formatVersion, cfDay: header.cfDay };
   } catch {
-    return undefined;
+    return {};
   }
+}
+
+/** 낡은 그리드 — 계산 방식 버전이 다르거나, TODAY()·NOW() 조건부 서식을 구운 날이 오늘이 아니다 */
+function gridIsStale(header: Pick<GridHeader, 'formatVersion' | 'cfDay'>): boolean {
+  return header.formatVersion !== GRID_CACHE_FORMAT_VERSION || (header.cfDay !== undefined && header.cfDay !== localDayKey());
 }
 
 /**
@@ -266,7 +272,7 @@ async function loadGridUncached(docId: string, allowRegenerate = true): Promise<
     if (!allowRegenerate || !(await regenerateStaleGridCache(docId))) throw error;
     return loadGridUncached(docId, false);
   }
-  if (allowRegenerate && peekGridHeaderVersion(buffer) !== GRID_CACHE_FORMAT_VERSION) {
+  if (allowRegenerate && gridIsStale(peekGridHeader(buffer))) {
     // 재생성이 성공하면 방금 막 저장한 최신 버퍼를 처음부터 다시 읽어 이어간다(아래 재귀 호출,
     // allowRegenerate=false로 무한 재귀를 막는다) — 실패하면(위 문서 주석) 그냥 아래로 흘러가
     // 지금 손에 있는(낡았을 수 있는) buffer를 기존 경로 그대로 서빙한다.
@@ -293,7 +299,11 @@ async function loadGridUncached(docId: string, allowRegenerate = true): Promise<
   return grid;
 }
 
-export function loadGrid(docId: string): Promise<LoadedGrid> {
+export async function loadGrid(docId: string): Promise<LoadedGrid> {
+  const grid = await gridCache.getOrLoad(docId, () => loadGridUncached(docId));
+  // 메모리에 남은 그리드도 날짜가 바뀌었으면(TODAY() 조건부 서식) 다시 만든다
+  if (!gridIsStale(grid.header)) return grid;
+  invalidateViewCaches(docId);
   return gridCache.getOrLoad(docId, () => loadGridUncached(docId));
 }
 

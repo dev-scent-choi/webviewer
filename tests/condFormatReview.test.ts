@@ -1,0 +1,159 @@
+import { describe, expect, test } from 'vitest';
+import ExcelJS from 'exceljs';
+import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
+import { computeStats, paintCell, shiftFormulaRefs, type CfStats, type CondFormatEntry } from '../src/collab/condFormatShared.js';
+import { createCfFormulaFallback } from '../src/xlsx/cfFormulaEngine.js';
+import { parseCondFormats } from '../src/xlsx/condFormatParse.js';
+import { localDayKey } from '../src/xlsx/viewerCondFormat.js';
+import { parseViewerGrid } from '../src/xlsx/viewerGrid.js';
+
+const red = { bg: '#FFC7CE', col: '#9C0006' };
+const green = { bg: '#C6EFCE' };
+const today = new Date();
+const iso = (d: Date) => d.toISOString().slice(0, 10);
+
+function sheet(values: Record<string, string>) {
+  const valueAt = (r: number, c: number) => values[`${r}:${c}`] ?? '';
+  return { valueAt, paint: (entries: CondFormatEntry[], r: number, c: number, stats = new Map<string, CfStats>(), fb?: Parameters<typeof paintCell>[6]) => paintCell(entries, r, c, valueAt(r, c), stats, valueAt, fb) };
+}
+
+describe('검토 I2 — 날짜 칸과 TODAY()', () => {
+  const past = new Date(Date.UTC(today.getFullYear() - 1, 0, 5));
+  const future = new Date(Date.UTC(today.getFullYear() + 1, 0, 5));
+  const { paint } = sheet({ '0:0': iso(past), '1:0': iso(future) });
+  const A = [{ r0: 0, r1: 1, c0: 0, c1: 0 }];
+  test('수식 규칙 $A1<TODAY() — 날짜 글자를 일련번호로 비교', () => {
+    const e: CondFormatEntry[] = [{ id: 'x', ranges: A, rule: { t: 'expr', f: '$A1<TODAY()', s: red } }];
+    expect(paint(e, 0, 0)?.style).toEqual(red);
+    expect(paint(e, 1, 0)).toBeNull();
+  });
+  test('셀 값 < TODAY() (피연산자가 수식)', () => {
+    const e: CondFormatEntry[] = [{ id: 'x', ranges: A, rule: { t: 'cell', op: 'lt', v1: 'TODAY()', s: red } }];
+    expect(paint(e, 0, 0)?.style).toEqual(red);
+    expect(paint(e, 1, 0)).toBeNull();
+  });
+});
+
+describe('검토 I3 — 셀 값 규칙의 상대 참조·수식 피연산자', () => {
+  const { paint } = sheet({ '1:0': '5', '1:1': '3', '4:0': '5', '4:1': '9', '0:5': '2' });
+  const A = [{ r0: 1, r1: 9, c0: 0, c1: 0 }];
+  test('"셀 값 > B2"는 A5에서 B5와 비교한다', () => {
+    const e: CondFormatEntry[] = [{ id: 'x', ranges: A, rule: { t: 'cell', op: 'gt', v1: 'B2', s: red } }];
+    expect(paint(e, 1, 0)?.style).toEqual(red); // 5 > 3
+    expect(paint(e, 4, 0)).toBeNull(); // 5 > 9 아님
+  });
+  test('=$F$1*2 같은 식도 계산한다', () => {
+    const e: CondFormatEntry[] = [{ id: 'x', ranges: A, rule: { t: 'cell', op: 'gt', v1: '=$F$1*2', s: red } }];
+    expect(paint(e, 1, 0)?.style).toEqual(red); // 5 > 4
+  });
+  test('참조 옮기기: 상대만, $와 따옴표는 그대로, 열 범위도', () => {
+    expect(shiftFormulaRefs('=COUNTIF($A:$A,$A2)>1', 3, 0)).toBe('=COUNTIF($A:$A,$A5)>1');
+    expect(shiftFormulaRefs('=B2+$C$1+"A1"&D$4', 2, 1)).toBe('=C4+$C$1+"A1"&E$4');
+    expect(shiftFormulaRefs('=SUM(A:A)', 0, 2)).toBe('=SUM(C:C)');
+  });
+});
+
+describe('검토 I4 — 우선순위·true이면 중지·문턱값 종류', () => {
+  const { paint } = sheet({ '0:0': '5' });
+  const A = [{ r0: 0, r1: 0, c0: 0, c1: 0 }];
+  test('true이면 중지: 1순위가 맞으면 2순위의 굵게가 섞이지 않는다', () => {
+    const e: CondFormatEntry[] = [
+      { id: '1', ranges: A, stop: 1, rule: { t: 'cell', op: 'gt', v1: '0', s: green } },
+      { id: '2', ranges: A, rule: { t: 'cell', op: 'gt', v1: '1', s: { bg: '#FF0000', b: 1 } } },
+    ];
+    expect(paint(e, 0, 0)?.style).toEqual(green);
+    const noStop = [{ ...e[0], stop: undefined }, e[1]];
+    expect(paint(noStop, 0, 0)?.style).toEqual({ ...green, b: 1 });
+  });
+  test('색조 cfvo: num 문턱값', () => {
+    const e: CondFormatEntry[] = [{ id: 's', ranges: A, rule: { t: 'scale', colors: ['#000000', '#FFFFFF'], th: [{ type: 'num', v: 0 }, { type: 'num', v: 20 }] } }];
+    const stats = new Map([['s', computeStats(e[0].rule, ['5', '10'])]]);
+    expect(paint(e, 0, 0, stats)?.scale).toBe('#404040'); // 5/20
+  });
+  test('데이터 막대 cfvo와 길이(minLength·maxLength)', () => {
+    const e: CondFormatEntry[] = [{ id: 'b', ranges: A, rule: { t: 'bar', color: '#638EC6', th: [{ type: 'num', v: 0 }, { type: 'num', v: 10 }], len: [0, 100] } }];
+    expect(paint(e, 0, 0, new Map([['b', computeStats(e[0].rule, ['5'])]]))?.bar?.ratio).toBeCloseTo(0.5);
+  });
+  test('파일의 stopIfTrue·cfvo를 읽는다', () => {
+    const xml = `<conditionalFormatting sqref="A1:A9"><cfRule type="cellIs" dxfId="0" priority="1" stopIfTrue="1" operator="greaterThan"><formula>0</formula></cfRule>
+<cfRule type="colorScale" priority="2"><colorScale><cfvo type="num" val="0"/><cfvo type="percentile" val="50"/><cfvo type="formula" val="$B$1"/><color rgb="FFF8696B"/><color rgb="FFFFEB84"/><color rgb="FF63BE7B"/></colorScale></cfRule></conditionalFormatting>`;
+    const entries = parseCondFormats(xml, [red], []);
+    expect(entries[0].stop).toBe(1);
+    expect(entries[1].rule).toMatchObject({ t: 'scale', th: [{ type: 'num', v: 0 }, { type: 'percentile', v: 50 }, { type: 'formula', f: '$B$1' }] });
+  });
+});
+
+describe('검토 10 — 범위·함수가 든 수식 규칙은 수식 엔진으로', () => {
+  const values: Record<string, string> = { '0:0': '사과', '1:0': '배', '2:0': '사과', '0:1': '10', '1:1': '20', '2:1': '30' };
+  const { valueAt, paint } = sheet(values);
+  const fb = createCfFormulaFallback(valueAt, () => ({ rows: 3, cols: 2 }));
+  const A = [{ r0: 0, r1: 2, c0: 0, c1: 0 }];
+  test('COUNTIF($A:$A,$A1)>1 — 중복 강조', () => {
+    const e: CondFormatEntry[] = [{ id: 'x', ranges: A, rule: { t: 'expr', f: 'COUNTIF($A:$A,$A1)>1', s: red } }];
+    expect(paint(e, 0, 0, undefined, fb)?.style).toEqual(red);
+    expect(paint(e, 1, 0, undefined, fb)).toBeNull();
+    expect(paint(e, 2, 0, undefined, fb)?.style).toEqual(red);
+  });
+  test('SUM 범위와 비교', () => {
+    const e: CondFormatEntry[] = [{ id: 'x', ranges: A, rule: { t: 'expr', f: '$B1>AVERAGE($B$1:$B$3)', s: red } }];
+    expect(paint(e, 2, 0, undefined, fb)?.style).toEqual(red);
+    expect(paint(e, 0, 0, undefined, fb)).toBeNull();
+  });
+  test('엔진이 없으면(편집 화면에서 아직 불러오기 전) 안 맞음으로 둔다', () => {
+    const e: CondFormatEntry[] = [{ id: 'x', ranges: A, rule: { t: 'expr', f: 'COUNTIF($A:$A,$A1)>1', s: red } }];
+    expect(paint(e, 0, 0)).toBeNull();
+  });
+});
+
+describe('검토 11 — x14 확장(아이콘 3Stars, 데이터 막대 설정)', () => {
+  const xml = `<conditionalFormatting sqref="B1:B5"><cfRule type="dataBar" priority="2"><dataBar><cfvo type="min"/><cfvo type="max"/><color rgb="FF638EC6"/></dataBar><extLst><ext uri="{B025F937-C7B1-47D3-B67F-A62EFF666E3E}"><x14:id>{AAA}</x14:id></ext></extLst></cfRule></conditionalFormatting>
+<extLst><ext uri="{78C0D931-6437-407d-A8EE-F0AAD7539E65}"><x14:conditionalFormattings>
+<x14:conditionalFormatting><x14:cfRule type="dataBar" id="{AAA}"><x14:dataBar minLength="0" maxLength="100" gradient="0"><x14:cfvo type="autoMin"/><x14:cfvo type="autoMax"/><x14:negativeFillColor rgb="FFFF0000"/></x14:dataBar></x14:cfRule><xm:sqref>B1:B5</xm:sqref></x14:conditionalFormatting>
+<x14:conditionalFormatting><x14:cfRule type="iconSet" priority="1" id="{BBB}"><x14:iconSet iconSet="3Stars"><x14:cfvo type="percent"><xm:f>0</xm:f></x14:cfvo><x14:cfvo type="percent"><xm:f>33</xm:f></x14:cfvo><x14:cfvo type="percent"><xm:f>67</xm:f></x14:cfvo></x14:iconSet></x14:cfRule><xm:sqref>A1:A5</xm:sqref></x14:conditionalFormatting>
+</x14:conditionalFormattings></ext></extLst>`;
+  const entries = parseCondFormats(xml, [], []);
+  test('x14 아이콘 집합을 읽어 우선순위대로 앞에, 저장용 priority(p)는 두지 않는다', () => {
+    expect(entries[0].rule).toMatchObject({ t: 'icon', set: '3Stars', th: [{ type: 'percent', v: 33 }, { type: 'percent', v: 67 }] });
+    expect(entries[0].p).toBeUndefined();
+    expect(entries[0].xp).toBe(1);
+  });
+  test('데이터 막대의 x14 설정(길이 0~100, 자동 최소·최대, 음수 색)을 본 규칙에 붙인다', () => {
+    expect(entries[1].rule).toMatchObject({ t: 'bar', len: [0, 100], th: [{ type: 'autoMin' }, { type: 'autoMax' }], neg: '#FF0000' });
+  });
+});
+
+async function cfWorkbook(rules: number): Promise<Buffer> {
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('s');
+  for (let r = 1; r <= rules; r += 1) for (let c = 1; c <= 10; c += 1) ws.getCell(r, c).value = (r * c) % 97;
+  const bytes = unzipSync(new Uint8Array(await wb.xlsx.writeBuffer()));
+  const blocks = Array.from({ length: rules }, (_, i) => `<conditionalFormatting sqref="A${i + 1}:J${i + 1}"><cfRule type="cellIs" dxfId="0" priority="${i + 1}" operator="greaterThan"><formula>50</formula></cfRule></conditionalFormatting>`).join('');
+  bytes['xl/worksheets/sheet1.xml'] = strToU8(strFromU8(bytes['xl/worksheets/sheet1.xml']).replace('</sheetData>', `</sheetData>${blocks}`));
+  bytes['xl/styles.xml'] = strToU8(strFromU8(bytes['xl/styles.xml']).replace('<dxfs count="0"/>', '<dxfs count="1"><dxf><fill><patternFill><bgColor rgb="FFFFC7CE"/></patternFill></fill></dxf></dxfs>'));
+  return Buffer.from(zipSync(bytes));
+}
+
+describe('검토 C2 — 조각난 규칙 수천 개도 굽기가 거의 선형, 중간에 쉰다', () => {
+  test('규칙 12,000개(행마다 하나) — 칠해지고 수 초 안에 끝난다, 이벤트 루프가 멈추지 않는다', async () => {
+    const xlsx = await cfWorkbook(12_000);
+    let ticks = 0;
+    const timer = setInterval(() => (ticks += 1), 5);
+    const t0 = performance.now();
+    const grid = await parseViewerGrid(xlsx);
+    const ms = performance.now() - t0;
+    clearInterval(timer);
+    const painted = grid.sheets[0].rows.flat().filter((c) => c && c.s !== undefined && grid.styles[c.s].bg === '#FFC7CE').length;
+    expect(painted).toBeGreaterThan(1000);
+    expect(ms).toBeLessThan(8000); // 예전 15.8초(제곱)
+    expect(ticks).toBeGreaterThan(3); // 굽는 동안 타이머가 돌았다 = 이벤트 루프를 놓았다
+  }, 60_000);
+  test('TODAY() 규칙이 있으면 구운 날을 적는다(날짜가 바뀌면 보기 그리드를 다시 만든다)', async () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('s');
+    ws.getCell('A1').value = new Date(Date.UTC(2020, 0, 5));
+    const bytes = unzipSync(new Uint8Array(await wb.xlsx.writeBuffer()));
+    bytes['xl/worksheets/sheet1.xml'] = strToU8(strFromU8(bytes['xl/worksheets/sheet1.xml']).replace('</sheetData>', '</sheetData><conditionalFormatting sqref="A1:A3"><cfRule type="expression" priority="1"><formula>$A1&lt;TODAY()</formula></cfRule></conditionalFormatting>'));
+    const grid = await parseViewerGrid(Buffer.from(zipSync(bytes)));
+    expect(grid.cfDay).toBe(localDayKey());
+  });
+});

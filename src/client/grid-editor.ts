@@ -33,9 +33,11 @@ import {
   computeStats,
   GRID_COND_FORMATS_MAP,
   needsStats,
+  cfRowIndex,
   paintCell,
   rectContains,
   subtractRect,
+  type CfFormulaFallback,
   type CfRule,
   type CfStats,
   type CondFormatEntry,
@@ -3264,7 +3266,9 @@ async function main(): Promise<void> {
     if (!Number.isInteger(row) || !Number.isInteger(col) || td.dataset.row === undefined) return;
     const entries = cfEntries();
     if (entries.length === 0 && td.dataset.cf === undefined) return;
-    const paint = entries.length > 0 ? paintCell(entries, row, col, cfValueAt(row, col), cfStatsNow(), cfValueAt) : null;
+    // 이 행에 걸린 규칙만 본다(조각난 규칙 수천 개에서 칸마다 전부 훑지 않게 — 보기 화면 굽기와 같은 색인)
+    const rowEntries = entries.length > 0 ? cfRowEntries(row) : [];
+    const paint = rowEntries.length > 0 ? paintCell(rowEntries, row, col, cfValueAt(row, col), cfStatsNow(), cfValueAt, cfFallback ?? undefined) : null;
     if (!paint && td.dataset.cf === undefined) return;
     // 기본 서식(applyStyleToTd와 같은 값)으로 되돌린 뒤 규칙 색을 얹는다 — 규칙이 더는 안 맞으면 원래 모습이 된다
     const base = styles.get(gridCellKey(activeSheet, row, col));
@@ -3287,10 +3291,39 @@ async function main(): Promise<void> {
     else delete td.dataset.cf;
   }
   condFormatOverlay = applyCondFormatOverlay;
+  let cfIndex: { sheet: number; entries: readonly CondFormatEntry[]; byRow: Array<CondFormatEntry[] | undefined> } | null = null;
+  function cfRowEntries(row: number): readonly CondFormatEntry[] {
+    const entries = cfEntries();
+    if (!cfIndex || cfIndex.sheet !== activeSheet || cfIndex.entries !== entries) {
+      // 데이터 행 + 화면에 더 그리는 빈 행 여유(빈 칸에는 값 규칙이 거의 걸리지 않는다)
+      const rows = (structure.get(String(activeSheet))?.rowCount ?? 0) + 1000;
+      cfIndex = { sheet: activeSheet, entries, byRow: cfRowIndex(entries, rows) };
+    }
+    return cfIndex.byRow[row] ?? [];
+  }
+  // 범위·함수가 든 규칙 수식(COUNTIF($A:$A,$A2)>1 등)은 수식 엔진으로 계산한다 — 그런 규칙이 있을 때만 따로 불러온다(번들 분리)
+  let cfFallback: CfFormulaFallback | null = null;
+  let cfEngineLoading = false;
+  function ensureCfEngine(): void {
+    if (cfFallback || cfEngineLoading) return;
+    const needs = cfEntries().some((e) => e.rule.t === 'expr' || e.rule.t === 'cell' || ((e.rule.t === 'scale' || e.rule.t === 'bar' || e.rule.t === 'icon') && (e.rule.th ?? []).some((th) => th.f)));
+    if (!needs) return;
+    cfEngineLoading = true;
+    void import('../xlsx/cfFormulaEngine.js')
+      .then(({ createCfFormulaFallback }) => {
+        cfFallback = createCfFormulaFallback(cfValueAt, () => {
+          const sheet = structure.get(String(activeSheet));
+          return { rows: sheet?.rowCount ?? 0, cols: sheet?.colCount ?? 0 };
+        });
+        scheduleCfRepaint();
+      })
+      .catch(() => undefined);
+  }
   // 값·계산 결과·규칙이 바뀌면 통계를 버리고 화면 칸을 한 번에 다시 칠한다(한 칸이 바뀌어도 상위 10개·중복 판정은 다른 칸이 바뀐다)
   let cfRepaintQueued = false;
   function scheduleCfRepaint(): void {
     cfStats = null;
+    ensureCfEngine();
     if (cfRepaintQueued) return;
     if (cfEntries().length === 0 && !tableEl.querySelector('td[data-cf]')) return;
     cfRepaintQueued = true;

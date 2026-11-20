@@ -8,6 +8,8 @@
  * 다시 찾아 그대로 쓴다(그래서 화면에 못 그리는 종류(`t: 'other'`, 수식·아이콘 집합 등)도 잃지 않는다).
  */
 
+import { dateTextToSerial } from './cellValueShared.js';
+
 export const GRID_COND_FORMATS_MAP = 'condFormats';
 
 /** 0부터 센 사각형(양 끝 포함) */
@@ -34,17 +36,22 @@ export type CfRule =
   | { readonly t: 'dup'; readonly unique?: 1; readonly s: CfStyle }
   | { readonly t: 'top'; readonly n: number; readonly bottom?: 1; readonly percent?: 1; readonly s: CfStyle }
   | { readonly t: 'avg'; readonly below?: 1; readonly s: CfStyle }
-  | { readonly t: 'scale'; readonly colors: readonly string[] }
-  | { readonly t: 'bar'; readonly color: string }
+  /** 색조 — th: 색마다의 문턱값(cfvo), 없으면 최소·(50 백분위)·최대 */
+  | { readonly t: 'scale'; readonly colors: readonly string[]; readonly th?: readonly CfThreshold[] }
+  /** 데이터 막대 — th: [최소, 최대] 문턱값, len: 칸 폭 대비 [최소, 최대] %(기본 10·90), neg: 음수 막대 색(x14) */
+  | { readonly t: 'bar'; readonly color: string; readonly th?: readonly [CfThreshold, CfThreshold]; readonly len?: readonly [number, number]; readonly neg?: string }
   /** 아이콘 집합 — th: 둘째 아이콘부터의 문턱값(첫 cfvo는 엑셀도 보지 않는다), gt: 이상(>=)이 아니라 초과(>) */
-  | { readonly t: 'icon'; readonly set: string; readonly th: readonly CfIconThreshold[]; readonly reverse?: 1; readonly hide?: 1 }
+  | { readonly t: 'icon'; readonly set: string; readonly th: readonly CfThreshold[]; readonly reverse?: 1; readonly hide?: 1 }
   /** 수식 규칙 — 범위 왼쪽 위 칸 기준으로 쓴 수식(상대 참조는 칸마다 옮긴다) */
   | { readonly t: 'expr'; readonly f: string; readonly s: CfStyle }
   | { readonly t: 'other' };
 
-export interface CfIconThreshold {
-  readonly type: 'percent' | 'percentile' | 'num';
-  readonly v: number;
+/** 문턱값(엑셀 cfvo) — autoMin/autoMax는 x14 막대의 "자동"(0을 포함하는 최소·최대) */
+export interface CfThreshold {
+  readonly type: 'min' | 'max' | 'num' | 'percent' | 'percentile' | 'formula' | 'autoMin' | 'autoMax';
+  readonly v?: number;
+  /** type이 formula일 때(또는 값 자리에 수식이 있을 때) 그 수식 */
+  readonly f?: string;
   readonly gt?: 1;
 }
 
@@ -89,6 +96,10 @@ export interface CondFormatEntry {
   readonly rule: CfRule;
   /** 파일에서 읽은 규칙의 priority — 저장 때 원래 규칙을 찾는 열쇠 */
   readonly p?: number;
+  /** "true이면 중지"(stopIfTrue) — 이 규칙이 맞으면 우선순위가 낮은 규칙은 보지 않는다 */
+  readonly stop?: 1;
+  /** x14 확장(extLst) 규칙의 priority — 정렬에만 쓴다(저장은 파일의 확장 부분을 그대로 둔다) */
+  readonly xp?: number;
 }
 
 /** 엑셀 "셀 강조 규칙" 대화 상자의 서식 고르기 6가지(엑셀과 같은 색) */
@@ -201,32 +212,22 @@ export function parseSqref(sqref: string, maxRow = 1_048_575, maxCol = 16_383): 
 
 // ---------- 판정 ----------
 const NUMERIC = /^-?(\d+(\.\d*)?|\.\d+)([eE][-+]?\d+)?$/;
+/** 칸 값 → 수. 날짜 글자("2026-11-20")는 엑셀처럼 날짜 일련번호로 본다(날짜 칸과 TODAY() 비교, 날짜 색조 등). */
 export function cfNumber(value: string): number | null {
   const t = value.trim().replace(/,/g, '');
-  return t !== '' && NUMERIC.test(t) ? Number(t) : null;
+  if (t === '') return null;
+  if (NUMERIC.test(t)) return Number(t);
+  return dateTextToSerial(t);
 }
 
-/** 규칙의 값 자리("10", "=10", "=\"사과\"", "=$B$1") → 비교할 값. 다른 칸을 가리키면 그 칸 값을 읽는다. */
-export function resolveOperand(operand: string, valueAt: (row: number, col: number) => string): string | null {
-  let s = operand.trim();
-  if (s.startsWith('=')) s = s.slice(1).trim();
-  if (s.length >= 2 && s.startsWith('"') && s.endsWith('"')) return s.slice(1, -1).replace(/""/g, '"');
-  if (cfNumber(s) !== null) return s;
-  const ref = /^\$?([A-Z]{1,3})\$?(\d+)$/i.exec(s);
-  if (ref) return valueAt(Number(ref[2]) - 1, colIndex(ref[1]));
-  if (s === '' || /[(),:!+*/^&<>-]/.test(s)) return s === '' ? '' : null; // 수식은 계산하지 않는다
-  return s; // 따옴표 없는 글자(편집기에서 그냥 적은 값)
-}
-
-/** 범위 전체를 보아야 하는 규칙(중복·상위·평균·색조·막대)의 통계 */
+/** 범위 전체를 보아야 하는 규칙(중복·상위·평균·색조·막대·아이콘)의 통계 */
 export interface CfStats {
   readonly counts?: ReadonlyMap<string, number>;
   readonly threshold?: number;
   readonly mean?: number;
   readonly min?: number;
   readonly max?: number;
-  readonly mid?: number;
-  /** 아이콘 집합의 백분위 문턱값용 — 오름차순 값 */
+  /** 백분위 문턱값용 — 오름차순 값 */
   readonly sorted?: readonly number[];
 }
 
@@ -252,14 +253,8 @@ export function computeStats(rule: CfRule, values: readonly string[]): CfStats {
     return { threshold: sorted[Math.min(n, sorted.length) - 1] };
   }
   if (rule.t === 'avg') return { mean: nums.reduce((a, b) => a + b, 0) / nums.length };
-  const min = Math.min(...nums);
-  const max = Math.max(...nums);
-  if (rule.t === 'scale') {
-    const sorted = [...nums].sort((a, b) => a - b);
-    return { min, max, mid: percentileOf(sorted, 50) }; // 50번째 백분위수(엑셀 3색 색조 기본)
-  }
-  if (rule.t === 'icon') return { min, max, sorted: [...nums].sort((a, b) => a - b) };
-  return { min: Math.min(0, min), max: Math.max(0, max) }; // 데이터 막대: 엑셀 "자동" 최소·최대는 0을 포함한다
+  const sorted = [...nums].sort((a, b) => a - b);
+  return { min: sorted[0], max: sorted[sorted.length - 1], sorted };
 }
 
 /** 오름차순 값의 p번째 백분위수(엑셀 PERCENTILE.INC와 같은 보간) */
@@ -269,37 +264,9 @@ function percentileOf(sorted: readonly number[], p: number): number {
   return sorted[lo] + (sorted[Math.min(lo + 1, sorted.length - 1)] - sorted[lo]) * (pos - lo);
 }
 
-function cellRuleMatches(op: CfCellOp, value: string, a: string | null, b: string | null): boolean {
-  if (a === null) return false;
-  const v = value.trim() === '' ? '0' : value; // 엑셀은 빈 칸을 0으로 본다
-  const nv = cfNumber(v);
-  const na = cfNumber(a);
-  if (op === 'between' || op === 'notBetween') {
-    const nb = b === null ? null : cfNumber(b);
-    if (nv === null || na === null || nb === null) return op === 'notBetween' && nv === null;
-    const inside = nv >= Math.min(na, nb) && nv <= Math.max(na, nb);
-    return op === 'between' ? inside : !inside;
-  }
-  if (nv !== null && na !== null) {
-    switch (op) {
-      case 'gt': return nv > na;
-      case 'lt': return nv < na;
-      case 'ge': return nv >= na;
-      case 'le': return nv <= na;
-      case 'eq': return nv === na;
-      case 'ne': return nv !== na;
-    }
-  }
-  const sv = value.trim().toLowerCase();
-  const sa = a.trim().toLowerCase();
-  if (op === 'eq') return sv === sa;
-  if (op === 'ne') return sv !== sa;
-  return false;
-}
-
 export interface CfPaint {
   style?: CfStyle;
-  /** 데이터 막대: 색과 길이(0~1) */
+  /** 데이터 막대: 색과 길이(0~1, 칸 폭 대비) */
   bar?: { color: string; ratio: number };
   /** 색조: 칸 배경 */
   scale?: string;
@@ -310,12 +277,50 @@ export interface CfPaint {
 function mixHex(a: string, b: string, t: number): string {
   const pa = [1, 3, 5].map((i) => parseInt(a.slice(i, i + 2), 16));
   const pb = [1, 3, 5].map((i) => parseInt(b.slice(i, i + 2), 16));
-  return `#${pa.map((x, i) => Math.round(x + (pb[i] - x) * t).toString(16).padStart(2, '0')).join('').toUpperCase()}`;
+  return `#${pa.map((x, i) => Math.round(x + (pb[i] - x) * Math.max(0, Math.min(1, t))).toString(16).padStart(2, '0')).join('').toUpperCase()}`;
+}
+
+/** 수식 엔진(fast-formula-parser)으로 계산하는 대체 경로 — 작은 계산기가 못 하는 범위·함수(COUNTIF($A:$A,$A2) 등)용.
+ * formula는 이미 이 칸 기준으로 참조를 옮긴 수식, 결과가 없으면(오류·지원 안 함) undefined. */
+export type CfFormulaFallback = (formula: string, row: number, col: number) => CfVal | undefined;
+
+/** 문턱값 하나(cfvo)를 수로 — 최소·최대·수·백분율·백분위·수식, x14의 자동 최소·최대(0을 포함) */
+function thresholdOf(
+  th: CfThreshold,
+  st: CfStats,
+  anchor: CfRect | undefined,
+  valueAt: (row: number, col: number) => string,
+  fallback: CfFormulaFallback | undefined,
+): number | null {
+  if (st.min === undefined || st.max === undefined) return null;
+  switch (th.type) {
+    case 'min':
+      return st.min;
+    case 'max':
+      return st.max;
+    case 'autoMin':
+      return Math.min(0, st.min);
+    case 'autoMax':
+      return Math.max(0, st.max);
+    case 'num':
+      return th.v ?? null;
+    case 'percent':
+      return st.min + ((st.max - st.min) * (th.v ?? 0)) / 100;
+    case 'percentile':
+      return st.sorted ? percentileOf(st.sorted, th.v ?? 0) : null;
+    case 'formula': {
+      const v = th.f && anchor ? evalCfValue(th.f, 0, 0, anchor.r0, anchor.c0, valueAt, fallback) : undefined;
+      return typeof v === 'number' ? v : typeof v === 'string' ? cfNumber(v) : null;
+    }
+    default:
+      return null;
+  }
 }
 
 /**
- * 칸 하나에 걸리는 강조. entries는 우선순위 순(앞이 높다), stats는 entry.id별 통계(needsStats인 것만).
- * 우선순위가 낮은 규칙부터 덮어 써서 높은 규칙의 속성이 이기게 한다.
+ * 칸 하나에 걸리는 강조. entries는 우선순위 순(앞이 높다) — 높은 규칙부터 보며 아직 정해지지 않은 속성만 채우고,
+ * "true이면 중지"(stopIfTrue)인 규칙이 맞으면 거기서 멈춘다(엑셀과 같다). stats는 entry.id별 통계(needsStats인 것만).
+ * 큰 시트에서는 부르는 쪽이 이 칸이 든 행에 걸리는 규칙만 골라 넘긴다(cfRowIndex).
  */
 export function paintCell(
   entries: readonly CondFormatEntry[],
@@ -324,100 +329,193 @@ export function paintCell(
   value: string,
   stats: ReadonlyMap<string, CfStats>,
   valueAt: (row: number, col: number) => string,
+  fallback?: CfFormulaFallback,
 ): CfPaint | null {
-  let paint: CfPaint | null = null;
-  for (let i = entries.length - 1; i >= 0; i -= 1) {
-    const entry = entries[i];
+  const paint: CfPaint = {};
+  let any = false;
+  for (const entry of entries) {
     if (!entry.ranges.some((r) => rectContains(r, row, col))) continue;
     const rule = entry.rule;
     const st = stats.get(entry.id) ?? {};
+    const anchor = entry.ranges[0];
     let hit: CfStyle | undefined;
+    let matched = false;
     switch (rule.t) {
       case 'cell': {
-        const a = resolveOperand(rule.v1, valueAt);
-        const b = rule.v2 === undefined ? null : resolveOperand(rule.v2, valueAt);
-        if (cellRuleMatches(rule.op, value, a, b)) hit = rule.s;
+        const dr = row - anchor.r0;
+        const dc = col - anchor.c0;
+        const a = evalCfValue(rule.v1, dr, dc, row, col, valueAt, fallback);
+        const b = rule.v2 === undefined ? undefined : evalCfValue(rule.v2, dr, dc, row, col, valueAt, fallback);
+        matched = cellRuleMatches(rule.op, cellVal(value), a, b);
         break;
       }
       case 'text': {
         const v = value.toLowerCase();
         const t = rule.text.toLowerCase();
-        const ok =
-          rule.op === 'contains' ? v.includes(t) : rule.op === 'notContains' ? !v.includes(t) : rule.op === 'begins' ? v.startsWith(t) : v.endsWith(t);
-        if (ok) hit = rule.s;
+        matched = rule.op === 'contains' ? v.includes(t) : rule.op === 'notContains' ? !v.includes(t) : rule.op === 'begins' ? v.startsWith(t) : v.endsWith(t);
         break;
       }
       case 'dup': {
         const k = value.trim().toLowerCase();
         if (k !== '') {
           const n = st.counts?.get(k) ?? 0;
-          if (rule.unique ? n === 1 : n > 1) hit = rule.s;
+          matched = rule.unique ? n === 1 : n > 1;
         }
         break;
       }
       case 'top': {
         const n = cfNumber(value);
-        if (n !== null && st.threshold !== undefined && (rule.bottom ? n <= st.threshold : n >= st.threshold)) hit = rule.s;
+        matched = n !== null && st.threshold !== undefined && (rule.bottom ? n <= st.threshold : n >= st.threshold);
         break;
       }
       case 'avg': {
         const n = cfNumber(value);
-        if (n !== null && st.mean !== undefined && (rule.below ? n < st.mean : n > st.mean)) hit = rule.s;
+        matched = n !== null && st.mean !== undefined && (rule.below ? n < st.mean : n > st.mean);
         break;
       }
       case 'scale': {
         const n = cfNumber(value);
-        if (n === null || st.min === undefined || st.max === undefined) break;
-        const [c0, c1, c2] = rule.colors;
-        let color: string;
-        if (st.max === st.min) color = c2 && c1 ? c1 : c0;
-        else if (c2) {
-          const mid = st.mid ?? (st.min + st.max) / 2;
-          color = n <= mid ? mixHex(c0, c1, mid === st.min ? 1 : (n - st.min) / (mid - st.min)) : mixHex(c1, c2, st.max === mid ? 1 : (n - mid) / (st.max - mid));
-        } else color = mixHex(c0, c1, (n - st.min) / (st.max - st.min));
-        paint = { ...(paint ?? {}), scale: color };
+        if (n === null || paint.scale) break;
+        const stops = (rule.th ?? (rule.colors.length === 3 ? DEFAULT_SCALE3 : DEFAULT_SCALE2)).map((th) => thresholdOf(th, st, anchor, valueAt, fallback));
+        if (stops.some((s) => s === null)) break;
+        const at = stops as number[];
+        const colors = rule.colors;
+        let color = colors[0];
+        if (n >= at[at.length - 1]) color = colors[colors.length - 1];
+        else if (n > at[0]) {
+          for (let k = 1; k < at.length; k += 1) {
+            if (n <= at[k]) {
+              color = mixHex(colors[k - 1], colors[k], at[k] === at[k - 1] ? 1 : (n - at[k - 1]) / (at[k] - at[k - 1]));
+              break;
+            }
+          }
+        }
+        paint.scale = color;
+        matched = true;
         break;
       }
       case 'bar': {
         const n = cfNumber(value);
-        if (n === null || st.min === undefined || st.max === undefined || st.max === st.min) break;
-        paint = { ...(paint ?? {}), bar: { color: rule.color, ratio: Math.max(0, Math.min(1, (n - st.min) / (st.max - st.min))) } };
+        if (n === null || paint.bar) break;
+        const lo = thresholdOf(rule.th?.[0] ?? { type: 'min' }, st, anchor, valueAt, fallback);
+        const hi = thresholdOf(rule.th?.[1] ?? { type: 'max' }, st, anchor, valueAt, fallback);
+        if (lo === null || hi === null) break;
+        const ratio = hi === lo ? 1 : Math.max(0, Math.min(1, (n - lo) / (hi - lo)));
+        // 막대 길이는 칸 폭의 minLength~maxLength %(엑셀 기본 10~90, x14 막대는 보통 0~100)
+        const minL = (rule.len?.[0] ?? 10) / 100;
+        const maxL = (rule.len?.[1] ?? 90) / 100;
+        paint.bar = { color: n < 0 && rule.neg ? rule.neg : rule.color, ratio: minL + (maxL - minL) * ratio };
+        matched = true;
         break;
       }
       case 'icon': {
         const n = cfNumber(value);
         const icons = CF_ICON_SETS[rule.set] ?? CF_ICON_SETS['3TrafficLights1'];
-        if (n === null || st.min === undefined || st.max === undefined || !st.sorted) break;
+        if (n === null || paint.icon) break;
         let level = 0;
         for (let k = Math.min(rule.th.length, icons.length - 1); k >= 1; k -= 1) {
           const th = rule.th[k - 1];
-          const at = th.type === 'num' ? th.v : th.type === 'percentile' ? percentileOf(st.sorted, th.v) : st.min + ((st.max - st.min) * th.v) / 100;
-          if (th.gt ? n > at : n >= at) {
+          const at = thresholdOf(th, st, anchor, valueAt, fallback);
+          if (at !== null && (th.gt ? n > at : n >= at)) {
             level = k;
             break;
           }
         }
         const icon = icons[rule.reverse ? icons.length - 1 - level : level];
-        paint = { ...(paint ?? {}), icon: { ...icon, ...(rule.hide ? { hide: true as const } : {}) } };
+        paint.icon = { ...icon, ...(rule.hide ? { hide: true as const } : {}) };
+        matched = true;
         break;
       }
-      case 'expr': {
-        const anchor = entry.ranges[0];
-        if (anchor && evalCfFormula(rule.f, row - anchor.r0, col - anchor.c0, row, col, valueAt)) hit = rule.s;
+      case 'expr':
+        matched = truthy(evalCfValue(rule.f, row - anchor.r0, col - anchor.c0, row, col, valueAt, fallback) ?? false);
         break;
-      }
       default:
         break;
     }
-    if (hit) paint = { ...(paint ?? {}), style: { ...(paint?.style ?? {}), ...hit } };
+    if (matched && 's' in rule) hit = rule.s;
+    if (hit) {
+      const merged: { bg?: string; col?: string; b?: 1 } = { ...paint.style };
+      if (hit.bg && merged.bg === undefined) merged.bg = hit.bg;
+      if (hit.col && merged.col === undefined) merged.col = hit.col;
+      if (hit.b && merged.b === undefined) merged.b = 1;
+      paint.style = merged;
+    }
+    if (matched) any = true;
+    if (matched && entry.stop) break;
   }
-  return paint;
+  return any ? paint : null;
 }
 
-// ---------- 수식 규칙(type="expression") 계산 ----------
-// 조건부 서식 수식은 짧다($C2>=1, MOD(ROW(),2)=0, AND($D2="완료",$E2>0) …). 편집기 번들에 수식 엔진 전체를 싣지 않고
-// 비교·산술·연결·자주 쓰는 함수만 여기서 계산한다. 모르는 함수나 범위·다른 시트 참조가 나오면 규칙이 안 맞는 것으로 본다.
-type CfVal = number | string | boolean | null; // null = 빈 칸
+const DEFAULT_SCALE2: readonly CfThreshold[] = [{ type: 'min' }, { type: 'max' }];
+const DEFAULT_SCALE3: readonly CfThreshold[] = [{ type: 'min' }, { type: 'percentile', v: 50 }, { type: 'max' }];
+
+/** 칸 값 글자 → 비교용 값(빈 칸 null, 수·날짜는 수, TRUE/FALSE는 논리값, 나머지는 글자) */
+function cellVal(v: string): CfVal {
+  if (v.trim() === '') return null;
+  const n = cfNumber(v);
+  if (n !== null) return n;
+  if (v === 'TRUE' || v === 'FALSE') return v === 'TRUE';
+  return v;
+}
+
+/** "셀 값 > …" 비교 — 엑셀은 빈 칸을 0으로 보고, 수끼리는 수로, 글자끼리는 대소문자 없이 비교한다 */
+function cellRuleMatches(op: CfCellOp, value: CfVal, a: CfVal | undefined, b: CfVal | undefined): boolean {
+  if (a === undefined) return false;
+  const v = value === null ? 0 : value;
+  if (op === 'between' || op === 'notBetween') {
+    if (b === undefined) return false;
+    const lo = compare(a, b) <= 0 ? a : b;
+    const hi = lo === a ? b : a;
+    const inside = compare(v, lo) >= 0 && compare(v, hi) <= 0;
+    return op === 'between' ? inside : !inside;
+  }
+  const d = compare(v, a);
+  switch (op) {
+    case 'gt': return d > 0;
+    case 'lt': return d < 0;
+    case 'ge': return d >= 0;
+    case 'le': return d <= 0;
+    case 'eq': return d === 0;
+    case 'ne': return d !== 0;
+    default: return false;
+  }
+}
+
+/** 규칙(cfRule들)을 행마다 색인한다 — 칸마다 모든 규칙을 훑지 않게(조각난 규칙 수천 개에서 제곱으로 느려지던 문제).
+ * rowCount까지만(시트 끝까지인 A:A 범위도 실제 행까지). 우선순위 순서는 그대로다. */
+export function cfRowIndex(entries: readonly CondFormatEntry[], rowCount: number): Array<CondFormatEntry[] | undefined> {
+  const byRow: Array<CondFormatEntry[] | undefined> = new Array(Math.max(0, rowCount));
+  for (const entry of entries) {
+    let last = -1;
+    for (const rect of entry.ranges) {
+      for (let r = rect.r0; r <= Math.min(rect.r1, rowCount - 1); r += 1) {
+        const list = byRow[r] ?? (byRow[r] = []);
+        if (last !== r || list[list.length - 1] !== entry) list.push(entry);
+        last = r;
+      }
+    }
+  }
+  return byRow;
+}
+
+/** 수식 안에 TODAY()·NOW()가 있는지 — 날마다 결과가 바뀌는 규칙(보기 화면 캐시를 날짜별로 다시 만든다) */
+export function cfIsVolatile(entries: readonly CondFormatEntry[]): boolean {
+  const vol = (f: string | undefined) => Boolean(f && /\b(TODAY|NOW)\s*\(/i.test(f));
+  return entries.some((e) => {
+    const r = e.rule;
+    if (r.t === 'expr') return vol(r.f);
+    if (r.t === 'cell') return vol(r.v1) || vol(r.v2);
+    if (r.t === 'scale' || r.t === 'bar' || r.t === 'icon') return (r.th ?? []).some((th) => vol(th.f));
+    return false;
+  });
+}
+
+// ---------- 수식(규칙 수식·피연산자) 계산 ----------
+// 조건부 서식 수식은 대개 짧다($C2>=1, MOD(ROW(),2)=0, $A2<TODAY() …). 그런 것은 여기 작은 계산기가 바로 하고,
+// 범위(A1:B5, $A:$A)·다른 시트·모르는 함수가 나오면 수식 엔진(fast-formula-parser, CfFormulaFallback)에 넘긴다.
+export type CfVal = number | string | boolean | null; // null = 빈 칸
+
+const UNSUPPORTED = new Error('cf: unsupported');
 
 function truthy(v: CfVal): boolean {
   return typeof v === 'boolean' ? v : typeof v === 'number' ? v !== 0 : false;
@@ -447,6 +545,7 @@ function compare(a: CfVal, b: CfVal): number {
   return rank(x) - rank(y);
 }
 
+const EXCEL_EPOCH = Date.UTC(1899, 11, 30);
 const CF_FUNCS: Readonly<Record<string, (args: CfVal[], at: { row: number; col: number }) => CfVal>> = {
   AND: (a) => a.every((v) => truthy(v)),
   OR: (a) => a.some((v) => truthy(v)),
@@ -479,19 +578,101 @@ const CF_FUNCS: Readonly<Record<string, (args: CfVal[], at: { row: number; col: 
   UPPER: (a) => text(a[0] ?? null).toUpperCase(),
   LOWER: (a) => text(a[0] ?? null).toLowerCase(),
   TRIM: (a) => text(a[0] ?? null).trim().replace(/\s+/g, ' '),
-  TODAY: () => Math.floor((Date.now() - Date.UTC(1899, 11, 30)) / 86_400_000),
+  // 오늘(서버·브라우저 현지 날짜) — 보기 화면 캐시는 날짜가 바뀌면 다시 만든다(cfIsVolatile)
+  TODAY: () => {
+    const d = new Date();
+    return (Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) - EXCEL_EPOCH) / 86_400_000;
+  },
+  NOW: () => {
+    const d = new Date();
+    return (Date.UTC(d.getFullYear(), d.getMonth(), d.getDate(), d.getHours(), d.getMinutes(), d.getSeconds()) - EXCEL_EPOCH) / 86_400_000;
+  },
+  DATE: (a) => (Date.UTC(num(a[0] ?? null), num(a[1] ?? null) - 1, num(a[2] ?? null)) - EXCEL_EPOCH) / 86_400_000,
 };
 
 const NUM_TOKEN = /^(\d+(\.\d*)?|\.\d+)([eE][-+]?\d+)?/;
-const REF_TOKEN = /^(\$?)([A-Za-z]{1,3})(\$?)(\d+)(?![\w(:!])/;
+const REF_TOKEN = /^(\$?)([A-Za-z]{1,3})(\$?)(\d+)(?![\w(!])/;
 const FUNC_TOKEN = /^([A-Za-z][A-Za-z0-9.]*)\s*\(/;
 const BOOL_TOKEN = /^(TRUE|FALSE)(?![\w(])/i;
 const CMP_TOKEN = /^(<>|<=|>=|=|<|>)/;
 
+/** 상대 참조(A1, A$1, A:A)를 dRow·dCol만큼 옮긴다 — $가 붙은 쪽, 따옴표 안 글자, 함수 이름은 그대로(정렬·채우기·조건부 서식 공용) */
+export function shiftFormulaRefs(formula: string, dRow: number, dCol: number): string {
+  if (dRow === 0 && dCol === 0) return formula;
+  const colName = (c: number) => {
+    let n = c;
+    let s = '';
+    while (n > 0) {
+      const m = (n - 1) % 26;
+      s = String.fromCharCode(65 + m) + s;
+      n = Math.floor((n - 1) / 26);
+    }
+    return s;
+  };
+  const colNum = (letters: string) => [...letters.toUpperCase()].reduce((acc, ch) => acc * 26 + (ch.charCodeAt(0) - 64), 0);
+  const moveCol = (abs: string, letters: string) => (abs ? `$${letters}` : colName(Math.max(1, colNum(letters) + dCol)));
+  let out = '';
+  let i = 0;
+  const cellRef = /(\$?)([A-Za-z]{1,3})(\$?)(\d+)(?![A-Za-z0-9_(])/y;
+  const colRange = /(\$?)([A-Za-z]{1,3}):(\$?)([A-Za-z]{1,3})(?![A-Za-z0-9_(])/y;
+  while (i < formula.length) {
+    const ch = formula[i];
+    if (ch === '"' || ch === "'") {
+      const end = formula.indexOf(ch, i + 1);
+      const stop = end < 0 ? formula.length : end + 1;
+      out += formula.slice(i, stop);
+      i = stop;
+      continue;
+    }
+    const boundary = i === 0 || !/[A-Za-z0-9_.$]/.test(formula[i - 1]);
+    if (boundary) {
+      colRange.lastIndex = i;
+      const cr = colRange.exec(formula);
+      if (cr) {
+        out += `${moveCol(cr[1], cr[2])}:${moveCol(cr[3], cr[4])}`;
+        i += cr[0].length;
+        continue;
+      }
+      cellRef.lastIndex = i;
+      const m = cellRef.exec(formula);
+      if (m) {
+        const [, colAbs, col, rowAbs, row] = m;
+        out += `${moveCol(colAbs, col)}${rowAbs}${rowAbs ? Number(row) : Math.max(1, Number(row) + dRow)}`;
+        i += m[0].length;
+        continue;
+      }
+    }
+    out += ch;
+    i += 1;
+  }
+  return out;
+}
+
 /**
- * 조건부 서식 수식 하나를 칸 (row, col)에 대해 계산해 참/거짓을 낸다. dr/dc: 범위 왼쪽 위에서 이 칸까지 — $ 없는 참조를 이만큼 옮긴다.
- * 계산할 수 없으면(모르는 함수, 범위·다른 시트 참조, 문법 오류) false.
+ * 조건부 서식 수식·피연산자 하나를 칸 (row, col)에 대해 계산한다. dr/dc: 범위 왼쪽 위에서 이 칸까지 — $ 없는 참조를 이만큼 옮긴다.
+ * 작은 계산기가 못 하는 것(범위·다른 시트·모르는 함수)은 fallback(수식 엔진)에 옮긴 수식으로 넘긴다. 계산할 수 없으면 undefined.
  */
+export function evalCfValue(
+  formula: string,
+  dr: number,
+  dc: number,
+  row: number,
+  col: number,
+  valueAt: (row: number, col: number) => string,
+  fallback?: CfFormulaFallback,
+): CfVal | undefined {
+  const src = formula.trim().replace(/^=/, '');
+  try {
+    return evalSmall(src, dr, dc, row, col, valueAt);
+  } catch (error) {
+    // 작은 계산기가 모르는 것(범위·다른 시트·모르는 함수·못 읽는 문법)만 수식 엔진으로 — 계산 오류(#VALUE! 등)는 안 맞음
+    const unsupported = error === UNSUPPORTED || (error instanceof Error && error.message === 'cf formula');
+    if (!unsupported || !fallback) return undefined;
+    return fallback(shiftFormulaRefs(`=${src}`, dr, dc).slice(1), row, col);
+  }
+}
+
+/** 조건부 서식 수식 규칙이 이 칸에서 참인지(계산할 수 없으면 거짓 — 엑셀도 오류는 안 맞음으로 본다) */
 export function evalCfFormula(
   formula: string,
   dr: number,
@@ -499,8 +680,12 @@ export function evalCfFormula(
   row: number,
   col: number,
   valueAt: (row: number, col: number) => string,
+  fallback?: CfFormulaFallback,
 ): boolean {
-  const src = formula.trim().replace(/^=/, '');
+  return truthy(evalCfValue(formula, dr, dc, row, col, valueAt, fallback) ?? false);
+}
+
+function evalSmall(src: string, dr: number, dc: number, row: number, col: number, valueAt: (row: number, col: number) => string): CfVal {
   let i = 0;
   const rest = () => src.slice(i);
   const peek = () => {
@@ -513,15 +698,6 @@ export function evalCfFormula(
   const expect = (ch: string) => {
     if (peek() !== ch) fail();
     i += 1;
-  };
-  const cellValue = (r: number, c: number): CfVal => {
-    if (r < 0 || c < 0) fail();
-    const v = valueAt(r, c);
-    if (v === '') return null;
-    const n = cfNumber(v);
-    if (n !== null) return n;
-    if (v === 'TRUE' || v === 'FALSE') return v === 'TRUE';
-    return v;
   };
   const primary = (): CfVal => {
     const ch = peek();
@@ -547,6 +723,7 @@ export function evalCfFormula(
         i += 1;
       }
     }
+    if (ch === "'" || ch === '!' || ch === ':') throw UNSUPPORTED; // 다른 시트·범위 — 수식 엔진으로
     const numMatch = NUM_TOKEN.exec(rest());
     if (numMatch) {
       i += numMatch[0].length;
@@ -560,14 +737,19 @@ export function evalCfFormula(
     const ref = REF_TOKEN.exec(rest());
     if (ref) {
       i += ref[0].length;
+      if (src[i] === ':') throw UNSUPPORTED;
       let c = 0;
       for (const l of ref[2].toUpperCase()) c = c * 26 + (l.charCodeAt(0) - 64);
-      return cellValue(Number(ref[4]) - 1 + (ref[3] ? 0 : dr), c - 1 + (ref[1] ? 0 : dc));
+      const r0 = Number(ref[4]) - 1 + (ref[3] ? 0 : dr);
+      const c0 = c - 1 + (ref[1] ? 0 : dc);
+      if (r0 < 0 || c0 < 0) fail();
+      return cellVal(valueAt(r0, c0));
     }
     const name = FUNC_TOKEN.exec(rest());
     if (name) {
       i += name[0].length;
-      const fn = CF_FUNCS[name[1].toUpperCase()] ?? fail();
+      const fn = CF_FUNCS[name[1].toUpperCase()];
+      if (!fn) throw UNSUPPORTED;
       const args: CfVal[] = [];
       if (peek() !== ')') {
         for (;;) {
@@ -579,6 +761,7 @@ export function evalCfFormula(
       expect(')');
       return fn(args, { row, col });
     }
+    if (/^[A-Za-z_]/.test(rest())) throw UNSUPPORTED; // 이름 정의·열 범위(A:A) 등
     return fail();
   };
   const unary = (): CfVal => {
@@ -643,10 +826,10 @@ export function evalCfFormula(
       v = op === '=' ? d === 0 : op === '<>' ? d !== 0 : op === '<' ? d < 0 : op === '>' ? d > 0 : op === '<=' ? d <= 0 : d >= 0;
     }
   }
-  try {
-    const v = comparison();
-    return peek() === '' && truthy(v);
-  } catch {
-    return false;
+  const v = comparison();
+  if (peek() !== '') {
+    if (peek() === ':' || peek() === '!') throw UNSUPPORTED;
+    fail();
   }
+  return v;
 }
