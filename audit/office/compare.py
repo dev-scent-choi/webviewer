@@ -168,10 +168,34 @@ for it in check:
         for h in it.get('not', []):
             results.append({'id': it['id'], 'doc': it['doc'], 'where': where, 'item': 'not ' + h, 'ok': norm(h) not in sq})
 # PPT 편집 화면 DOM 점검(pptx_checks.json, capture.mjs → pptx_dom.mjs가 잰 결과)
+# officePos 항목은 구현이 낸 값이 아니라 MS Office 정답 PDF에서 같은 글자의 위치를 찾아 비교한다(자기 확인 아님 — 검토 Minor 10).
+# 글자 상자 위·왼쪽 가장자리의 차이가 슬라이드 높이·폭의 tol 이하면 통과. 글꼴 높이 차이를 줄이려고 글자 상자 가운데 높이로 비교한다.
+def office_pos(doc, slide, text):
+    pdf = os.path.join(OUT, 'ref', doc + '.pdf')
+    if not os.path.exists(pdf): return None
+    d = pymupdf.open(pdf)
+    if slide - 1 >= len(d): return None
+    page = d[slide - 1]
+    hits = page.search_for(text) or page.search_for(text.replace(' ', ''))  # Office PDF는 한글 사이 띄어쓰기를 글자로 안 넣기도 한다
+    if not hits: return None
+    b = hits[0]
+    return {'cy': (b.y0 + b.y1) / 2 / page.rect.height, 'x': b.x0 / page.rect.width}
 for r in rows:
     ed = r['_entry'].get('edit')
     for c in ((ed.get('dom') if isinstance(ed, dict) else None) or []):
-        results.append({'id': c['id'], 'doc': c['doc'], 'where': 'editDom', 'item': f"s{c['slide']} {c['item']}", 'ok': c['ok'], 'got': {k: v for k, v in c['got'].items() if k != 'found'} if c['got'].get('found') else '없음'})
+        got = {k: v for k, v in c['got'].items() if k != 'found'} if c['got'].get('found') else '없음'
+        ok = c['ok']
+        if c.get('officePos') and isinstance(got, dict) and got.get('topFrac') is not None:
+            ref = office_pos(c['doc'], c['slide'], c['text'])
+            if ref is None:
+                ok = False
+                got = {'office': '정답 PDF에서 글자를 못 찾음'}
+            else:
+                cy = got['topFrac'] + got['heightFrac'] / 2
+                dy, dx = cy - ref['cy'], got['leftFrac'] - ref['x']
+                ok = abs(dy) <= c['officePos'] and abs(dx) <= c['officePos']
+                got = {'dy': round(dy, 4), 'dx': round(dx, 4), 'tol': c['officePos']}
+        results.append({'id': c['id'], 'doc': c['doc'], 'where': 'editDom', 'item': f"s{c['slide']} {c['item']}", 'ok': ok, 'got': got})
 for r in rows: r.pop('_entry', None)
 
 def mean(xs):

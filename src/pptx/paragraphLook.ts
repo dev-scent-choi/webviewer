@@ -89,10 +89,10 @@ export function lineHeightCss(v: SpacingValue): string {
   return 'pct' in v ? `calc(${SINGLE_LINE} * (${v.pct} - var(--ln-red, 0)))` : `calc(${v.pts} * var(--slide-pt, 1pt))`;
 }
 
-/** 단락 앞·뒤 간격 CSS(margin 값) — 비율(pct)은 한 줄 높이에 대한 비율, pts는 슬라이드 pt. 자동 맞춤의 줄임 비율은
- * 비율 간격에서도 뺀다(0 아래로는 안 감) — MS Office 정답 p03: 20% 줄인 상자에서 단락 사이가 거의 붙는다. */
+/** 단락 앞·뒤 간격 CSS(margin 값) — 비율(pct)은 한 줄 높이에 대한 비율, pts는 슬라이드 pt. 자동 맞춤의 줄 간격 줄임은
+ * 단락 간격에 적용하지 않는다(MS Office 정답 p03 1장 실측: 단락 간격 32.4pt = 줄 2개×줄인 줄 높이 + 줄이지 않은 단락 앞 간격). */
 export function gapCss(v: SpacingValue): string {
-  return 'pct' in v ? `max(0px, calc((${v.pct} - var(--ln-red, 0)) * ${SINGLE_LINE}em))` : `calc(${v.pts} * var(--slide-pt, 1pt))`;
+  return 'pct' in v ? `calc(${Math.round(v.pct * SINGLE_LINE * 10000) / 10000}em)` : `calc(${v.pts} * var(--slide-pt, 1pt))`;
 }
 
 const ROMAN: ReadonlyArray<[number, string]> = [

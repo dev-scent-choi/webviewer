@@ -1,5 +1,5 @@
 {
-  "_설명": "PPT 편집 화면 DOM 점검(pptx_dom.mjs가 잰다). target: text(그 글자를 담은 요소, nth=몇 번째) / image(배경 아닌 그림 순서, 0부터) / shape(data-geom 이름) / background. expect: 값 그대로 같거나 {min,max,includes,not}. 기대값은 docs/quality-audit/out/ref의 MS Office PDF에서 읽은 것. id는 REPORT.md 결함 번호. 단위: fontPt·marginPt = 슬라이드 pt, bottom = 슬라이드 높이 비율, leftInBox = 글상자 폭 비율, rotate = 도.",
+  "_설명": "PPT 편집 화면 DOM 점검(pptx_dom.mjs가 잰다). target: text(그 글자를 담은 요소, nth=몇 번째) / image(배경 아닌 그림 순서, 0부터) / shape(data-geom 이름) / background. expect: 값 그대로 같거나 {min,max,includes,not}. 기대값은 docs/quality-audit/out/ref의 MS Office PDF에서 읽은 것. id는 REPORT.md 결함 번호. 단위: fontPt·marginPt = 슬라이드 pt, bottom = 슬라이드 높이 비율, leftInBox = 글상자 폭 비율, rotate = 도. officePos: 그 글자 위치(첫 줄 상자 가운데 높이·왼쪽)를 compare.py가 MS Office 정답 PDF에서 찾은 같은 글자 위치와 비교한다(슬라이드 비율 허용 오차) — 구현이 낸 값을 그대로 확인하는 항목과 달리 정답 대비 측정이다.",
   "items": [
     { "id": "P1", "doc": "p03-autofit", "slide": 1, "item": "자동 맞춤 47.5% — 본문 글자 15.2pt", "target": { "text": "향기랩 주식회사는" }, "expect": { "fontPt": { "min": 14, "max": 16.5 } } },
     { "id": "P1", "doc": "p03-autofit", "slide": 1, "item": "자동 맞춤 — 마지막 단락이 슬라이드 안에 보임", "target": { "text": "12. 향기랩" }, "expect": { "bottom": { "max": 0.99 } } },
@@ -33,6 +33,24 @@
     { "id": "P5", "doc": "p02-theme-fonts-colors", "slide": 1, "item": "테마 그라데이션 — 주황 둥근 사각형", "target": { "shape": "roundRect" }, "expect": { "gradient": true } },
     { "id": "P6", "doc": "p03-autofit", "slide": 2, "item": "한글 줄 바꿈 = 원본 eaLnBrk=1(Office도 '주|식회사는'처럼 글자 단위로 끊음)", "target": { "text": "주식회사는", "nth": 1 }, "expect": { "wordBreak": "normal" } },
     { "id": "P6", "doc": "p08-korean-business-slide", "slide": 1, "item": "한글 줄 바꿈 = 원본 eaLnBrk=1(Office '달|라질')", "target": { "text": "달라질" }, "expect": { "wordBreak": "normal" } },
-    { "id": "BG", "doc": "p08-korean-business-slide", "slide": 1, "item": "슬라이드 배경색 F2F2F2", "target": { "background": true }, "expect": { "color": "rgb(242, 242, 242)" } }
+    { "id": "BG", "doc": "p08-korean-business-slide", "slide": 1, "item": "슬라이드 배경색 F2F2F2", "target": { "background": true }, "expect": { "color": "rgb(242, 242, 242)" } },
+    { "id": "POS", "doc": "p03-autofit", "slide": 1, "item": "'자동 맞춤(글자' 위치가 Office 정답과 같음(±1.5%)", "target": { "text": "자동 맞춤(글자" }, "expect": {}, "officePos": 0.015 },
+    { "id": "POS", "doc": "p03-autofit", "slide": 1, "item": "'향기랩 주식회사는 2026년' 위치가 Office 정답과 같음(±1.5%)", "target": { "text": "향기랩 주식회사는 2026년" }, "expect": {}, "officePos": 0.015 },
+    { "id": "POS", "doc": "p03-autofit", "slide": 1, "item": "'12. 향기랩' 위치가 Office 정답과 같음(±1.5%)", "target": { "text": "12. 향기랩" }, "expect": {}, "officePos": 0.015 },
+    { "id": "POS", "doc": "p03-autofit", "slide": 2, "item": "'세로 가운데 짧은' 위치가 Office 정답과 같음(±1.5%)", "target": { "text": "세로 가운데 짧은" }, "expect": {}, "officePos": 0.015 },
+    { "id": "POS", "doc": "p08-korean-business-slide", "slide": 1, "item": "'추진 일정 및' 위치가 Office 정답과 같음(±1.5%)", "target": { "text": "추진 일정 및" }, "expect": {}, "officePos": 0.015 },
+    { "id": "POS", "doc": "p08-korean-business-slide", "slide": 1, "item": "'1단계(12월)' 위치가 Office 정답과 같음(±1.5%)", "target": { "text": "1단계(12월)" }, "expect": {}, "officePos": 0.015 },
+    { "id": "POS", "doc": "p08-korean-business-slide", "slide": 1, "item": "'고장 출동 건수' 위치가 Office 정답과 같음(±1.5%)", "target": { "text": "고장 출동 건수" }, "expect": {}, "officePos": 0.015 },
+    { "id": "POS", "doc": "p01-placeholders-bullets", "slide": 1, "item": "'2026년 설비관리' 위치가 Office 정답과 같음(±1.5%)", "target": { "text": "2026년 설비관리" }, "expect": {}, "officePos": 0.015 },
+    { "id": "POS", "doc": "p01-placeholders-bullets", "slide": 1, "item": "'향기랩 설비관리팀' 위치가 Office 정답과 같음(±1.5%)", "target": { "text": "향기랩 설비관리팀" }, "expect": {}, "officePos": 0.015 },
+    { "id": "POS", "doc": "p01-placeholders-bullets", "slide": 2, "item": "'예방 정비' 위치가 Office 정답과 같음(±1.5%)", "target": { "text": "예방 정비" }, "expect": {}, "officePos": 0.015 },
+    { "id": "POS", "doc": "p01-placeholders-bullets", "slide": 2, "item": "'안전 관리 강화' 위치가 Office 정답과 같음(±1.5%)", "target": { "text": "안전 관리 강화" }, "expect": {}, "officePos": 0.015 },
+    { "id": "POS", "doc": "p01-placeholders-bullets", "slide": 4, "item": "'구역 머리글' 위치가 Office 정답과 같음(±1.5%)", "target": { "text": "구역 머리글" }, "expect": {}, "officePos": 0.015 },
+    { "id": "POS", "doc": "p02-theme-fonts-colors", "slide": 1, "item": "'Theme fonts' 위치가 Office 정답과 같음(±1.5%)", "target": { "text": "Theme fonts" }, "expect": {}, "officePos": 0.015 },
+    { "id": "POS", "doc": "p02-theme-fonts-colors", "slide": 1, "item": "'본문: Segoe UI' 위치가 Office 정답과 같음(±1.5%)", "target": { "text": "본문: Segoe UI" }, "expect": {}, "officePos": 0.015 },
+    { "id": "POS", "doc": "p07-shapes-effects-groups", "slide": 1, "item": "'그룹 A' 위치가 Office 정답과 같음(±1.5%)", "target": { "text": "그룹 A" }, "expect": {}, "officePos": 0.015 },
+    { "id": "POS", "doc": "p07-shapes-effects-groups", "slide": 1, "item": "'선형 그라데이션' 위치가 Office 정답과 같음(±1.5%)", "target": { "text": "선형 그라데이션" }, "expect": {}, "officePos": 0.015 },
+    { "id": "POS", "doc": "p06-pictures-crop-rotate", "slide": 1, "item": "'가로로 늘림' 위치가 Office 정답과 같음(±1.5%)", "target": { "text": "가로로 늘림" }, "expect": {}, "officePos": 0.015 },
+    { "id": "POS", "doc": "a2-korean-deck", "slide": 1, "item": "'합성 시험용' 위치가 Office 정답과 같음(±1.5%)", "target": { "text": "합성 시험용" }, "expect": {}, "officePos": 0.015 }
   ]
 }

@@ -421,7 +421,7 @@ describe('검토 Minor 4·6·8: 빈 줄 높이, "링크도 글자 색", 테마 �
   const toDOM = (node: ReturnType<typeof schema.node>) => schema.nodes.paragraph.spec.toDOM!(node) as [string, Record<string, string>, number];
   test('빈 문단은 문단 끝 글자 크기(endParaRPr sz)로 높이를 잡는다', () => {
     const [, attrs] = toDOM(schema.node('paragraph', { endRPr: '<a:endParaRPr lang="ko-KR" sz="4000"/>' }, []));
-    expect(attrs.style).toContain('font-size: calc(40 *');
+    expect(attrs.style).toContain('font-size: calc(round(down, 40 *');
   });
   test('hlinkClr val="tx" 하이퍼링크는 글자 색 그대로(클래스)', () => {
     const raw = '<a:rPr><a:hlinkClick r:id="rId2"><a:extLst><a:ext uri="{A12FA001-AC4F-418D-AE19-62706E023703}"><ahyp:hlinkClr xmlns:ahyp="http://schemas.microsoft.com/office/drawing/2018/hyperlinkcolor" val="tx"/></a:ext></a:extLst></a:hlinkClick></a:rPr>';

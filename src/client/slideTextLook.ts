@@ -3,7 +3,7 @@ import { Decoration, DecorationSet } from 'prosemirror-view';
 import type { Node as PMNode } from 'prosemirror-model';
 import { DEFAULT_INSETS_EMU, type SlideLevelLook, type SlideShapeMeta } from '../collab/pptxShared.js';
 import { autoNumberPlan, gapCss, lineHeightCss } from '../pptx/paragraphLook.js';
-import { slideMediaUrl } from '../pptx/textSchema.js';
+import { fontSizeCss, slideMediaUrl } from '../pptx/textSchema.js';
 
 /**
  * 편집 캔버스 글상자의 "물려받은 모양"(src/pptx/inheritance.ts가 푼 meta)을 화면에 입히는 부분 —
@@ -44,7 +44,7 @@ function fontStack(latin?: string, ea?: string): string | undefined {
 }
 
 /** 수준별 값을 --lN-* 변수로(ensureLevelRules가 문단에 옮긴다). 글머리 글꼴(Wingdings 등)이 브라우저에 없으면 기본 글꼴로 대체된다. */
-function setLevelVars(dom: HTMLElement, levels: ReadonlyArray<SlideLevelLook>, slidePt: string): void {
+function setLevelVars(dom: HTMLElement, levels: ReadonlyArray<SlideLevelLook>): void {
   levels.forEach((level, i) => {
     const set = (name: string, value: string | undefined) => {
       if (value !== undefined) dom.style.setProperty(`--l${i}-${name}`, value);
@@ -56,7 +56,7 @@ function setLevelVars(dom: HTMLElement, levels: ReadonlyArray<SlideLevelLook>, s
       set('buimg', `url("${slideMediaUrl(level.bulletImage)}")`);
       set('buh', '1em');
     }
-    set('sz', `calc(${level.sizePt} * ${slidePt})`);
+    set('sz', fontSizeCss(level.sizePt));
     if (level.color && /^#[0-9A-Fa-f]{6}$/.test(level.color)) set('color', level.color);
     if (level.bold) set('fw', '700');
     if (level.italic) set('fi', 'italic');
@@ -68,7 +68,7 @@ function setLevelVars(dom: HTMLElement, levels: ReadonlyArray<SlideLevelLook>, s
     if (level.spacing?.after) set('sa', gapCss(level.spacing.after));
     if (level.bulletFont) set('buff', `${cssFont(level.bulletFont)}, ${BASE_FONT}`);
     if (level.bulletColor && /^#[0-9A-Fa-f]{6}$/.test(level.bulletColor)) set('buclr', level.bulletColor);
-    if (level.bulletSize) set('busz', 'pct' in level.bulletSize ? `${level.bulletSize.pct}em` : `calc(${level.bulletSize.pts} * ${slidePt})`);
+    if (level.bulletSize) set('busz', 'pct' in level.bulletSize ? `${level.bulletSize.pct}em` : fontSizeCss(level.bulletSize.pts));
   });
 }
 
@@ -170,13 +170,12 @@ const VERT: Record<string, { mode: string; orient: string; flip?: boolean }> = {
 
 /**
  * 원본 글상자(시딩된 meta)의 물려받은 모양을 상자(box)와 편집 영역(dom = view.dom)에 입힌다. 글자 크기는 자동 맞춤 배율을
- * 곱한 1pt(--slide-fpt)로, 여백·들여쓰기는 슬라이드 1pt(--slide-pt)로 잰다.
+ * 곱하고 0.5pt 단위로 내린 크기(textSchema fontSizeCss)로, 여백·들여쓰기는 슬라이드 1pt(--slide-pt)로 잰다.
  */
 export function applyTextboxLook(box: HTMLElement, dom: HTMLElement, meta: SlideShapeMeta, emuToPx: (emu: number) => number): void {
-  const fontPt = 'var(--slide-fpt, var(--slide-pt, 1pt))';
   if (meta.autofit) applyAutofit(dom, meta.autofit);
-  if (meta.defaultSizePt) dom.style.fontSize = `calc(${meta.defaultSizePt} * ${fontPt})`;
-  if (meta.levels) setLevelVars(dom, meta.levels, fontPt);
+  if (meta.defaultSizePt) dom.style.fontSize = fontSizeCss(meta.defaultSizePt);
+  if (meta.levels) setLevelVars(dom, meta.levels);
   const base = meta.levels?.[0];
   const family = fontStack(base?.fontLatin, base?.fontEa);
   if (family) dom.style.fontFamily = family;
@@ -204,7 +203,8 @@ type Autofit = { readonly fontScale: number; readonly lnSpcReduction: number };
 
 /** 자동 맞춤(normAutofit): 글자 크기만 배율만큼(들여쓰기·여백은 그대로), 줄 간격은 줄임 비율만큼 뺀다 */
 export function applyAutofit(dom: HTMLElement, autofit: Autofit): void {
-  dom.style.setProperty('--slide-fpt', `calc(var(--slide-pt, 1pt) * ${autofit.fontScale})`);
+  dom.style.setProperty('--fs-scale', String(autofit.fontScale));
+  dom.style.setProperty('--fs-step', autofit.fontScale < 1 ? '0.5' : '0.01');
   dom.style.setProperty('--ln-red', String(autofit.lnSpcReduction));
 }
 

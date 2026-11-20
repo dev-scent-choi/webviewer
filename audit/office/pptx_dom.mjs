@@ -64,6 +64,10 @@ function measure(spec) {
       lines: tops.size,
       // 글자가 슬라이드 안에 보이는가(아래·오른쪽 끝, 0~1 = 슬라이드 높이·폭 비율)
       bottom: rects.length ? Math.round(((Math.max(...rects.map((r) => r.bottom)) - cr.top) / cr.height) * 100) / 100 : null,
+      // 글자 첫 줄 상자 왼쪽 위(슬라이드 폭·높이 비율, 소수 4자리) — compare.py가 MS Office 정답 PDF의 같은 글자 위치와 비교한다
+      topFrac: rects.length ? Math.round(((rects[0].top - cr.top) / cr.height) * 10000) / 10000 : null,
+      leftFrac: rects.length ? Math.round(((rects[0].left - cr.left) / cr.width) * 10000) / 10000 : null,
+      heightFrac: rects.length ? Math.round((rects[0].height / cr.height) * 10000) / 10000 : null,
       // 글자 시작 위치가 상자 왼쪽에서 얼마나(상자 폭 비율) — 가운데/왼쪽 정렬 구분용
       leftInBox: box && rects.length ? Math.round(((rects[0].left - box.getBoundingClientRect().left) / box.getBoundingClientRect().width) * 100) / 100 : null,
       writingMode: getComputedStyle(el.closest('.ProseMirror') ?? p).writingMode,
@@ -107,7 +111,7 @@ function measure(spec) {
   return { found: false };
 }
 
-function judge(got, expect) {
+function judge(got, expect = {}) {
   if (!got.found) return false;
   return Object.entries(expect).every(([k, want]) => {
     const v = got[k];
@@ -127,7 +131,7 @@ export async function runPptxDomChecks(page, name, slide) {
   const out = [];
   for (const c of CHECKS.filter((it) => it.doc === name && it.slide === slide)) {
     const got = await page.evaluate(measure, c.target).catch((e) => ({ found: false, error: String(e).slice(0, 120) }));
-    out.push({ id: c.id, doc: name, slide, item: c.item, ok: judge(got, c.expect), got });
+    out.push({ id: c.id, doc: name, slide, item: c.item, ok: judge(got, c.expect), got, ...(c.officePos ? { officePos: c.officePos, text: c.target.text } : {}) });
   }
   return out;
 }

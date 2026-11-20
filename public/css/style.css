@@ -1596,6 +1596,9 @@ body.home-hidden .doclist-link { display: none !important; }
 .slide-textbox.slide-anchor-b { justify-content: flex-end; }
 .slide-textbox.slide-anchor-ctr > .ProseMirror,
 .slide-textbox.slide-anchor-b > .ProseMirror { width: 100%; }
+/* 글이 상자보다 길어도 편집 영역을 줄이지 않는다 — 줄어든 편집 영역 아래로 글이 흘러 세로 가운데·아래 맞춤 상자의 글이
+   PowerPoint보다 아래로 밀렸다(정답 p02·p03 제목: 넘친 글은 위아래로 똑같이 넘친다). */
+.slide-textbox > .ProseMirror { flex-shrink: 0; }
 
 /* 리본 "도형"으로 넣은 도형 — 배경색은 JS가 meta.fill로 인라인 지정. 저장되는 prstGeom
    (rect/roundRect/ellipse)과 같은 모양을 보여준다. */
