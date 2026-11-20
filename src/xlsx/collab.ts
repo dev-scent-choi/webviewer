@@ -26,7 +26,7 @@ import { gridCellValue, yieldToEventLoop, YIELD_EVERY_N_ROWS } from '../spreadsh
 import { parseViewerGrid } from './viewerGrid.js';
 import { sanitizeCellStyle, type BorderSpec } from '../collab/cellBoxCss.js';
 import type { LazyGridSheetMeta, LazyGridStore } from './lazyGridStore.js';
-import { GRID_COND_FORMATS_MAP, type CondFormatEntry } from '../collab/condFormatShared.js';
+import { GRID_COND_FORMATS_MAP, shiftSpan, type CondFormatEntry } from '../collab/condFormatShared.js';
 import { applyEditedCondFormats, preserveUnsupportedCfRules } from './condFormatExport.js';
 import { getRow } from './lazyGridStore.js';
 import { dateTextToDate, parseTypedNumber } from '../collab/cellValueShared.js';
@@ -753,6 +753,102 @@ export function applyEditedSizes(
   });
 }
 
+/**
+ * ExcelJS가 읽은 표의 머리 줄·요약 행·필터 단추를 원본대로 되돌린다. ExcelJS는 headerRowCount가 없으면(엑셀 기본값 1 — 엑셀이
+ * 만든 파일은 보통 적지 않는다) 머리 줄이 없다고 읽어 headerRowCount="0"으로 저장하고, hiddenButton이 없는 열(단추 보임)도
+ * 단추를 숨겨 저장했다 — 값 하나만 고쳐 저장해도 엑셀에서 표 머리 줄이 데이터가 되고 필터 단추가 사라졌다.
+ */
+function restoreTableHeaderAndButtons(workbook: ExcelJS.Workbook, originalXlsxBytes: Uint8Array): void {
+  const tables = workbook.worksheets.flatMap((ws) => ws.getTables() as unknown as Array<{ table: LoadedTableModel }>);
+  if (tables.length === 0) return;
+  const xmlByName = new Map<string, string>();
+  for (const bytes of Object.values(unzipSync(originalXlsxBytes, { filter: (f) => /^xl\/tables\/[^/]+\.xml$/.test(f.name) }))) {
+    const xml = strFromU8(bytes);
+    const name = /<table\b[^>]*?\sname="([^"]*)"/.exec(xml)?.[1];
+    if (name) xmlByName.set(name.replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&'), xml);
+  }
+  for (const { table: m } of tables) {
+    const xml = xmlByName.get(m.name);
+    if (!xml) continue;
+    const head = /<table\b[^>]*>/.exec(xml)?.[0] ?? '';
+    m.headerRow = !/\sheaderRowCount="0"/.test(head);
+    m.totalsRow = /\stotalsRowCount="[1-9]/.test(head);
+    const hidden = new Set([...xml.matchAll(/<filterColumn\b[^>]*>/g)].filter((f) => /hiddenButton="(1|true)"/.test(f[0])).map((f) => Number(/colId="(\d+)"/.exec(f[0])?.[1])));
+    m.columns.forEach((c, i) => (c.filterButton = !hidden.has(i)));
+  }
+}
+
+/** ExcelJS가 읽어 둔 표(xl/tables/tableN.xml)의 모델 — 저장할 때 tableRef·autoFilterRef·columns를 그대로 쓴다 */
+interface LoadedTableModel {
+  name: string;
+  tableRef: string;
+  autoFilterRef?: string;
+  headerRow?: boolean;
+  totalsRow?: boolean;
+  columns: Array<{ name: string; [k: string]: unknown }>;
+}
+
+/**
+ * 행/열 삽입·삭제(0부터 센 at)를 엑셀 표에 반영한다 — ExcelJS의 spliceRows/spliceColumns는 칸만 옮기고 표는 그대로 두어,
+ * 표 위에 행을 넣고 저장하면 표 범위(ref)·필터 범위가 한 줄 위에 남았다. 엑셀처럼: 표 안쪽에 넣으면 표가 늘고, 위(왼쪽)에
+ * 넣으면 통째로 내려가고, 지우면 줄어든다(다 지우면 표를 뺀다). 열을 표 안에 넣으면 "열N" 열을 더하고 머리 칸에 이름을 쓴다.
+ * 조건부 서식 범위와 같은 구간 계산(shiftSpan)을 쓴다.
+ */
+function shiftWorksheetTables(sheet: ExcelJS.Worksheet, onRows: boolean, at: number, count: number, insert: boolean): Array<{ row: number; col: number; names: string[] }> {
+  const headers: Array<{ row: number; col: number; names: string[] }> = [];
+  for (const table of sheet.getTables() as unknown as Array<{ table: LoadedTableModel }>) {
+    const m = table.table;
+    const box = /^\$?([A-Z]+)\$?(\d+):\$?([A-Z]+)\$?(\d+)$/.exec(m.tableRef ?? '');
+    if (!box) continue;
+    const c0 = colIndexOf(box[1]);
+    const r0 = Number(box[2]) - 1;
+    const c1 = colIndexOf(box[3]);
+    const r1 = Number(box[4]) - 1;
+    const span = shiftSpan(onRows ? r0 : c0, onRows ? r1 : c1, at, count, insert);
+    if (!span) {
+      sheet.removeTable(m.name);
+      continue;
+    }
+    const [n0, n1] = span;
+    const next = onRows ? { r0: n0, r1: n1, c0, c1 } : { r0, r1, c0: n0, c1: n1 };
+    if (!onRows) {
+      if (insert && at > c0 && at <= c1) {
+        const used = new Set(m.columns.map((c) => c.name.toLowerCase()));
+        let k = 1;
+        const added = Array.from({ length: count }, () => {
+          while (used.has(`열${k}`.toLowerCase())) k += 1;
+          used.add(`열${k}`.toLowerCase());
+          return { name: `열${k}`, filterButton: true };
+        });
+        m.columns.splice(at - c0, 0, ...added);
+        if (m.headerRow !== false) headers.push({ row: r0 + 1, col: at + 1, names: added.map((a) => a.name) });
+      } else if (!insert) {
+        const from = Math.max(at, c0) - c0;
+        const to = Math.min(at + count - 1, c1) - c0;
+        if (to >= from) m.columns.splice(from, to - from + 1);
+      }
+    }
+    m.tableRef = `${colLettersOf(next.c0)}${next.r0 + 1}:${colLettersOf(next.c1)}${next.r1 + 1}`;
+    if (m.autoFilterRef) m.autoFilterRef = `${colLettersOf(next.c0)}${next.r0 + 1}:${colLettersOf(next.c1)}${next.r1 + 1 - (m.totalsRow ? 1 : 0)}`;
+  }
+  return headers;
+}
+function colIndexOf(letters: string): number {
+  let n = 0;
+  for (const ch of letters) n = n * 26 + (ch.charCodeAt(0) - 64);
+  return n - 1;
+}
+function colLettersOf(col0: number): string {
+  let n = col0 + 1;
+  let s = '';
+  while (n > 0) {
+    const m = (n - 1) % 26;
+    s = String.fromCharCode(65 + m) + s;
+    n = Math.floor((n - 1) / 26);
+  }
+  return s;
+}
+
 /** exportXlsxFromGrid 참고 — mergesEdited 시트의 병합을 모두 풀고 sheetMeta.merges(1부터 센 좌표)로 다시 건다. */
 export function applyEditedMerges(
   store: Pick<LazyGridStore, 'sheetMeta'>,
@@ -787,6 +883,7 @@ export async function exportXlsxFromGrid(
   // 차트·그림(그리기 파트)은 ExcelJS를 거치지 않고 원본 그대로 되붙인다 — drawingPassthrough.ts 참고
   const { bytes: loadable, stash: drawings } = stripDrawings(originalXlsxBytes);
   await workbook.xlsx.load(loadable as unknown as ArrayBuffer);
+  restoreTableHeaderAndButtons(workbook, originalXlsxBytes);
   const visibleSheets = workbook.worksheets.filter((sheet) => !sheet.state || sheet.state === 'visible');
   const originalSheetCount = visibleSheets.length;
 
@@ -838,6 +935,7 @@ export async function exportXlsxFromGrid(
       if (op.sheet !== sheetIdx) continue;
       const onRows = op.kind === 'insertRows' || op.kind === 'deleteRows';
       const insert = op.kind === 'insertRows' || op.kind === 'insertCols';
+      const tableHeaders = shiftWorksheetTables(sheet, onRows, op.at, op.count, insert);
       if (onRows) {
         if (insert) {
           sheet.spliceRows(op.at + 1, 0, ...Array.from({ length: op.count }, () => [] as unknown[]));
@@ -853,6 +951,8 @@ export async function exportXlsxFromGrid(
         sheet.spliceColumns(op.at + 1, op.count);
         expectedColCount -= op.count;
       }
+      // 표 안에 넣은 열의 머리 칸 = 열 이름(엑셀이 요구한다) — 칸을 옮긴 뒤에 쓴다
+      for (const h of tableHeaders) h.names.forEach((name, i) => (sheet.getCell(h.row, h.col + i).value = name));
     }
 
     // 위 재생 이후에도 남는 차이는 삽입·삭제 연산 없이 rowCount/colCount만 직접 줄어든 경우다

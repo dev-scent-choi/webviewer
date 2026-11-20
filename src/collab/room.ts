@@ -96,6 +96,7 @@ import {
   type LazyGridStore,
 } from '../xlsx/lazyGridStore.js';
 import { cfRangeValues, type CfRangeCache, type CfRangeRect, type CfRangeValues } from '../xlsx/cfRangeValues.js';
+import { shiftTables } from '../xlsx/tableStyles.js';
 import {
   duplicateSlideContent,
   exportPptxFromSlides,
@@ -1070,7 +1071,12 @@ export function discardPrewarmedXlsx(docId: string): void {
 
 /** 파일의 하이퍼링크(바로가기)·목록 상자 — 편집 화면이 링크 이동·목록 고르기에 쓴다. 열린 룸이 있으면 그 원본 기준. */
 export async function getFileExtras(docId: string): Promise<SheetExtras> {
-  return readSheetExtrasFromEntries(await fileSkeletonOf(docId));
+  const extras = readSheetExtrasFromEntries(await fileSkeletonOf(docId));
+  // 편집 방은 원본 바이트 + 지금까지의 행/열 삽입·삭제(structuralOps)다 — 표 범위도 그만큼 옮겨 준다(저장할 때와 같다)
+  const room = rooms.get(docId);
+  if (!room?.originalXlsxBytes || !room.lazyGrid || room.structuralOps.length === 0) return extras;
+  const meta = room.lazyGrid.sheetMeta;
+  return { ...extras, tables: shiftTables(extras.tables, room.structuralOps, (i) => meta[i]?.name) };
 }
 
 /**

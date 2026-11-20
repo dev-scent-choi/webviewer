@@ -9,6 +9,7 @@
  * 줄무늬를 얼마나 옅게 칠하는지, 선을 어디에 긋는지"의 조합이다 — 그 규칙을 계열별로 옮겼다(색은 문서 테마에서).
  * 사용자 정의 표 스타일(styles.xml의 tableStyles)은 읽지 않고 같은 번호의 기본 스타일 모양 대신 Medium2로 본다.
  */
+import { shiftSpan } from '../collab/condFormatShared.js';
 import { parseRangeFormula } from './chartModel.js';
 
 export interface SheetTable {
@@ -39,6 +40,27 @@ export interface TableLook {
 }
 
 const attr = (xml: string, name: string) => new RegExp(`\\b${name}="([^"]*)"`).exec(xml)?.[1];
+
+/** 행/열 삽입·삭제(편집 방 structuralOps — 0부터 센 at)를 순서대로 표 범위에 반영한다. 다 지워진 표는 뺀다 */
+export function shiftTables<T extends SheetTable & { readonly sheetName: string }>(
+  tables: readonly T[],
+  ops: ReadonlyArray<{ readonly sheet: number; readonly kind: 'insertRows' | 'deleteRows' | 'insertCols' | 'deleteCols'; readonly at: number; readonly count: number }>,
+  sheetNameOf: (sheet: number) => string | undefined,
+): T[] {
+  let out = [...tables];
+  for (const op of ops) {
+    const name = sheetNameOf(op.sheet);
+    const rows = op.kind === 'insertRows' || op.kind === 'deleteRows';
+    const insert = op.kind === 'insertRows' || op.kind === 'insertCols';
+    out = out.flatMap((t) => {
+      if (t.sheetName !== name) return [t];
+      const span = rows ? shiftSpan(t.r0, t.r1, op.at, op.count, insert) : shiftSpan(t.c0, t.c1, op.at, op.count, insert);
+      if (!span) return [];
+      return [rows ? { ...t, r0: span[0], r1: span[1] } : { ...t, c0: span[0], c1: span[1] }];
+    });
+  }
+  return out;
+}
 
 export function parseTableXml(xml: string): SheetTable | null {
   const tag = /<table\b[^>]*>/.exec(xml)?.[0] ?? '';

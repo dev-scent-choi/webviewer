@@ -134,7 +134,8 @@ export function subtractRect(a: CfRect, b: CfRect): CfRect[] {
 }
 
 /** 한 축의 [start, end](0부터, 양 끝 포함)를 삽입·삭제에 맞춘다 — gridShift.ts의 병합 규칙과 같다. 없어지면 null */
-function shiftSpan(start: number, end: number, at: number, count: number, insert: boolean): [number, number] | null {
+/** 행/열 삽입·삭제 뒤의 구간(양 끝 포함) — 다 지워지면 null. 조건부 서식 범위·엑셀 표 범위가 함께 쓴다 */
+export function shiftSpan(start: number, end: number, at: number, count: number, insert: boolean): [number, number] | null {
   if (insert) {
     if (start >= at) return [start + count, end + count];
     if (at <= end) return [start, end + count];

@@ -3384,18 +3384,29 @@ async function main(): Promise<void> {
     }
     return style;
   };
-  void fetch(`/api/view/xlsx-extras?token=${encodeURIComponent(token)}`)
-    .then((res) => res.json() as Promise<{ data?: { tables?: Array<SheetTable & { sheetName: string }>; themeColors?: string[] } }>)
-    .then((json) => {
-      fileTables = json.data?.tables ?? [];
-      fileThemeColors = json.data?.themeColors ?? [];
-      if (fileTables.length > 0) tableEl.querySelectorAll<HTMLTableCellElement>('td[data-row]').forEach((td) => {
-        const at = Number(td.dataset.row);
-        const c = Number(td.dataset.col);
-        applyStyleToTd(td, styles.get(gridCellKey(activeSheet, at, c)));
-      });
-    })
-    .catch(() => undefined);
+  const loadFileTables = (): void => {
+    const had = fileTables.length > 0;
+    void fetch(`/api/view/xlsx-extras?token=${encodeURIComponent(token)}`)
+      .then((res) => res.json() as Promise<{ data?: { tables?: Array<SheetTable & { sheetName: string }>; themeColors?: string[] } }>)
+      .then((json) => {
+        fileTables = json.data?.tables ?? [];
+        fileThemeColors = json.data?.themeColors ?? [];
+        if (fileTables.length > 0 || had) tableEl.querySelectorAll<HTMLTableCellElement>('td[data-row]').forEach((td) => {
+          const at = Number(td.dataset.row);
+          const c = Number(td.dataset.col);
+          applyStyleToTd(td, styles.get(gridCellKey(activeSheet, at, c)));
+        });
+      })
+      .catch(() => undefined);
+  };
+  loadFileTables();
+  // 행/열을 넣거나 지우면(행 수·열 수가 바뀐다) 서버가 옮긴 표 범위를 다시 받는다 — 표가 있는 문서만
+  let tablesRefetch = 0;
+  structure.observe(() => {
+    if (fileTables.length === 0) return;
+    clearTimeout(tablesRefetch);
+    tablesRefetch = window.setTimeout(loadFileTables, 200);
+  });
   // 행마다 걸리는 규칙 — 화면에 그리는 행만 그때그때 골라 기억한다(시트 전체 행 배열을 미리 만들지 않는다)
   let cfIndex: { sheet: number; entries: readonly CondFormatEntry[]; usable: readonly CondFormatEntry[]; byRow: Map<number, readonly CondFormatEntry[]> } | null = null;
   function cfRowEntries(row: number): readonly CondFormatEntry[] {
