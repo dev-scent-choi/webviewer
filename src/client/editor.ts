@@ -28,7 +28,9 @@ import {
   DOCX_PAGE_MAP,
   DOCX_PAGE_SETUP_KEY,
   docxSchema,
+  fontStack,
   safeFontName,
+  setDocxMediaUrl,
   type DocxComment,
   type DocxPageSetup,
   type PageSetup,
@@ -67,6 +69,8 @@ import {
   type CopiedFormat,
 } from './wordCommands.js';
 import { officeAlert } from './officeDialog.js';
+import { docxLayoutPlugin, docxStyleSheetText } from './docxLayout.js';
+import type { DocxRenderExtras } from '../docx/import.js';
 
 /** 레이아웃 탭 용지 크기(dxa, 세로 기준) */
 const PAPER_SIZES = {
@@ -134,6 +138,10 @@ interface ViewInfo {
   readonly permissions: Permissions;
   readonly editHasUnsupportedContent: boolean;
   readonly pageSetup: PageSetup | null;
+  /** 보기 화면(LibreOffice)이 센 쪽 수 — 바닥글의 전체 쪽 수(NUMPAGES) */
+  readonly pageCount?: number | null;
+  /** 번호 매기기·머리글/바닥글·각주·스타일 — 편집기가 덧그리는 Word 모양(docxLayout.ts) */
+  readonly docxRender?: DocxRenderExtras | null;
   readonly defaultFontSizePt: number | null;
   readonly defaultFontFamily: ScriptFontFamily | null;
   /** 직접 간격이 없는 문단의 간격(twip, line은 lineRule 'auto'면 240 = 1줄) — 서버가 styles.xml에서 계산 */
@@ -184,6 +192,10 @@ function applyPageSetup(pageSetup: PageSetup | null): void {
   editorHost.style.maxWidth = `${pageSetup.widthPx}px`;
   editorHost.style.padding =
     `${pageSetup.marginTopPx}px ${pageSetup.marginRightPx}px ${pageSetup.marginBottomPx}px ${pageSetup.marginLeftPx}px`;
+  // 쪽 경계 장식(머리글·바닥글·쪽 간격, docxLayout.ts)이 여백 안으로 나가 그리는 데 쓴다
+  for (const [name, px] of [['--page-mt', pageSetup.marginTopPx], ['--page-mb', pageSetup.marginBottomPx], ['--page-ml', pageSetup.marginLeftPx], ['--page-mr', pageSetup.marginRightPx]] as const) {
+    editorHost.style.setProperty(name, `${px}px`);
+  }
   // .ProseMirror의 임의 max-width:65ch 캡을 풀어서 실제 여백만큼의 콘텐츠 폭을 그대로 쓰게 한다
   editorHost.classList.add('page-sized');
 }
@@ -224,7 +236,19 @@ function applyDefaultParagraphSpacing(spacing: ViewInfo['defaultParagraphSpacing
  * 문서 기본 글꼴로 줄 높이를 재어 --doc-single-line에 둔다(줄 간격 '배수'는 전부 이 값을 곱한다). 예전엔 모든 글꼴에
  * 1.2배를 써서 맑은 고딕 문서가 워드보다 촘촘하게 보였다.
  */
-function measureSingleLineRatio(): void {
+/**
+ * 브라우저 줄 높이(hhea 값)와 Word의 "1줄"이 크게 다른 글꼴 — Word가 만든 PDF에서 잰 값(글자 크기 대비).
+ * 맑은 고딕: 10.5pt 글자, 1.15줄 문단의 줄 간격 20.9pt → 1줄 18.17pt = 1.73배(브라우저는 1.33배라 Word보다 촘촘했다).
+ * shortcut: 측정한 글꼴만 — 다른 글꼴도 차이가 보이면 같은 방법으로 재어 더한다.
+ */
+const WORD_SINGLE_LINE_RATIO: Readonly<Record<string, number>> = { '맑은 고딕': 1.73, 'Malgun Gothic': 1.73 };
+
+function measureSingleLineRatio(defaultFontName: string): void {
+  const known = WORD_SINGLE_LINE_RATIO[defaultFontName];
+  if (known) {
+    editorHost.style.setProperty('--doc-single-line', String(known));
+    return;
+  }
   const probe = document.createElement('span');
   probe.textContent = '가Ag';
   probe.style.cssText = 'position:absolute;visibility:hidden;display:inline-block;font-size:100px;line-height:normal;white-space:nowrap';
@@ -264,12 +288,9 @@ function applyDefaultFontFamily(family: ScriptFontFamily | null): void {
       `@font-face { font-family: "doc-mixed-font"; src: local("${eastAsia}"); unicode-range: ${HANGUL_UNICODE_RANGE}; }` +
       `@font-face { font-family: "doc-mixed-font"; src: local("${ascii}"); }`;
     document.head.appendChild(styleEl);
-    editorHost.style.setProperty(
-      '--doc-font-family',
-      `"doc-mixed-font", "${eastAsia}", "${ascii}", var(--font-sans)`,
-    );
+    editorHost.style.setProperty('--doc-font-family', `"doc-mixed-font", ${fontStack([eastAsia, ascii], 'var(--font-sans)')}`);
   } else {
-    editorHost.style.setProperty('--doc-font-family', `"${eastAsia ?? ascii}", var(--font-sans)`);
+    editorHost.style.setProperty('--doc-font-family', fontStack([eastAsia ?? ascii], 'var(--font-sans)'));
   }
 }
 
@@ -586,6 +607,13 @@ async function main(): Promise<void> {
   applyDefaultFontFamily(info.defaultFontFamily);
   applyDefaultParagraphSpacing(info.defaultParagraphSpacing ?? null);
   applyWatermark(info.viewer);
+  // 문서 안 그림은 원본 docx의 word/media/에서 바로 받는다(토큰 확인은 서버가 한다)
+  setDocxMediaUrl((mediaPath) => `/api/view/slide-media?token=${encodeURIComponent(token)}&path=${encodeURIComponent(mediaPath)}`);
+  if (info.docxRender) {
+    const styleEl = document.createElement('style');
+    styleEl.textContent = docxStyleSheetText(info.docxRender.styles);
+    document.head.append(styleEl);
+  }
 
   const ydoc = new Y.Doc();
   const fragment = ydoc.getXmlFragment('prosemirror');
@@ -641,6 +669,7 @@ async function main(): Promise<void> {
       columnResizing({ View: AlignedTableView }),
       tableEditing(),
       buildSearchPlugin(),
+      ...(info.docxRender ? [docxLayoutPlugin(info.docxRender, info.pageCount ?? null)] : []),
     ],
   });
 
@@ -656,7 +685,7 @@ async function main(): Promise<void> {
   // 클릭 핸들러)는 우회한다 — 그래서 이 옵션만으로는 부족하고, 툴바(.toolbar-format) 자체를
   // 위에서 이미 숨겨 그 우회로를 원천 차단했다.
   const view = new EditorView(editorHost, { state, editable: () => canEdit });
-  measureSingleLineRatio(); // 문서 기본 글꼴의 "1줄" 높이 — .ProseMirror가 생긴 뒤에 잰다
+  measureSingleLineRatio(defaultFontName); // 문서 기본 글꼴의 "1줄" 높이 — .ProseMirror가 생긴 뒤에 잰다
   let syncLayoutFields: (state: EditorState) => void = () => undefined;
   let syncReview: (state: EditorState) => void = () => undefined;
   const shell = initOfficeShell({

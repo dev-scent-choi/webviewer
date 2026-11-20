@@ -2980,6 +2980,11 @@ body.home-hidden .doclist-link { display: none !important; }
      여러 칸을 띄운 문서), 화면에서만 한 칸처럼 보여 "편집하면 공백이 사라졌다"로 오인하게 만든다.
      pre-wrap은 줄바꿈은 그대로 자동으로 하면서 공백 폭은 Word처럼 있는 그대로 보여준다. */
   white-space: pre-wrap;
+  /* Word처럼 한글은 어절(띄어쓰기) 단위로 줄을 바꾼다 — 기본값(normal)은 한글을 글자마다 끊어 "향/기랩"처럼 보였다.
+     띄어쓰기 없이 긴 글자(주소·경로)는 칸을 넘지 않게 어디서든 끊는다. */
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+  line-break: strict;
 }
 /* Word 원본의 실제 페이지 크기를 읽어온 문서(.page-sized, editor.ts의 applyPageSetup)는 임의
    글자수 기준 폭(65ch) 대신 실제 여백만큼의 콘텐츠 폭을 그대로 쓴다 — .editor-surface 자체의
@@ -3588,6 +3593,56 @@ body[data-app] { --v-accent: var(--app-accent); --v-accent-ink: #ffffff; }
 .editor-surface .ProseMirror .page-break { display: block; position: relative; height: 1.4em; margin: 0.4em 0; border-top: 1px dashed #8a8886; user-select: none; }
 .editor-surface .ProseMirror .page-break::after { content: "페이지 나누기"; position: absolute; top: -0.65em; left: 50%; transform: translateX(-50%); padding: 0 0.5em; background: var(--color-surface); color: #8a8886; font-size: 0.7rem; line-height: 1.2; }
 .editor-surface .ProseMirror .page-break.ProseMirror-selectednode { border-top-color: var(--app-accent, var(--v-accent)); }
+
+/* ---------- Word 편집기: 원본 모양 그대로 그리기(src/client/docxLayout.ts·schema.ts ooxml 노드) ---------- */
+/* 쪽 경계(머리글·바닥글·쪽 간격)를 그리면 쪽 나누기 점선은 겹치므로 숨긴다(선택했을 때만 보인다) */
+.editor-surface .ProseMirror:has(.docx-page-boundary) .page-break:not(.ProseMirror-selectednode) { height: 0; margin: 0; border-top: 0; }
+.editor-surface .ProseMirror:has(.docx-page-boundary) .page-break:not(.ProseMirror-selectednode)::after { content: none; }
+/* 그림: 줄 안 그림은 글자처럼, 떠 있는 그림·글상자는 float(문서의 크기 그대로) */
+.editor-surface .ProseMirror .docx-img { display: inline-block; vertical-align: baseline; max-width: 100%; height: auto; }
+.editor-surface .ProseMirror .docx-img[style*="height"] { object-fit: fill; }
+.editor-surface .ProseMirror .docx-img[style*="float: left"] { margin: 0 12px 6px 0; }
+.editor-surface .ProseMirror .docx-img[style*="float: right"] { margin: 0 0 6px 12px; }
+.editor-surface .ProseMirror .docx-img-missing {
+  display: inline-flex; align-items: center; justify-content: center; vertical-align: bottom; min-width: 2em; min-height: 1.2em;
+  border: 1px dashed #a19f9d; background: #f3f2f1; color: #605e5c; font-size: 0.8em; text-indent: 0; overflow: hidden;
+}
+.editor-surface .ProseMirror .docx-textbox {
+  display: inline-block; vertical-align: top; box-sizing: border-box; padding: 4.8px 9.6px; overflow: hidden;
+  white-space: normal; text-indent: 0; line-height: var(--doc-line-height, 1.5);
+}
+.editor-surface .ProseMirror .docx-textbox[style*="float: left"] { margin: 0 12px 6px 0; }
+.editor-surface .ProseMirror .docx-textbox[style*="float: right"] { margin: 0 0 6px 12px; }
+.editor-surface .ProseMirror .docx-textbox p { margin: 0 0 0.4em; }
+.editor-surface .ProseMirror .docx-ooxml.ProseMirror-selectednode { outline: 2px solid var(--app-accent, var(--v-accent)); }
+.editor-surface .ProseMirror .docx-hidden { display: none; }
+.editor-surface .ProseMirror .docx-del { color: #c00000; }
+.editor-surface .docx-link { color: #0563c1; text-decoration: underline; }
+.editor-surface .ProseMirror .docx-note-ref { font-size: 0.7em; }
+.editor-surface .ProseMirror .docx-preserved-block { margin: 0.4em 0; user-select: none; }
+/* 탭: 폭은 탭 정지에 맞춰 docxLayout.ts가 재어 정한다. 점선·실선 채움 */
+.editor-surface .ProseMirror .docx-tab { display: inline-block; overflow: hidden; white-space: pre; color: transparent; vertical-align: baseline; text-indent: 0; }
+.editor-surface .ProseMirror .docx-tab-dot { background: radial-gradient(circle, #000 0.7px, transparent 0.9px) 0 calc(100% - 0.25em) / 4px 4px repeat-x; }
+.editor-surface .ProseMirror .docx-tab-line { background: linear-gradient(#000, #000) 0 calc(100% - 0.2em) / 100% 1px no-repeat; }
+/* 번호 매기기 글자(문서 내용이 아니라 원본 번호 정의로 그린 장식) */
+.editor-surface .ProseMirror .docx-num { display: inline-block; text-indent: 0; white-space: pre; user-select: none; }
+/* 다단 구역 */
+.editor-surface .ProseMirror .docx-columns > :first-child { margin-top: 0; }
+/* 쪽 경계: 바닥글(쪽 아래 여백) · 회색 쪽 간격 · 다음 쪽 머리글(쪽 위 여백) — 종이 폭 전체로 */
+.editor-surface .docx-page-boundary,
+.editor-surface .docx-page-start-first,
+.editor-surface .docx-page-end-last { margin-left: calc(-1 * var(--page-ml, 0px)); margin-right: calc(-1 * var(--page-mr, 0px)); user-select: none; text-indent: 0; white-space: normal; }
+.editor-surface .docx-page-start { position: relative; height: var(--page-mt, 96px); }
+.editor-surface .docx-page-start-first { margin-top: calc(-1 * var(--page-mt, 0px)); }
+.editor-surface .docx-header { position: absolute; top: var(--hdr-top, 48px); left: var(--page-ml, 0px); right: var(--page-mr, 0px); }
+.editor-surface .docx-page-end { position: relative; min-height: var(--page-mb, 96px); padding: 1.5em var(--page-mr, 0px) 2.5em var(--page-ml, 0px); box-sizing: border-box; }
+.editor-surface .docx-page-end-last { margin-bottom: calc(-1 * var(--page-mb, 0px)); }
+.editor-surface .docx-footer { margin-top: 1em; }
+.editor-surface .docx-header p, .editor-surface .docx-footer p, .editor-surface .docx-footnotes p { margin: 0; }
+.editor-surface .docx-footnotes { font-size: 0.85em; }
+.editor-surface .docx-footnotes::before { content: ""; display: block; width: 33%; border-top: 1px solid #000; margin-bottom: 0.3em; }
+.editor-surface .docx-footnotes .docx-note-ref { font-size: 0.75em; vertical-align: super; }
+.editor-surface .docx-page-gap { height: 18px; background: var(--color-page-gap, #e1dfdd); box-shadow: inset 0 4px 4px -4px rgba(0, 0, 0, 0.25), inset 0 -4px 4px -4px rgba(0, 0, 0, 0.25); }
 
 /* ---------- Word 검토 탭: 메모 표시·메모/변경 내용 창·단어 개수 ---------- */
 .editor-surface .ProseMirror .comment-mark { background: #fff2b3; border-bottom: 2px solid #f2c94c; }
