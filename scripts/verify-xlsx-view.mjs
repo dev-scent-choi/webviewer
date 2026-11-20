@@ -62,12 +62,13 @@ const editBg = (page, row, col = 0) => page.evaluate(([r, c]) => {
   return td ? getComputedStyle(td).backgroundColor : null;
 }, [row, col]);
 
-async function heavyCfXlsx() {
+/** span: 규칙이 읽는 범위 행 수. 2만(SUMPRODUCT)이면 너무 무거워 건너뛰고(알림), 500(MATCH — 수식 엔진으로만 됨)이면 나눠 칠한다 */
+async function heavyCfXlsx(span = 20000, count = 40) {
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet('s');
   for (let r = 1; r <= 20000; r += 1) ws.getCell(r, 1).value = `코드${r % 997}`;
   const b = unzipSync(new Uint8Array(await wb.xlsx.writeBuffer()));
-  const rules = Array.from({ length: 40 }, (_, i) => `<conditionalFormatting sqref="A1:A20000"><cfRule type="expression" dxfId="0" priority="${i + 1}"><formula>SUMPRODUCT(($A$1:$A$20000=$A1)*1)&gt;${i + 1}</formula></cfRule></conditionalFormatting>`).join('');
+  const rules = Array.from({ length: count }, (_, i) => `<conditionalFormatting sqref="A1:A20000"><cfRule type="expression" dxfId="0" priority="${i + 1}"><formula>${span === 20000 ? `SUMPRODUCT(($A$1:$A$20000=$A1)*1)&gt;${i + 1}` : `MATCH($A1,$A$1:$A$${span},0)&gt;${i}`}</formula></cfRule></conditionalFormatting>`).join('');
   b['xl/worksheets/sheet1.xml'] = strToU8(strFromU8(b['xl/worksheets/sheet1.xml']).replace('</sheetData>', `</sheetData>${rules}`));
   b['xl/styles.xml'] = strToU8(strFromU8(b['xl/styles.xml']).replace('<dxfs count="0"/>', '<dxfs count="1"><dxf><fill><patternFill><bgColor rgb="FFFFC7CE"/></patternFill></fill></dxf></dxfs>'));
   return Buffer.from(zipSync(b));
@@ -204,6 +205,26 @@ try {
     const maxLong2 = Math.max(0, ...m2);
     check('무거운 조건부 서식: 스크롤 중에도 300ms 넘는 긴 작업 없음', maxLong2 < 300, `가장 긴 것 ${maxLong2}ms (${Date.now() - t0}ms 동안)`);
     await page.screenshot({ path: `${OUT}/3-cf-notice-edit.png` });
+    await page.close();
+    warm.provider.destroy();
+  }
+
+  // 3b) 칠할 수 있는 무거운 규칙(MATCH 500칸 범위 × 30개 — 칸마다 수식 엔진) — 나눠 칠하므로 멈추지 않고 칠한다(E1)
+  {
+    const { id, tok, token } = await upload('heavy-500.xlsx', await heavyCfXlsx(500, 30));
+    const warm = await connect(id, token);
+    const page = await browser.newPage({ viewport: { width: 1200, height: 700 } });
+    await page.addInitScript(() => {
+      window.__long = [];
+      new PerformanceObserver((list) => list.getEntries().forEach((e) => window.__long.push(Math.round(e.duration)))).observe({ type: 'longtask', buffered: true });
+    });
+    await openEditor(page, tok);
+    await wait(5000);
+    const m = await page.evaluate(() => window.__long);
+    const painted = await editBg(page, 3);
+    check('나눠 칠하기: MATCH 500칸 × 30개 규칙을 칠한다', painted === PINK, String(painted));
+    check('나눠 칠하기: 300ms 넘는 긴 작업 없음', Math.max(0, ...m) < 300, `긴 작업 ${m.length}개, 가장 긴 것 ${Math.max(0, ...m)}ms`);
+    await page.screenshot({ path: `${OUT}/3b-cf-sliced-edit.png` });
     await page.close();
     warm.provider.destroy();
   }
