@@ -25,8 +25,18 @@ const PRESET: Record<string, string> = {
 
 export interface ThemeColors {
   /** 색 노드(<a:solidFill>나 <a:fillRef>의 내용 — srgbClr/schemeClr/sysClr/prstClr 중 하나를 자식으로
-   * 가진 노드)를 '#RRGGBB'로 푼다. 풀 수 없으면 undefined. */
-  resolve(container: XmlNode | undefined): string | undefined;
+   * 가진 노드)를 '#RRGGBB'로 푼다. 풀 수 없으면 undefined. ph는 스타일 행렬(fmtScheme) 안의 phClr
+   * 자리에 들어갈 색('#RRGGBB' — 그 스타일을 부른 fillRef/lnRef/effectRef의 색). */
+  resolve(container: XmlNode | undefined, ph?: string): string | undefined;
+  /** 테마 서식 행렬(fmtScheme) — 도형 스타일 <a:fillRef idx>·<a:lnRef idx>·<a:effectRef idx>가 가리키는 항목.
+   * idx는 1부터, fillRef 1001 이상은 배경 채우기 목록(bgFillStyleLst). 없으면 undefined.
+   * fillStyle은 채우기 요소를 자식으로 가진 노드(spPr처럼 {'a:gradFill': …}), lineStyle은 <a:ln>, effectStyle은 <a:effectStyle>. */
+  fillStyle(idx: number): XmlNode | undefined;
+  lineStyle(idx: number): XmlNode | undefined;
+  effectStyle(idx: number): XmlNode | undefined;
+  /** 테마 글꼴 참조(+mj-lt, +mn-ea …)를 실제 글꼴 이름으로. 테마 참조가 아니면 그대로, 풀 수 없으면 undefined.
+   * 동아시아(ea) 칸이 비어 있으면 한글 글꼴(<a:font script="Hang">)을 쓴다 — PowerPoint가 한국어에 쓰는 것과 같다. */
+  font(typeface: string | undefined): string | undefined;
 }
 
 function readXml(zip: Record<string, Uint8Array>, part: string): XmlNode | null {
@@ -90,7 +100,15 @@ function hslToRgb([h, s, l]: [number, number, number]): [number, number, number]
   return [f(h + 1 / 3) * 255, f(h) * 255, f(h - 1 / 3) * 255];
 }
 
-/** 색 노드의 자식 변환(lumMod/lumOff/tint/shade)을 순서대로 적용한다. 값은 1/1000 퍼센트(100000=100%). */
+const toLinear = (c: number) => {
+  const v = c / 255;
+  return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+};
+const fromLinear = (v: number) => 255 * (v <= 0.0031308 ? v * 12.92 : 1.055 * v ** (1 / 2.4) - 0.055);
+
+/** 색 노드의 자식 변환(tint/shade/satMod/lumMod/lumOff)을 적용한다. 값은 1/1000 퍼센트(100000=100%).
+ * tint·shade는 PowerPoint처럼 선형 밝기(scRGB)에서 흰색·검정과 섞는다 — sRGB로 섞으면 "tx1 tint 75%"가
+ * #404040(너무 진함)이 되는데 PowerPoint·LibreOffice는 #898989로 그린다(부제목 회색이 검게 보이던 원인). */
 function applyTransforms(hex: string, node: XmlNode): string {
   let rgb = hexToRgb(hex);
   const pct = (name: string) => {
@@ -98,16 +116,33 @@ function applyTransforms(hex: string, node: XmlNode): string {
     return v === undefined ? undefined : Number(v) / 100000;
   };
   const tint = pct('a:tint');
-  if (tint !== undefined) rgb = rgb.map((c) => c * tint + 255 * (1 - tint)) as [number, number, number];
+  if (tint !== undefined) rgb = rgb.map((c) => fromLinear(toLinear(c) * tint + (1 - tint))) as [number, number, number];
   const shade = pct('a:shade');
-  if (shade !== undefined) rgb = rgb.map((c) => c * shade) as [number, number, number];
+  if (shade !== undefined) rgb = rgb.map((c) => fromLinear(toLinear(c) * shade)) as [number, number, number];
+  const satMod = pct('a:satMod');
   const lumMod = pct('a:lumMod');
   const lumOff = pct('a:lumOff');
-  if (lumMod !== undefined || lumOff !== undefined) {
+  if (satMod !== undefined || lumMod !== undefined || lumOff !== undefined) {
     const [h, s, l] = rgbToHsl(rgb);
-    rgb = hslToRgb([h, s, Math.max(0, Math.min(1, l * (lumMod ?? 1) + (lumOff ?? 0)))]);
+    const clamp = (v: number) => Math.max(0, Math.min(1, v));
+    rgb = hslToRgb([h, clamp(s * (satMod ?? 1)), clamp(l * (lumMod ?? 1) + (lumOff ?? 0))]);
   }
   return rgbToHex(rgb);
+}
+
+/** fmtScheme 목록(fillStyleLst 등)의 자식 요소를 문서 순서대로 — 파서는 이름이 다른 형제(solidFill·gradFill)를
+ * 이름별로 묶어 순서를 잃으므로 원문에서 순서대로 잘라 하나씩 읽는다. */
+function styleList(themeXml: string, listTag: string, childRe: string): XmlNode[] {
+  const list = new RegExp(`<a:${listTag}\\b[^>]*>([\\s\\S]*?)</a:${listTag}>`).exec(themeXml)?.[1] ?? '';
+  const out: XmlNode[] = [];
+  for (const m of list.matchAll(new RegExp(`<a:(${childRe})\\b(?:[^>]*/>|[\\s\\S]*?</a:\\1>)`, 'g'))) {
+    try {
+      out.push(parser.parse(m[0]) as XmlNode);
+    } catch {
+      out.push({});
+    }
+  }
+  return out;
 }
 
 /** 슬라이드에 적용되는 테마 색표(clrMap 별칭 포함). 테마를 못 찾으면 Office 기본 테마로 대체한다. */
@@ -118,6 +153,23 @@ export function loadThemeColors(zip: Record<string, Uint8Array>, sourceSlidePart
   const master = masterPart ? readXml(zip, masterPart) : null;
   const themePart = masterPart ? relTargetOf(zip, masterPart, 'theme') : null;
   const theme = themePart ? readXml(zip, themePart) : null;
+  const themeXml = themePart && zip[themePart] ? decoder.decode(zip[themePart]) : '';
+  const FILLS = 'noFill|solidFill|gradFill|blipFill|pattFill|grpFill';
+  const fills = styleList(themeXml, 'fillStyleLst', FILLS);
+  const bgFills = styleList(themeXml, 'bgFillStyleLst', FILLS);
+  const lines = styleList(themeXml, 'lnStyleLst', 'ln');
+  const effects = styleList(themeXml, 'effectStyleLst', 'effectStyle');
+  const fontScheme = ((theme?.['a:theme'] as XmlNode | undefined)?.['a:themeElements'] as XmlNode | undefined)?.['a:fontScheme'] as XmlNode | undefined;
+  const slotFont = (slot: 'majorFont' | 'minorFont', script: 'latin' | 'ea' | 'cs'): string | undefined => {
+    const group = fontScheme?.[`a:${slot}`] as XmlNode | undefined;
+    const direct = (group?.[`a:${script}`] as XmlNode | undefined)?.['@_typeface'];
+    if (typeof direct === 'string' && direct) return direct;
+    if (script !== 'ea') return undefined;
+    const scripts = group?.['a:font'];
+    const list = (Array.isArray(scripts) ? scripts : scripts ? [scripts] : []) as XmlNode[];
+    const hang = list.find((f) => f['@_script'] === 'Hang')?.['@_typeface'];
+    return typeof hang === 'string' && hang ? hang : undefined;
+  };
 
   // 실제 테마 파트에 적힌 값만 쓴다 — 테마를 못 찾았을 때 Office 기본 색표로 "추측"하면 원본과 다른
   // 색을 그럴듯하게 그려 버린다(테마 참조 색은 그냥 풀지 않는 편이 낫다 — 기존 정책과 같음).
@@ -142,7 +194,16 @@ export function loadThemeColors(zip: Record<string, Uint8Array>, sourceSlidePart
   };
 
   return {
-    resolve(container) {
+    fillStyle: (idx) => (idx >= 1001 ? bgFills[idx - 1001] : fills[idx - 1]),
+    lineStyle: (idx) => lines[idx - 1]?.['a:ln'] as XmlNode | undefined,
+    effectStyle: (idx) => effects[idx - 1]?.['a:effectStyle'] as XmlNode | undefined,
+    font(typeface) {
+      if (!typeface) return undefined;
+      const m = /^\+(mj|mn)-(lt|ea|cs)$/.exec(typeface);
+      if (!m) return typeface.startsWith('+') ? undefined : typeface;
+      return slotFont(m[1] === 'mj' ? 'majorFont' : 'minorFont', m[2] === 'lt' ? 'latin' : m[2] === 'ea' ? 'ea' : 'cs');
+    },
+    resolve(container, ph) {
       if (!container || typeof container !== 'object') return undefined;
       const srgb = container['a:srgbClr'] as XmlNode | undefined;
       const schemeClr = container['a:schemeClr'] as XmlNode | undefined;
@@ -154,8 +215,9 @@ export function loadThemeColors(zip: Record<string, Uint8Array>, sourceSlidePart
         base = String(srgb['@_val'] ?? '');
         node = srgb;
       } else if (schemeClr && typeof schemeClr === 'object') {
-        // phClr = "자리표시 색"(스타일 행렬 안에서만 쓰임) — 이 앱 표시엔 의미 없어 풀지 않는다
-        base = scheme[alias(String(schemeClr['@_val'] ?? ''))];
+        // phClr = "자리표시 색"(스타일 행렬 안에서만 쓰임) — 그 스타일을 부른 참조의 색(ph)이 들어간다
+        const val = String(schemeClr['@_val'] ?? '');
+        base = val === 'phClr' ? ph?.replace('#', '') : scheme[alias(val)];
         node = schemeClr;
       } else if (sysClr && typeof sysClr === 'object') {
         base = String(sysClr['@_lastClr'] ?? '');
