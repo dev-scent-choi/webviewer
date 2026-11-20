@@ -34,6 +34,8 @@ import {
   type DocxComment,
   type DocxPageSetup,
   type PageSetup,
+  lineSpacingCss,
+  WORD_SINGLE_LINE_RATIO,
 } from '../docx/schema.js';
 import { setupWordReview } from './wordReview.js';
 import { pickPresenceColorForName, renderPresenceAvatars } from './presence.js';
@@ -229,12 +231,11 @@ function applyDefaultParagraphSpacing(spacing: ViewInfo['defaultParagraphSpacing
   if (spacing.before !== null) editorHost.style.setProperty('--doc-p-before', `${spacing.before / twipsPerPx}px`);
   if (spacing.after !== null) editorHost.style.setProperty('--doc-p-after', `${spacing.after / twipsPerPx}px`);
   if (spacing.line) {
-    editorHost.style.setProperty(
-      '--doc-line-height',
-      spacing.lineRule === 'exact' || spacing.lineRule === 'atLeast'
-        ? `${spacing.line / twipsPerPx}px`
-        : `calc(var(--doc-single-line, 1.2) * ${Number((spacing.line / 240).toFixed(3))})`,
-    );
+    // 문단 줄 간격과 같은 규칙(schema.ts lineSpacingCss) — 줄 높이는 --doc-line-height로, 글꼴별 런이 쓰는 배수·고정 값은 변수 그대로
+    for (const declaration of lineSpacingCss(spacing)) {
+      const [name, value] = declaration.split(/:\s*(.*)/s);
+      editorHost.style.setProperty(name === 'line-height' ? '--doc-line-height' : name, value);
+    }
   }
 }
 
@@ -243,13 +244,6 @@ function applyDefaultParagraphSpacing(spacing: ViewInfo['defaultParagraphSpacing
  * 문서 기본 글꼴로 줄 높이를 재어 --doc-single-line에 둔다(줄 간격 '배수'는 전부 이 값을 곱한다). 예전엔 모든 글꼴에
  * 1.2배를 써서 맑은 고딕 문서가 워드보다 촘촘하게 보였다.
  */
-/**
- * 브라우저 줄 높이(hhea 값)와 Word의 "1줄"이 크게 다른 글꼴 — Word가 만든 PDF에서 잰 값(글자 크기 대비).
- * 맑은 고딕: 10.5pt 글자, 1.15줄 문단의 줄 간격 20.9pt → 1줄 18.17pt = 1.73배(브라우저는 1.33배라 Word보다 촘촘했다).
- * shortcut: 측정한 글꼴만 — 다른 글꼴도 차이가 보이면 같은 방법으로 재어 더한다.
- */
-const WORD_SINGLE_LINE_RATIO: Readonly<Record<string, number>> = { '맑은 고딕': 1.73, 'Malgun Gothic': 1.73 };
-
 function measureSingleLineRatio(defaultFontName: string): void {
   const known = WORD_SINGLE_LINE_RATIO[defaultFontName];
   if (known) {
@@ -688,7 +682,7 @@ async function main(): Promise<void> {
       tableEditing(),
       buildSearchPlugin(),
       ...(info.docxRender ? [docxLayoutPlugin(info.docxRender, info.pageCount ?? null)] : []),
-      docxPastePlugin(() => void officeAlert('다른 문서에서 붙여넣은 그림·글상자·번호 같은 Word 요소 일부는 이 문서에 저장할 수 없어 빼고 붙였습니다(글자는 그대로).')),
+      docxPastePlugin(info.docId, () => void officeAlert('다른 문서에서 붙여넣은 그림·글상자·번호 같은 Word 요소 일부는 이 문서에 저장할 수 없어 빼고 붙였습니다(글자는 그대로).')),
     ],
   });
 

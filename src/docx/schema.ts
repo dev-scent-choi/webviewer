@@ -70,6 +70,49 @@ const TWIPS_PER_PX = 15;
  * --doc-single-line으로 넘긴다(editor.ts). 못 재면 이 값. */
 const WORD_SINGLE_LINE_HEIGHT = 1.2;
 
+/**
+ * Word의 "1줄" 높이(글자 크기 대비)가 브라우저 기본 줄 높이와 다른 글꼴 — 글자(런)마다 이 값으로 줄 높이를 정한다(줄 간격 '배수'는 곱한다).
+ * 출처:
+ *  - 맑은 고딕: Word가 만든 PDF에서 잰 값 — 10.5pt 글자, 1.15줄 문단의 줄 간격 20.9pt → 1줄 18.17pt = 1.73배
+ *    (글꼴 파일 malgun.ttf 의 win/hhea 값은 (2229+495)/2048 = 1.33 — Word는 이보다 넓게 둔다).
+ *  - 바탕·바탕체·궁서·궁서체(batang.ttc), 굴림·굴림체·돋움·돋움체(gulim.ttc): Windows 11 글꼴 파일의 OS/2·hhea 표
+ *    (winAscent 879 + winDescent 145 + hhea lineGap 152) / unitsPerEm 1024 = 1.148. Word 출력과 맞춰 보지는 못했다(미검증).
+ *  - 나눔고딕·함초롬바탕·함초롬돋움: 이 PC에 글꼴이 없어 값을 재지 못했다 — 표에 넣지 않는다(그 글자는 문단 줄 높이를 따른다).
+ */
+export const WORD_SINGLE_LINE_RATIO: Readonly<Record<string, number>> = {
+  '맑은 고딕': 1.73,
+  'Malgun Gothic': 1.73,
+  ...Object.fromEntries(['바탕', 'Batang', '바탕체', 'BatangChe', '궁서', 'Gungsuh', '궁서체', 'GungsuhChe', '굴림', 'Gulim', '굴림체', 'GulimChe', '돋움', 'Dotum', '돋움체', 'DotumChe'].map((name) => [name, 1.148])),
+};
+
+/**
+ * 문단(또는 문단 스타일·문서 기본) 줄 간격 CSS — 배수(auto)면 --line-mult에 배수를 두고 줄 높이 = 1줄 × 배수, 고정(exact)·최소(atLeast)면 그 px.
+ * 글자 글꼴마다 1줄이 다른 런(.docx-font-lh)은 --run-line-height(고정 px) 또는 자기 1줄 × --line-mult로 줄 높이를 다시 정한다(style.css).
+ */
+export function lineSpacingCss(spacing: { line: number | null; lineRule: string | null }): string[] {
+  if (!spacing.line) return [];
+  if (spacing.lineRule === 'exact' || spacing.lineRule === 'atLeast') {
+    const px = `${spacing.line / TWIPS_PER_PX}px`;
+    return [`--run-line-height: ${px}`, `line-height: ${px}`];
+  }
+  const mult = Number((spacing.line / 240).toFixed(3));
+  return [`--line-mult: ${mult}`, '--run-line-height: initial', `line-height: calc(var(--doc-single-line, ${WORD_SINGLE_LINE_HEIGHT}) * ${mult})`];
+}
+
+/** 문단 글자가 모두 같은 (표에 있는) 글꼴이면 그 글꼴의 1줄 비율 — 문단 줄 높이(빈 줄·줄 바탕)도 그 글꼴로 */
+function paragraphFontRatio(node: PMNode): number | null {
+  let ratio: number | null = null;
+  let mixed = false;
+  node.forEach((child) => {
+    if (!child.isText || mixed) return;
+    const font = child.marks.find((m) => m.type.name === 'fontFamily');
+    const r = font ? WORD_SINGLE_LINE_RATIO[String(font.attrs.eastAsia ?? font.attrs.ascii ?? '')] ?? null : null;
+    if (r === null || (ratio !== null && r !== ratio)) mixed = true;
+    else ratio = r;
+  });
+  return mixed ? null : ratio;
+}
+
 function parseJsonAttr<T>(dom: HTMLElement, name: string): T | null {
   const raw = dom.getAttribute(name);
   if (!raw) return null;
@@ -82,6 +125,23 @@ function parseJsonAttr<T>(dom: HTMLElement, name: string): T | null {
 
 /** paragraph/heading의 공통 문단 속성 — DOM에는 인라인 스타일로 보이게 하고, 붙여넣기·복원용으로
  * data-* 속성에 원래 값을 남긴다. docx로는 w:pPr(shd·spacing·ind·jc)로 나간다. */
+/** 떠 있는(둘러싸기) 그림·글상자가 든 문단 표시 — 편집기가 화면 밖 블록 그리기를 건너뛸 때(content-visibility, 블록을 가둔다) 이 문단은 빼야 다음 문단이 그림을 그대로 둘러싼다 */
+function floatHostAttrs(node: PMNode, attrs: Record<string, string>): Record<string, string> {
+  let float = false;
+  node.forEach((child) => {
+    if (child.attrs.float === 'left' || child.attrs.float === 'right') float = true;
+  });
+  let out = float ? { ...attrs, class: attrs.class ? `${attrs.class} docx-float-host` : 'docx-float-host' } : attrs;
+  // 글자가 모두 한 글꼴이면 문단 1줄도 그 글꼴로(맑은 고딕 문서 안 바탕 문단 등) — 문단에 줄 간격이 없으면 문서 배수로
+  const ratio = paragraphFontRatio(node);
+  if (ratio !== null) {
+    const own = (node.attrs.spacing as ParagraphSpacing | null)?.line;
+    const lh = own ? '' : ' line-height: var(--run-line-height, calc(var(--doc-single-line) * var(--line-mult, 1)));';
+    out = { ...out, style: `${out.style ? `${out.style}; ` : ''}--doc-single-line: ${ratio};${lh}` };
+  }
+  return out;
+}
+
 function paragraphDOMAttrs(attrs: Record<string, unknown>): Record<string, string> {
   const styles: string[] = [];
   const out: Record<string, string> = {};
@@ -98,13 +158,7 @@ function paragraphDOMAttrs(attrs: Record<string, unknown>): Record<string, strin
   if (spacing) {
     if (spacing.before !== null) styles.push(`margin-top: ${spacing.before / TWIPS_PER_PX}px`);
     if (spacing.after !== null) styles.push(`margin-bottom: ${spacing.after / TWIPS_PER_PX}px`);
-    if (spacing.line) {
-      styles.push(
-        spacing.lineRule === 'exact' || spacing.lineRule === 'atLeast'
-          ? `line-height: ${spacing.line / TWIPS_PER_PX}px`
-          : `line-height: calc(var(--doc-single-line, ${WORD_SINGLE_LINE_HEIGHT}) * ${Number((spacing.line / 240).toFixed(3))})`,
-      );
-    }
+    styles.push(...lineSpacingCss(spacing));
     out['data-spacing'] = JSON.stringify(spacing);
   }
   if (attrs.shading && safeCssColor(attrs.shading)) {
@@ -112,6 +166,9 @@ function paragraphDOMAttrs(attrs: Record<string, unknown>): Record<string, strin
     out['data-shading'] = attrs.shading as string;
   }
   if (attrs.styleId) out['data-style'] = attrs.styleId as string;
+  // 번호 수준 들여쓰기 CSS 규칙(편집기 docxLayout.ts)이 고르는 표시 — 문단마다 장식을 달지 않으려고
+  const num = attrs.num as { numId?: unknown; ilvl?: unknown } | null;
+  if (num?.numId) out['data-numlvl'] = `${String(num.numId)}:${Number(num.ilvl) || 0}`;
   if (Array.isArray(attrs.tabs) && attrs.tabs.length > 0) out['data-tabs'] = JSON.stringify(attrs.tabs);
   // 잘라내기·붙여넣기(클립보드는 HTML로 오간다)에서 번호·보존 조각·구역이 떨어지지 않게 — parseDOM이 되읽는다
   const keep = Object.fromEntries(PRESERVED_PARAGRAPH_ATTRS.filter((key) => attrs[key]).map((key) => [key, attrs[key]]));
@@ -179,7 +236,7 @@ const baseNodes: Record<string, NodeSpec> = {
         }),
       },
     ],
-    toDOM: (node) => ['p', paragraphDOMAttrs(node.attrs), 0],
+    toDOM: (node) => ['p', floatHostAttrs(node, paragraphDOMAttrs(node.attrs)), 0],
   },
 
   heading: {
@@ -192,7 +249,7 @@ const baseNodes: Record<string, NodeSpec> = {
       tag: `h${level}`,
       getAttrs: (dom) => ({ level, ...paragraphAttrsFromDOM(dom as HTMLElement) }),
     })),
-    toDOM: (node) => [`h${node.attrs.level as number}`, paragraphDOMAttrs({ ...node.attrs, styleId: null }), 0],
+    toDOM: (node) => [`h${node.attrs.level as number}`, floatHostAttrs(node, paragraphDOMAttrs({ ...node.attrs, styleId: null })), 0],
   },
 
   text: { group: 'inline' },
@@ -437,6 +494,12 @@ const marks: Record<string, MarkSpec> = {
       const ascii = mark.attrs.ascii ? safeFontName(mark.attrs.ascii) : '';
       const eastAsia = mark.attrs.eastAsia ? safeFontName(mark.attrs.eastAsia) : '';
       const attrs: Record<string, string> = { style: `font-family: ${fontStack([eastAsia, ascii])}` };
+      // 글꼴마다 Word "1줄"이 다르다(WORD_SINGLE_LINE_RATIO) — 이 글자의 줄 높이를 그 글꼴 값으로(style.css .docx-font-lh)
+      const ratio = WORD_SINGLE_LINE_RATIO[eastAsia || ascii];
+      if (ratio) {
+        attrs.style += `; --doc-single-line: ${ratio}`;
+        attrs.class = 'docx-font-lh';
+      }
       if (ascii) attrs['data-font-ascii'] = ascii;
       if (eastAsia) attrs['data-font-east-asia'] = eastAsia;
       return ['span', attrs, 0];

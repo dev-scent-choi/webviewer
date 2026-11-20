@@ -3,7 +3,8 @@
 //   처리 = 키 입력 이벤트 처리 시간(PerformanceEventTiming processingEnd-processingStart, 우리 코드·ProseMirror),
 //   화면까지 = 키를 누른 뒤 다음 그림까지(event duration, INP와 같은 값 — 브라우저 다시 배치·그리기 포함),
 //   긴 작업 = 50ms 넘는 작업(longtask) 수·최대.
-// CPU 4배 느리게(저사양 PC 흉내)도 같이 잰다. 사용: node audit/office/perf-docx-typing.mjs [http://127.0.0.1:8143]
+// CPU 4배 느리게(저사양 PC 흉내, 문서 열기부터 느리게)도 같이 잰다. 첫 화면 = 편집기 주소를 연 뒤 본문 첫 문단이 보일 때까지,
+// 쪽 나눔 = 첫 넘침 쪽 경계(.docx-page-boundary)가 생길 때까지. 사용: node audit/office/perf-docx-typing.mjs [http://127.0.0.1:8143]
 import fs from 'node:fs';
 import path from 'node:path';
 import { chromium } from 'playwright';
@@ -34,9 +35,15 @@ try {
     for (const throttle of [1, 4]) {
       const page = await browser.newPage({ viewport: { width: 1400, height: 1000 } });
       const cdp = await page.context().newCDPSession(page);
+      await cdp.send('Emulation.setCPUThrottlingRate', { rate: throttle });
+      const opened = Date.now();
       await page.goto(`${BASE}${tok.editorUrl}&home=hidden`);
-      await page.waitForSelector('.ProseMirror');
-      await page.waitForTimeout(4000); // 첫 동기화·넘침 쪽 나눔·글꼴
+      await page.waitForSelector('.ProseMirror > p', { timeout: 120000 });
+      const firstScreen = Date.now() - opened;
+      await page.waitForSelector('.docx-page-boundary', { timeout: 120000 }).catch(() => undefined);
+      const paged = Date.now() - opened;
+      await page.waitForTimeout(4000 * throttle); // 첫 동기화·넘침 쪽 나눔·글꼴
+      await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 });
       const stats = await page.evaluate(() => ({ dom: document.querySelectorAll('.ProseMirror *').length, tabs: document.querySelectorAll('.docx-tab').length, nums: document.querySelectorAll('.docx-num').length, pages: document.querySelectorAll('.docx-page-boundary').length + 1 }));
       const paragraphs = page.locator('.ProseMirror > p');
       const n = await paragraphs.count();
@@ -72,7 +79,7 @@ try {
       }
       const keys = [...byKey.values()];
       const row = {
-        file: path.basename(file), throttle: `${throttle}x`, ...stats, keys: keys.length,
+        file: path.basename(file), throttle: `${throttle}x`, ...stats, firstScreen, paged, keys: keys.length,
         processingMedian: Math.round(pct(keys.map((k) => k.processing), 0.5) * 10) / 10,
         processingP95: Math.round(pct(keys.map((k) => k.processing), 0.95) * 10) / 10,
         toPaintMedian: Math.round(pct(keys.map((k) => k.duration), 0.5)),
@@ -88,6 +95,6 @@ try {
 } finally {
   await browser.close();
 }
-console.log('\n| 문서 | CPU | DOM 요소 | 탭/번호 | 쪽 | 처리(중앙/95%) ms | 화면까지(중앙/95%) ms | 긴 작업(수/최대 ms) |');
-console.log('|---|---|---|---|---|---|---|---|');
-for (const r of rows) console.log(`| ${r.file} | ${r.throttle} | ${r.dom} | ${r.tabs}/${r.nums} | ${r.pages} | ${r.processingMedian} / ${r.processingP95} | ${r.toPaintMedian} / ${r.toPaintP95} | ${r.longtasks} / ${r.longtaskMax} |`);
+console.log('\n| 문서 | CPU | DOM 요소 | 탭/번호 | 쪽 | 첫 화면 / 쪽 나눔 ms | 처리(중앙/95%) ms | 화면까지(중앙/95%) ms | 긴 작업(수/최대 ms) |');
+console.log('|---|---|---|---|---|---|---|---|---|');
+for (const r of rows) console.log(`| ${r.file} | ${r.throttle} | ${r.dom} | ${r.tabs}/${r.nums} | ${r.pages} | ${r.firstScreen} / ${r.paged} | ${r.processingMedian} / ${r.processingP95} | ${r.toPaintMedian} / ${r.toPaintP95} | ${r.longtasks} / ${r.longtaskMax} |`);

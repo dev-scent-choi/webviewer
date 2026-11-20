@@ -2,7 +2,7 @@ import { Plugin, PluginKey, type EditorState, type Transaction } from 'prosemirr
 import { ReplaceStep } from 'prosemirror-transform';
 import { Decoration, DecorationSet, type EditorView } from 'prosemirror-view';
 import type { Node as PMNode } from 'prosemirror-model';
-import { blocksDOM, fontStack, type ParagraphIndent, type ParagraphSpacing, type TabStop } from '../docx/schema.js';
+import { blocksDOM, fontStack, lineSpacingCss, type ParagraphIndent, type ParagraphSpacing, type TabStop } from '../docx/schema.js';
 import { NumberingCounter, type NumberingDefs } from '../docx/numbering.js';
 import type { DocxRenderExtras, DocxSectionInfo, DocxStyleRule } from '../docx/import.js';
 
@@ -103,19 +103,24 @@ const contentWidthOf = (section: DocxSectionInfo | undefined): number | null =>
   section?.page ? section.page.widthPx - section.page.marginLeftPx - section.page.marginRightPx : null;
 
 /** 번호 글자 + 번호 수준의 들여쓰기(문단에 직접 들여쓰기가 없을 때) */
-function numberingDecorations(doc: PMNode, defs: NumberingDefs | null, out: Decoration[]): void {
+/**
+ * 번호 문단의 들여쓰기(문단에 직접 들여쓰기가 없을 때 번호 수준 값) — 문단마다 노드 장식을 달면 글자 하나 칠 때마다 장식 옮기기가
+ * 블록 수의 제곱만큼 걸린다(400쪽 1600문단에서 글자당 약 70ms). 그래서 (번호, 수준)마다 CSS 규칙 하나로 둔다(문단의 data-numlvl).
+ */
+function numberingDecorations(doc: PMNode, defs: NumberingDefs | null, out: Decoration[], rules: Map<string, string>): void {
   const counter = new NumberingCounter(defs);
   doc.descendants((node, pos) => {
     if (!node.isTextblock) return true;
     const num = node.attrs.num as { numId: string; ilvl: number } | null;
     const result = num ? counter.next(String(num.numId), Number(num.ilvl) || 0) : null;
-    if (!result) return false;
+    if (!result || !num) return false;
     const { label, level } = result;
     const indent = node.attrs.indent as ParagraphIndent | null;
     const hangingPx = (indent ? indent.hanging : level.hanging) / TWIPS_PER_PX;
-    if (!indent && (level.left || level.hanging || level.firstLine)) {
+    const key = `${num.numId}:${Number(num.ilvl) || 0}`;
+    if (!rules.has(key) && /^[\w:.-]{1,80}$/.test(key) && (level.left || level.hanging || level.firstLine)) {
       const textIndent = level.hanging ? -level.hanging : level.firstLine;
-      out.push(Decoration.node(pos, pos + node.nodeSize, { style: `margin-left: ${level.left / TWIPS_PER_PX}px; text-indent: ${textIndent / TWIPS_PER_PX}px` }));
+      rules.set(key, `.editor-surface .ProseMirror [data-numlvl="${key}"]:not([data-indent]) { margin-left: ${level.left / TWIPS_PER_PX}px; text-indent: ${textIndent / TWIPS_PER_PX}px; }`);
     }
     out.push(
       Decoration.widget(pos + 1, () => {
@@ -151,14 +156,24 @@ function bodyBlocksOf(doc: PMNode): Array<{ node: PMNode; pos: number; after: nu
 function pageDecorations(doc: PMNode, extras: DocxRenderExtras, totalPages: number | null, autoBreaks: readonly number[], out: Decoration[]): void {
   if (extras.sections.length === 0) return;
   const hostContent = Math.max(0, ...extras.sections.map((s) => contentWidthOf(s) ?? 0));
-  const auto = new Set(autoBreaks);
+  const auto = [...autoBreaks].sort((a, b) => a - b);
+  let ai = 0;
   const blocks = bodyBlocksOf(doc);
   // 쪽 수: 보기 화면(LibreOffice)이 센 실제 쪽 수가 있으면 그것, 없으면 명시적 나눔으로 센 수
   let counted = 1;
-  const boundaries: Array<{ pos: number; nextSection: number | null }> = [];
+  // inline: 문단 안(긴 문단의 넘치는 줄 앞) · hidden: 표·다단 안 — 경계를 그리지 않고 쪽 수만 센다
+  const boundaries: Array<{ pos: number; nextSection: number | null; inline?: boolean; hidden?: boolean }> = [];
   let section = 0;
-  for (const { node, pos, after } of blocks) {
-    if ((node.attrs.breakBefore || auto.has(pos)) && pos > 0) boundaries.push({ pos, nextSection: null });
+  for (const { node, pos, after, inColumns } of blocks) {
+    while (ai < auto.length && auto[ai] < pos) ai += 1;
+    const autoHere = ai < auto.length && auto[ai] === pos;
+    if (autoHere) ai += 1;
+    if ((node.attrs.breakBefore || (autoHere && !inColumns)) && pos > 0) boundaries.push({ pos, nextSection: null });
+    else if (autoHere && inColumns) boundaries.push({ pos, nextSection: null, hidden: true });
+    for (; ai < auto.length && auto[ai] < after; ai += 1) {
+      const inline = node.isTextblock && !inColumns;
+      boundaries.push({ pos: auto[ai], nextSection: null, inline, hidden: !inline });
+    }
     // 구역 본문 폭이 편집 영역(가장 넓은 구역)보다 좁으면 그 폭으로 — 세로 쪽 글이 가로 쪽 폭으로 길게 흐르지 않게
     const width = contentWidthOf(extras.sections[section]);
     if (width && width < hostContent - 0.5 && node.type.name !== 'table') {
@@ -204,6 +219,10 @@ function pageDecorations(doc: PMNode, extras: DocxRenderExtras, totalPages: numb
       cur.section = -boundary.nextSection - 1;
       continue;
     }
+    if (boundary.hidden) {
+      cur.page += 1;
+      continue;
+    }
     const ending = { ...cur, notes: [...cur.notes] };
     cur.page += 1;
     cur.notes = [];
@@ -233,9 +252,18 @@ function pageDecorations(doc: PMNode, extras: DocxRenderExtras, totalPages: numb
   );
 }
 
+/** 번호 수준 들여쓰기 규칙(numberingDecorations) — 문서에 쓰인 (번호, 수준)마다 하나, 편집기 하나에 한 벌 */
+let numberingStyle: HTMLStyleElement | null = null;
+const numberingRules = new Map<string, string>();
+
 function buildDecorations(doc: PMNode, extras: DocxRenderExtras, totalPages: number | null, autoBreaks: readonly number[]): DecorationSet {
   const out: Decoration[] = [];
-  numberingDecorations(doc, extras.numbering, out);
+  const before = numberingRules.size;
+  numberingDecorations(doc, extras.numbering, out, numberingRules);
+  if (numberingRules.size !== before && typeof document !== 'undefined') {
+    numberingStyle ??= document.head.appendChild(document.createElement('style'));
+    numberingStyle.textContent = [...numberingRules.values()].join('\n');
+  }
   pageDecorations(doc, extras, totalPages, autoBreaks, out);
   return DecorationSet.create(doc, out);
 }
@@ -381,67 +409,203 @@ function blocksWithTabs(root: ParentNode): HTMLElement[] {
   return [...set];
 }
 
+/** 넘침 쪽 나눔의 재료 — 본문 직속 블록 하나(다단 구역은 통째로 하나) */
+export interface FlowItem {
+  /** 마지막으로 그려졌을 때의 높이·위아래 여백(px, ResizeObserver가 적어 둔 값). 아직 모르면 null */
+  readonly height: number | null;
+  readonly marginTop: number;
+  readonly marginBottom: number;
+  /** para: 줄 단위로 나눈다(줄 높이 lineHeight) · split: 아무 데서나(표의 행·다단 — 위치는 셀 수만 있다) · block: 나누지 않는다 */
+  readonly kind: 'para' | 'split' | 'block';
+  readonly lineHeight: number;
+  /** 이 블록 안 각주 본문 높이 합(px) — 각주는 참조가 있는 쪽 아래에 놓이므로 그 쪽 본문이 그만큼 줄어든다 */
+  readonly notes: number;
+  /** 이 블록이 속한 구역(쪽 크기) */
+  readonly section: number;
+  /** 문단 앞 쪽 나눔 · 블록 뒤에서 쪽이 바뀜(쪽 나누기·다음 쪽 구역) */
+  readonly breakBefore: boolean;
+  readonly breakAfter: boolean;
+}
+
+/** 넘침 쪽 경계: index번째 블록의 위에서 offset(px)만큼 내려간 곳 — 0이면 블록 앞 */
+export interface FlowBreak {
+  readonly index: number;
+  readonly offset: number;
+}
+
+/** 쪽에 남은 자리(room px)에 둘 수 있는 블록 조각의 높이 — 문단은 줄 단위로, 앞뒤 2줄씩은 남긴다(Word 기본 '외톨이 줄 방지') */
+function fitPiece(item: FlowItem, room: number, rest: number): number {
+  if (item.kind === 'block' || room <= 0) return 0;
+  if (item.kind === 'split') return room >= 20 ? room : 0;
+  const lh = item.lineHeight;
+  if (!(lh > 0)) return 0;
+  const lines = Math.round(rest / lh);
+  const fit = Math.min(Math.floor((room + 1) / lh), lines - 2);
+  return fit >= 2 ? fit * lh : 0;
+}
+
 /**
- * 넘침 쪽 나눔: 그려진 본문 블록의 위·아래를 재어(쪽 경계 장식 높이는 빼고) 쪽 본문 높이를 넘는 블록 앞에 쪽 경계를 둔다.
- * 블록 하나가 쪽보다 크면(긴 표·긴 문단) 그 블록은 나누지 않는다.
+ * 블록 높이표로 쪽을 나눈다(그려진 위치를 읽지 않는다 — 화면 밖 블록은 그리지 않고 건너뛰므로).
+ * bodyHeight(구역): 그 구역 쪽의 본문 높이(쪽 높이 − 위아래 여백). 각주가 있는 쪽은 각주 높이만큼 본문이 줄어든다.
+ * 쪽보다 긴 블록은 나눠 다음 쪽에 이어 센다 — 문단은 줄 단위, 표·다단은 높이로(행 경계는 모른다).
  */
-function measureAutoBreaks(view: EditorView, extras: DocxRenderExtras): number[] {
-  const scale = view.dom.offsetWidth > 0 ? view.dom.getBoundingClientRect().width / view.dom.offsetWidth : 1;
-  const blocks = bodyBlocksOf(view.state.doc);
-  const top = new Map<number, { top: number; bottom: number }>();
-  // 장식(쪽 경계) 높이를 빼고 본문만 이어 붙인 좌표
-  let shift = 0;
-  let widgetTop: number | null = null;
-  const children = [...view.dom.children] as HTMLElement[];
-  const posOfDom = new Map<Element, number>();
-  for (const b of blocks) {
-    const dom = view.nodeDOM(b.pos);
-    if (dom instanceof HTMLElement) posOfDom.set(dom, b.pos);
-  }
-  const visit = (list: HTMLElement[]) => {
-    for (const child of list) {
-      if (child.classList.contains('docx-columns')) {
-        visit([...child.children] as HTMLElement[]);
-        continue;
-      }
-      const rect = child.getBoundingClientRect();
-      if (child.matches('.docx-page-boundary, .docx-page-start, .docx-page-end')) {
-        widgetTop ??= rect.top;
-        continue;
-      }
-      if (widgetTop !== null) {
-        shift += rect.top - widgetTop;
-        widgetTop = null;
-      }
-      const pos = posOfDom.get(child);
-      if (pos !== undefined) top.set(pos, { top: (rect.top - shift) / scale, bottom: (rect.bottom - shift) / scale });
+export function paginateFlow(items: readonly FlowItem[], bodyHeight: (section: number) => number | null): FlowBreak[] {
+  const out: FlowBreak[] = [];
+  let used: number | null = null; // 이 쪽 본문에 쓴 높이 — null이면 새 쪽 처음
+  let notes = 0; // 이 쪽 각주 높이
+  let prevMargin = 0;
+  items.forEach((item, index) => {
+    if (item.breakBefore && index > 0) {
+      used = null;
+      notes = 0;
     }
-  };
-  visit(children);
-  const breaks: number[] = [];
+    const limit = bodyHeight(item.section);
+    if (item.height !== null && limit) {
+      let top = used === null ? 0 : used + Math.max(prevMargin, item.marginTop);
+      let rest = item.height;
+      let done = 0;
+      let notesPlaced = false;
+      if (used !== null && top + rest > limit - notes - item.notes + 1) {
+        const piece = fitPiece(item, limit - notes - item.notes - top, rest);
+        out.push({ index, offset: piece });
+        if (piece > 0) notesPlaced = true; // 참조가 앞 조각에 있다고 보고 앞 쪽에 둔다
+        done += piece;
+        rest -= piece;
+        top = 0;
+        notes = 0;
+      }
+      if (!notesPlaced) notes += item.notes;
+      // 한 쪽보다 긴 블록 — 넘친 만큼 다음 쪽에 잇는다
+      for (let guard = 0; top + rest > limit - notes + 1 && guard < 10000; guard += 1) {
+        const piece = fitPiece(item, limit - notes - top, rest);
+        if (piece <= 0) break;
+        out.push({ index, offset: done + piece });
+        done += piece;
+        rest -= piece;
+        top = 0;
+        notes = 0;
+      }
+      used = top + rest;
+      prevMargin = item.marginBottom;
+    }
+    if (item.breakAfter) {
+      used = null;
+      notes = 0;
+      prevMargin = 0;
+    }
+  });
+  return out;
+}
+
+interface Measured {
+  readonly height: number;
+  readonly marginTop: number;
+  readonly marginBottom: number;
+  readonly lineHeight: number;
+}
+
+/** 쪽 경계·쪽 끝 장식(본문 블록이 아니다 — 높이표에 넣지 않는다) */
+const isPageWidget = (dom: Element) => dom.matches('.docx-page-boundary, .docx-page-start, .docx-page-end');
+
+/**
+ * 넘침 쪽 나눔: 본문 블록 높이표(ResizeObserver가 그릴 때마다 적어 둔 값)로 쪽을 센다. 경계는 블록 앞에, 쪽보다 긴 문단은 넘치는 줄
+ * 앞에(화면에 그려진 문단은 그 줄의 글자 위치, 건너뛴 문단은 글자 수 비율로 어림 — 화면에 들어오면 다시 잰다), 표·다단 안에서는
+ * 경계를 그리지 않고 쪽 수만 센다(estimated: 어림한 문단 DOM — 화면에 들어오면 다시 잰다).
+ */
+function measureAutoBreaks(view: EditorView, extras: DocxRenderExtras, heights: WeakMap<Element, Measured>, noteHeight: (id: string) => number, estimated: Set<HTMLElement>): number[] {
+  const items: FlowItem[] = [];
+  const nodes: Array<{ node: PMNode; pos: number; dom: HTMLElement | null }> = [];
   let section = 0;
-  let pageTop: number | null = null;
-  for (const b of blocks) {
-    // 다단 구역 안 블록은 단을 따라 옆으로 흘러 위치로 쪽을 셀 수 없다 — 다단 구역은 나누지 않는다(뒤 블록이 그 높이를 포함해 센다)
-    const m = b.inColumns ? undefined : top.get(b.pos);
-    const page = extras.sections[section]?.page;
-    const explicit = b.node.attrs.breakBefore && b.pos > 0;
-    if (m && (pageTop === null || explicit)) pageTop = m.top;
-    else if (m && page && pageTop !== null && m.bottom - pageTop > page.heightPx - page.marginTopPx - page.marginBottomPx + 1) {
-      breaks.push(b.pos);
-      pageTop = m.top;
-    }
+  view.state.doc.forEach((node, pos) => {
+    const dom = view.nodeDOM(pos);
+    const el = dom instanceof HTMLElement ? dom : null;
+    const m = el ? heights.get(el) : undefined;
+    let notes = 0;
     let hasBreak = false;
-    b.node.descendants((child) => {
+    node.descendants((child) => {
       if (child.type.name === 'page_break') hasBreak = true;
-      return !hasBreak;
+      if (child.type.name === 'ooxml' && child.attrs.kind === 'note' && child.attrs.noteType === 'footnote') notes += noteHeight(String(child.attrs.noteId));
+      return true;
     });
-    if (typeof b.node.attrs.sect === 'number') {
-      section = b.node.attrs.sect + 1;
-      if ((extras.sections[section]?.type ?? 'nextPage') !== 'continuous') pageTop = null;
-    } else if (hasBreak) pageTop = null;
+    const sect = node.attrs.sect;
+    let breakAfter = hasBreak;
+    const own = section;
+    if (typeof sect === 'number') {
+      section = sect + 1;
+      if ((extras.sections[section]?.type ?? 'nextPage') !== 'continuous') breakAfter = true;
+    }
+    const kind = node.type.name === 'table' || node.type.name === 'columns' ? 'split' : node.isTextblock && !hasBreak ? 'para' : 'block';
+    items.push({
+      height: m?.height ?? null,
+      marginTop: m?.marginTop ?? 0,
+      marginBottom: m?.marginBottom ?? 0,
+      kind,
+      lineHeight: m?.lineHeight ?? 0,
+      notes,
+      section: own,
+      breakBefore: Boolean(node.attrs.breakBefore),
+      breakAfter,
+    });
+    nodes.push({ node, pos, dom: el });
+  });
+  const flow = paginateFlow(items, (i) => {
+    const page = extras.sections[i]?.page;
+    return page ? page.heightPx - page.marginTopPx - page.marginBottomPx : null;
+  });
+  estimated.clear();
+  const breaks: number[] = [];
+  const inner = new Map<number, number>();
+  for (const { index, offset } of flow) {
+    const { node, pos, dom } = nodes[index];
+    if (offset === 0) breaks.push(pos);
+    else if (items[index].kind === 'para') breaks.push(lineStartAt(view, node, pos, dom, offset, items[index].height ?? 1, estimated));
+    else {
+      // 표·다단 안: 그리지 않고 쪽 수만 센다(안쪽 위치 하나에 쪽 하나)
+      const k = (inner.get(pos) ?? 0) + 1;
+      inner.set(pos, k);
+      if (k < node.nodeSize - 1) breaks.push(pos + k);
+    }
   }
-  return breaks;
+  return breaks.sort((a, b) => a - b);
+}
+
+/** 문단 위에서 offset(px) 내려간 줄의 첫 글자 위치 — 그려진 문단이면 그 자리의 글자, 건너뛴(화면에서 먼, content-visibility: hidden) 문단이면 글자 수 비율로 어림 */
+function lineStartAt(view: EditorView, node: PMNode, pos: number, dom: HTMLElement | null, offset: number, height: number, estimated: Set<HTMLElement>): number {
+  const end = pos + node.nodeSize - 1;
+  if (dom && getComputedStyle(dom).contentVisibility !== 'hidden') {
+    const rect = dom.getBoundingClientRect();
+    const scale = dom.offsetHeight > 0 ? rect.height / dom.offsetHeight : 1;
+    const hit = view.posAtCoords({ left: rect.left + 2, top: rect.top + (offset + 2) * scale });
+    if (hit && hit.pos > pos + 1 && hit.pos < end) return hit.pos;
+  }
+  if (dom) estimated.add(dom);
+  return Math.min(end - 1, Math.max(pos + 2, pos + 1 + Math.round((node.content.size * offset) / height)));
+}
+
+/** 각주 본문 높이(px) — 각주는 편집하지 않으니 처음 한 번 숨긴 곳에 그려 잰다(쪽 끝 각주 칸과 같은 글꼴·폭) */
+function noteHeights(view: EditorView, extras: DocxRenderExtras): (id: string) => number {
+  const cache = new Map<string, number>();
+  let box: HTMLElement | null = null;
+  return (id) => {
+    const known = cache.get(id);
+    if (known !== undefined) return known;
+    const content = extras.notes.footnote[id];
+    if (!content) return 0;
+    if (!box) {
+      const host = view.dom.parentElement ?? document.body;
+      box = el('div', 'docx-footnotes');
+      const style = getComputedStyle(view.dom);
+      box.style.cssText = `position:absolute;visibility:hidden;left:-99999px;top:0;width:${contentWidthOf(extras.sections[0]) ?? view.dom.clientWidth}px;font:${style.font};line-height:${style.lineHeight}`;
+      box.setAttribute('aria-hidden', 'true');
+      host.append(box);
+    }
+    const body = noteBodyDOM(content, '0');
+    box.append(body);
+    const height = body.getBoundingClientRect().height + (cache.size === 0 ? 12 : 0); // 처음 각주엔 구분선·위 여백
+    body.remove();
+    cache.set(id, height);
+    return height;
+  };
 }
 
 function cssNumber(value: unknown): number | null {
@@ -471,11 +635,8 @@ function ruleDeclarations(rule: DocxStyleRule): string[] {
     const line = cssNumber(spacing?.line);
     if (before !== null) d.push(`margin-top: ${before / TWIPS_PER_PX}px`);
     if (after !== null) d.push(`margin-bottom: ${after / TWIPS_PER_PX}px`);
-    if (line) {
-      d.push(spacing?.lineRule === 'exact' || spacing?.lineRule === 'atLeast'
-        ? `line-height: ${line / TWIPS_PER_PX}px`
-        : `line-height: calc(var(--doc-single-line, 1.2) * ${Number((line / 240).toFixed(3))})`);
-    } else if (rule.kind === 'h') d.push('line-height: var(--doc-line-height, 1.3)');
+    if (line) d.push(...lineSpacingCss({ line, lineRule: spacing?.lineRule ?? null }));
+    else if (rule.kind === 'h') d.push('line-height: var(--doc-line-height, 1.3)');
     const indent = rule.indent;
     const textIndent = indent ? (indent.firstLine ? indent.firstLine : indent.hanging ? -indent.hanging : 0) : 0;
     d.push(`margin-left: ${(indent?.left ?? 0) / TWIPS_PER_PX}px`, `margin-right: ${(indent?.right ?? 0) / TWIPS_PER_PX}px`, `text-indent: ${textIndent / TWIPS_PER_PX}px`);
@@ -507,6 +668,10 @@ export function docxStyleSheetText(rules: readonly DocxStyleRule[]): string[] {
 }
 
 const PAGINATION_META = 'docxPagination';
+/** 화면 밖 블록 그리기 건너뛰기(content-visibility) 켜기 — 첫 쪽 나눔을 잰 뒤(그때까지 모든 블록 높이를 한 번 적어 둔다) */
+const CONTENT_SKIP_META = 'docxContentSkip';
+/** 화면에 보이는 블록 앞뒤로 그려 둘 본문 직속 블록(쪽 장식 포함) 수 */
+const SKIP_MARGIN = 60;
 
 /**
  * ProseMirror는 화면을 고칠 때마다 본문 직속 블록마다 DecorationSet.forChild를 부르는데, 그 안에서 장식 목록을 처음부터 훑는다
@@ -549,6 +714,8 @@ function indexedOf(set: DecorationSet): DecorationSet {
 /** 편집기에 Word 문서 모양 장식을 붙이는 플러그인 — 번호·쪽 경계·구역 폭 장식, 탭 폭, 넘침 쪽 나눔(성능은 파일 위 설명). */
 export function docxLayoutPlugin(extras: DocxRenderExtras, totalPages: number | null): Plugin<LayoutState> {
   const defaultTabPx = extras.defaultTabStopDxa / TWIPS_PER_PX;
+  /** 화면 밖 블록 그리기 건너뛰기(CSS .docx-skip — content-visibility: auto)가 켜졌나 */
+  let skipOn = false;
   return new Plugin<LayoutState>({
     key: layoutKey,
     state: {
@@ -567,38 +734,215 @@ export function docxLayoutPlugin(extras: DocxRenderExtras, totalPages: number | 
         const deco = layoutKey.getState(state)?.deco;
         return deco ? indexedOf(deco) : null;
       },
-      attributes: extras.sections.length > 0 ? { class: 'docx-paged' } : {},
+      attributes: (): Record<string, string> => (extras.sections.length > 0 ? { class: skipOn ? 'docx-paged docx-skip' : 'docx-paged' } : {}),
     },
     view: (view: EditorView) => {
       let frame = 0;
-      let pending: 'all' | Set<HTMLElement> = 'all';
       let paginateTimer = 0;
+      /**
+       * 탭·번호 폭은 화면에 들어온(들어올) 문단만 잰다 — 400쪽 문서 전체를 재면 브라우저가 문서 전체를 다시 배치한다.
+       * stale: 다시 재야 하는 문단, visible: 지금 화면 근처(IntersectionObserver)에 있는 문단.
+       */
+      const stale = new Set<HTMLElement>();
+      /** 번호 글자 폭까지 다시 잴 문단(번호·들여쓰기가 바뀌었을 수 있는 'all') — 글자만 친 문단은 탭만 */
+      const staleLabels = new Set<HTMLElement>();
+      /** 고친 문단(커서가 있는 화면 안) — 바로 잰다 */
+      const touchedNow = new Set<HTMLElement>();
+      /** 화면 밖 어림으로 나눈 긴 문단 — 화면에 들어오면 그 자리 글자로 다시 잰다 */
+      const estimated = new Set<HTMLElement>();
+      const remeasured = new WeakSet<HTMLElement>();
+      let firstPass = true;
+      /**
+       * 지금 화면에 보이는 문서 범위(글자 위치) — 화면 위·아래 끝 두 점의 글자 위치. IntersectionObserver로 수천 문단을 지켜보면
+       * 그림마다 수 ms가 들어(400쪽 약 8ms/글자) 이렇게 한다. 화면 밖 건너뛴(content-visibility) 블록은 재지 않는다.
+       */
+      let scroller: Element | null | undefined;
+      const scrollerOf = (): Element | null => {
+        if (scroller === undefined) {
+          scroller = null;
+          for (let p = view.dom.parentElement; p; p = p.parentElement)
+            if (/(auto|scroll)/.test(getComputedStyle(p).overflowY)) {
+              scroller = p;
+              break;
+            }
+        }
+        return scroller;
+      };
+      const visibleRange = (): [number, number] | null => {
+        const rect = view.dom.getBoundingClientRect();
+        const clip = scrollerOf()?.getBoundingClientRect();
+        const top = Math.max(rect.top, clip?.top ?? 0, 0) + 1;
+        const bottom = Math.min(rect.bottom, clip?.bottom ?? Infinity, window.innerHeight) - 1;
+        if (bottom <= top) return null;
+        // posAtCoords는 큰 문서에서 본문 블록 전부의 글자 상자를 훑는다(400쪽 한 번 약 25ms) — 그 점의 요소만 집어 본문 직속 블록 위치로
+        const left = rect.left + rect.width / 2;
+        const from = topBlockPosAt(left, top, 'next');
+        const to = topBlockPosAt(left, bottom, 'prev');
+        // 못 집으면(화면 위에 다른 것이 덮였다) 고친 문단만 — 문서 전체를 재지 않는다
+        if (from === null || to === null) return null;
+        return [from, to + (view.state.doc.nodeAt(to)?.nodeSize ?? 0)];
+      };
+      /** 화면 점(x, y)에 있는 본문 직속 블록의 위치 — 쪽 장식·여백이면 dir 쪽 이웃 블록 */
+      const topBlockPosAt = (x: number, y: number, dir: 'next' | 'prev'): number | null => {
+        let node: Element | null = document.elementFromPoint(x, y);
+        while (node && node.parentElement !== view.dom) node = node.parentElement;
+        for (let guard = 0; node && guard < 50; guard += 1) {
+          if (!isPageWidget(node)) {
+            try {
+              const pos = view.posAtDOM(node, 0) - 1;
+              if (pos >= 0 && view.nodeDOM(pos) === node) return pos;
+            } catch {
+              // 블록이 아닌 요소
+            }
+          }
+          node = dir === 'next' ? node.nextElementSibling : node.previousElementSibling;
+        }
+        return null;
+      };
+      /** 보이는 범위 안 블록(본문 문단·표 안 문단)의 DOM — 범위 안 블록 수만큼만 돈다 */
+      const blocksIn = (range: [number, number] | null): Set<Element> => {
+        const out = new Set<Element>();
+        if (!range) return out;
+        const doc = view.state.doc;
+        doc.nodesBetween(Math.max(0, range[0]), Math.min(doc.content.size, range[1]), (node, pos) => {
+          if (!node.isTextblock) return true;
+          const dom = view.nodeDOM(pos);
+          if (dom instanceof Element) out.add(dom);
+          return false;
+        });
+        return out;
+      };
+      /** 쪽 장식(머리글·바닥글) 안 문단이 화면 안인가 — 장식은 건너뛰지 않으니 위치를 읽어도 된다 */
+      const widgetVisible = (b: HTMLElement) => {
+        const r = b.getBoundingClientRect();
+        return r.bottom >= 0 && r.top <= window.innerHeight;
+      };
       const flush = () => {
         frame = 0;
-        const all = pending === 'all';
-        const targets = pending === 'all' ? blocksWithTabs(view.dom) : [...pending].filter((b) => b.isConnected);
-        pending = new Set();
-        layoutBlocks(view.dom, targets, defaultTabPx, all);
+        const range = firstPass ? null : visibleRange();
+        const shown = blocksIn(range);
+        const targets = [...stale].filter((b) => b.isConnected && (firstPass || touchedNow.has(b) || shown.has(b) || (b.closest('.docx-page-boundary, .docx-page-start, .docx-page-end') !== null && widgetVisible(b))));
+        touchedNow.clear();
+        for (const b of targets) stale.delete(b);
+        const labelled = targets.filter((b) => staleLabels.delete(b));
+        layoutBlocks(view.dom, labelled, defaultTabPx, true);
+        layoutBlocks(view.dom, targets.filter((b) => !labelled.includes(b)), defaultTabPx, false);
+        firstPass = false;
+        // 어림으로 나눈 문단이 화면에 들어왔다 — 그 문단마다 한 번만 다시 잰다(재도 또 어림이면 되풀이하지 않게)
+        const arrived = [...estimated].filter((b) => shown.has(b) && !remeasured.has(b));
+        for (const b of arrived) remeasured.add(b);
+        if (arrived.length > 0) paginate();
       };
       const schedule = (what: 'all' | HTMLElement[]) => {
-        if (what === 'all') pending = 'all';
-        else if (pending !== 'all') for (const b of what) pending.add(b);
+        if (what === 'all')
+          for (const b of blocksWithTabs(view.dom)) {
+            stale.add(b);
+            staleLabels.add(b);
+          }
+        else
+          for (const b of what) {
+            stale.add(b);
+            touchedNow.add(b);
+          }
         if (!frame) frame = requestAnimationFrame(flush);
       };
+      /**
+       * 화면 밖 블록 그리기 건너뛰기: 화면 근처(앞뒤 SKIP_MARGIN개) 밖의 본문 직속 블록은 content-visibility: hidden — 순서 번호
+       * (nth-child) 범위 규칙 하나로 둔다. content-visibility: auto는 브라우저가 블록마다 화면 안인지 그림마다 재어(400쪽 2400블록,
+       * 글자당 약 20ms) 쓰지 않는다. 건너뛴 블록 크기는 마지막으로 그렸을 때 크기(contain-intrinsic-size: auto)라 스크롤 위치는 그대로다.
+       */
+      const skipStyle = document.head.appendChild(document.createElement('style'));
+      let shownRange: [number, number] | null = null;
+      const updateSkip = () => {
+        if (!skipOn) return;
+        const children = view.dom.children;
+        const rect = view.dom.getBoundingClientRect();
+        const clip = scrollerOf()?.getBoundingClientRect();
+        const top = Math.max(rect.top, clip?.top ?? 0, 0) + 1;
+        const bottom = Math.min(rect.bottom, clip?.bottom ?? Infinity, window.innerHeight) - 1;
+        const x = rect.left + rect.width / 2;
+        const indexAt = (y: number) => {
+          let node: Element | null = document.elementFromPoint(x, y);
+          while (node && node.parentElement !== view.dom) node = node.parentElement;
+          return node ? Array.prototype.indexOf.call(children, node) : -1;
+        };
+        const first = bottom > top ? indexAt(top) : -1;
+        const last = bottom > top ? indexAt(bottom) : -1;
+        if (first < 0 || last < 0) return; // 못 집으면 그대로(다른 것이 화면을 덮었다)
+        if (shownRange && first - shownRange[0] >= SKIP_MARGIN / 4 && shownRange[1] - last >= SKIP_MARGIN / 4) return; // 아직 여유 — 규칙을 바꾸지 않는다
+        const lo = Math.max(0, first - SKIP_MARGIN);
+        const hi = Math.min(children.length - 1, last + SKIP_MARGIN);
+        shownRange = [lo, hi];
+        const ranges = [lo > 0 ? `:nth-child(-n+${lo})` : '', `:nth-child(n+${hi + 2})`].filter(Boolean).join(', ');
+        skipStyle.textContent = `.editor-surface .ProseMirror.docx-skip > :is(p, h1, h2, h3, h4, h5, h6, table, .tableWrapper, ul, ol, blockquote):not(.docx-float-host):is(${ranges}) { content-visibility: hidden; }`;
+      };
+      let skipFrame = 0;
+      // 굴리면 건너뛰기 범위를 옮기고, 새로 들어온 문단의 탭 폭을 잰다(다시 잴 것이 있을 때만)
+      const onScroll = () => {
+        if (skipOn && !skipFrame)
+          skipFrame = requestAnimationFrame(() => {
+            skipFrame = 0;
+            updateSkip();
+          });
+        if ((stale.size > 0 || estimated.size > 0) && !frame) frame = requestAnimationFrame(flush);
+      };
+      window.addEventListener('scroll', onScroll, { capture: true, passive: true });
+      // 본문 블록 높이표 — 블록이 그려질 때마다(크기가 바뀔 때만) 적는다. 쪽 나눔은 이 표로만 센다(화면 밖 블록 위치를 읽지 않는다)
+      const heights = new WeakMap<Element, Measured>();
+      const ro = typeof ResizeObserver === 'function'
+        ? new ResizeObserver((entries) => {
+          for (const e of entries) {
+            const target = e.target as HTMLElement;
+            if (!target.isConnected) continue;
+            const style = getComputedStyle(target);
+            const fontSize = parseFloat(style.fontSize) || 16;
+            // 긴 문단 안에 둔 쪽 경계(inline 장식)는 본문이 아니다 — 빼야 다음 재기에서 문단이 그만큼 길어 보이지 않는다
+            let widgets = 0;
+            for (const w of target.querySelectorAll<HTMLElement>(':scope > .docx-page-boundary')) widgets += w.offsetHeight;
+            heights.set(target, {
+              height: target.offsetHeight - widgets,
+              marginTop: parseFloat(style.marginTop) || 0,
+              marginBottom: parseFloat(style.marginBottom) || 0,
+              lineHeight: parseFloat(style.lineHeight) || fontSize * 1.3,
+            });
+          }
+          paginate();
+        })
+        : null;
+      const observeBlocks = (list: Iterable<Node>) => {
+        for (const child of list) if (child instanceof HTMLElement && !isPageWidget(child)) ro?.observe(child);
+      };
+      const mo = new MutationObserver((records) => {
+        for (const r of records) {
+          observeBlocks(r.addedNodes);
+          for (const gone of r.removedNodes) if (gone instanceof HTMLElement) ro?.unobserve(gone);
+        }
+      });
+      mo.observe(view.dom, { childList: true });
+      observeBlocks(view.dom.children);
+      const noteHeight = noteHeights(view, extras);
       const paginate = () => {
         window.clearTimeout(paginateTimer);
         paginateTimer = window.setTimeout(() => {
-          const breaks = measureAutoBreaks(view, extras);
+          const breaks = measureAutoBreaks(view, extras, heights, noteHeight, estimated);
           const current = layoutKey.getState(view.state)?.autoBreaks ?? [];
-          if (breaks.join() !== current.join()) view.dispatch(view.state.tr.setMeta(PAGINATION_META, breaks).setMeta('addToHistory', false));
+          // 첫 쪽 나눔을 잰 뒤부터 화면 밖 블록 그리기를 건너뛴다(그 전에 한 번은 모두 그려 높이표를 채운다)
+          const tr = view.state.tr;
+          if (!skipOn && view.dom.classList.contains('docx-paged')) {
+            skipOn = true;
+            tr.setMeta(CONTENT_SKIP_META, true);
+          }
+          if (breaks.join() !== current.join()) tr.setMeta(PAGINATION_META, breaks);
+          if (tr.getMeta(PAGINATION_META) || tr.getMeta(CONTENT_SKIP_META)) view.dispatch(tr.setMeta('addToHistory', false));
+          shownRange = null; // 쪽 경계가 바뀌면 순서 번호도 바뀐다
+          updateSkip();
         }, 400);
       };
       schedule('all');
-      paginate();
-      // 글꼴이 늦게 내려오면 글자 폭이 바뀐다 — 다 내려온 뒤 한 번 더 잰다
+      // 글꼴이 늦게 내려오면 글자 폭이 바뀐다 — 다 내려온 뒤 한 번 더 잰다(높이는 ResizeObserver가 다시 적는다)
       void document.fonts?.ready.then(() => {
+        if (!skipOn) firstPass = true;
         schedule('all');
-        paginate();
       });
       return {
         update: (v, prevState) => {
@@ -622,6 +966,11 @@ export function docxLayoutPlugin(extras: DocxRenderExtras, totalPages: number | 
         destroy: () => {
           cancelAnimationFrame(frame);
           window.clearTimeout(paginateTimer);
+          window.removeEventListener('scroll', onScroll, { capture: true });
+          cancelAnimationFrame(skipFrame);
+          skipStyle.remove();
+          ro?.disconnect();
+          mo.disconnect();
         },
       };
     },
