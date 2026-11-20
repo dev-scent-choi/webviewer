@@ -148,17 +148,12 @@ const VERT: Record<string, { mode: string; orient: string; flip?: boolean }> = {
 };
 
 /**
- * 원본 글상자(시딩된 meta)의 물려받은 모양을 상자(box)와 편집 영역(dom = view.dom)에 입힌다.
- * slidePt는 캔버스의 1pt CSS 길이(var(--slide-pt)).
+ * 원본 글상자(시딩된 meta)의 물려받은 모양을 상자(box)와 편집 영역(dom = view.dom)에 입힌다. 글자 크기는 자동 맞춤 배율을
+ * 곱한 1pt(--slide-fpt)로, 여백·들여쓰기는 슬라이드 1pt(--slide-pt)로 잰다.
  */
 export function applyTextboxLook(box: HTMLElement, dom: HTMLElement, meta: SlideShapeMeta, emuToPx: (emu: number) => number): void {
-  const slidePt = 'var(--slide-pt, 1pt)';
   const fontPt = 'var(--slide-fpt, var(--slide-pt, 1pt))';
-  // 자동 맞춤(normAutofit): 글자 크기만 배율만큼(들여쓰기·여백은 그대로), 줄 간격은 줄임 비율만큼 뺀다
-  if (meta.autofit) {
-    dom.style.setProperty('--slide-fpt', `calc(${slidePt} * ${meta.autofit.fontScale})`);
-    if (meta.autofit.lnSpcReduction > 0) dom.style.setProperty('--ln-red', String(meta.autofit.lnSpcReduction));
-  }
+  if (meta.autofit) applyAutofit(dom, meta.autofit);
   if (meta.defaultSizePt) dom.style.fontSize = `calc(${meta.defaultSizePt} * ${fontPt})`;
   if (meta.levels) setLevelVars(dom, meta.levels, fontPt);
   const base = meta.levels?.[0];
@@ -182,6 +177,34 @@ export function applyTextboxLook(box: HTMLElement, dom: HTMLElement, meta: Slide
       box.style.padding = [t, r, b, l].map((emu) => `${emuToPx(emu)}px`).join(' ');
     }
   }
+}
+
+type Autofit = { readonly fontScale: number; readonly lnSpcReduction: number };
+
+/** 자동 맞춤(normAutofit): 글자 크기만 배율만큼(들여쓰기·여백은 그대로), 줄 간격은 줄임 비율만큼 뺀다 */
+export function applyAutofit(dom: HTMLElement, autofit: Autofit): void {
+  dom.style.setProperty('--slide-fpt', `calc(var(--slide-pt, 1pt) * ${autofit.fontScale})`);
+  dom.style.setProperty('--ln-red', String(autofit.lnSpcReduction));
+}
+
+/** PowerPoint "넘치면 글자 줄이기"가 고르는 단계: 먼저 줄 간격을 10%·20% 줄이고, 그래도 넘치면 글자를 7.5%씩 줄인다
+ * (PowerPoint가 저장하는 값 92500·85000·77500…·25000과 같은 단계). */
+const AUTOFIT_STEPS: readonly Autofit[] = [
+  { fontScale: 1, lnSpcReduction: 0 },
+  { fontScale: 1, lnSpcReduction: 0.1 },
+  { fontScale: 1, lnSpcReduction: 0.2 },
+  ...Array.from({ length: 10 }, (_, i) => ({ fontScale: Math.round((0.925 - i * 0.075) * 1000) / 1000, lnSpcReduction: 0.2 })),
+];
+
+/** 글을 고친 뒤 상자에 맞는 가장 큰 단계를 다시 고른다(글상자 높이 안에 글이 다 들어가는 첫 단계, 다 넘치면 마지막). */
+export function refitAutofit(box: HTMLElement, dom: HTMLElement): Autofit {
+  const cs = getComputedStyle(box);
+  const room = box.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom) + 1;
+  for (const step of AUTOFIT_STEPS) {
+    applyAutofit(dom, step);
+    if (dom.scrollHeight <= room) return step;
+  }
+  return AUTOFIT_STEPS[AUTOFIT_STEPS.length - 1];
 }
 
 /** 캔·구름 모양 — 다각형(clip-path polygon)으로 못 그리는 곡선 모양을 px 경로로(상자 크기를 알아야 한다). */

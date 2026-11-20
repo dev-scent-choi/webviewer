@@ -565,6 +565,26 @@ function carryOverBodyProps(originalTxBody: string, newTxBody: string): string {
  * pattFill·grpFill)만 갈아 끼우고, 선(<a:ln>) 안의 색 등 나머지는 그대로 둔다. 스키마 순서(xfrm → 모양 → 채우기 → 선 …)대로
  * 모양 뒤(없으면 xfrm 뒤, 그것도 없으면 맨 앞)에 넣는다. 도형을 못 찾거나 spPr이 없으면 원본 그대로 돌려준다(저장을 막지 않는다).
  */
+/**
+ * 고친 글상자의 자동 맞춤 값(<a:bodyPr><a:normAutofit fontScale lnSpcReduction>)을 편집기가 다시 계산한 값으로 바꾼다 —
+ * PowerPoint처럼 글을 더 쓰면 작아지고 지우면 커진다. 원래 normAutofit인 도형만 바꾸고(맞춤 종류는 건드리지 않는다), 값은
+ * 협업자가 쓴 것이라 범위를 잘라 숫자로만 쓴다. 100%·0%는 PowerPoint처럼 속성을 생략한다.
+ */
+export function setShapeAutofit(slideXml: string, shapeId: string, autofit: { fontScale: unknown; lnSpcReduction: unknown }): string {
+  const scale = Number(autofit.fontScale);
+  const red = Number(autofit.lnSpcReduction);
+  if (!Number.isFinite(scale) || !Number.isFinite(red)) return slideXml;
+  const fs = Math.round(Math.max(0.1, Math.min(1, scale)) * 100000);
+  const lr = Math.round(Math.max(0, Math.min(0.2, red)) * 100000);
+  const tag = `<a:normAutofit${fs < 100000 ? ` fontScale="${fs}"` : ''}${lr > 0 ? ` lnSpcReduction="${lr}"` : ''}/>`;
+  const spBlockRe = /<p:sp\b(?:(?!<\/p:sp>)[\s\S])*?<\/p:sp>/g;
+  return slideXml.replace(spBlockRe, (spBlock) => {
+    const idMatch = /<p:cNvPr\b[^>]*\bid="([^"]+)"/.exec(spBlock);
+    if (!idMatch || idMatch[1] !== shapeId) return spBlock;
+    return spBlock.replace(/<a:normAutofit\b[^>]*?(?:\/>|>\s*<\/a:normAutofit>)/, () => tag);
+  });
+}
+
 export function setShapeSolidFill(slideXml: string, shapeId: string, hex: string): string {
   if (!/^#[0-9A-Fa-f]{6}$/.test(hex)) return slideXml;
   const fillXml = `<a:solidFill><a:srgbClr val="${hex.slice(1).toUpperCase()}"/></a:solidFill>`;

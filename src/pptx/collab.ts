@@ -12,6 +12,7 @@ import {
   removeShape,
   serializeTxBodyXml,
   spliceShapeTxBody,
+  setShapeAutofit,
   setShapeSolidFill,
   type TrustedFragments,
 } from './slideContent.js';
@@ -647,6 +648,9 @@ export function exportPptxFromSlides(
           // meta와 무관한 이 분기까지 함께 건너뛰어 이미 슬라이드에 있던 실제 사용자 편집이(단지
           // 같은 도형의 meta가 손상됐다는 이유만으로) 조용히 영구 유실되는 회귀가 있었다.
           slideXml = spliceShapeTxBody(slideXml, shapeId, txBodyXml);
+          // 글을 고치면서 편집기가 다시 맞춘 자동 맞춤 배율(normAutofit 도형만, setShapeAutofit이 범위 검사)
+          const refit = (shapeMap.get('meta') as SlideShapeMeta | undefined)?.autofit;
+          if (refit && typeof refit === 'object') slideXml = setShapeAutofit(slideXml, shapeId, refit);
           // 리본 "도형 채우기"로 바꾼 원본 도형 — 시딩된 meta엔 fill이 없으므로 값이 있으면 사용자가 바꾼 것
           const editedFill = (shapeMap.get('meta') as SlideShapeMeta | undefined)?.fill;
           if (typeof editedFill === 'string' && /^#[0-9A-Fa-f]{6}$/.test(editedFill)) slideXml = setShapeSolidFill(slideXml, shapeId, editedFill);

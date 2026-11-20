@@ -63,7 +63,7 @@ const sp = (id: number, nv: string, spPr: string, txBody: string, style = '') =>
   `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="s${id}"/><p:cNvSpPr/><p:nvPr>${nv}</p:nvPr></p:nvSpPr><p:spPr>${spPr}</p:spPr>${style}<p:txBody>${txBody}</p:txBody></p:sp>`;
 
 describe('P1 자동 맞춤·세로 쓰기(bodyPr)', () => {
-  test('normAutofit fontScale/lnSpcReduction을 비율로, 레이아웃에서도 물려받고, spAutoFit은 맞춤 없음', () => {
+  test('normAutofit fontScale/lnSpcReduction을 비율로, 레이아웃에선 맞춤 종류만 물려받고(배율은 1), spAutoFit은 맞춤 없음', () => {
     const zip = deck(
       sp(2, '<p:ph idx="1"/>', '', '<a:bodyPr><a:normAutofit fontScale="47500" lnSpcReduction="20000"/></a:bodyPr><a:p/>') +
         sp(3, '<p:ph type="body" idx="2"/>', '', '<a:bodyPr/><a:p/>') +
@@ -72,7 +72,7 @@ describe('P1 자동 맞춤·세로 쓰기(bodyPr)', () => {
     );
     const looks = resolveSlideShapeLooks(zip, 'slide1.xml');
     expect(looks.get('2')?.autofit).toEqual({ fontScale: 0.475, lnSpcReduction: 0.2 });
-    expect(looks.get('3')?.autofit).toEqual({ fontScale: 0.9, lnSpcReduction: 0 });
+    expect(looks.get('3')?.autofit).toEqual({ fontScale: 1, lnSpcReduction: 0 }); // 검토 Minor 3: 배율은 상속 안 함
     expect(looks.get('4')?.autofit).toBeUndefined();
     expect(looks.get('4')?.vert).toBe('eaVert');
     expect(looks.get('2')?.hlinkColor).toBe('#0000FF');
@@ -374,5 +374,19 @@ describe('검토 Minor 1: 저장 zip은 시각과 무관하게 같은 내용이�
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('검토 Minor 3: 다시 맞춘 자동 맞춤 값을 저장(normAutofit 도형만, 값은 범위 검사)', () => {
+  test('setShapeAutofit', async () => {
+    const { setShapeAutofit } = await import('../src/pptx/slideContent.js');
+    const slide = (bodyPr: string) => `<p:sld ${NS}>${tree(sp(2, '', xfrm(0, 0, 1, 1), `${bodyPr}<a:lstStyle/><a:p/>`))}</p:sld>`;
+    const norm = slide('<a:bodyPr><a:normAutofit fontScale="62500" lnSpcReduction="20000"/></a:bodyPr>');
+    expect(setShapeAutofit(norm, '2', { fontScale: 0.85, lnSpcReduction: 0.2 })).toContain('<a:normAutofit fontScale="85000" lnSpcReduction="20000"/>');
+    expect(setShapeAutofit(norm, '2', { fontScale: 1, lnSpcReduction: 0 })).toContain('<a:bodyPr><a:normAutofit/></a:bodyPr>');
+    expect(setShapeAutofit(norm, '2', { fontScale: 99, lnSpcReduction: -5 })).toContain('<a:normAutofit/>');
+    expect(setShapeAutofit(norm, '2', { fontScale: '"/><x', lnSpcReduction: 0 })).toBe(norm);
+    const spFit = slide('<a:bodyPr><a:spAutoFit/></a:bodyPr>');
+    expect(setShapeAutofit(spFit, '2', { fontScale: 0.5, lnSpcReduction: 0.2 })).toBe(spFit);
   });
 });

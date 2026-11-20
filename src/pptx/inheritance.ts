@@ -39,7 +39,8 @@ export interface InheritedShapeLook {
   readonly defaultAlign: Align;
   /** 수준 0~8(lvl1pPr~lvl9pPr)의 글머리·들여쓰기·크기. */
   readonly levels: readonly LevelLook[];
-  /** 자동 맞춤(bodyPr normAutofit) — 글자 배율·줄 간격 줄임(0~1). 없으면 맞춤 없음. */
+  /** 자동 맞춤(bodyPr normAutofit, "넘치면 글자 줄이기") — 이 도형에 저장된 글자 배율·줄 간격 줄임(0~1, 없으면 1·0).
+   * 맞춤 종류가 아니면 없음. 편집기는 글을 고칠 때 이 값을 다시 계산한다. */
   readonly autofit?: { readonly fontScale: number; readonly lnSpcReduction: number };
   /** 세로 쓰기(bodyPr vert: vert·vert270·eaVert·wordArtVert·mongolianVert·wordArtVertRtl). 가로면 없음. */
   readonly vert?: string;
@@ -364,7 +365,10 @@ export function resolveSlideShapeLooks(
     const chain = [shape, layout, master];
     const pick = <K extends 'anchor' | 'wrap' | 'sizePt' | 'align' | 'lIns' | 'tIns' | 'rIns' | 'bIns' | 'autofit' | 'vert'>(key: K) =>
       chain.find((s) => s?.[key] !== undefined)?.[key];
-    const autofit = pick('autofit') as ShapeLook['autofit'];
+    // 자동 맞춤은 "종류"만 물려받고 배율은 그 도형 자신의 값만 쓴다 — 배율은 그 도형 글의 양에 맞춰 PowerPoint가 계산해
+    // 저장한 값이라, 레이아웃의 배율을 슬라이드 도형에 쓰면 엉뚱하게 작아진다(검토 Minor 3)
+    const autofitKind = pick('autofit') as ShapeLook['autofit'];
+    const autofit = autofitKind ? (shape.autofit ?? { fontScale: 1, lnSpcReduction: 0 }) : autofitKind;
     const vert = pick('vert') as string | undefined;
     const hlinkColor = theme.resolve({ 'a:schemeClr': { '@_val': 'hlink' } });
     // 위치는 네 값을 한 묶음으로 물려받는다(슬라이드가 위치만 바꾸고 크기는 안 쓰는 경우는 없다).
@@ -390,7 +394,7 @@ export function resolveSlideShapeLooks(
       // (MS Office 정답 PDF p07: 정렬 없는 도형 글자 전부 왼쪽). 별·타원처럼 글자 칸이 도형보다 좁은 모양은
       // 편집기가 프리셋의 글자 칸(text rect)으로 여백을 줘서 글자가 도형 안에 놓인다.
       defaultAlign: (pick('align') as Align | undefined) ?? classStyle[cls].align ?? defaultText.align ?? 'l',
-      ...(autofit && (autofit.fontScale < 1 || autofit.lnSpcReduction > 0) ? { autofit } : {}),
+      ...(autofit ? { autofit } : {}),
       ...(vert && vert !== 'horz' ? { vert } : {}),
       ...(hlinkColor ? { hlinkColor } : {}),
       levels: Array.from({ length: 9 }, (_, i): LevelLook => {

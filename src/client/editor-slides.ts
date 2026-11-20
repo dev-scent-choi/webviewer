@@ -27,7 +27,7 @@ import {
 import { DOC_META_MAP, DOC_META_SAVED_AT_KEY, DOC_META_SAVE_ERROR_AT_KEY } from '../collab/gridShared.js';
 import { pickPresenceColorForName, renderPresenceAvatars } from './presence.js';
 import { pptxTextSchema } from '../pptx/textSchema.js';
-import { applyTextboxLook, autoNumberPlugin, curvedShapePath, ensureLevelRules, turnCss } from './slideTextLook.js';
+import { applyAutofit, applyTextboxLook, autoNumberPlugin, refitAutofit, curvedShapePath, ensureLevelRules, turnCss } from './slideTextLook.js';
 
 /** src/pptx/collab.ts가 서버 쪽에서 선언한 것과 같은 모양이지만, 그 파일은 node:crypto/fflate 등
  * 서버 전용 의존성을 끌고 있어 클라이언트 번들에 그대로 import할 수 없다 — Yjs 공유 타입 자체는
@@ -624,6 +624,9 @@ function renderCanvasForSlideInner(entryId: string): void {
       if (!event.keysChanged.has('meta')) return;
       const next = shapeMap.get('meta') as SlideShapeMeta;
       if (next.fill && /^#[0-9A-Fa-f]{6}$/.test(next.fill)) box.style.background = next.fill;
+      // 다른 참여자(또는 내)가 글을 고쳐 다시 맞춘 자동 맞춤 배율
+      const view = mountedViews.get(shapeId);
+      if (view && next.autofit && Number.isFinite(next.autofit.fontScale) && Number.isFinite(next.autofit.lnSpcReduction)) applyAutofit(view.dom, next.autofit);
     };
     shapeMap.observe(onShapeMetaChange);
     const previousUnobserve = activePerSlideUnobserve;
@@ -670,6 +673,8 @@ function renderCanvasForSlideInner(entryId: string): void {
       dispatchTransaction(this: EditorView, tr) {
         this.updateState(this.state.apply(tr));
         if (focusedView === this) refreshRibbonState(this);
+        // 내가 글을 고쳤을 때만(원격 동기화 반영은 제외) 자동 맞춤을 다시 계산한다 — 열기만 해서는 원본 배율을 바꾸지 않는다
+        if (tr.docChanged && canEdit && !tr.getMeta(ySyncPluginKey)) scheduleRefit(shapeId);
       },
       // 서식 툴바가 "지금 어느 텍스트박스를 편집 중인지" 알 수 있는 유일한 경로 — handleDOMEvents의
       // 반환값 false는 "이 이벤트를 ProseMirror가 가로채 막지 말고 브라우저 기본 동작(포커스 이동)을
@@ -710,6 +715,26 @@ function renderCanvasForSlideInner(entryId: string): void {
     viewDefaults.set(view, { sizePt: meta.defaultSizePt ?? DEFAULT_TEXT_PT, align: meta.defaultAlign ?? 'l' });
     mountedViews.set(shapeId, view);
   }
+}
+
+/** 글을 고친 글상자의 자동 맞춤(normAutofit)을 다음 그림 틀에서 다시 맞추고, 바뀌었으면 meta에 적어 저장·다른 참여자에게
+ * 넘긴다(PowerPoint처럼 글이 늘면 작아지고 줄면 커진다 — 검토 Minor 3). 맞춤 도형이 아니면 아무것도 안 한다. */
+const refitPending = new Set<string>();
+function scheduleRefit(shapeId: string): void {
+  if (refitPending.has(shapeId)) return;
+  refitPending.add(shapeId);
+  requestAnimationFrame(() => {
+    refitPending.delete(shapeId);
+    const view = mountedViews.get(shapeId);
+    const shapeMap = slideContents.get(activeSlideId ?? '')?.get(shapeId);
+    const meta = shapeMap?.get('meta') as SlideShapeMeta | undefined;
+    const box = view?.dom.parentElement;
+    if (!view || !shapeMap || !meta?.autofit || !box) return;
+    const fit = refitAutofit(box, view.dom);
+    if (fit.fontScale !== meta.autofit.fontScale || fit.lnSpcReduction !== meta.autofit.lnSpcReduction) {
+      shapeMap.set('meta', { ...meta, autofit: fit });
+    }
+  });
 }
 
 /** 이 슬라이드를 LibreOffice가 렌더링한 페이지 번호(/api/view/pages/N). 복제본은 sourcePageNumber가
