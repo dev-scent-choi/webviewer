@@ -107,16 +107,21 @@ function numberingDecorations(doc: PMNode, defs: NumberingDefs | null, out: Deco
 /** 쪽 경계 장식(머리글·바닥글·각주) — 본문 직속 블록(다단 구역 안 블록 포함)을 문서 순서대로 훑는다 */
 function pageDecorations(doc: PMNode, extras: DocxRenderExtras, totalPages: number | null, out: Decoration[]): void {
   if (extras.sections.length === 0) return;
-  const blocks: Array<{ node: PMNode; pos: number }> = [];
+  // after: 이 블록 뒤 쪽 경계를 둘 자리 — 다단 구역의 마지막 블록이면 다단 상자 밖(안에 두면 머리글까지 단으로 흐른다)
+  const blocks: Array<{ node: PMNode; pos: number; after: number }> = [];
   doc.forEach((node, offset) => {
-    if (node.type.name === 'columns') node.forEach((child, inner) => blocks.push({ node: child, pos: offset + 1 + inner }));
-    else blocks.push({ node, pos: offset });
+    if (node.type.name === 'columns') {
+      node.forEach((child, inner, index) => {
+        const pos = offset + 1 + inner;
+        blocks.push({ node: child, pos, after: index === node.childCount - 1 ? offset + node.nodeSize : pos + child.nodeSize });
+      });
+    } else blocks.push({ node, pos: offset, after: offset + node.nodeSize });
   });
   // 쪽 수: 보기 화면(LibreOffice)이 센 실제 쪽 수가 있으면 그것, 없으면 명시적 나눔으로 센 수
   let counted = 1;
   const boundaries: Array<{ pos: number; nextSection: number | null }> = [];
   let section = 0;
-  for (const { node, pos } of blocks) {
+  for (const { node, pos, after } of blocks) {
     if (node.attrs.breakBefore && pos > 0) boundaries.push({ pos, nextSection: null });
     let hasBreak = false;
     node.descendants((child) => {
@@ -126,9 +131,9 @@ function pageDecorations(doc: PMNode, extras: DocxRenderExtras, totalPages: numb
     const sect = node.attrs.sect;
     if (typeof sect === 'number') {
       section = sect + 1;
-      if ((extras.sections[section]?.type ?? 'nextPage') !== 'continuous') boundaries.push({ pos: pos + node.nodeSize, nextSection: section });
-      else boundaries.push({ pos: pos + node.nodeSize, nextSection: -section - 1 }); // 이어지는 구역: 쪽은 그대로, 구역만 바뀜
-    } else if (hasBreak) boundaries.push({ pos: pos + node.nodeSize, nextSection: null });
+      if ((extras.sections[section]?.type ?? 'nextPage') !== 'continuous') boundaries.push({ pos: after, nextSection: section });
+      else boundaries.push({ pos: after, nextSection: -section - 1 }); // 이어지는 구역: 쪽은 그대로, 구역만 바뀜
+    } else if (hasBreak) boundaries.push({ pos: after, nextSection: null });
   }
   counted += boundaries.filter((b) => b.nextSection === null || b.nextSection >= 0).length;
   const total = totalPages ?? counted;
@@ -161,7 +166,6 @@ function pageDecorations(doc: PMNode, extras: DocxRenderExtras, totalPages: numb
         return wrap;
       }, { side: -1, key: `page-${starting.page}-${starting.section}-${ending.notes.map((n) => n.attrs.noteId).join(',')}`, ignoreSelection: true }),
     );
-    cur.firstOfSection = false;
   }
   notesUntil(doc.content.size);
   const lastPage = { ...cur, notes: [...cur.notes] };
@@ -214,11 +218,13 @@ function followingWidth(tab: HTMLElement, block: HTMLElement, untilDot: boolean)
 
 /** 문단마다 탭 폭을 정한다 — 앞 탭 폭이 뒤 탭 위치를 바꾸므로 앞에서부터 차례로 잰다 */
 function layoutTabs(root: HTMLElement, defaultTabPx: number): void {
+  // 화면 배율(편집기 확대·축소 CSS zoom) — 잰 값(화면 px)을 문서 px로 되돌린다. 위치를 잡은(absolute) 머리글 안에서는
+  // 요소마다 offsetWidth가 배율을 따르기도 해서, 편집 영역 전체 한 번으로 정한다.
+  const scale = root.offsetWidth > 0 ? root.getBoundingClientRect().width / root.offsetWidth : 1;
   // 번호 글자가 내어쓰기 폭보다 길면(1.1.1.) Word는 번호 뒤 탭을 다음 기본 탭 위치로 보낸다 — 붙어 보이지 않게
   for (const label of root.querySelectorAll<HTMLElement>('.docx-num[data-tab]')) {
     const minPx = Number(label.dataset.tab);
     label.style.width = '';
-    const scale = label.offsetWidth > 0 ? label.getBoundingClientRect().width / label.offsetWidth : 1;
     const natural = label.scrollWidth;
     if (natural > minPx + 0.5) {
       const block = label.closest<HTMLElement>('p, h1, h2, h3, h4, h5, h6');
@@ -247,12 +253,10 @@ function layoutTabs(root: HTMLElement, defaultTabPx: number): void {
     }
     const style = getComputedStyle(block);
     const rect = block.getBoundingClientRect();
-    // 화면 배율(편집기 확대·축소 CSS zoom) — 잰 값(화면 px)을 문서 px로 되돌린다
-    const scale = block.offsetWidth > 0 ? rect.width / block.offsetWidth : 1;
     const origin = rect.left - (parseFloat(style.marginLeft) || 0) * scale;
     for (const tab of tabs) {
       const x = (tab.getBoundingClientRect().left - origin) / scale;
-      const stop = stops.find((s) => s.pos / TWIPS_PER_PX > x + 0.5);
+      const stop = stops.find((s) => s.pos / TWIPS_PER_PX > x + 1.5); // 1.5: 앞 탭을 1px 덜 채웠으니 같은 정지에 다시 걸리지 않게
       let width: number;
       if (!stop) width = Math.ceil((x + 1) / defaultTabPx) * defaultTabPx - x;
       else {
@@ -280,12 +284,14 @@ function ruleDeclarations(rule: DocxStyleRule): string[] {
   if (rule.color && HEX.test(rule.color)) d.push(`color: ${rule.color}`);
   const size = cssNumber(rule.sizePt);
   if (size && size > 0 && size < 400) d.push(`font-size: ${size}pt`);
+  else if (rule.kind === 'p') d.push('font-size: inherit');
   if (rule.bold !== null && rule.bold !== undefined) d.push(`font-weight: ${rule.bold ? 700 : 400}`);
   if (rule.italic !== null && rule.italic !== undefined) d.push(`font-style: ${rule.italic ? 'italic' : 'normal'}`);
   if (rule.underline) d.push('text-decoration: underline');
   if (rule.caps) d.push('text-transform: uppercase');
   if (rule.font && (rule.font.eastAsia || rule.font.ascii)) d.push(`font-family: ${fontStack([rule.font.eastAsia, rule.font.ascii])}`);
-  if (rule.align && /^(left|right|center|justify)$/.test(rule.align)) d.push(`text-align: ${rule.align}`);
+  // 문단·제목은 정렬·들여쓰기를 늘 적는다 — 문서에 있는 스타일이면 편집기 갤러리 기본 모양(인용 가운데 맞춤 등)이 새어 나오지 않게
+  if (rule.kind !== 'r') d.push(`text-align: ${rule.align && /^(left|right|center|justify)$/.test(rule.align) ? rule.align : 'left'}`);
   const spacing = rule.spacing as ParagraphSpacing | null | undefined;
   if (rule.kind !== 'r') {
     const before = cssNumber(spacing?.before);
@@ -299,18 +305,17 @@ function ruleDeclarations(rule: DocxStyleRule): string[] {
         : `line-height: calc(var(--doc-single-line, 1.2) * ${Number((line / 240).toFixed(3))})`);
     } else if (rule.kind === 'h') d.push('line-height: var(--doc-line-height, 1.3)');
     const indent = rule.indent;
-    if (indent) {
-      if (indent.left) d.push(`margin-left: ${indent.left / TWIPS_PER_PX}px`);
-      if (indent.right) d.push(`margin-right: ${indent.right / TWIPS_PER_PX}px`);
-      const textIndent = indent.firstLine ? indent.firstLine : indent.hanging ? -indent.hanging : 0;
-      if (textIndent) d.push(`text-indent: ${textIndent / TWIPS_PER_PX}px`);
-    }
+    const textIndent = indent ? (indent.firstLine ? indent.firstLine : indent.hanging ? -indent.hanging : 0) : 0;
+    d.push(`margin-left: ${(indent?.left ?? 0) / TWIPS_PER_PX}px`, `margin-right: ${(indent?.right ?? 0) / TWIPS_PER_PX}px`, `text-indent: ${textIndent / TWIPS_PER_PX}px`);
     for (const [side, border] of [['bottom', rule.borderBottom], ['top', rule.borderTop]] as const) {
       if (border && HEX.test(border.color)) d.push(`border-${side}: ${border.widthPx}px ${border.style} ${border.color}`, `padding-${side}: 4px`);
+      else d.push(`border-${side}: 0`, `padding-${side}: 0`);
     }
+    if (!rule.color) d.push('color: inherit');
+    if (rule.italic === null || rule.italic === undefined) d.push('font-style: normal');
     if (rule.shading && HEX.test(rule.shading)) d.push(`background-color: ${rule.shading}`);
   }
-  if (rule.kind === 'h') d.push('letter-spacing: normal', 'text-wrap: wrap');
+  if (rule.kind !== 'r') d.push('letter-spacing: normal', 'text-wrap: wrap');
   return d;
 }
 

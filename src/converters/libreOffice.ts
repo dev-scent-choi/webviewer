@@ -243,14 +243,23 @@ function literalizeThemeFontsXml(xml: string, themeXml: string): string {
 export function literalizeDocxThemeFonts(docxBytes: Uint8Array): Uint8Array {
   const entries = guardedUnzipSync(docxBytes, 'literalizeDocxThemeFonts');
   const themeXmlBytes = entries['word/theme/theme1.xml'];
-  if (!themeXmlBytes) return docxBytes;
-  const themeXml = strFromU8(themeXmlBytes);
+  const themeXml = themeXmlBytes ? strFromU8(themeXmlBytes) : null;
   const updated: Record<string, Uint8Array> = { ...entries };
+  let changed = false;
   for (const name of ['word/styles.xml', 'word/document.xml']) {
     const bytes = entries[name];
-    if (bytes) updated[name] = strToU8(literalizeThemeFontsXml(strFromU8(bytes), themeXml));
+    if (!bytes) continue;
+    const xml = strFromU8(bytes);
+    let out = themeXml ? literalizeThemeFontsXml(xml, themeXml) : xml;
+    // 떠 있는 글상자·그림의 "양쪽으로 글 흐름" — LibreOffice는 좁은 틈에도 글을 흘려 오른쪽에 한 글자씩 세로로 남긴다(Word는
+    // 좁은 쪽은 비운다). "넓은 쪽에만"으로 바꾸면 Word와 같은 모양이 된다(보기용 변환 사본만 — 원본 파일은 그대로).
+    if (name === 'word/document.xml') out = out.replace(/(<wp:wrap(?:Square|Tight|Through)\b[^>]*\bwrapText=")bothSides"/g, '$1largest"');
+    if (out !== xml) {
+      updated[name] = strToU8(out);
+      changed = true;
+    }
   }
-  return zipSync(updated);
+  return changed ? zipSync(updated) : docxBytes;
 }
 
 type SourcePreprocessor = (bytes: Uint8Array) => Uint8Array;

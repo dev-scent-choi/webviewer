@@ -91,4 +91,10 @@ describe('literalizeDocxThemeFonts', () => {
     const result = literalizeDocxThemeFonts(original);
     expect(strFromU8(unzipSync(result)['word/styles.xml'])).toBe(strFromU8(unzipSync(original)['word/styles.xml']));
   });
+  test('보기용 사본에서 떠 있는 개체의 "양쪽으로 글 흐름"을 "넓은 쪽에만"으로 바꾼다(LibreOffice가 좁은 틈에 한 글자씩 흘리지 않게, 보고서 D-v2)', () => {
+    const docx = docxWith('<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>', (xml) =>
+      xml.replace('<w:body>', '<w:body><w:p><w:r><w:drawing><wp:anchor><wp:wrapSquare wrapText="bothSides"/></wp:anchor></w:drawing></w:r></w:p>'), false);
+    const out = strFromU8(unzipSync(literalizeDocxThemeFonts(docx))['word/document.xml']);
+    expect(out).toContain('<wp:wrapSquare wrapText="largest"/>');
+  });
 });

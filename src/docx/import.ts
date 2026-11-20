@@ -1458,10 +1458,10 @@ function baseCtxOf(entries: Record<string, Uint8Array>, partPath: string, conten
   };
 }
 
-/** w:sectPr의 다단(w:cols num>1). python-docx처럼 w:cols를 두 번 쓴 파일은 단 수가 있는 쪽을 쓴다(Word와 같다). */
+/** w:sectPr의 다단(w:cols num>1). python-docx처럼 w:cols를 여러 번 쓴 파일은 마지막 것을 쓴다(Word 결과와 같다 — d06·a2 정답 PDF로 확인). */
 function columnsOf(sectPr: XmlNode | undefined): { count: number; spacePx: number; sep: boolean } | null {
-  const cols = findAll(childrenOf(sectPr ?? {}), 'w:cols').map(attrsOf).filter((a) => Number(a['@_w:num']) > 1).pop();
-  if (!cols) return null;
+  const cols = findAll(childrenOf(sectPr ?? {}), 'w:cols').map(attrsOf).pop();
+  if (!cols || !(Number(cols['@_w:num']) > 1)) return null;
   return { count: Number(cols['@_w:num']), spacePx: dxaToPx(Number(cols['@_w:space'] ?? 720)), sep: cols['@_w:sep'] === '1' || cols['@_w:sep'] === 'true' };
 }
 
