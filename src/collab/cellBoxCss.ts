@@ -49,6 +49,14 @@ export function borderSideCss(style: CellBoxStyle | undefined, side: 't' | 'r' |
   return `${BORDER_CSS[spec[0]] ?? `${weight}px solid`} ${spec[1] ?? 'var(--v-text)'}`;
 }
 
+/** 툴바로 다시 그린 변의 선 종류·색을 버린다(새 선은 실선 검정) — 손대지 않은 변의 점선·색은 남긴다. 남는 게 없으면 undefined */
+export function bordersWithout(bd: CellBoxStyle['bd'], redrawn: Readonly<Record<'t' | 'r' | 'b' | 'l', boolean>>): CellBoxStyle['bd'] {
+  if (!bd) return undefined;
+  const out: { t?: BorderSpec; r?: BorderSpec; b?: BorderSpec; l?: BorderSpec } = {};
+  for (const side of ['t', 'r', 'b', 'l'] as const) if (bd[side] && !redrawn[side]) out[side] = bd[side];
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 function mix(a: string, b: string, t: number): string {
   const pa = [1, 3, 5].map((i) => parseInt(a.slice(i, i + 2), 16));
   const pb = [1, 3, 5].map((i) => parseInt(b.slice(i, i + 2), 16));

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import fs from 'node:fs';
-import { borderSideCss, cellBoxCss, cellBoxCssText, sanitizeCellStyle } from '../src/collab/cellBoxCss.js';
+import { borderSideCss, bordersWithout, cellBoxCss, cellBoxCssText, sanitizeCellStyle } from '../src/collab/cellBoxCss.js';
 import { fromCellStyleAttrs } from '../src/xlsx/collab.js';
 import { parseXlsxToGrid } from '../src/spreadsheet.js';
 
@@ -55,5 +55,10 @@ describe('칸 상자 CSS(테두리 선 종류·색, 무늬, 회전, 들여쓰기
     const viaRoom = fromCellStyleAttrs(evil) as Record<string, unknown>;
     expect(viaRoom.col).toBeUndefined();
     expect(viaRoom.bd).toEqual({ t: ['thin'] });
+  });
+  test('툴바 테두리(검토 M6): 다시 그린 변만 선 종류·색을 버리고 나머지 변은 남긴다', () => {
+    const bd = { t: ['dashed', '#C00000'], b: ['double'], l: ['dotted', '#00FF00'] } as const;
+    expect(bordersWithout(bd, { t: true, r: false, b: false, l: false })).toEqual({ b: ['double'], l: ['dotted', '#00FF00'] });
+    expect(bordersWithout(bd, { t: true, r: true, b: true, l: true })).toBeUndefined();
   });
 });

@@ -44,7 +44,7 @@ import {
 } from '../collab/condFormatShared.js';
 import type { CellRangeRef, ChartKind } from '../xlsx/chartModel.js';
 import { EXCEL_DEFAULT_FONT_PX, RowLayout } from '../xlsx/sheetGeometry.js';
-import { borderSideCss, cellBoxCss } from '../collab/cellBoxCss.js';
+import { borderSideCss, bordersWithout, cellBoxCss } from '../collab/cellBoxCss.js';
 import { compareCells, filteredRows, GRID_FILTERS_MAP, shiftFormulaRows, sortOrder, type SheetFilter } from './gridSort.js';
 import { officeAlert, officeConfirm } from './officeDialog.js';
 
@@ -3532,8 +3532,6 @@ async function main(): Promise<void> {
           const isLeft = c === c0;
           const isRight = c === c1;
           const weight = preset === 'outside-thick' ? 2 : 1;
-          // 파일의 선 종류·색(bd)은 버린다 — 남아 있으면 그 변이 새로 고른 실선 대신 예전 점선·색으로 그려진다
-          delete next.bd;
           switch (preset) {
             case 'none':
               delete next.bt; delete next.br; delete next.bb; delete next.bl;
@@ -3561,6 +3559,13 @@ async function main(): Promise<void> {
               if (isRight) next.br = 1;
               break;
           }
+          // 바꾼 변만 파일의 선 종류·색(bd)을 버린다 — 남아 있으면 그 변이 새로 고른 실선 대신 예전 점선·색으로 그려진다.
+          // 'all'·'outside'처럼 다시 그린 변도 새 실선이다. 손대지 않은 변의 점선·색은 그대로 둔다.
+          const redrawn = preset === 'none' || preset === 'all' || preset.startsWith('outside');
+          const touched = { t: redrawn || (preset === 'top' && isTop), b: redrawn || (preset === 'bottom' && isBottom), l: redrawn || (preset === 'left' && isLeft), r: redrawn || (preset === 'right' && isRight) };
+          const bd = bordersWithout(next.bd, touched);
+          if (bd) next.bd = bd;
+          else delete next.bd;
           // 테두리 'none'으로 서식이 통째로 비어도 delete가 아니라 빈 객체를 쓴다 — updateStyle의 주석 참고.
           styles.set(key, next as CellStyleAttrs);
           const td = tdFor(r, c);
