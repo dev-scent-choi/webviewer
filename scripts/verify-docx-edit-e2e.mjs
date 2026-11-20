@@ -207,8 +207,11 @@ try {
     await page.keyboard.press('Enter');
     await page.keyboard.type('구역 끝 새 글', { delay: 20 });
     const saved = await saveAndDownload(page, tok);
-    rec('I4 구역 끝 Enter: 같은 구역에 남음', saved.indexOf('구역 끝 새 글') > 0 && saved.indexOf('구역 끝 새 글') < saved.indexOf('<w:sectPr') && count(saved, 'w:sectPr') === 2,
-      `글 위치 ${saved.indexOf('구역 끝 새 글')}, 첫 구역 나눔 ${saved.indexOf('<w:sectPr')}, 구역 ${count(saved, 'w:sectPr')}`);
+    // 같은 구역 = 새 글이 든 문단이 첫 구역 나눔을 지닌 문단이거나 그보다 앞(구역 나눔은 그 구역 마지막 문단의 w:pPr 안에 있다)
+    const at = saved.indexOf('구역 끝 새 글');
+    const paragraphStart = saved.lastIndexOf('<w:p>', at);
+    rec('I4 구역 끝 Enter: 같은 구역에 남음', at > 0 && saved.indexOf('<w:sectPr') > paragraphStart && count(saved, 'w:sectPr') === 2,
+      `글 문단 시작 ${paragraphStart}, 첫 구역 나눔 ${saved.indexOf('<w:sectPr')}, 구역 ${count(saved, 'w:sectPr')}`);
     await page.close();
   }
 

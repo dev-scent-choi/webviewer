@@ -127,15 +127,15 @@ function numberingDecorations(doc: PMNode, defs: NumberingDefs | null, out: Deco
 }
 
 /** 본문 직속 블록(다단 구역 안 블록 포함) — after: 이 블록 뒤 쪽 경계를 둘 자리(다단 구역의 마지막 블록이면 다단 상자 밖) */
-function bodyBlocksOf(doc: PMNode): Array<{ node: PMNode; pos: number; after: number }> {
-  const blocks: Array<{ node: PMNode; pos: number; after: number }> = [];
+function bodyBlocksOf(doc: PMNode): Array<{ node: PMNode; pos: number; after: number; inColumns: boolean }> {
+  const blocks: Array<{ node: PMNode; pos: number; after: number; inColumns: boolean }> = [];
   doc.forEach((node, offset) => {
     if (node.type.name === 'columns') {
       node.forEach((child, inner, index) => {
         const pos = offset + 1 + inner;
-        blocks.push({ node: child, pos, after: index === node.childCount - 1 ? offset + node.nodeSize : pos + child.nodeSize });
+        blocks.push({ node: child, pos, after: index === node.childCount - 1 ? offset + node.nodeSize : pos + child.nodeSize, inColumns: true });
       });
-    } else blocks.push({ node, pos: offset, after: offset + node.nodeSize });
+    } else blocks.push({ node, pos: offset, after: offset + node.nodeSize, inColumns: false });
   });
   return blocks;
 }
@@ -408,7 +408,8 @@ function measureAutoBreaks(view: EditorView, extras: DocxRenderExtras): number[]
   let section = 0;
   let pageTop: number | null = null;
   for (const b of blocks) {
-    const m = top.get(b.pos);
+    // 다단 구역 안 블록은 단을 따라 옆으로 흘러 위치로 쪽을 셀 수 없다 — 다단 구역은 나누지 않는다(뒤 블록이 그 높이를 포함해 센다)
+    const m = b.inColumns ? undefined : top.get(b.pos);
     const page = extras.sections[section]?.page;
     const explicit = b.node.attrs.breakBefore && b.pos > 0;
     if (m && (pageTop === null || explicit)) pageTop = m.top;
