@@ -270,7 +270,8 @@ async function loadGridUncached(docId: string, allowRegenerate = true): Promise<
   } catch (error) {
     // 아직 만들지 않았다 — 메모리 저장 모드(향기랩)는 편집기로만 열어서 보기용 그리드를 미리 만들지 않는다
     // (documents.ts). 누가 보기 화면을 열면 그때 만든다.
-    if (!allowRegenerate || !(await gridRegen.run(docId, () => regenerateStaleGridCache(docId)))) throw error;
+    // 그리드가 아예 없으면 보기 화면이 오류다 — 일시 실패에서 빨리 회복하게 쉬는 시간을 짧게(45초)
+    if (!allowRegenerate || !(await gridRegen.run(docId, () => regenerateStaleGridCache(docId), 45_000))) throw error;
     return loadGridUncached(docId, false);
   }
   if (allowRegenerate && gridIsStale(peekGridHeader(buffer))) {

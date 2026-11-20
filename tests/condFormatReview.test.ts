@@ -215,3 +215,14 @@ describe('검토 N2 — 조건부 서식 굽기의 시간 예산·멈춤·메모
     expect(ms).toBeLessThan(500);
   }, 120_000);
 });
+
+describe('검토 r3 — 시트 XML 풀기 실패', () => {
+  test('조건부 서식만 건너뛰고(알림) 보기 그리드는 그대로', async () => {
+    const wb = new ExcelJS.Workbook();
+    wb.addWorksheet('s').getCell('A1').value = 1;
+    const grid = await parseXlsxToGrid(Buffer.from(await wb.xlsx.writeBuffer()));
+    const out = await bakeCondFormats(grid, new Uint8Array([1, 2, 3, 4]));
+    expect(out.cfSkipped).toBe(1);
+    expect(out.sheets).toBe(grid.sheets);
+  });
+});

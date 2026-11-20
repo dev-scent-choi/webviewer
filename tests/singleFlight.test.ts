@@ -31,4 +31,13 @@ describe('검토 N4 — 보기 그리드 재생성: 문서마다 하나, 실패�
     expect(await sf.run('doc', async () => true)).toBe(true);
     expect(sf.backingOff('doc')).toBe(false);
   });
+  test('쉬는 시간을 부를 때 정한다(그리드 없음은 짧게), 끝난 기록은 지운다', async () => {
+    let t = 0;
+    const sf = singleFlightWithBackoff(600_000, () => t);
+    expect(await sf.run('a', async () => false, 45_000)).toBe(false);
+    t = 45_001;
+    expect(sf.backingOff('a')).toBe(false);
+    expect(await sf.run('b', async () => false)).toBe(false); // 이때 끝난 a 기록이 지워진다
+    expect(sf.size()).toBe(1);
+  });
 });

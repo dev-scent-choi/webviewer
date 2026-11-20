@@ -262,7 +262,14 @@ export async function bakeSheetCondFormats(
 
 /** 그리드에 파일의 조건부 서식을 입힌 사본(규칙이 없으면 그대로) */
 export async function bakeCondFormats(grid: GridDocument, xlsx: Uint8Array): Promise<GridDocument> {
-  const bySheet = await condFormatsBySheet(xlsx);
+  // 시트 XML 풀기·규칙 읽기가 실패해도 보기 그리드는 만든다 — 조건부 서식만 건너뛰고 알린다
+  let bySheet: Map<string, CondFormatEntry[]>;
+  try {
+    bySheet = await condFormatsBySheet(xlsx);
+  } catch (error) {
+    console.warn('조건부 서식 읽기 실패 — 보기 그리드는 조건부 서식 없이 만든다:', error instanceof Error ? error.message : error);
+    return { ...grid, cfSkipped: 1 };
+  }
   if (bySheet.size === 0) return grid;
   const styles = [...grid.styles];
   const registry = styleRegistry(styles);
