@@ -254,7 +254,7 @@ export function literalizeDocxThemeFonts(docxBytes: Uint8Array): Uint8Array {
   return zipSync(updated);
 }
 
-type SourcePreprocessor = (bytes: Uint8Array) => Uint8Array;
+type SourcePreprocessor = (bytes: Uint8Array) => Uint8Array | Promise<Uint8Array>;
 
 /**
  * 프로필 풀: 매 변환마다 새 프로필을 만들면 LibreOffice가 프로필 초기화에
@@ -316,7 +316,7 @@ async function convertWithSoffice(
       const original = await fs.readFile(sourcePath);
       let staged: Uint8Array;
       try {
-        staged = preprocess(original);
+        staged = await preprocess(original);
       } catch {
         // 전처리에 실패해도 변환 자체는 원본으로 계속한다.
         staged = original;

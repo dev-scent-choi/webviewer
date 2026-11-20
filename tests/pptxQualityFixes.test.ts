@@ -235,8 +235,17 @@ describe('P-v2 LibreOffice 전처리: 표 머리 줄 굵게', () => {
     const { boldTableHeaderXml } = await import('../src/pptx/loPreprocess.js');
     expect(boldTableHeaderXml(tbl('{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}', '0'), '')).toBe(tbl('{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}', '0'));
     expect(boldTableHeaderXml(tbl('{2D5ABB26-0587-4C30-8999-92F81FD0307C}'), '')).toBe(tbl('{2D5ABB26-0587-4C30-8999-92F81FD0307C}'));
-    const styles = '<a:tblStyleLst><a:tblStyle styleId="{AAA}" styleName="x"><a:firstRow><a:tcTxStyle b="off"/></a:firstRow></a:tblStyle></a:tblStyleLst>';
-    expect(boldTableHeaderXml(tbl('{AAA}'), styles)).toBe(tbl('{AAA}'));
+    const id = '{11111111-2222-3333-4444-555555555555}';
+    const styles = `<a:tblStyleLst><a:tblStyle styleId="${id}" styleName="x"><a:firstRow><a:tcTxStyle b="off"/></a:firstRow></a:tblStyle></a:tblStyleLst>`;
+    expect(boldTableHeaderXml(tbl(id), styles)).toBe(tbl(id));
+    expect(boldTableHeaderXml(tbl(id), styles.replace('b="off"', 'b="on"'))).toContain('<a:rPr b="1" lang="ko-KR"/><a:t>구분');
+  });
+  test('검토 C1: 스타일 id는 정규식에 넣지 않는다 — 역추적 폭발·잘못된 정규식 값도 즉시 끝나고 굵게 안 함', async () => {
+    const { boldTableHeaderXml } = await import('../src/pptx/loPreprocess.js');
+    const styles = `<a:tblStyleLst><a:tblStyle styleId="${'a'.repeat(40)}!"></a:tblStyle></a:tblStyleLst>`;
+    const t0 = Date.now();
+    for (const id of ['(a|a)+$', '{X(}', `${'a'.repeat(40)}!`]) expect(boldTableHeaderXml(tbl(id), styles)).toBe(tbl(id));
+    expect(Date.now() - t0).toBeLessThan(100);
   });
 });
 
@@ -246,4 +255,30 @@ describe('슬라이드 배경 bgRef → 테마 배경 채우기 목록(bgFillSty
     zip['ppt/slides/slide1.xml'] = enc(`<p:sld ${NS}><p:cSld><p:bg><p:bgRef idx="1001"><a:schemeClr val="accent2"/></p:bgRef></p:bg><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/></p:spTree></p:cSld></p:sld>`);
     expect(parseSlideVisuals(zip, 'slide1.xml')[0]).toMatchObject({ kind: 'shape', background: true, fill: '#C0504D' });
   });
+});
+
+describe('검토 I1: 표 머리 줄 전처리는 바뀐 슬라이드만 다시 묶고 무압축 미디어는 그대로', () => {
+  test('30MB 무압축 미디어가 있어도 빠르게(재압축 없음), 이벤트 루프를 길게 막지 않음', async () => {
+    const { zipSync, unzipSync } = await import('fflate');
+    const { readFileSync } = await import('node:fs');
+    const { randomBytes } = await import('node:crypto');
+    const { boldPptxTableHeaders } = await import('../src/pptx/loPreprocess.js');
+    const entries: Record<string, unknown> = { ...unzipSync(readFileSync('audit/office/corpus/pptx/p04-table.pptx')) };
+    const media = randomBytes(30 * 1024 * 1024);
+    entries['ppt/media/video1.mp4'] = [media, { level: 0 }];
+    const big = zipSync(entries as never);
+    let maxGap = 0;
+    let last = Date.now();
+    const tick = setInterval(() => { const n = Date.now(); maxGap = Math.max(maxGap, n - last); last = n; }, 5);
+    const t0 = Date.now();
+    const out = await boldPptxTableHeaders(big);
+    const took = Date.now() - t0;
+    clearInterval(tick);
+    expect(took).toBeLessThan(1500);
+    expect(maxGap).toBeLessThan(400);
+    expect(Math.abs(out.length - big.length)).toBeLessThan(64 * 1024); // 미디어를 다시 압축하지 않았다
+    const back = unzipSync(out);
+    expect(Buffer.from(back['ppt/media/video1.mp4']).equals(media)).toBe(true);
+    expect(new TextDecoder().decode(back['ppt/slides/slide1.xml'])).toContain('b="1"');
+  }, 20000);
 });
