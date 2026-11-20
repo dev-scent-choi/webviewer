@@ -6,7 +6,7 @@ import type { Node as PMNode } from 'prosemirror-model';
 import { exportDocx } from '../src/docx/export.js';
 import { getDocxRenderExtras, importDocx } from '../src/docx/import.js';
 import { NumberingCounter, formatNumber, parseNumberingXml } from '../src/docx/numbering.js';
-import { docxSchema } from '../src/docx/schema.js';
+import { docxSchema, fontStack, safeFontName } from '../src/docx/schema.js';
 import { refHashOf } from '../src/docx/ooxml.js';
 import { makeSampleDocx } from './helpers.js';
 
@@ -130,14 +130,16 @@ describe('docx import: content that used to be dropped', () => {
 });
 
 describe('docx export: what is displayed survives saving', () => {
-  test('every corpus document saves without losing preserved parts, numbering, sections or tab stops', () => {
-    for (const name of fs.readdirSync('audit/office/corpus/docx').filter((f) => f.endsWith('.docx'))) {
-      const bytes = corpus(name);
+  test('every corpus and review-repro document saves without losing preserved parts, numbering, sections, tracked changes or tab stops', () => {
+    const files = ['audit/office/corpus/docx', 'tests/fixtures/docx-review'].flatMap((d) => fs.readdirSync(d).filter((f) => f.endsWith('.docx')).map((f) => path.join(d, f)));
+    for (const file of files) {
+      const name = path.basename(file);
+      const bytes = new Uint8Array(fs.readFileSync(file));
       const { doc, comments } = importDocx(bytes);
       const saved = exportDocx(bytes, doc, null, comments);
       const before = strFromU8(unzipSync(bytes)['word/document.xml']);
       const after = strFromU8(unzipSync(saved)['word/document.xml']);
-      for (const tag of ['w:numPr', 'w:sectPr', 'w:drawing', 'w:footnoteReference', 'w:tblStyle', 'w:tabs', 'w:fldChar', 'w:tblHeader']) {
+      for (const tag of ['w:numPr', 'w:sectPr', 'w:drawing', 'w:footnoteReference', 'w:tblStyle', 'w:tabs', 'w:fldChar', 'w:tblHeader', 'w:ins', 'w:del', 'w:hyperlink']) {
         const count = (s: string) => (s.match(new RegExp(`<${tag}[\\s/>]`, 'g')) ?? []).length;
         expect(`${name} ${tag} ${count(after)}`).toBe(`${name} ${tag} ${count(before)}`);
       }
@@ -145,16 +147,84 @@ describe('docx export: what is displayed survives saving', () => {
     }
   });
 
-  test('raw XML that was not in the original document (e.g. injected by another collaborator) is not written', () => {
+  test('only fragments from the room store are written — references a collaborator invents (or raw XML) are dropped', () => {
     const bytes = withBody('<w:p><w:r><w:t>본문</w:t></w:r></w:p>');
-    const { doc } = importDocx(bytes);
-    const injected = docxSchema.nodes.ooxml.create({ xml: '<w:r><w:fldSimple w:instr="INCLUDEPICTURE \\\\evil\\x"/></w:r>', kind: 'hidden' });
-    const para = docxSchema.nodes.paragraph.create({ pPrExtra: ['<w:framePr w:w="1"/>'] }, [docxSchema.text('x'), injected]);
+    const { doc, fragments } = importDocx(bytes);
+    const injected = docxSchema.nodes.ooxml.create({ ref: 'w:fldSimple@AAAAAAAAAAAAAAAAAAAA', kind: 'hidden' });
+    const para = docxSchema.nodes.paragraph.create({ pPrExtra: ['<w:framePr w:w="1"/>', 'w:framePr@BBBBBBBBBBBBBBBBBBBB'] }, [docxSchema.text('x'), injected]);
     const tampered = doc.copy(doc.content.append(docxSchema.nodes.doc.create(null, [para]).content));
-    const xml = strFromU8(unzipSync(exportDocx(bytes, tampered))['word/document.xml']);
-    expect(xml).not.toContain('evil');
+    const xml = strFromU8(unzipSync(exportDocx(bytes, tampered, null, [], fragments))['word/document.xml']);
+    expect(xml).not.toContain('fldSimple');
     expect(xml).not.toContain('framePr');
     expect(xml).toContain('본문');
+  });
+
+  test('C1: three sections with identical w:sectPr stay three sections after saving without edits', () => {
+    const bytes = new Uint8Array(fs.readFileSync('tests/fixtures/docx-review/A-same-sections.docx'));
+    const count = (b: Uint8Array) => (strFromU8(unzipSync(b)['word/document.xml']).match(/<w:sectPr[\s>]/g) ?? []).length;
+    const { doc, comments } = importDocx(bytes);
+    expect(count(exportDocx(bytes, doc, null, comments))).toBe(count(bytes));
+    expect(count(bytes)).toBe(3);
+  });
+
+  test('C3: a picture deleted, saved, then restored by undo is saved again — the room keeps the fragment store from when it opened', () => {
+    const bytes = corpus('d04-images.docx');
+    const { doc, fragments } = importDocx(bytes);
+    const drawings = (b: Uint8Array) => (strFromU8(unzipSync(b)['word/document.xml']).match(/<w:drawing>/g) ?? []).length;
+    // 그림이 든 첫 문단을 지우고 저장(자동저장) → 디스크의 원본엔 그 그림 조각이 없다
+    let imagePara = -1;
+    doc.forEach((n, _, i) => {
+      if (imagePara < 0 && nodesOf(n, (c) => c.attrs.kind === 'image').length > 0) imagePara = i;
+    });
+    const without = docxSchema.nodes.doc.create(null, Array.from({ length: doc.childCount }, (_, i) => doc.child(i)).filter((_, i) => i !== imagePara));
+    const savedOnce = exportDocx(bytes, without, null, [], fragments);
+    expect(drawings(savedOnce)).toBe(2);
+    // 되돌리기로 문서가 원래대로 → 디스크의 직전 저장본을 바탕으로 저장해도 방의 저장소 덕분에 그림 3개
+    expect(drawings(exportDocx(savedOnce, doc, null, [], fragments))).toBe(3);
+  });
+
+  test('C2: copying a picture/bookmark/footnote reference inside the same document — drawing ids renumbered, bookmarks and note references written once', () => {
+    const bytes = corpus('d06-columns-footnotes.docx');
+    const { doc, fragments } = importDocx(bytes);
+    const note = nodesOf(doc, (n) => n.attrs.kind === 'note')[0];
+    const imgBytes = corpus('d04-images.docx');
+    const imgDoc = importDocx(imgBytes);
+    const img = nodesOf(imgDoc.doc, (n) => n.attrs.kind === 'image')[0];
+    const twiceNote = docxSchema.nodes.paragraph.create(null, [docxSchema.text('복사 '), note, docxSchema.text(' '), note]);
+    const withCopy = doc.copy(doc.content.append(docxSchema.nodes.doc.create(null, [twiceNote]).content));
+    const xml = strFromU8(unzipSync(exportDocx(bytes, withCopy, null, [], fragments))['word/document.xml']);
+    expect((xml.match(/<w:footnoteReference /g) ?? []).length).toBe(3); // 원래 3개 — 복사본은 쓰지 않는다
+    const twiceImg = docxSchema.nodes.paragraph.create(null, [img, img]);
+    const imgSaved = strFromU8(unzipSync(exportDocx(imgBytes, imgDoc.doc.copy(imgDoc.doc.content.append(docxSchema.nodes.doc.create(null, [twiceImg]).content)), null, [], imgDoc.fragments))['word/document.xml']);
+    const ids = [...imgSaved.matchAll(/<wp:docPr\b[^>]*?\bid="(\d+)"/g)].map((m) => m[1]);
+    expect(ids).toHaveLength(5);
+    expect(new Set(ids).size).toBe(5);
+  });
+
+  test('I2: tracked deletion/insertion/move fixture keeps every w:ins·w:del on save', () => {
+    const bytes = new Uint8Array(fs.readFileSync('tests/fixtures/docx-review/B-tracked.docx'));
+    const { doc, comments } = importDocx(bytes);
+    const before = strFromU8(unzipSync(bytes)['word/document.xml']);
+    const after = strFromU8(unzipSync(exportDocx(bytes, doc, null, comments))['word/document.xml']);
+    for (const tag of ['w:ins', 'w:del', 'w:moveFrom', 'w:moveTo']) {
+      const count = (s: string) => (s.match(new RegExp(`<${tag}[\\s>]`, 'g')) ?? []).length;
+      expect(`${tag} ${count(after)}`).toBe(`${tag} ${count(before)}`);
+    }
+  });
+
+  test('I3: a number the editor turned on (docview:decimal) is saved as a real Word list — numbering.xml definition + w:numPr', () => {
+    const bytes = withBody('<w:p><w:r><w:t>하나</w:t></w:r></w:p>');
+    const { doc } = importDocx(bytes);
+    const numbered = docxSchema.nodes.doc.create(null, [docxSchema.nodes.paragraph.create({ num: { numId: 'docview:decimal', ilvl: 0, fromStyle: false } }, docxSchema.text('하나'))]);
+    void doc;
+    const out = unzipSync(exportDocx(bytes, numbered));
+    const numbering = strFromU8(out['word/numbering.xml']);
+    const numId = /<w:num w:numId="(\d+)">/.exec(numbering)?.[1];
+    expect(numId).toBeDefined();
+    expect(strFromU8(out['word/document.xml'])).toContain(`<w:numPr><w:ilvl w:val="0"/><w:numId w:val="${numId}"/></w:numPr>`);
+    expect(strFromU8(out['word/document.xml'])).not.toContain('1. ');
+    expect(strFromU8(out['[Content_Types].xml'])).toContain('/word/numbering.xml');
+    expect(strFromU8(out['word/_rels/document.xml.rels'])).toContain('Target="numbering.xml"');
   });
 
   test('a split section-break paragraph writes its w:sectPr only once (on the last half)', () => {
@@ -173,6 +243,34 @@ describe('docx export: what is displayed survives saving', () => {
     const bytes = corpus('d05-header-footer-sections.docx');
     const xml = strFromU8(unzipSync(exportDocx(bytes, split))['word/document.xml']);
     expect((xml.match(/<w:sectPr[\s>]/g) ?? []).length).toBe(2);
+  });
+});
+
+describe('numbering counter: Word rules (REVIEW I6, Minor 9)', () => {
+  test('numIds sharing an abstractNum continue counting; a startOverride restarts on first use', () => {
+    const lvl = '<w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/></w:lvl>';
+    const defs = parseNumberingXml(
+      `<w:numbering><w:abstractNum w:abstractNumId="0">${lvl}</w:abstractNum>` +
+        '<w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num><w:num w:numId="2"><w:abstractNumId w:val="0"/></w:num>' +
+        '<w:num w:numId="3"><w:abstractNumId w:val="0"/><w:lvlOverride w:ilvl="0"><w:startOverride w:val="1"/></w:lvlOverride></w:num></w:numbering>',
+    );
+    const c = new NumberingCounter(defs);
+    expect(['1', '1', '2', '2', '3', '3'].map((id) => c.next(id, 0)?.label)).toEqual(['1.', '2.', '3.', '4.', '1.', '2.']);
+  });
+
+  test('koreanLegal is Sino-Korean hangul numerals', () => {
+    expect([1, 10, 11, 20, 105].map((n) => formatNumber(n, 'koreanLegal'))).toEqual(['일', '십', '십일', '이십', '백오']);
+  });
+});
+
+describe('style sheet safety (REVIEW I1)', () => {
+  test('a font name from styles.xml cannot break out of the CSS string (newline, braces, quotes, url)', () => {
+    const extras = getDocxRenderExtras(new Uint8Array(fs.readFileSync('tests/fixtures/docx-review/E-css.docx')));
+    const fonts = extras.styles.flatMap((r) => (r.font ? [fontStack([r.font.eastAsia, r.font.ascii])] : []));
+    expect(fonts.length).toBeGreaterThan(0);
+    for (const f of fonts) expect(f).not.toMatch(/[{}\n@;<>\\]|url\(/);
+    expect(safeFontName('X\n} p { color: red } x{')).toBe('X p color red x');
+    expect(safeFontName('맑은 고딕')).toBe('맑은 고딕');
   });
 });
 
