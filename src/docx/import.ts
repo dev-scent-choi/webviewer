@@ -23,6 +23,7 @@ import {
   extrasOf,
   findAll,
   fragmentRef,
+  refHashOf,
   type FragmentStore,
   findDeep,
   findFirst,
@@ -50,6 +51,8 @@ interface ImportCtx {
   readonly noteLabel: string | null;
   /** 보존 조각 저장소(해시 → 원본 XML) — ooxml.ts fragmentRef */
   readonly fragments: FragmentStore;
+  /** 브라우저가 못 그려 서버가 그림으로 바꿔 보여 줄 조각(EMF/WMF·차트·도형)의 해시 — drawingImage.ts가 한 번에 그린다 */
+  readonly serverDrawn: Set<string>;
 }
 
 /** 표 스타일이 칸 안 글자에 물려주는 값(굵게·색·글꼴)과 문단 간격 */
@@ -398,6 +401,12 @@ function runPieceRef(run: XmlNode, child: XmlNode, ctx: ImportCtx): string {
 /** 문단 자식 하나(책갈피·단순 필드·삭제분 등)를 통째로 보존하는 참조 */
 const elementRef = (el: XmlNode, ctx: ImportCtx): string => fragmentRef(ctx.fragments, tagOf(el) ?? '', xmlOf(el));
 
+/** 그림·도형 노드 — 브라우저가 못 그리는 것(그림 경로 없음)은 서버가 그릴 목록에 넣는다 */
+function drawingNode(ref: string, attrs: OoxmlAttrs, marks: RunMarks, ctx: ImportCtx): PMNode {
+  if (attrs.kind === 'image' && !attrs.media) ctx.serverDrawn.add(refHashOf(ref));
+  return ooxmlNode({ ref, ...attrs }, marks);
+}
+
 function ooxmlNode(attrs: OoxmlAttrs, marks: RunMarks): PMNode {
   return docxSchema.nodes.ooxml.create(attrs, null, marksOf(marks));
 }
@@ -409,14 +418,14 @@ const DROPPED_RUN_CHILDREN = new Set(['w:rPr', 'w:lastRenderedPageBreak', 'w:com
 function preservedRunChild(run: XmlNode, child: XmlNode, marks: RunMarks, ctx: ImportCtx): PMNode {
   const tag = tagOf(child) ?? '';
   const ref = runPieceRef(run, child, ctx);
-  if (tag === 'w:drawing') return ooxmlNode({ ref, ...drawingAttrsOf(child, ctx) }, marks);
+  if (tag === 'w:drawing') return drawingNode(ref, drawingAttrsOf(child, ctx), marks, ctx);
   if (tag === 'mc:AlternateContent') {
     const choiceDrawing = findDeep(childrenOf(findFirst(childrenOf(child), 'mc:Choice') ?? {}), 'w:drawing');
     const fallbackPict = findDeep(childrenOf(findFirst(childrenOf(child), 'mc:Fallback') ?? {}), 'w:pict');
-    if (choiceDrawing) return ooxmlNode({ ref, ...drawingAttrsOf(choiceDrawing, ctx) }, marks);
-    if (fallbackPict) return ooxmlNode({ ref, ...vmlAttrsOf(fallbackPict, ctx) }, marks);
+    if (choiceDrawing) return drawingNode(ref, drawingAttrsOf(choiceDrawing, ctx), marks, ctx);
+    if (fallbackPict) return drawingNode(ref, vmlAttrsOf(fallbackPict, ctx), marks, ctx);
   }
-  if (tag === 'w:pict' || tag === 'w:object') return ooxmlNode({ ref, ...vmlAttrsOf(child, ctx) }, marks);
+  if (tag === 'w:pict' || tag === 'w:object') return drawingNode(ref, vmlAttrsOf(child, ctx), marks, ctx);
   if (tag === 'w:footnoteReference' || tag === 'w:endnoteReference') {
     const noteType = tag === 'w:footnoteReference' ? 'footnote' : 'endnote';
     ctx.noteCount[noteType] += 1;
@@ -1199,6 +1208,8 @@ export interface DocxImportResult {
   readonly comments: readonly DocxComment[];
   /** 보존 조각 저장소(해시 → 원본 XML) — 방이 열려 있는 동안 유지해 저장 때 넘긴다(export.ts) */
   readonly fragments: FragmentStore;
+  /** 서버가 그림으로 바꿔 보여 줄 조각 해시(EMF/WMF·차트·도형) */
+  readonly serverDrawn: ReadonlySet<string>;
 }
 
 /** w:sectPr(파싱된 트리)에서 페이지 크기·여백을 읽는다. w:pgSz가 없으면(비정상 문서) null.
@@ -1465,6 +1476,7 @@ function baseCtxOf(entries: Record<string, Uint8Array>, partPath: string, conten
     noteCount: { footnote: 0, endnote: 0 },
     noteLabel: null,
     fragments: new Map(),
+    serverDrawn: new Set(),
   };
 }
 
@@ -1531,7 +1543,7 @@ export function importDocx(docxBytes: Uint8Array): DocxImportResult {
     for (const mark of node.marks) if (mark.type === docxSchema.marks.comment) used.add(mark.attrs.id as string);
   });
   const comments = commentsXml ? commentsOf(strFromU8(commentsXml)).filter((c) => used.has(c.id)) : [];
-  return { doc, pageSetup, comments, fragments: ctx.fragments };
+  return { doc, pageSetup, comments, fragments: ctx.fragments, serverDrawn: ctx.serverDrawn };
 }
 
 // ── 편집기 화면용 부가 정보(머리글·바닥글·각주·번호·스타일) ─────────────────────

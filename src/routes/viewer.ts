@@ -36,10 +36,10 @@ import {
   getDocxPageSetup,
   getDocxRenderExtras,
 } from '../docx/import.js';
-import { renderDocxDrawingPng } from '../docx/drawingImage.js';
+import { cachedDocxDrawing, hasDocxDrawingBatch, renderDocxDrawingPng } from '../docx/drawingImage.js';
 import { MarkupValidationError, addMarkup, deleteMarkup, listMarkup, updateMarkup } from '../markup.js';
 import { touchPresence } from '../presence.js';
-import { flushNow, getCurrentBytes, getChangeLog, getFileCharts, getFileExtras, getFileImages } from '../collab/room.js';
+import { docxFragmentsOf, flushNow, getCurrentBytes, getChangeLog, getFileCharts, getFileExtras, getFileImages } from '../collab/room.js';
 import {
   buildGridFromOriginal,
   computeLineOffsets,
@@ -945,19 +945,32 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
-  /** docx 편집기의 브라우저가 못 그리는 그림 조각(EMF/WMF·차트·도형) — 이 문서에 있는 조각만 LibreOffice로 그려 PNG로(무거운 작업이라 분당 상한) */
+  /**
+   * docx 편집기의 브라우저가 못 그리는 그림 조각(EMF/WMF·차트·도형) — 이 문서(열린 방이면 그 저장소까지)에 있는 조각만 LibreOffice로 그려 PNG로.
+   * 문서 판마다 그런 조각을 한 번에 그려 두므로, 그린 그림·묶음이 있으면 바로 돌려주고 무거운 첫 그리기에만 분당 상한을 센다.
+   */
+  const drawingLimit = app.createRateLimit(HEAVY_RATE_LIMIT);
+  const drawingStarted = new Set<string>();
   app.get<{ Querystring: { token?: string; ref: string } }>(
     '/api/view/docx-drawing',
-    {
-      schema: { querystring: { type: 'object', required: ['ref'], properties: { token: { type: 'string' }, ref: { type: 'string', pattern: '^[A-Za-z0-9:._-]{1,64}@[A-Za-z0-9_-]{20}(#\d+)?$' } } } },
-      config: { rateLimit: { max: 120, timeWindow: '1 minute' } },
-    },
+    { schema: { querystring: { type: 'object', required: ['ref'], properties: { token: { type: 'string' }, ref: { type: 'string', pattern: '^[A-Za-z0-9:._-]{1,64}@[A-Za-z0-9_-]{20}(#[0-9]+)?$' } } } } },
     async (request, reply) => {
       const view = await resolveEditorDataView(request.query.token, reply);
       if (!view) return reply;
       if (view.meta.ext !== 'docx') return reply.code(400).send({ success: false, error: 'docx 문서가 아닙니다.' });
+      const docId = view.meta.id;
+      // 한 문서의 첫 그리기(묶음 하나)만 센다 — 동시에 들어온 나머지 요청은 같은 묶음을 기다린다
+      if (!cachedDocxDrawing(docId, request.query.ref) && !hasDocxDrawingBatch(docId) && !drawingStarted.has(docId)) {
+        drawingStarted.add(docId);
+        const limit = await drawingLimit(request);
+        // isAllowed는 허용 목록일 때만 true — 넘었는지는 isExceeded
+        if (!limit.isAllowed && limit.isExceeded) {
+          drawingStarted.delete(docId);
+          return reply.code(429).send({ success: false, error: '잠시 뒤 다시 시도하세요.' });
+        }
+      }
       try {
-        const png = await renderDocxDrawingPng(await store.readOriginal(view.meta.id, 'docx'), request.query.ref, view.meta.id);
+        const png = await renderDocxDrawingPng(() => store.readOriginal(docId, 'docx'), docId, request.query.ref, docxFragmentsOf(docId));
         if (!png) return reply.code(404).send({ success: false, error: '그림을 찾을 수 없습니다.' });
         return await reply.type('image/png').header('cache-control', 'private, max-age=3600').header('content-security-policy', SANDBOX_CSP).send(png);
       } catch (error) {

@@ -244,6 +244,38 @@ try {
     await page.close();
   }
 
+  // N4: 그림 200개(EMF·차트) 문서 — 모두 그려지고(상한에 걸려 회색으로 남지 않음), 그리는 동안 서버가 멈추지 않는다
+  {
+    const file = 'tests/fixtures/docx-review/J-200-drawings.docx';
+    const tok = await upload(file);
+    const page = await openEditor(context, tok);
+    // 그림을 그리는 동안의 다른 요청 지연만 잰다(문서 열기·변환은 따로)
+    let maxLag = 0;
+    let pinging = true;
+    const pinger = (async () => {
+      while (pinging) {
+        const t = Date.now();
+        await fetch(`${BASE}/api/formats`).catch(() => {});
+        maxLag = Math.max(maxLag, Date.now() - t);
+        await new Promise((r) => setTimeout(r, 200));
+      }
+    })();
+    const t0 = Date.now();
+    const scroll = async () => page.evaluate(() => { for (const img of document.querySelectorAll('.ProseMirror img.docx-img')) img.loading = 'eager'; });
+    await scroll();
+    await page.waitForFunction(() => [...document.querySelectorAll('.ProseMirror img.docx-img')].every((i) => i.complete), null, { timeout: 180000 }).catch(() => {});
+    const imgs = await page.evaluate(() => [...document.querySelectorAll('.ProseMirror img.docx-img')].map((i) => i.naturalWidth));
+    pinging = false;
+    await pinger;
+    rec('N4 그림 200개: 모두 그려짐 + 서버 응답', imgs.length >= 202 && imgs.every((w) => w > 0) && maxLag < 500, `그림 ${imgs.length}개 중 그려짐 ${imgs.filter((w) => w > 0).length}, ${Math.round((Date.now() - t0) / 1000)}초, 다른 요청 최대 지연 ${maxLag}ms`);
+    // 같은 그림 다시 요청: 캐시에서 바로(문서를 다시 읽지 않음)
+    const ref = await page.evaluate(() => new URL(document.querySelector('.ProseMirror img.docx-img[src*="docx-drawing"]').src).searchParams.get('ref'));
+    const t1 = Date.now();
+    for (let i = 0; i < 20; i += 1) await fetch(`${BASE}/api/view/docx-drawing?token=${encodeURIComponent(tok.token)}&ref=${encodeURIComponent(ref)}`);
+    rec('N4 캐시된 그림 20번', Date.now() - t1 < 2000, `${Date.now() - t1}ms`);
+    await page.close();
+  }
+
   // I1: 글꼴 이름으로 CSS를 넣은 문서 — 보통 문단이 빨갛게 되지 않는다
   {
     const tok = await upload('tests/fixtures/docx-review/E-css.docx');

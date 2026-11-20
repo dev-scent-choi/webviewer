@@ -1703,6 +1703,11 @@ async function seedRoom(room: Room): Promise<void> {
   }
 }
 
+/** 열려 있는 docx 방의 보존 조각 저장소(없으면 null) — 그림 경로(docx-drawing)가 지웠다 되돌린 조각도 그릴 수 있게 */
+export function docxFragmentsOf(docId: string): ReadonlyMap<string, string> | null {
+  return rooms.get(docId)?.docxFragments ?? null;
+}
+
 /**
  * 현재 협업 상태(Y.Doc)를 원본 포맷으로 직렬화해 저장하고, 뷰어용 캐시(PDF 또는 그리드)를
  * 재생성하며, 렌더링·검색 캐시를 무효화한다. 유휴 자동 저장과 "마지막 참여자 퇴장" 양쪽에서 호출된다.
