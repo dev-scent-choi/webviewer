@@ -102,6 +102,8 @@ import {
 } from '../pptx/collab.js';
 import { parseSlideVisuals } from '../pptx/slideContent.js';
 import { buildStoreSheetNameIndex, computeGridCellDisplayAsync, formatComputedValueForStorage } from '../xlsx/formulas.js';
+import { randomUUID } from 'node:crypto';
+import { MESSAGE_ROOM_EPOCH, MESSAGE_ROOM_STALE, ROOM_EPOCH_PARAM, ROOM_STALE_CLOSE_CODE } from './roomEpoch.js';
 import {
   PPTX_SAVE_NOTICE_MAP,
   PPTX_SLIDE_CONTENTS_MAP,
@@ -2644,6 +2646,54 @@ function toUint8Array(data: ArrayBuffer | Buffer | ArrayBufferView): Uint8Array 
  * earlyMessages: 호출자(edit.ts)가 인증 확인(그 자체도 비동기)을 하는 동안 이미 도착해 버린
  * 메시지들 — 같은 이유로 여기서 만드는 큐에 먼저 합쳐 순서대로 처리한다.
  */
+/* ===== [RX-C1] 방 세대(epoch) 확인 — 2차 검토 RX-C1(재연결 시 옛 Yjs 상태가 새 방에 합쳐져 슬라이드·문단·행이 두 벌) =====
+ * 설명·약속은 src/collab/roomEpoch.ts. 이 블록과 joinEditSession 첫머리 두 줄(거절 확인·세대 알림)만이 이 변경이다. */
+const roomEpochs = new WeakMap<Room, string>();
+
+/** 이 방 세대 값 — 방(객체)이 새로 만들어지면 새 값 */
+function epochOf(room: Room): string {
+  let epoch = roomEpochs.get(room);
+  if (!epoch) {
+    epoch = randomUUID();
+    roomEpochs.set(room, epoch);
+  }
+  return epoch;
+}
+
+/**
+ * 다시 접속한 클라이언트가 들고 온 세대(웹소켓 주소 epoch 매개변수)가 지금 방과 다르면(방이 없거나 새로 만들어졌으면) 동기화
+ * 메시지를 하나도 받지 않고 거절 알림을 보낸 뒤 닫는다 — 방을 새로 만들지도 않는다. 세대 값이 없는 첫 접속은 그대로 받는다.
+ */
+function rejectStaleReconnect(docId: string, socket: WebSocket, request: IncomingMessage): boolean {
+  let clientEpoch: string | null = null;
+  try {
+    clientEpoch = new URL(request.url ?? '', 'http://localhost').searchParams.get(ROOM_EPOCH_PARAM);
+  } catch {
+    clientEpoch = null;
+  }
+  if (!clientEpoch) return false;
+  const room = rooms.get(docId);
+  if (room && epochOf(room) === clientEpoch) return false;
+  const encoder = encoding.createEncoder();
+  encoding.writeVarUint(encoder, MESSAGE_ROOM_STALE);
+  try {
+    socket.send(encoding.toUint8Array(encoder));
+  } catch {
+    /* 이미 닫힌 연결 — 닫기만 한다 */
+  }
+  socket.close(ROOM_STALE_CLOSE_CODE, 'room-epoch-stale');
+  return true;
+}
+
+/** 지금 방 세대를 이 연결에 알린다(클라이언트가 다음 접속 주소에 싣는다) */
+function sendRoomEpoch(room: Room, socket: WebSocket): void {
+  const encoder = encoding.createEncoder();
+  encoding.writeVarUint(encoder, MESSAGE_ROOM_EPOCH);
+  encoding.writeVarString(encoder, epochOf(room));
+  send(room, socket, encoding.toUint8Array(encoder));
+}
+/* ===== [RX-C1] 끝 ===== */
+
 export async function joinEditSession(
   socket: WebSocket,
   _rawRequest: IncomingMessage,
@@ -2656,7 +2706,9 @@ export async function joinEditSession(
   // 알 수 없으면 null(테스트처럼 누가 편집했는지 중요하지 않은 호출부는 그냥 생략).
   viewer: string | null = null,
 ): Promise<void> {
+  if (rejectStaleReconnect(docId, socket, _rawRequest)) return; // [RX-C1] 이전 세대 방의 상태로 다시 접속 — 거절
   const room = getOrCreateRoom(docId, docExt);
+  sendRoomEpoch(room, socket); // [RX-C1]
 
   socket.binaryType = 'arraybuffer';
   room.conns.set(socket, new Set());

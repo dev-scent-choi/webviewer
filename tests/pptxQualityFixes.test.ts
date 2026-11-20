@@ -571,3 +571,28 @@ describe('2차 검토 R2-m4: 감싼 도형은 Choice·Fallback 자리를 합친 
     expect(parseSlideVisuals(zip, 'slide1.xml')).toEqual([{ kind: 'snapshot', x: 400000, y: 0, w: 200000, h: 50000, snapshot: true }]);
   });
 });
+
+describe('RX-C1 저장 직전 안전망: 같은 원본 슬라이드 항목이 둘이면 하나만 저장(sldId 중복 손상 방지)', () => {
+  test('합쳐진 슬라이드 목록(원본 3장 × 2)을 내보내도 sldId·슬라이드는 3개, 알림 1개', async () => {
+    const Y = await import('yjs');
+    const { exportPptxFromSlides, seedSlidesFromPptx } = await import('../src/pptx/collab.js');
+    const { makeSamplePptx } = await import('./helpers.js');
+    const { PPTX_SLIDES_ARRAY } = await import('../src/collab/pptxShared.js');
+    const original = makeSamplePptx(['A', 'B', 'C']);
+    const doc = new Y.Doc();
+    const slides = doc.getArray(PPTX_SLIDES_ARRAY) as never as import('yjs').Array<import('../src/collab/pptxShared.js').SlideEntry>;
+    seedSlidesFromPptx(original, slides as never);
+    const again = new Y.Doc().getArray(PPTX_SLIDES_ARRAY) as never as import('yjs').Array<import('../src/collab/pptxShared.js').SlideEntry>;
+    seedSlidesFromPptx(original, again as never);
+    slides.push(again.toArray().map((e) => ({ ...e })));
+    expect(slides.length).toBe(6);
+    const out = exportPptxFromSlides(original, slides as never);
+    const { unzipSync, strFromU8 } = await import('fflate');
+    const pres = strFromU8(unzipSync(out.bytes)['ppt/presentation.xml']);
+    const ids = [...pres.matchAll(/<p:sldId\b[^>]*\bid="(\d+)"/g)].map((m) => m[1]);
+    expect(ids.length).toBe(3);
+    expect(new Set(ids).size).toBe(3);
+    expect(out.finalParts.length).toBe(3);
+    expect(out.notices).toEqual(['같은 슬라이드가 두 번 들어 있어(연결이 끊겼다 이어질 때 생길 수 있음) 한 번만 저장했습니다.']);
+  });
+});

@@ -43,6 +43,7 @@ import type { CellRangeRef, ChartKind } from '../xlsx/chartModel.js';
 import { RowLayout } from '../xlsx/sheetGeometry.js';
 import { compareCells, filteredRows, GRID_FILTERS_MAP, shiftFormulaRows, sortOrder, type SheetFilter } from './gridSort.js';
 import { officeAlert, officeConfirm } from './officeDialog.js';
+import { guardRoomEpoch } from './roomEpoch.js';
 
 interface Permissions {
   readonly canPrint: boolean;
@@ -284,6 +285,7 @@ async function main(): Promise<void> {
   const provider = new WebsocketProvider(`${wsProtocol}//${location.host}/ws/edit`, info.docId, ydoc, {
     params: { token },
   });
+  guardRoomEpoch(provider, ydoc); // 재연결 시 이전 세대 방 상태를 합치지 않는다(src/collab/roomEpoch.ts)
   // 서버가 "이 페이지들은 다 채웠다"고 알린다(room.ts MESSAGE_PAGES_READY = 6) — 구독(요청)한 페이지가 실제로
   // 도착했는지 이걸로 안다. 로딩 표시·필터 값 목록·정렬 가능 여부가 이 값을 본다.
   (provider.messageHandlers as unknown as Array<(e: encoding.Encoder, d: decoding.Decoder) => void>)[MESSAGE_PAGES_READY] = (_encoder, decoder) => {

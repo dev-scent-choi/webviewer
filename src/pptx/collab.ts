@@ -423,7 +423,19 @@ export function exportPptxFromSlides(
   const zipEntries = { ...originalZipEntries };
   const notices = new Set<string>();
   const rawEntryList = slidesArray.toArray();
-  const entryList = filterValidEntries(rawEntryList, zipEntries);
+  // [RX-C1 안전망] 같은 원본 파트를 가리키는 'original'(또는 같은 항목 id)이 둘 이상이면 첫 것만 — 연결이 끊겼다 이어지며
+  // 이전 세대 방의 슬라이드 목록이 합쳐지면 이렇게 되고, 그대로 쓰면 presentation.xml에 같은 sldId가 두 번 들어간 손상 파일이 된다.
+  // (근본 차단은 room.ts의 방 세대 확인 — 이 거름은 그래도 생긴 경우의 저장 직전 방어)
+  const seenParts = new Set<string>();
+  const seenIds = new Set<string>();
+  const entryList = filterValidEntries(rawEntryList, zipEntries).filter((entry) => {
+    const dupId = seenIds.has(entry.id);
+    const dupPart = entry.kind === 'original' && entry.sourceSlidePart !== null && seenParts.has(entry.sourceSlidePart);
+    seenIds.add(entry.id);
+    if (entry.kind === 'original' && entry.sourceSlidePart) seenParts.add(entry.sourceSlidePart);
+    if (dupId || dupPart) notices.add('같은 슬라이드가 두 번 들어 있어(연결이 끊겼다 이어질 때 생길 수 있음) 한 번만 저장했습니다.');
+    return !dupId && !dupPart;
+  });
   if (entryList.length === 0) {
     throw new Error('슬라이드가 하나도 남지 않아 저장할 수 없습니다.');
   }

@@ -28,6 +28,7 @@ import {
 import { DOC_META_MAP, DOC_META_SAVED_AT_KEY, DOC_META_SAVE_ERROR_AT_KEY } from '../collab/gridShared.js';
 import { pickPresenceColorForName, renderPresenceAvatars } from './presence.js';
 import { pptxTextSchema, setSlideMediaUrl, slideMediaUrl } from '../pptx/textSchema.js';
+import { guardRoomEpoch } from './roomEpoch.js';
 import { applyAutofit, applyTextboxLook, autoNumberPlugin, refitAutofit, unmirroredFill, curvedShapePath, ensureLevelRules, turnCss } from './slideTextLook.js';
 
 /** src/pptx/collab.ts가 서버 쪽에서 선언한 것과 같은 모양이지만, 그 파일은 node:crypto/fflate 등
@@ -1353,6 +1354,7 @@ async function main(): Promise<void> {
   provider = new WebsocketProvider(`${wsProtocol}//${location.host}/ws/edit`, info.docId, ydoc, {
     params: { token },
   });
+  guardRoomEpoch(provider, ydoc); // 재연결 시 이전 세대 방 상태를 합치지 않는다(src/collab/roomEpoch.ts)
 
   const myColor = pickPresenceColorForName(info.viewer);
   provider.awareness.setLocalStateField('user', { name: info.viewer, color: myColor });
