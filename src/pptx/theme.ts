@@ -111,22 +111,47 @@ const fromLinear = (v: number) => 255 * (v <= 0.0031308 ? v * 12.92 : 1.055 * v 
  * tint·shade는 PowerPoint처럼 선형 밝기(scRGB)에서 흰색·검정과 섞는다 — sRGB로 섞으면 "tx1 tint 75%"가
  * #404040(너무 진함)이 되는데 PowerPoint·LibreOffice는 #898989로 그린다(부제목 회색이 검게 보이던 원인). */
 function applyTransforms(hex: string, node: XmlNode): string {
+  type Rgb = [number, number, number];
   let rgb = hexToRgb(hex);
-  const pct = (name: string) => {
-    const v = (node[name] as XmlNode | undefined)?.['@_val'];
-    return v === undefined ? undefined : Number(v) / 100000;
-  };
-  const tint = pct('a:tint');
-  if (tint !== undefined) rgb = rgb.map((c) => fromLinear(toLinear(c) * tint + (1 - tint))) as [number, number, number];
-  const shade = pct('a:shade');
-  if (shade !== undefined) rgb = rgb.map((c) => fromLinear(toLinear(c) * shade)) as [number, number, number];
-  const satMod = pct('a:satMod');
-  const lumMod = pct('a:lumMod');
-  const lumOff = pct('a:lumOff');
-  if (satMod !== undefined || lumMod !== undefined || lumOff !== undefined) {
+  const clamp = (v: number) => Math.max(0, Math.min(1, v));
+  const hsl = (f: (h: number, s: number, l: number) => [number, number, number]) => {
     const [h, s, l] = rgbToHsl(rgb);
-    const clamp = (v: number) => Math.max(0, Math.min(1, v));
-    rgb = hslToRgb([h, clamp(s * (satMod ?? 1)), clamp(l * (lumMod ?? 1) + (lumOff ?? 0))]);
+    const [h2, s2, l2] = f(h, s, l);
+    rgb = hslToRgb([((h2 % 1) + 1) % 1, clamp(s2), clamp(l2)]);
+  };
+  const lin = (f: (c: number, i: number) => number) => {
+    rgb = rgb.map((c, i) => fromLinear(clamp(f(toLinear(c), i)))) as Rgb;
+  };
+  // 변환은 파일에 적힌 순서대로 적용한다(OOXML) — 파서가 담은 키 순서가 문서 순서다(같은 이름이 두 번 나오는 일은 없다).
+  // 값은 1/1000 퍼센트(100000=100%), 색상(hue)은 1/60000도.
+  for (const key of Object.keys(node)) {
+    const raw = (node[key] as XmlNode | undefined)?.['@_val'];
+    const v = raw === undefined ? NaN : Number(raw) / 100000;
+    switch (key) {
+      case 'a:tint': lin((c) => c * v + (1 - v)); break;
+      case 'a:shade': lin((c) => c * v); break;
+      case 'a:satMod': hsl((h, s, l) => [h, s * v, l]); break;
+      case 'a:satOff': hsl((h, s, l) => [h, s + v, l]); break;
+      case 'a:sat': hsl((h, _s, l) => [h, v, l]); break;
+      case 'a:lumMod': hsl((h, s, l) => [h, s, l * v]); break;
+      case 'a:lumOff': hsl((h, s, l) => [h, s, l + v]); break;
+      case 'a:lum': hsl((h, s) => [h, s, v]); break;
+      case 'a:hueMod': hsl((h, s, l) => [h * v, s, l]); break;
+      case 'a:hueOff': hsl((h, s, l) => [h + Number(raw) / 60000 / 360, s, l]); break;
+      case 'a:hue': hsl((_h, s, l) => [Number(raw) / 60000 / 360, s, l]); break;
+      case 'a:comp': hsl((h, s, l) => [h + 0.5, s, l]); break;
+      case 'a:inv': rgb = rgb.map((c) => 255 - c) as Rgb; break;
+      case 'a:gray': { const g = 0.3 * rgb[0] + 0.59 * rgb[1] + 0.11 * rgb[2]; rgb = [g, g, g]; break; }
+      case 'a:gamma': rgb = rgb.map((c) => 255 * toLinear(c)) as Rgb; break;
+      case 'a:invGamma': rgb = rgb.map((c) => fromLinear(c / 255)) as Rgb; break;
+      case 'a:redMod': lin((c, i) => (i === 0 ? c * v : c)); break;
+      case 'a:redOff': lin((c, i) => (i === 0 ? c + v : c)); break;
+      case 'a:greenMod': lin((c, i) => (i === 1 ? c * v : c)); break;
+      case 'a:greenOff': lin((c, i) => (i === 1 ? c + v : c)); break;
+      case 'a:blueMod': lin((c, i) => (i === 2 ? c * v : c)); break;
+      case 'a:blueOff': lin((c, i) => (i === 2 ? c + v : c)); break;
+      default: break; // alpha 등 색을 바꾸지 않는 값
+    }
   }
   return rgbToHex(rgb);
 }

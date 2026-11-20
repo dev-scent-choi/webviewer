@@ -390,3 +390,18 @@ describe('검토 Minor 3: 다시 맞춘 자동 맞춤 값을 저장(normAutofit 
     expect(setShapeAutofit(spFit, '2', { fontScale: 0.5, lnSpcReduction: 0.2 })).toBe(spFit);
   });
 });
+
+describe('검토 Minor 5: 색 변환은 파일 순서대로, hue·comp·inv·gray 등도', () => {
+  const theme = loadThemeColors(deck(''), 'slide1.xml');
+  test('순서가 다르면 결과가 다르다(lumOff 뒤 shade ≠ shade 뒤 lumOff)', () => {
+    const a = theme.resolve({ 'a:srgbClr': { '@_val': '808080', 'a:lumOff': { '@_val': '20000' }, 'a:shade': { '@_val': '50000' } } });
+    const b = theme.resolve({ 'a:srgbClr': { '@_val': '808080', 'a:shade': { '@_val': '50000' }, 'a:lumOff': { '@_val': '20000' } } });
+    expect(a).not.toBe(b);
+  });
+  test('comp·inv·gray·hueOff', () => {
+    expect(theme.resolve({ 'a:srgbClr': { '@_val': 'FF0000', 'a:comp': {} } })).toBe('#00FFFF');
+    expect(theme.resolve({ 'a:srgbClr': { '@_val': '102030', 'a:inv': {} } })).toBe('#EFDFCF');
+    expect(theme.resolve({ 'a:srgbClr': { '@_val': 'FF0000', 'a:gray': {} } })).toBe('#4D4D4D');
+    expect(theme.resolve({ 'a:srgbClr': { '@_val': 'FF0000', 'a:hueOff': { '@_val': '7200000' } } })).toBe('#00FF00');
+  });
+});
