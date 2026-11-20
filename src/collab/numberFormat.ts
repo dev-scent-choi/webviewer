@@ -57,7 +57,7 @@ function replaceOutsideLiterals(code: string, pattern: RegExp, fn: (m: string) =
 /** SSF가 모르는 한국어 표기를 글자 그대로("…")로 바꾼다 — aaa/aaaa(요일), [$-412]의 ddd/dddd·AM/PM */
 function koreanize(code: string, serial: number): string {
   const korean = /\[\$-(?:412|ko)/i.test(code);
-  if (!/a{3}/i.test(code) && !korean) return code;
+  if (!korean && !/a{3}/i.test(code)) return code;
   const day = KO_DAYS[new Date(EXCEL_EPOCH_MS + Math.floor(serial) * 86_400_000).getUTCDay()];
   let out = replaceOutsideLiterals(code, /a{3,4}/, (m) => (m.length === 4 ? `"${day}요일"` : `"${day}"`));
   if (korean) {
@@ -68,9 +68,29 @@ function koreanize(code: string, serial: number): string {
   return out;
 }
 
+/** 서식 코드별 준비 결과 — 칸마다 다시 하지 않는다(큰 시트는 같은 코드가 수십만 번 온다) */
+interface PreparedCode {
+  readonly korean: boolean;
+  /** 색 지정([Red] 등)이 있는 코드만 구역 목록을 둔다 */
+  readonly sections?: readonly string[];
+}
+const prepared = new Map<string, PreparedCode>();
+function prepare(code: string): PreparedCode {
+  let p = prepared.get(code);
+  if (!p) {
+    const colored = /\[(black|blue|cyan|green|magenta|red|white|yellow|color\s*\d+)\]/i.test(code);
+    p = {
+      korean: /a{3}/i.test(code) || /\[\$-(?:412|ko)/i.test(code),
+      ...(colored ? { sections: SSF._split(code).filter((_s, i, all) => !(i === all.length - 1 && all.length === 4)) } : {}),
+    };
+    if (prepared.size > 500) prepared.clear(); // 서식 코드 종류는 파일마다 수십 개 — 넘치면 비운다
+    prepared.set(code, p);
+  }
+  return p;
+}
+
 /** 값이 고를 서식 구역(양수;음수;0;글자, [조건]) — 색을 알아내는 데 쓴다(글자 자체는 SSF가 같은 규칙으로 고른다) */
-function sectionFor(code: string, value: number): string {
-  const sections = SSF._split(code).filter((s, i, all) => !(i === all.length - 1 && all.length === 4));
+function sectionFor(sections: readonly string[], value: number): string {
   const cond = (s: string) => /\[(=|<>|>=|<=|>|<)\s*(-?[\d.]+)\]/.exec(s);
   if (sections.some((s) => cond(s))) {
     for (const s of sections) {
@@ -101,8 +121,9 @@ export function formatNumberCode(value: number, code: string | undefined): Forma
   // 가장 흔한 경우(일반 서식의 11자리 이하 정수)는 SSF를 거치지 않는다 — 결과는 같다
   if (fmt === 'General' && Number.isInteger(value) && Math.abs(value) < 1e11) return { text: String(value) };
   try {
-    const text = SSF.format(koreanize(fmt, value), value);
-    const color = fmt === 'General' ? undefined : colorOf(sectionFor(fmt, value));
+    const p = prepare(fmt);
+    const text = SSF.format(p.korean ? koreanize(fmt, value) : fmt, value);
+    const color = p.sections ? colorOf(sectionFor(p.sections, value)) : undefined;
     return color ? { text, color } : { text };
   } catch {
     // 서식 코드가 깨졌으면 엑셀 일반 서식으로

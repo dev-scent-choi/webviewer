@@ -482,10 +482,9 @@ function gridCellOf(t: CellTexts, styleRef: number | undefined): GridCell {
 /** 값에 따라 달라지는 서식을 덧붙인다: 서식 코드의 글자 색(fc), 숫자처럼 보이는 글자 값의 왼쪽 정렬(엑셀 기본) */
 function valueStyleRef(palette: StylePalette, styleRef: number | undefined, t: CellTexts): number | undefined {
   const base: GridStyle = styleRef === undefined ? {} : palette.toArray()[styleRef];
-  const extra: { fc?: string; a?: 'l' } = {};
-  if (t.color) extra.fc = t.color;
-  if (t.isText && !base.a && t.text !== '' && (NUMERIC_LOOKING_TEXT.test(t.text) || base.fmt || base.nf)) extra.a = 'l';
-  return extra.fc || extra.a ? palette.register({ ...base, ...extra }) : styleRef;
+  const left = Boolean(t.isText) && !base.a && t.text !== '' && (Boolean(base.fmt || base.nf) || NUMERIC_LOOKING_TEXT.test(t.text));
+  if (!t.color && !left) return styleRef;
+  return palette.registerVariant(styleRef, t.color, left);
 }
 
 /** ExcelJS 칸 → 그리드 칸(표시·값·서식). 값도 서식도 없으면 null — parseXlsxToGrid와 스트리밍 읽기(lazyGridStore)가 함께 쓴다 */
@@ -588,8 +587,13 @@ function hashOverflowingNumbers(sheet: GridSheet, styles: readonly GridStyle[]):
       const cell = cells[c];
       if (cell === 0 || cell.s === undefined || cell.v === '') continue;
       const style = styles[cell.s];
-      if (!style.fmt || isTextNumFmt(style.fmt) || style.w || merged.has(`${r}:${c}`) || !isNumberOrDateValue(gridCellValue(cell))) continue;
-      const shown = hashIfTooWide(cell.v, sheet.colWidths[c] ?? sheet.defaultColWidth, style.fs ?? EXCEL_DEFAULT_FONT_PX);
+      if (!style.fmt || isTextNumFmt(style.fmt) || style.w) continue;
+      const width = sheet.colWidths[c] ?? sheet.defaultColWidth;
+      const fontPx = style.fs ?? EXCEL_DEFAULT_FONT_PX;
+      // 한글이 없고 모든 글자를 가장 넓게(0.55em) 잡아도 들어가면 볼 것도 없다 — 큰 시트의 거의 모든 칸이 여기서 끝난다
+      if (cell.v.length * fontPx * 0.55 + 2 <= width && !/[⺀-￿]/.test(cell.v)) continue;
+      if (merged.has(`${r}:${c}`) || !isNumberOrDateValue(gridCellValue(cell))) continue;
+      const shown = hashIfTooWide(cell.v, width, fontPx);
       if (shown !== cell.v) cells[c] = { ...cell, v: shown, n: gridCellValue(cell) };
     }
   });
@@ -623,6 +627,19 @@ export class StylePalette {
 
   toArray(): GridStyle[] {
     return this.styles;
+  }
+
+  private readonly variants = new Map<string, number | undefined>();
+  /** base 서식에 서식 코드 색(fc)·왼쪽 정렬을 더한 서식 — 큰 시트에서 칸마다 JSON을 만들지 않게 조합별로 기억한다 */
+  registerVariant(base: number | undefined, fc: string | undefined, left: boolean): number | undefined {
+    const key = `${base}|${fc ?? ''}|${left ? 1 : 0}`;
+    if (this.variants.has(key)) return this.variants.get(key);
+    const style: { -readonly [K in keyof GridStyle]?: GridStyle[K] } = { ...(base === undefined ? {} : this.styles[base]) };
+    if (fc) style.fc = fc;
+    if (left) style.a = 'l';
+    const index = this.register(style);
+    this.variants.set(key, index);
+    return index;
   }
 }
 

@@ -54,8 +54,19 @@ export function serialToDateText(serial: number): string {
 /** 엑셀 표시 형식 코드가 날짜/시각 형식인지 — 따옴표 안 문자열·[색]/[$통화] 대괄호·이스케이프를
  * 걷어낸 뒤 연/월/일/시 토큰(y, d, h, 그리고 시간 문맥이 아닌 m)이 남아 있으면 날짜로 본다.
  * 경과 시간 형식([h]:mm)은 대괄호를 걷어내 판단하지 않는다(날짜가 아니라 기간이다). */
+const dateNumFmtMemo = new Map<string, boolean>();
 export function isDateNumFmt(numFmt: string | undefined): boolean {
   if (!numFmt || numFmt === 'General' || numFmt === '@') return false;
+  // 큰 시트는 같은 서식 코드로 수십만 번 묻는다 — 코드별로 기억한다(종류는 파일마다 수십 개)
+  const known = dateNumFmtMemo.get(numFmt);
+  if (known !== undefined) return known;
+  if (dateNumFmtMemo.size > 500) dateNumFmtMemo.clear();
+  const result = isDateNumFmtUncached(numFmt);
+  dateNumFmtMemo.set(numFmt, result);
+  return result;
+}
+
+function isDateNumFmtUncached(numFmt: string): boolean {
   const stripped = numFmt
     .replace(/"[^"]*"/g, '')
     .replace(/\[[^\]]*\]/g, '')
