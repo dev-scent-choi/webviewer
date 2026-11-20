@@ -32,9 +32,10 @@ if (missing.length && process.platform === 'win32') {
 }
 
 const env = { ...process.env, DOCVIEW_PORT: String(PORT), DOCVIEW_HOST: '127.0.0.1', DOCVIEW_DATA_DIR: path.join(run, 'data'), TMP: path.join(run, 'tmp'), TEMP: path.join(run, 'tmp'), DOCVIEW_LO_PROFILE_ROOT: path.join(run, 'lo') };
-const server = spawn(process.execPath, ['node_modules/tsx/dist/cli.mjs', 'src/server.ts'], { env, stdio: ['ignore', 'pipe', 'pipe'] });
-const log = fs.createWriteStream(path.join(run, 'server-audit.log'));
-server.stdout.pipe(log); server.stderr.pipe(log);
+// 서버 로그는 파일에 바로 쓴다 — 파이프로 받으면 아래 spawnSync(캡처)가 도는 동안 아무도 파이프를 비우지 않아, Windows에서
+// 파이프 버퍼(약 64KB)가 차는 순간 서버가 통째로 멈췄다(p03~p04에서 fetch failed — 검토 I6).
+const logFd = fs.openSync(path.join(run, 'server-audit.log'), 'w');
+const server = spawn(process.execPath, ['node_modules/tsx/dist/cli.mjs', 'src/server.ts'], { env, stdio: ['ignore', logFd, logFd] });
 try {
   const base = `http://127.0.0.1:${PORT}`;
   for (let i = 0; ; i += 1) {
