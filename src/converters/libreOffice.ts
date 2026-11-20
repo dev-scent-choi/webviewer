@@ -240,6 +240,51 @@ function literalizeThemeFontsXml(xml: string, themeXml: string): string {
  * 변환 전에 테마 참조를 theme1.xml이 가리키는 실제 서체 이름으로 미리 박아 넣으면 이 문제를
  * 피할 수 있다. 테마 파일이 없으면 원본을 그대로 반환한다.
  */
+/** 본문 가장자리에서 이만큼(1.5cm, EMU) 안에 붙은 떠 있는 개체만 "가장자리 개체"로 본다 */
+const EDGE_EMU = 540000;
+const DXA_TO_EMU = 635;
+
+/**
+ * 보기 화면용 변환 사본(document.xml)에서만 고치는 LibreOffice와 Word의 배치 차이 — 원본 파일은 그대로다.
+ *  - 본문 가장자리에 붙은 떠 있는 글상자·그림의 "양쪽으로 글 흐름"(bothSides): LibreOffice는 가장자리 쪽 좁은 틈에도 글을 흘려 한 글자씩
+ *    세로로 남긴다(Word는 비운다) → "넓은 쪽에만"(largest). 가운데쯤 놓인 개체는 Word도 양쪽으로 흘리므로 그대로 둔다.
+ *  - 표 열 너비: LibreOffice는 w:tblGrid를, Word는 칸 너비(w:tcW)를 따른다 → 병합 칸·표 안 표가 없는 단순한 표만 tblGrid를 첫 행 tcW로 맞춘다.
+ */
+export function docxViewLayoutFixes(documentXml: string): string {
+  const sect = /<w:sectPr\b[\s\S]*?<\/w:sectPr>(?![\s\S]*<w:sectPr\b)/.exec(documentXml)?.[0] ?? '';
+  const pageW = Number(/<w:pgSz\b[^>]*\bw:w="(\d+)"/.exec(sect)?.[1]);
+  const marL = Number(/<w:pgMar\b[^>]*\bw:left="(\d+)"/.exec(sect)?.[1] ?? 1440);
+  const marR = Number(/<w:pgMar\b[^>]*\bw:right="(\d+)"/.exec(sect)?.[1] ?? 1440);
+  const contentEmu = Number.isFinite(pageW) ? (pageW - marL - marR) * DXA_TO_EMU : null;
+  const wrapped = documentXml.replace(/<wp:anchor\b[\s\S]*?<\/wp:anchor>/g, (anchor) => {
+    if (!/wrapText="bothSides"/.test(anchor)) return anchor;
+    const posH = /<wp:positionH\b[^>]*\brelativeFrom="(\w+)"[^>]*>([\s\S]*?)<\/wp:positionH>/.exec(anchor);
+    const align = /<wp:align>(\w+)<\/wp:align>/.exec(posH?.[2] ?? '')?.[1];
+    let atEdge = align === 'left' || align === 'right' || align === 'inside' || align === 'outside';
+    const offset = Number(/<wp:posOffset>(-?\d+)<\/wp:posOffset>/.exec(posH?.[2] ?? '')?.[1]);
+    const cx = Number(/<wp:extent\b[^>]*\bcx="(\d+)"/.exec(anchor)?.[1]);
+    if (!align && posH && contentEmu && Number.isFinite(offset) && Number.isFinite(cx)) {
+      const left = posH[1] === 'page' ? offset - marL * DXA_TO_EMU : offset;
+      atEdge = left <= EDGE_EMU || contentEmu - (left + cx) <= EDGE_EMU;
+    }
+    return atEdge ? anchor.replace(/(<wp:wrap(?:Square|Tight|Through)\b[^>]*\bwrapText=")bothSides"/, '$1largest"') : anchor;
+  });
+  return simpleTableGridsFromCellWidths(wrapped);
+}
+
+/** 병합 칸·표 안 표가 없는 표의 w:tblGrid를 첫 행 칸 너비(dxa)로 — 칸 수와 열 수가 같을 때만 */
+function simpleTableGridsFromCellWidths(xml: string): string {
+  return xml.replace(/<w:tbl>((?:(?!<w:tbl>)[\s\S])*?)<\/w:tbl>/g, (table, inner: string) => {
+    if (/<w:gridSpan\b|<w:hMerge\b/.test(inner)) return table;
+    const firstRow = /<w:tr\b[\s\S]*?<\/w:tr>/.exec(inner)?.[0] ?? '';
+    const widths = [...firstRow.matchAll(/<w:tcW\b([^>]*)\/>/g)].map((m) => (/\bw:type="dxa"/.test(m[1]) || !/\bw:type=/.test(m[1]) ? Number(/\bw:w="(\d+)"/.exec(m[1])?.[1]) : NaN));
+    const cols = (inner.match(/<w:gridCol\b/g) ?? []).length;
+    if (widths.length === 0 || widths.length !== cols || !widths.every((w) => Number.isFinite(w) && w > 0)) return table;
+    let i = 0;
+    return table.replace(/<w:tblGrid>[\s\S]*?<\/w:tblGrid>/, (grid) => grid.replace(/<w:gridCol\b[^>]*\/>/g, () => `<w:gridCol w:w="${widths[i++]}"/>`));
+  });
+}
+
 export function literalizeDocxThemeFonts(docxBytes: Uint8Array): Uint8Array {
   const entries = guardedUnzipSync(docxBytes, 'literalizeDocxThemeFonts');
   const themeXmlBytes = entries['word/theme/theme1.xml'];
@@ -251,9 +296,7 @@ export function literalizeDocxThemeFonts(docxBytes: Uint8Array): Uint8Array {
     if (!bytes) continue;
     const xml = strFromU8(bytes);
     let out = themeXml ? literalizeThemeFontsXml(xml, themeXml) : xml;
-    // 떠 있는 글상자·그림의 "양쪽으로 글 흐름" — LibreOffice는 좁은 틈에도 글을 흘려 오른쪽에 한 글자씩 세로로 남긴다(Word는
-    // 좁은 쪽은 비운다). "넓은 쪽에만"으로 바꾸면 Word와 같은 모양이 된다(보기용 변환 사본만 — 원본 파일은 그대로).
-    if (name === 'word/document.xml') out = out.replace(/(<wp:wrap(?:Square|Tight|Through)\b[^>]*\bwrapText=")bothSides"/g, '$1largest"');
+    if (name === 'word/document.xml') out = docxViewLayoutFixes(out);
     if (out !== xml) {
       updated[name] = strToU8(out);
       changed = true;
