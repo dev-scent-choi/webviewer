@@ -71,7 +71,8 @@ export function builtinAbstractNumXml(numId: string, abstractId: number): string
       `<w:lvl w:ilvl="${i}"><w:start w:val="1"/><w:numFmt w:val="${l.numFmt}"/><w:lvlText w:val="${esc(l.lvlText)}"/><w:lvlJc w:val="left"/>` +
       `<w:pPr><w:ind w:left="${l.left}" w:hanging="${l.hanging}"/></w:pPr></w:lvl>`)
     .join('');
-  return `<w:abstractNum w:abstractNumId="${abstractId}"><w:multiLevelType w:val="hybridMultilevel"/>${levels}</w:abstractNum>`;
+  // w:name이 표지 — 다음 저장 때 이 정의를 찾아 다시 쓴다(저장마다 정의가 늘지 않게, CT_AbstractNum 순서: multiLevelType → name → lvl)
+  return `<w:abstractNum w:abstractNumId="${abstractId}"><w:multiLevelType w:val="hybridMultilevel"/><w:name w:val="${numId}"/>${levels}</w:abstractNum>`;
 }
 
 /** 수준 정의 — 문서 정의, 없으면 편집기 기본 번호 */

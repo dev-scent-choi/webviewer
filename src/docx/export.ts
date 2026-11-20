@@ -703,27 +703,41 @@ function ensureBuiltinLists(doc: PMNode, entries: Record<string, Uint8Array>): M
   if (used.size === 0) return ids;
   const existing = entries['word/numbering.xml'];
   let xml = existing ? strFromU8(existing) : `${DOCUMENT_XML_HEADER}<w:numbering xmlns:w="${NS_W}"></w:numbering>`;
+  const before = xml;
   const maxOf = (attr: string) => Math.max(0, ...[...xml.matchAll(new RegExp(`${attr}="(\\d+)"`, 'g'))].map((m) => Number(m[1])));
-  let nextAbstract = maxOf('w:abstractNumId') + 1;
-  let nextNum = maxOf('w:numId') + 1;
-  let abstracts = '';
-  let nums = '';
   for (const id of BUILTIN_LISTS.filter((l) => used.has(l.id)).map((l) => l.id)) {
-    abstracts += builtinAbstractNumXml(id, nextAbstract);
-    nums += `<w:num w:numId="${nextNum}"><w:abstractNumId w:val="${nextAbstract}"/></w:num>`;
-    ids.set(id, String(nextNum));
-    nextAbstract += 1;
-    nextNum += 1;
+    // 앞선 저장이 더한 정의(w:name 표지)가 있으면 그 번호를 다시 쓴다 — 저장마다 정의가 늘거나 numId가 바뀌지 않게
+    const abstractId = new RegExp(`<w:abstractNum\\b[^>]*w:abstractNumId="(\\d+)"[^>]*>(?:(?!</w:abstractNum>)[\\s\\S])*<w:name w:val="${id}"/>`).exec(xml)?.[1]
+      ?? String(maxOf('w:abstractNumId') + 1);
+    if (!new RegExp(`w:abstractNumId="${abstractId}"`).test(xml)) xml = insertAbstractNum(xml, builtinAbstractNumXml(id, Number(abstractId)));
+    let numId = new RegExp(`<w:num w:numId="(\\d+)"><w:abstractNumId w:val="${abstractId}"/></w:num>`).exec(xml)?.[1];
+    if (!numId) {
+      numId = String(maxOf('w:numId') + 1);
+      xml = insertNum(xml, `<w:num w:numId="${numId}"><w:abstractNumId w:val="${abstractId}"/></w:num>`);
+    }
+    ids.set(id, numId);
   }
-  // CT_Numbering 순서: abstractNum들이 num들보다 앞
-  xml = /<w:num\b/.test(xml) ? xml.replace(/<w:num\b/, `${abstracts}<w:num`) : xml.replace(/<\/w:numbering>/, `${abstracts}</w:numbering>`);
-  xml = xml.replace(/<\/w:numbering>/, `${nums}</w:numbering>`);
+  if (xml === before) return ids;
   entries['word/numbering.xml'] = strToU8(xml);
   if (!existing) {
     registerPart(entries, '/word/numbering.xml', 'application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml',
       'http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering', 'numbering.xml', 'rIdDocviewNumbering');
   }
   return ids;
+}
+
+/** CT_Numbering 순서(numPicBullet* → abstractNum* → num* → numIdMacAtCleanup): 새 abstractNum은 첫 num 앞(없으면 numIdMacAtCleanup 앞, 없으면 끝) */
+function insertAbstractNum(xml: string, abstractNum: string): string {
+  const at = [/<w:num\b/, /<w:numIdMacAtCleanup\b/, /<\/w:numbering>/].map((re) => re.exec(xml)?.index ?? -1).find((i) => i >= 0)!;
+  return xml.slice(0, at) + abstractNum + xml.slice(at);
+}
+
+/** 새 num은 마지막 num 뒤(없으면 numIdMacAtCleanup 앞, 없으면 끝) */
+function insertNum(xml: string, num: string): string {
+  const nums = [...xml.matchAll(/<w:num\b[^>]*\/>|<w:num\b[^>]*>[\s\S]*?<\/w:num>/g)];
+  const last = nums[nums.length - 1];
+  const at = last ? last.index! + last[0].length : [/<w:numIdMacAtCleanup\b/, /<\/w:numbering>/].map((re) => re.exec(xml)?.index ?? -1).find((i) => i >= 0)!;
+  return xml.slice(0, at) + num + xml.slice(at);
 }
 
 /** 새로 만든 파트를 콘텐츠 형식과 문서 관계에 등록한다 */
