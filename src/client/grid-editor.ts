@@ -30,6 +30,9 @@ import { currentRegion, setupGridCharts } from './gridCharts.js';
 import { setupGridLinks, type GridLinks } from './gridLinks.js';
 import {
   CF_PRESETS,
+  cfEngineRanges,
+  cfRangeTableFromCounts,
+  cfRuleTooCostly,
   computeStats,
   GRID_COND_FORMATS_MAP,
   needsStats,
@@ -38,6 +41,7 @@ import {
   subtractRect,
   type CfEnv,
   type CfFormulaFallback,
+  type CfRect,
   type CfRule,
   type CfStats,
   type CondFormatEntry,
@@ -3249,37 +3253,99 @@ async function main(): Promise<void> {
   function cfStatsNow(): ReadonlyMap<string, CfStats> {
     if (cfStats && cfStatsSheet === activeSheet) return cfStats;
     const next = new Map<string, CfStats>();
-    const withStats = cfEntries().filter((e) => needsStats(e.rule));
-    if (withStats.length > 0) {
-      const values = new Map<string, string[]>(withStats.map((e) => [e.id, []]));
+    const { rows, cols } = cfExtent();
+    const local: CondFormatEntry[] = [];
+    for (const e of cfEntries()) {
+      if (!needsStats(e.rule)) continue;
+      // 범위가 불러오지 않은 페이지까지 걸치면 서버가 센 값으로(편집 화면은 보고 있는 페이지의 칸만 가진다)
+      const remote = e.ranges.map((r) => cfRemoteRange(r.r0, r.c0, Math.min(r.r1, rows - 1), Math.min(r.c1, cols - 1)));
+      if (remote.every((x) => x === null) || remote.some((x) => x === undefined || x === 'skipped')) {
+        if (remote.includes('skipped')) showCfSkipNotice();
+        local.push(e); // 아직 안 왔으면 불러온 값으로 먼저 칠하고, 도착하면 다시 칠한다
+        continue;
+      }
+      const values: string[] = [];
+      remote.forEach((x, k) => {
+        if (x === null) {
+          const r = e.ranges[k];
+          for (let row = r.r0; row <= Math.min(r.r1, rows - 1); row += 1) for (let col = r.c0; col <= Math.min(r.c1, cols - 1); col += 1) values.push(cfValueAt(row, col));
+        } else if (x && x !== 'skipped') for (const [v, n] of x.values) for (let m = 0; m < n; m += 1) values.push(v);
+      });
+      next.set(e.id, computeStats(e.rule, values));
+    }
+    if (local.length > 0) {
+      const values = new Map<string, string[]>(local.map((e) => [e.id, []]));
       const prefix = `${activeSheet}:`;
       for (const key of cells.keys()) {
         if (!key.startsWith(prefix)) continue;
         const at = parseGridCellKey(key);
         if (!at) continue;
-        for (const e of withStats) if (e.ranges.some((r) => rectContains(r, at.row, at.col))) values.get(e.id)?.push(cfValueAt(at.row, at.col));
+        for (const e of local) if (e.ranges.some((r) => rectContains(r, at.row, at.col))) values.get(e.id)?.push(cfValueAt(at.row, at.col));
       }
-      for (const e of withStats) next.set(e.id, computeStats(e.rule, values.get(e.id) ?? []));
+      for (const e of local) next.set(e.id, computeStats(e.rule, values.get(e.id) ?? []));
     }
     cfStats = next;
     cfStatsSheet = activeSheet;
     return next;
   }
+  const cfExtent = (): { rows: number; cols: number } => {
+    const sheet = structure.get(String(activeSheet));
+    return { rows: sheet?.rowCount ?? 0, cols: sheet?.colCount ?? 0 };
+  };
   function applyCondFormatOverlay(td: HTMLTableCellElement): void {
+    if (td.dataset.row === undefined) return;
+    if (cfEntries().length === 0 && td.dataset.cf === undefined) return;
+    // 그리는 중(같은 작업 안)에는 CF_SYNC_MS까지만 바로 칠하고 나머지는 나눠 칠한다 — 무거운 규칙이 화면 그리기를 막지 않게
+    const now = performance.now();
+    if (now - cfSync.start > 50) {
+      cfSync.start = now;
+      cfSync.spent = 0;
+    }
+    if (cfSync.spent < CF_SYNC_MS && cfQueue.size === 0) {
+      paintCondFormat(td);
+      cfSync.spent += performance.now() - now;
+      return;
+    }
+    cfQueue.add(td);
+    if (!cfPumpTimer) cfPumpTimer = window.setTimeout(pumpCondFormats, 0);
+  }
+  // 조건부 서식 칠하기 줄 — 한 번에 CF_SLICE_MS만 칠하고 양보한다. 한 줄(화면 한 번 칠하기)에 CF_PASS_BUDGET_MS(보기 화면
+  // 굽기와 같은 예산)를 넘게 쓰면 나머지는 칠하지 않고 "일부 생략"을 알린다.
+  const CF_SYNC_MS = 8;
+  const CF_SLICE_MS = 30;
+  const CF_PASS_BUDGET_MS = 2_000;
+  const cfSync = { start: 0, spent: 0 };
+  const cfQueue = new Set<HTMLTableCellElement>();
+  let cfPumpTimer = 0;
+  let cfPassSpent = 0;
+  function pumpCondFormats(): void {
+    cfPumpTimer = 0;
+    const t0 = performance.now();
+    for (const td of cfQueue) {
+      cfQueue.delete(td);
+      if (td.isConnected) paintCondFormat(td);
+      if (performance.now() - t0 > CF_SLICE_MS) break;
+    }
+    cfPassSpent += performance.now() - t0;
+    if (cfQueue.size === 0) {
+      cfPassSpent = 0;
+      return;
+    }
+    if (cfPassSpent > CF_PASS_BUDGET_MS) {
+      cfQueue.clear();
+      cfPassSpent = 0;
+      showCfSkipNotice();
+      return;
+    }
+    cfPumpTimer = window.setTimeout(pumpCondFormats, 0);
+  }
+  function paintCondFormat(td: HTMLTableCellElement): void {
     const row = Number(td.dataset.row);
     const col = Number(td.dataset.col);
-    if (!Number.isInteger(row) || !Number.isInteger(col) || td.dataset.row === undefined) return;
-    const entries = cfEntries();
-    if (entries.length === 0 && td.dataset.cf === undefined) return;
+    if (!Number.isInteger(row) || !Number.isInteger(col)) return;
     // 이 행에 걸린 규칙만 본다(조각난 규칙 수천 개에서 칸마다 전부 훑지 않게 — 보기 화면 굽기와 같은 색인)
-    const rowEntries = entries.length > 0 ? cfRowEntries(row) : [];
-    // 한 번 칠하기(화면 전체)에 쓰는 시간 상한 — 넘으면 나머지 칸은 칠하지 않고 알린다(무거운 규칙이 화면을 멈추지 않게)
-    const overBudget = cfPaintBudget.started > 0 && performance.now() - cfPaintBudget.started > CF_PAINT_BUDGET_MS;
-    if (overBudget && !cfPaintBudget.skipped) {
-      cfPaintBudget.skipped = true;
-      showCfSkipNotice();
-    }
-    const paint = rowEntries.length > 0 && !overBudget ? paintCell(rowEntries, row, col, cfValueAt(row, col), cfStatsNow(), cfValueAt, cfEnvNow()) : null;
+    const rowEntries = cfEntries().length > 0 ? cfRowEntries(row) : [];
+    const paint = rowEntries.length > 0 ? paintCell(rowEntries, row, col, cfValueAt(row, col), cfStatsNow(), cfValueAt, cfEnvNow()) : null;
     if (!paint && td.dataset.cf === undefined) return;
     // 기본 서식(applyStyleToTd와 같은 값)으로 되돌린 뒤 규칙 색을 얹는다 — 규칙이 더는 안 맞으면 원래 모습이 된다
     const own = styles.get(gridCellKey(activeSheet, row, col));
@@ -3331,33 +3397,119 @@ async function main(): Promise<void> {
     })
     .catch(() => undefined);
   // 행마다 걸리는 규칙 — 화면에 그리는 행만 그때그때 골라 기억한다(시트 전체 행 배열을 미리 만들지 않는다)
-  let cfIndex: { sheet: number; entries: readonly CondFormatEntry[]; byRow: Map<number, readonly CondFormatEntry[]> } | null = null;
+  let cfIndex: { sheet: number; entries: readonly CondFormatEntry[]; usable: readonly CondFormatEntry[]; byRow: Map<number, readonly CondFormatEntry[]> } | null = null;
   function cfRowEntries(row: number): readonly CondFormatEntry[] {
     const entries = cfEntries();
-    if (!cfIndex || cfIndex.sheet !== activeSheet || cfIndex.entries !== entries) cfIndex = { sheet: activeSheet, entries, byRow: new Map() };
+    if (!cfIndex || cfIndex.sheet !== activeSheet || cfIndex.entries !== entries) {
+      const { rows, cols } = cfExtent();
+      const usable = entries.filter((e) => {
+        const skip = cfRuleTooCostly(e, rows, cols) || cfEngineRanges(e, rows, cols).some((r) => !rowsArrived(r.r0, r.r1));
+        if (skip) showCfSkipNotice();
+        return !skip;
+      });
+      cfIndex = { sheet: activeSheet, entries, usable, byRow: new Map() };
+    }
     let list = cfIndex.byRow.get(row);
     if (!list) {
-      list = entries.filter((e) => e.ranges.some((r) => row >= r.r0 && row <= r.r1));
+      list = cfIndex.usable.filter((e) => e.ranges.some((r) => row >= r.r0 && row <= r.r1));
       if (cfIndex.byRow.size > 2000) cfIndex.byRow.clear();
       cfIndex.byRow.set(row, list);
     }
     return list;
   }
-  // 범위 함수(COUNTIF 등)의 범위 값 표 — 칸 값이 바뀌면(scheduleCfRepaint) 새로
+  // 범위 함수(COUNTIF 등)의 범위 값 표 — 칸 값이 바뀌면(onCfDataChanged) 새로. 불러오지 않은 페이지까지 걸친 범위는 서버 표로
   let cfEnv: CfEnv | null = null;
   function cfEnvNow(): CfEnv {
     cfEnv ??= {
       ...(cfFallback ? { fallback: cfFallback } : {}),
       tables: new Map(),
-      extent: () => {
-        const sheet = structure.get(String(activeSheet));
-        return { rows: sheet?.rowCount ?? 0, cols: sheet?.colCount ?? 0 };
+      extent: cfExtent,
+      remote: (r0, c0, r1, c1) => {
+        const x = cfRemoteRange(r0, c0, r1, c1);
+        if (x === 'skipped') showCfSkipNotice();
+        return x && x !== 'skipped' ? cfRangeTableFromCounts(x.cells, x.values) : undefined;
       },
     };
     return cfEnv;
   }
-  const CF_PAINT_BUDGET_MS = 300;
-  const cfPaintBudget = { started: 0, skipped: false };
+  // ---------- 서버 범위 값 개수 표(/api/view/xlsx-cf-ranges) ----------
+  // 편집 화면은 보고 있는 페이지(500행 단위)만 받는다. 범위 전체를 보아야 하는 규칙(COUNTIF($A:$A,$A1)>1·중복·상위·색조 …)이
+  // 불러오지 않은 행까지 걸치면 서버(편집 방의 지금 상태)가 센 표를 쓴다. 칸 값이 바뀌면 리비전을 붙여 다시 물어
+  // (같으면 서버가 표를 다시 보내지 않는다) 편집으로 생기거나 없어진 중복이 반영된다.
+  type CfRemote = { readonly cells: number; readonly values: ReadonlyArray<readonly [string, number]> } | 'skipped';
+  const cfRemote = { sheet: -1, rev: undefined as number | undefined, byKey: new Map<string, CfRemote>(), wanted: new Map<string, CfRect>(), timer: 0, busy: false };
+  const cfRectKey = (r: CfRect) => `${r.r0}:${r.c0}:${r.r1}:${r.c1}`;
+  function rowsArrived(r0: number, r1: number): boolean {
+    const arrived = arrivedPages.get(activeSheet);
+    if (!arrived) return false;
+    for (let page = Math.floor(r0 / PAGE_SIZE_ROWS); page <= Math.floor(Math.max(r0, r1) / PAGE_SIZE_ROWS); page += 1) if (!arrived.has(page)) return false;
+    return true;
+  }
+  /** 불러온 행 안이면 null(직접 센다), 서버 표가 있으면 그 표, 아직 없으면 물어 두고 undefined */
+  function cfRemoteRange(r0: number, c0: number, r1: number, c1: number): CfRemote | null | undefined {
+    if (r1 < r0 || c1 < c0 || rowsArrived(r0, r1)) return null;
+    if (cfRemote.sheet !== activeSheet) {
+      cfRemote.sheet = activeSheet;
+      cfRemote.rev = undefined;
+      cfRemote.byKey.clear();
+      cfRemote.wanted.clear();
+    }
+    const rect = { r0, c0, r1, c1 };
+    const hit = cfRemote.byKey.get(cfRectKey(rect));
+    if (hit) return hit;
+    cfRemote.wanted.set(cfRectKey(rect), rect);
+    scheduleCfRemoteFetch(0);
+    return undefined;
+  }
+  function scheduleCfRemoteFetch(delay: number): void {
+    if (cfRemote.timer) return;
+    cfRemote.timer = window.setTimeout(() => {
+      cfRemote.timer = 0;
+      void fetchCfRemote();
+    }, delay);
+  }
+  async function fetchCfRemote(): Promise<void> {
+    if (cfRemote.busy) {
+      scheduleCfRemoteFetch(200);
+      return;
+    }
+    const sheet = cfRemote.sheet;
+    const known = [...cfRemote.byKey.keys()].filter((k) => !cfRemote.wanted.has(k)).map((k) => {
+      const [r0, c0, r1, c1] = k.split(':').map(Number);
+      return { r0, c0, r1, c1 };
+    });
+    const rects = [...cfRemote.wanted.values(), ...known].slice(0, 64);
+    if (rects.length === 0) return;
+    const revalidate = cfRemote.wanted.size === 0 && cfRemote.rev !== undefined;
+    cfRemote.wanted.clear();
+    cfRemote.busy = true;
+    try {
+      const res = await fetch(`/api/view/xlsx-cf-ranges?token=${encodeURIComponent(token)}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ sheet, ranges: rects, ...(revalidate ? { rev: cfRemote.rev } : {}) }),
+      });
+      const json = (await res.json()) as { data?: { rev: number; ranges?: Array<CfRect & ({ cells: number; values: Array<[string, number]> } | { skipped: true })> } };
+      if (sheet !== cfRemote.sheet) return;
+      if (!json.data) {
+        // 물을 수 없으면(편집 방이 없음 등) 그 범위는 불러온 값으로만 칠하고 "일부 생략"을 알린다
+        for (const r of rects) cfRemote.byKey.set(cfRectKey(r), 'skipped');
+      } else {
+        cfRemote.rev = json.data.rev === -1 ? undefined : json.data.rev;
+        for (const r of json.data.ranges ?? []) cfRemote.byKey.set(cfRectKey(r), 'skipped' in r ? 'skipped' : { cells: r.cells, values: r.values });
+        if (json.data.rev === -1) scheduleCfRemoteFetch(300); // 세는 사이 편집이 들어왔다 — 다시 묻는다
+        if (!json.data.ranges) return; // 바뀐 것 없음
+      }
+      cfStats = null;
+      cfEnv = null;
+      scheduleCfRepaint();
+    } catch {
+      for (const r of rects) cfRemote.wanted.set(cfRectKey(r), r);
+      scheduleCfRemoteFetch(5_000);
+    } finally {
+      cfRemote.busy = false;
+    }
+  }
   function showCfSkipNotice(): void {
     const el = document.getElementById('cf-skip-notice');
     if (el) el.hidden = false;
@@ -3373,33 +3525,34 @@ async function main(): Promise<void> {
     void import('../xlsx/cfFormulaEngine.js')
       .then(({ createCfFormulaFallback }) => {
         cfEnv = null;
-        cfFallback = createCfFormulaFallback(cfValueAt, () => {
-          const sheet = structure.get(String(activeSheet));
-          return { rows: sheet?.rowCount ?? 0, cols: sheet?.colCount ?? 0 };
-        });
+        cfFallback = createCfFormulaFallback(cfValueAt, cfExtent);
         scheduleCfRepaint();
       })
       .catch(() => undefined);
   }
-  // 값·계산 결과·규칙이 바뀌면 통계를 버리고 화면 칸을 한 번에 다시 칠한다(한 칸이 바뀌어도 상위 10개·중복 판정은 다른 칸이 바뀐다)
-  let cfRepaintQueued = false;
-  function scheduleCfRepaint(): void {
+  // 값·계산 결과·규칙이 바뀌면 통계·범위 표·규칙 색인을 버리고 화면 칸을 다시 칠한다(한 칸이 바뀌어도 상위 10개·중복 판정은 다른 칸이 바뀐다)
+  function onCfDataChanged(): void {
     cfStats = null;
     cfEnv = null;
+    cfIndex = null; // 페이지가 도착하면 불러온 행이 늘어 건너뛰던 규칙을 칠할 수 있다
     ensureCfEngine();
+    if (cfRemote.byKey.size > 0 && cfRemote.sheet === activeSheet) scheduleCfRemoteFetch(300);
+    scheduleCfRepaint();
+  }
+  let cfRepaintQueued = false;
+  function scheduleCfRepaint(): void {
     if (cfRepaintQueued) return;
     if (cfEntries().length === 0 && !tableEl.querySelector('td[data-cf]')) return;
     cfRepaintQueued = true;
     requestAnimationFrame(() => {
       cfRepaintQueued = false;
-      cfPaintBudget.started = performance.now();
-      tableEl.querySelectorAll<HTMLTableCellElement>('td[data-row]').forEach(applyCondFormatOverlay);
-      cfPaintBudget.started = 0;
+      tableEl.querySelectorAll<HTMLTableCellElement>('td[data-row]').forEach((td) => cfQueue.add(td));
+      if (!cfPumpTimer) cfPumpTimer = window.setTimeout(pumpCondFormats, 0);
     });
   }
-  cells.observe(scheduleCfRepaint);
-  computed.observe(scheduleCfRepaint);
-  condFormats.observe(scheduleCfRepaint);
+  cells.observe(onCfDataChanged);
+  computed.observe(onCfDataChanged);
+  condFormats.observe(onCfDataChanged);
 
   function addCondFormat(rule: CfRule): void {
     if (!canEdit || !activeCellKey) return;

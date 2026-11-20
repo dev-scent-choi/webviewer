@@ -226,3 +226,17 @@ describe('검토 r3 — 시트 XML 풀기 실패', () => {
     expect(out.sheets).toBe(grid.sheets);
   });
 });
+
+describe('무거운 규칙 어림(보기·편집 화면 공통 — 검토 r3 E1)', () => {
+  test('2만 행 SUMPRODUCT 규칙은 건너뛰고, COUNTIF·작은 범위는 칠한다', async () => {
+    const { cfRuleTooCostly, cfEngineRanges } = await import('../src/collab/condFormatShared.js');
+    const entry = (f: string, r1 = 19_999) => ({ id: 'x', ranges: [{ r0: 0, c0: 0, r1, c1: 0 }], rule: { t: 'expr' as const, f, s: { bg: '#FF0000' } } });
+    expect(cfRuleTooCostly(entry('SUMPRODUCT(($A$1:$A$20000=$A1)*1)>1'), 20_000, 5)).toBe(true);
+    expect(cfRuleTooCostly(entry('COUNTIF($A:$A,$A1)>1'), 20_000, 5)).toBe(false);
+    expect(cfEngineRanges(entry('COUNTIF($A:$A,$A1)>1'), 20_000, 5)).toEqual([]);
+    expect(cfRuleTooCostly(entry('SUMPRODUCT(($A$1:$A$50=$A1)*1)>1', 49), 20_000, 5)).toBe(false);
+    expect(cfEngineRanges(entry('SUMPRODUCT(($A$2:$A$50=$A1)*1)>1'), 20_000, 5)).toEqual([{ r0: 1, r1: 49, cols: 1 }]);
+    // 칸 몇 개짜리 규칙이라도 칸 하나가 너무 큰 범위를 읽으면 건너뛴다(칸 하나에 오래 걸린다)
+    expect(cfRuleTooCostly(entry('SUMPRODUCT(($A:$C=$A1)*1)>1', 0), 200_000, 5)).toBe(true);
+  });
+});

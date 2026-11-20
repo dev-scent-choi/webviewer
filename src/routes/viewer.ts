@@ -38,7 +38,8 @@ import {
 } from '../docx/import.js';
 import { MarkupValidationError, addMarkup, deleteMarkup, listMarkup, updateMarkup } from '../markup.js';
 import { touchPresence } from '../presence.js';
-import { flushNow, getCurrentBytes, getChangeLog, getFileCharts, getFileExtras, getFileImages } from '../collab/room.js';
+import { flushNow, getCfRangeValues, getCurrentBytes, getChangeLog, getFileCharts, getFileExtras, getFileImages } from '../collab/room.js';
+import { isCfRangeRequest } from '../xlsx/cfRangeValues.js';
 import {
   buildGridFromOriginal,
   computeLineOffsets,
@@ -917,6 +918,25 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
         request.log.warn(error, 'xlsx extras read failed');
         return { success: true, data: { links: [], lists: [] } };
       }
+    },
+  );
+
+  // 편집 화면 조건부 서식 — 범위 전체를 보아야 하는 규칙(COUNTIF($A:$A,$A1)·중복·상위·색조 …)용 범위 값 개수 표.
+  // 편집 화면은 보고 있는 페이지만 받으므로 서버(편집 방의 지금 상태)가 만들어 준다(src/xlsx/cfRangeValues.ts).
+  app.post<{ Querystring: TokenQuery; Body: { sheet?: unknown; ranges?: unknown; rev?: unknown } }>(
+    '/api/view/xlsx-cf-ranges',
+    { schema: { querystring: tokenQuerySchema }, bodyLimit: 16_384 },
+    async (request, reply) => {
+      const view = await resolveEditorDataView(request.query.token, reply);
+      if (!view) return reply;
+      const body = request.body;
+      if (view.meta.ext !== 'xlsx' || !isCfRangeRequest(body)) {
+        return reply.code(400).send({ success: false, error: '잘못된 요청입니다.' });
+      }
+      const knownRev = typeof request.body.rev === 'number' ? request.body.rev : undefined;
+      const data = await getCfRangeValues(view.meta.id, body.sheet, body.ranges, knownRev);
+      if (!data) return reply.code(409).send({ success: false, error: '편집 방이 열려 있지 않습니다.' });
+      return { success: true, data };
     },
   );
 

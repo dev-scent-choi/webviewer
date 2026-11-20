@@ -95,6 +95,7 @@ import {
   type LazyGridSheetMeta,
   type LazyGridStore,
 } from '../xlsx/lazyGridStore.js';
+import { cfRangeValues, type CfRangeCache, type CfRangeRect, type CfRangeValues } from '../xlsx/cfRangeValues.js';
 import {
   duplicateSlideContent,
   exportPptxFromSlides,
@@ -357,6 +358,8 @@ interface Room {
    * 각 호출이 자기 첫 await까지 동기로 실행돼 양보 없는 블록이 연달아 붙는다.
    */
   canonicalGrowth: Promise<void>;
+  /** xlsx 룸 — 편집 화면 조건부 서식용 범위 값 개수 표(cfRangeValues.ts). 칸 값·행열 구조가 바뀌면 rev가 오르고 비운다 */
+  cfRanges: CfRangeCache;
   /**
    * 지금 진행 중인 "흘려보낸(fire-and-forget) 백그라운드 작업"들 — 페이지 창 반영
    * (reconcilePageSubscriptions), 수식 재계산 체인(recomputeSubscribedPagesInBackground), 셀/서식
@@ -607,6 +610,41 @@ async function applyCellsChangeToCanonical(
     setDirtyCell(store, c.sheetIdx, c.row, c.col, after);
     recordCellChange(room, c.sheetIdx, c.row, c.col, before, after, viewer);
   }
+  bumpCfRanges(room);
+}
+
+/** 칸 값·구조가 바뀌었다 — 편집 화면이 범위 값 표를 다시 묻게 리비전을 올린다 */
+function bumpCfRanges(room: Room): void {
+  room.cfRanges.rev += 1;
+  room.cfRanges.byKey.clear();
+}
+
+/**
+ * 편집 화면 조건부 서식용 범위 값 개수 표(/api/view/xlsx-cf-ranges). knownRev가 지금 리비전과 같으면 표를 다시 보내지 않는다.
+ * 열린 xlsx 편집 방이 없으면 null.
+ */
+export async function getCfRangeValues(
+  docId: string,
+  sheet: number,
+  ranges: readonly CfRangeRect[],
+  knownRev: number | undefined,
+): Promise<{ rev: number; ranges?: CfRangeValues[] } | null> {
+  const room = rooms.get(docId);
+  if (!room?.lazyGrid) return null;
+  await room.ready;
+  const store = room.lazyGrid;
+  if (!store.sheetMeta[sheet]) return null;
+  // 방금 들어온 편집(웹소켓)이 lazyGrid에 다 반영된 뒤에 센다 — 길어도 2초까지만 기다린다
+  let timer: NodeJS.Timeout | undefined;
+  await Promise.race([Promise.all([room.cfRanges.applying, room.canonicalGrowth]), new Promise((resolve) => (timer = setTimeout(resolve, 2_000)))]);
+  clearTimeout(timer);
+  const rev = room.cfRanges.rev;
+  if (knownRev === rev) return { rev };
+  const computed = room.ydoc.getMap<string>(GRID_COMPUTED_MAP);
+  const values = await cfRangeValues(store, sheet, ranges, (r, c) => computed.get(gridCellKey(sheet, r, c)), room.cfRanges);
+  // 계산하는 사이 편집이 들어왔으면 방금 넣은 표는 낡았다 — 비우고, 낡은 리비전(-1)으로 알린다(편집 화면이 다음 변경 때 다시 묻는다)
+  if (room.cfRanges.rev !== rev) room.cfRanges.byKey.clear();
+  return { rev: room.cfRanges.rev === rev ? rev : -1, ranges: values };
 }
 
 /**
@@ -1484,6 +1522,7 @@ async function applyGridStructureOp(room: Room, op: GridStructureOp): Promise<vo
   // 이 연산을 기록한다 — 내보내기(exportXlsxFromGrid)가 원본을 다시 로드한 워크북에 같은 순서로
   // 재생하기 위한 로그다.
   room.structuralOps.push({ sheet: op.sheet, kind: op.kind, at: op.at, count: op.count });
+  bumpCfRanges(room);
   // 행/열 삽입·삭제는 Yjs 쓰기가 없을 수도 있다(병합·채워진 페이지가 없으면) — 직접 편집으로 표시한다
   room.editedSinceSave = true;
   scheduleAutosave(room);
@@ -1579,7 +1618,9 @@ async function seedRoom(room: Room): Promise<void> {
         // applyCellsChangeToCanonical은 이제 async다(LazyGridStore.getCell이 디스크를 읽어야 할
         // 수도 있어서) — Yjs observe 콜백 자체는 동기여야 하므로 흘려보내고, 재계산은 그 완료를
         // 기다린 뒤 잇는다(재계산이 더티 오버레이가 아직 안 채워진 값을 볼 수 없도록).
-        trackBackgroundWork(room, applyCellsChangeToCanonical(room, lazyStore, cells, event)
+        const applying = applyCellsChangeToCanonical(room, lazyStore, cells, event);
+        room.cfRanges.applying = Promise.all([room.cfRanges.applying, applying.catch(() => undefined)]).then(() => undefined);
+        trackBackgroundWork(room, applying
           .then(() => {
             // 이번 배치에서 실제로 바뀐 셀이 속한 시트만 재계산한다 — event.changes.keys가
             // "시트:행:열" 키별로 add/update/delete를 알려주므로 거기서 시트 인덱스를 뽑아낸다.
@@ -2178,6 +2219,7 @@ function getOrCreateRoom(docId: string, ext: string): Room {
     pageSubscriptions: new Map(),
     loadedPages: new Map(),
     canonicalGrowth: Promise.resolve(),
+    cfRanges: { rev: 0, byKey: new Map(), applying: Promise.resolve() },
     backgroundWork: new Set<Promise<void>>(),
     pendingSlideSeeds: new Map(),
     connSlideSeedsInFlight: new Map(),

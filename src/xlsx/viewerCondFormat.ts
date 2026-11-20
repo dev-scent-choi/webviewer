@@ -16,6 +16,7 @@
 import { strFromU8, unzip } from 'fflate';
 import {
   cfIsVolatile,
+  cfRuleTooCostly,
   cfRowSweeper,
   computeStats,
   needsStats,
@@ -35,8 +36,6 @@ import { sheetPathsByName } from './drawingPassthrough.js';
 export const CF_BAKE_BUDGET_MS = 2_000;
 /** 이 간격(ms)마다 이벤트 루프에 양보한다 — 한 번에 이보다 오래 막지 않는다 */
 export const CF_YIELD_MS = 15;
-/** 수식 엔진으로 계산해야 하는 규칙의 어림 비용(규칙 칸 수 × 읽는 범위 칸 수) 상한 — 넘으면 그 규칙은 굽지 않는다 */
-export const CF_FALLBACK_COST_CAP = 20_000_000;
 
 /** 현지(서버) 날짜 YYYY-MM-DD — TODAY() 규칙을 구운 날. 운영 PC는 KST라 한국 날짜와 같다 */
 export function localDayKey(date = new Date()): string {
@@ -145,24 +144,6 @@ export function styleRegistry(styles: GridStyle[]): { styleOf(s: number | undefi
 /** 굽기에 쓰는 행 읽기 — 작은 파일은 메모리의 행, 큰 파일(스트리밍)은 행 묶음을 읽어 넘긴다 */
 export type CfRowSource = (onRow: (r: number, line: ReadonlyArray<GridCell | 0>) => void, budget: CfBakeBudget) => Promise<void>;
 
-const cellsIn = (e: CondFormatEntry, rows: number, cols: number) =>
-  e.ranges.reduce((sum, r) => sum + Math.max(0, Math.min(r.r1, rows - 1) - r.r0 + 1) * Math.max(0, Math.min(r.c1, cols - 1) - r.c0 + 1), 0);
-
-/** 수식 엔진이 칸마다 읽을 범위의 어림 크기(작은 계산기가 바로 하는 범위 함수는 범위 표를 한 번만 만들어 0으로 본다) */
-function fallbackRangeCells(e: CondFormatEntry, rows: number, cols: number): number {
-  const formulas = e.rule.t === 'expr' ? [e.rule.f] : e.rule.t === 'cell' ? [e.rule.v1, e.rule.v2 ?? ''] : [];
-  let total = 0;
-  for (const f of formulas) {
-    const engineOnly = /\b(?!(?:COUNTIF|SUM|AVERAGE|MIN|MAX|COUNT|COUNTA)\s*\()[A-Z][A-Z0-9.]*\s*\(/i.test(f.replace(/\b(AND|OR|NOT|IF|ISBLANK|ISNUMBER|ISTEXT|LEN|ABS|INT|ROUND|MOD|ROW|COLUMN|LEFT|RIGHT|UPPER|LOWER|TRIM|TODAY|NOW|DATE)\s*\(/gi, '')) || f.includes('!');
-    if (!engineOnly) continue;
-    for (const m of f.matchAll(/\$?([A-Z]{1,3})\$?(\d*):\$?([A-Z]{1,3})\$?(\d*)/gi)) {
-      const r = m[2] && m[4] ? Math.abs(Number(m[4]) - Number(m[2])) + 1 : rows;
-      total += r * Math.min(cols, Math.abs(m[3].toUpperCase().charCodeAt(0) - m[1].toUpperCase().charCodeAt(0)) + 1);
-    }
-  }
-  return total;
-}
-
 /**
  * 시트 하나의 조건부 서식을 굽는다. readRows로 행을 두 번 읽는다(1차 통계, 2차 칠하기) — onPainted로 칠한 행을 돌려준다.
  * valueAt은 칸 값 글자(작은 파일은 시트 전체, 큰 파일은 지금 읽은 행 묶음 안).
@@ -178,9 +159,9 @@ export async function bakeSheetCondFormats(
 ): Promise<void> {
   // 수식 엔진이 칸마다 큰 범위를 읽어야 하는 규칙은 어림해 너무 무거우면 건너뛴다
   const usable = entries.filter((e) => {
-    const cost = cellsIn(e, extent.rows, extent.cols) * fallbackRangeCells(e, extent.rows, extent.cols);
-    if (cost > CF_FALLBACK_COST_CAP) budget.skipped = true;
-    return cost <= CF_FALLBACK_COST_CAP;
+    const heavy = cfRuleTooCostly(e, extent.rows, extent.cols);
+    if (heavy) budget.skipped = true;
+    return !heavy;
   });
   if (usable.length === 0) {
     await readRows((r, line) => onPainted(r, line), budget);

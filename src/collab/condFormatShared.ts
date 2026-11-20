@@ -875,6 +875,8 @@ export interface CfEnv {
   /** 범위 키 → 값 표. 칸 값이 바뀌면 새 Map으로 */
   readonly tables?: Map<string, CfRangeTable>;
   readonly extent?: () => { rows: number; cols: number };
+  /** 범위 값 표를 밖(편집 화면 — 서버의 범위 값 개수 표)에서 받는다. undefined면 valueAt으로 만든다 */
+  readonly remote?: (r0: number, c0: number, r1: number, c1: number) => CfRangeTable | undefined;
 }
 
 interface CfRange {
@@ -904,13 +906,26 @@ function rangeTableOf(range: CfRange, valueAt: (row: number, col: number) => str
   const r1 = Math.min(range.r1, rows - 1);
   const c1 = Math.min(range.c1, cols - 1);
   const key = `${range.r0}:${range.c0}:${r1}:${c1}`;
-  const hit = env.tables?.get(key);
-  if (hit) return hit;
+  const hit = env.tables?.get(key) ?? env.remote?.(range.r0, range.c0, r1, c1);
+  if (hit) {
+    env.tables?.set(key, hit);
+    return hit;
+  }
   const values: CfVal[] = [];
   for (let r = range.r0; r <= r1; r += 1) for (let c = range.c0; c <= c1; c += 1) values.push(cellVal(valueAt(r, c)));
   const table: CfRangeTable = { cells: Math.max(0, (r1 - range.r0 + 1) * (c1 - range.c0 + 1)), values };
   env.tables?.set(key, table);
   return table;
+}
+
+/** 값 개수 표([값 글자, 개수][], 빈 칸 제외)와 칸 수 → 범위 값 표(서버 /api/view/xlsx-cf-ranges 응답용) */
+export function cfRangeTableFromCounts(cells: number, counts: ReadonlyArray<readonly [string, number]>): CfRangeTable {
+  const values: CfVal[] = [];
+  for (const [v, n] of counts) {
+    const cv = cellVal(v);
+    for (let i = 0; i < n; i += 1) values.push(cv);
+  }
+  return { cells, values };
 }
 
 const countKey = (v: CfVal): string => (typeof v === 'number' ? `n${v}` : typeof v === 'boolean' ? `b${v}` : `s${String(v ?? '').toLowerCase()}`);
@@ -1003,4 +1018,39 @@ export function cfRowSweeper(entries: readonly CondFormatEntry[]): (row: number)
     }
     return cache;
   };
+}
+
+
+// ---------- 무거운 규칙 어림(보기 화면 굽기·편집 화면이 같은 기준으로 건너뛴다) ----------
+/** 수식 엔진으로 계산해야 하는 규칙의 어림 비용(규칙 칸 수 × 읽는 범위 칸 수) 상한 — 넘으면 그 규칙은 칠하지 않는다 */
+export const CF_FALLBACK_COST_CAP = 20_000_000;
+/** 칸 하나를 판정할 때 수식 엔진이 읽는 범위 칸 수 상한 — 넘으면 칸 하나에도 오래 걸리므로 건너뛴다 */
+export const CF_FALLBACK_RANGE_CAP = 100_000;
+
+const cfCellsIn = (e: CondFormatEntry, rows: number, cols: number) =>
+  e.ranges.reduce((sum, r) => sum + Math.max(0, Math.min(r.r1, rows - 1) - r.r0 + 1) * Math.max(0, Math.min(r.c1, cols - 1) - r.c0 + 1), 0);
+
+/** 수식 엔진이 칸마다 읽을 범위(행 구간·열 수). 작은 계산기가 바로 하는 범위 함수(COUNTIF 등 — 범위 값 표를 한 번만 만든다)만 쓰면 [] */
+export function cfEngineRanges(e: CondFormatEntry, rows: number, cols: number): Array<{ r0: number; r1: number; cols: number }> {
+  const formulas = e.rule.t === 'expr' ? [e.rule.f] : e.rule.t === 'cell' ? [e.rule.v1, e.rule.v2 ?? ''] : [];
+  const out: Array<{ r0: number; r1: number; cols: number }> = [];
+  for (const f of formulas) {
+    const engineOnly = /\b(?!(?:COUNTIF|SUM|AVERAGE|MIN|MAX|COUNT|COUNTA)\s*\()[A-Z][A-Z0-9.]*\s*\(/i.test(f.replace(/\b(AND|OR|NOT|IF|ISBLANK|ISNUMBER|ISTEXT|LEN|ABS|INT|ROUND|MOD|ROW|COLUMN|LEFT|RIGHT|UPPER|LOWER|TRIM|TODAY|NOW|DATE)\s*\(/gi, '')) || f.includes('!');
+    if (!engineOnly) continue;
+    for (const m of f.matchAll(/\$?([A-Z]{1,3})\$?(\d*):\$?([A-Z]{1,3})\$?(\d*)/gi)) {
+      const full = !(m[2] && m[4]);
+      out.push({
+        r0: full ? 0 : Math.min(Number(m[2]), Number(m[4])) - 1,
+        r1: full ? rows - 1 : Math.max(Number(m[2]), Number(m[4])) - 1,
+        cols: Math.min(cols, Math.abs(m[3].toUpperCase().charCodeAt(0) - m[1].toUpperCase().charCodeAt(0)) + 1),
+      });
+    }
+  }
+  return out;
+}
+
+/** 이 규칙이 너무 무거워 건너뛰어야 하는지(규칙 칸 수 × 읽는 범위 칸 수, 칸 하나가 읽는 범위 칸 수) */
+export function cfRuleTooCostly(e: CondFormatEntry, rows: number, cols: number): boolean {
+  const perCell = cfEngineRanges(e, rows, cols).reduce((sum, r) => sum + (r.r1 - r.r0 + 1) * r.cols, 0);
+  return perCell > CF_FALLBACK_RANGE_CAP || cfCellsIn(e, rows, cols) * perCell > CF_FALLBACK_COST_CAP;
 }
