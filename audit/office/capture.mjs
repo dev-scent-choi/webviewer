@@ -65,7 +65,7 @@ async function shotDocxEdit(page, base, name) {
   await host.screenshot({ path: path.join(OUT, 'edit', `${name}.png`) });
   const text = await page.locator('.ProseMirror').innerText();
   const warn = await page.locator('body').innerText();
-  const images = await page.locator('.ProseMirror img').count();
+  const images = await page.locator('.ProseMirror img:not(.ProseMirror-separator)').count();
   return { text, images, unsupportedWarning: /이미지가 사라|지원하지 않는|보존되지/.test(warn) };
 }
 
