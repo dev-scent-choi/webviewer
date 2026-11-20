@@ -21,11 +21,10 @@ import {
   type GridHeader,
 } from '../spreadsheet.js';
 import { numFmtCodeOf, formatValueText } from '../collab/numberFormat.js';
-import { bakeCondFormats, bakeRow, CF_BAKE_WORK_CAP, localDayKey, styleRegistry } from './viewerCondFormat.js';
-import { createCfFormulaFallback } from './cfFormulaEngine.js';
+import { bakeCondFormats, bakeSheetCondFormats, CF_BAKE_BUDGET_MS, CfBakeBudget, localDayKey, styleRegistry, type CfRowSource } from './viewerCondFormat.js';
 import { workbookTablesOf } from './sheetExtras.js';
 import { tableCellLook, withTableLook } from './tableStyles.js';
-import { cfIsVolatile, cfRowIndex, computeStats, needsStats, type CfStats } from '../collab/condFormatShared.js';
+import { cfIsVolatile } from '../collab/condFormatShared.js';
 import { declaredEntrySizes } from '../zipGuard.js';
 import { closeLazyGridStore, getRowCells, ingestXlsxLazily, type LazyGridStore } from './lazyGridStore.js';
 
@@ -66,7 +65,7 @@ export async function serializeGridFromLazyStore(store: LazyGridStore, originalX
   const tables = originalXlsx ? workbookTablesOf(originalXlsx) : null;
   const styles = [...store.styles];
   const registry = styleRegistry(styles);
-  const work = { left: CF_BAKE_WORK_CAP };
+  const budget = new CfBakeBudget();
   let volatile = false;
   const parts: Buffer[] = [];
   const newline = Buffer.from('\n');
@@ -78,72 +77,66 @@ export async function serializeGridFromLazyStore(store: LazyGridStore, originalX
   for (let s = 0; s < store.sheetMeta.length; s += 1) {
     const { rowCount, colCount } = store.sheetMeta[s];
     const entries = (store.sheetMeta[s].condFormats ?? []).filter((e) => e.rule.t !== 'other');
-    let stats = new Map<string, CfStats>();
-    const byRow = entries.length > 0 ? cfRowIndex(entries, rowCount) : [];
-    if (entries.length > 0) {
-      volatile ||= cfIsVolatile(entries);
-      // 1차: 통계가 필요한 규칙의 범위 값만 모은다(행 묶음으로 읽고 바로 버린다)
-      const statEntries = entries.filter((e) => needsStats(e.rule));
-      if (statEntries.length > 0) {
-        const values = new Map<string, string[]>(statEntries.map((e) => [e.id, []]));
-        for (let start = 0; start < rowCount; start += BATCH) {
-          const end = Math.min(start + BATCH, rowCount);
-          if (!byRow.slice(start, end).some((list) => list?.some((e) => needsStats(e.rule)))) continue;
-          const rows = await readBatch(s, start, end, colCount);
-          rows.forEach((line, i) => {
-            const r = start + i;
-            for (const e of byRow[r] ?? []) {
-              if (!needsStats(e.rule)) continue;
-              for (const rect of e.ranges) {
-                if (r < rect.r0 || r > rect.r1) continue;
-                for (let c = rect.c0; c <= Math.min(rect.c1, line.length - 1); c += 1) {
-                  const cell = line[c];
-                  const v = cell ? gridCellValue(cell) : '';
-                  if (v !== '') values.get(e.id)?.push(v);
-                }
-              }
-            }
-          });
-          await yieldToEventLoop();
+    const sheetTables = tables?.bySheet.get(store.sheetMeta[s].name) ?? [];
+    /** 표시 글자·서식 코드 색·표 스타일까지 입힌 행 */
+    const shownRow = (r: number, row: ReadonlyArray<GridCell | 0>): Array<GridCell | 0> => {
+      const cells = row.map((cell) => displayCellOf(cell, registry));
+      for (const table of sheetTables) {
+        if (r < table.r0 || r > table.r1) continue;
+        for (let c = table.c0; c <= Math.min(table.c1, colCount - 1); c += 1) {
+          const look = tableCellLook(table, r, c, tables?.themeColors ?? []);
+          if (!look) continue;
+          while (cells.length <= c) cells.push(0);
+          const cell = cells[c];
+          const sIdx = registry.register(withTableLook(registry.styleOf(cell === 0 ? undefined : cell.s), look));
+          cells[c] = cell === 0 ? { v: '', s: sIdx } : { ...cell, s: sIdx };
         }
-        stats = new Map(statEntries.map((e) => [e.id, computeStats(e.rule, values.get(e.id) ?? [])]));
       }
+      return cells;
+    };
+    const emit = (line: ReadonlyArray<GridCell | 0>) => {
+      const cells = [...line];
+      while (cells.length > 0 && cells[cells.length - 1] === 0) cells.pop();
+      parts.push(newline, Buffer.from(JSON.stringify(cells), 'utf8'));
+    };
+    if (entries.length === 0) {
+      for (let start = 0; start < rowCount; start += BATCH) {
+        const end = Math.min(start + BATCH, rowCount);
+        (await readBatch(s, start, end, colCount)).forEach((row, i) => emit(shownRow(start + i, row)));
+        await budget.tick();
+      }
+      continue;
     }
-    for (let start = 0; start < rowCount; start += BATCH) {
-      const end = Math.min(start + BATCH, rowCount);
-      const rows = await readBatch(s, start, end, colCount);
-      const valueAt = (r: number, c: number): string => {
-        const cell = r >= start && r < end ? rows[r - start][c] : undefined;
-        return cell ? gridCellValue(cell) : '';
-      };
-      const fallback = entries.length > 0 ? createCfFormulaFallback(valueAt, () => ({ rows: rowCount, cols: colCount })) : undefined;
-      const sheetTables = tables?.bySheet.get(store.sheetMeta[s].name) ?? [];
-      rows.forEach((row, i) => {
-        let cells = row.map((cell) => displayCellOf(cell, registry));
-        for (const table of sheetTables) {
-          const r = start + i;
-          if (r < table.r0 || r > table.r1) continue;
-          for (let c = table.c0; c <= Math.min(table.c1, colCount - 1); c += 1) {
-            const look = tableCellLook(table, r, c, tables?.themeColors ?? []);
-            if (!look) continue;
-            while (cells.length <= c) cells.push(0);
-            const cell = cells[c];
-            const sIdx = registry.register(withTableLook(registry.styleOf(cell === 0 ? undefined : cell.s), look));
-            cells[c] = cell === 0 ? { v: '', s: sIdx } : { ...cell, s: sIdx };
-          }
-        }
-        if (entries.length > 0) cells = [...bakeRow(start + i, cells, byRow[start + i], stats, valueAt, fallback, registry, work)];
-        while (cells.length > 0 && cells[cells.length - 1] === 0) cells.pop();
-        parts.push(newline, Buffer.from(JSON.stringify(cells), 'utf8'));
-      });
-      if (end % YIELD_EVERY_N_ROWS < BATCH) await yieldToEventLoop();
-    }
+    // 조건부 서식 — 행 묶음으로 두 번 읽는다(통계, 칠하기). 수식 규칙이 보는 값은 지금 읽은 묶음 안
+    volatile ||= cfIsVolatile(entries);
+    let batchStart = 0;
+    let batch: Array<ReadonlyArray<GridCell | 0>> = [];
+    const valueAt = (r: number, c: number): string => {
+      const cell = r >= batchStart && r < batchStart + batch.length ? batch[r - batchStart][c] : undefined;
+      return cell ? gridCellValue(cell) : '';
+    };
+    const readRows: CfRowSource = async (onRow, b) => {
+      for (let start = 0; start < rowCount; start += BATCH) {
+        const end = Math.min(start + BATCH, rowCount);
+        batchStart = start;
+        batch = (await readBatch(s, start, end, colCount)).map((row, i) => shownRow(start + i, row));
+        batch.forEach((line, i) => onRow(start + i, line));
+        await b.tick();
+      }
+    };
+    let painted = 0;
+    await bakeSheetCondFormats(entries, { rows: rowCount, cols: colCount }, readRows, valueAt, registry, budget, (_r, line) => {
+      emit(line);
+      painted += 1;
+    });
+    if (painted !== rowCount) throw new Error('조건부 서식 굽기: 행 수가 맞지 않는다');
   }
-  if (work.left <= 0) console.warn(`조건부 서식 굽기 상한(${CF_BAKE_WORK_CAP})에 닿아 큰 파일 보기 화면에 일부만 칠했다`);
+  if (budget.skipped) console.warn(`조건부 서식 굽기(큰 파일): 시간 예산(${CF_BAKE_BUDGET_MS}ms)·비용 상한 때문에 일부 생략(보기 화면에 알림)`);
   // 머리(서식 목록)는 행을 다 붙인 뒤에 만든다 — 굽기와 서식 코드 색이 서식을 더하므로
   const header: GridHeader = {
     formatVersion: GRID_CACHE_FORMAT_VERSION,
     ...(volatile ? { cfDay: localDayKey() } : {}),
+    ...(budget.skipped ? { cfSkipped: 1 as const } : {}),
     styles,
     sheets: store.sheetMeta.map((m) => ({
       name: m.name,

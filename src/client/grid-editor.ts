@@ -33,10 +33,10 @@ import {
   computeStats,
   GRID_COND_FORMATS_MAP,
   needsStats,
-  cfRowIndex,
   paintCell,
   rectContains,
   subtractRect,
+  type CfEnv,
   type CfFormulaFallback,
   type CfRule,
   type CfStats,
@@ -3273,7 +3273,13 @@ async function main(): Promise<void> {
     if (entries.length === 0 && td.dataset.cf === undefined) return;
     // 이 행에 걸린 규칙만 본다(조각난 규칙 수천 개에서 칸마다 전부 훑지 않게 — 보기 화면 굽기와 같은 색인)
     const rowEntries = entries.length > 0 ? cfRowEntries(row) : [];
-    const paint = rowEntries.length > 0 ? paintCell(rowEntries, row, col, cfValueAt(row, col), cfStatsNow(), cfValueAt, cfFallback ?? undefined) : null;
+    // 한 번 칠하기(화면 전체)에 쓰는 시간 상한 — 넘으면 나머지 칸은 칠하지 않고 알린다(무거운 규칙이 화면을 멈추지 않게)
+    const overBudget = cfPaintBudget.started > 0 && performance.now() - cfPaintBudget.started > CF_PAINT_BUDGET_MS;
+    if (overBudget && !cfPaintBudget.skipped) {
+      cfPaintBudget.skipped = true;
+      showCfSkipNotice();
+    }
+    const paint = rowEntries.length > 0 && !overBudget ? paintCell(rowEntries, row, col, cfValueAt(row, col), cfStatsNow(), cfValueAt, cfEnvNow()) : null;
     if (!paint && td.dataset.cf === undefined) return;
     // 기본 서식(applyStyleToTd와 같은 값)으로 되돌린 뒤 규칙 색을 얹는다 — 규칙이 더는 안 맞으면 원래 모습이 된다
     const own = styles.get(gridCellKey(activeSheet, row, col));
@@ -3324,15 +3330,37 @@ async function main(): Promise<void> {
       });
     })
     .catch(() => undefined);
-  let cfIndex: { sheet: number; entries: readonly CondFormatEntry[]; byRow: Array<CondFormatEntry[] | undefined> } | null = null;
+  // 행마다 걸리는 규칙 — 화면에 그리는 행만 그때그때 골라 기억한다(시트 전체 행 배열을 미리 만들지 않는다)
+  let cfIndex: { sheet: number; entries: readonly CondFormatEntry[]; byRow: Map<number, readonly CondFormatEntry[]> } | null = null;
   function cfRowEntries(row: number): readonly CondFormatEntry[] {
     const entries = cfEntries();
-    if (!cfIndex || cfIndex.sheet !== activeSheet || cfIndex.entries !== entries) {
-      // 데이터 행 + 화면에 더 그리는 빈 행 여유(빈 칸에는 값 규칙이 거의 걸리지 않는다)
-      const rows = (structure.get(String(activeSheet))?.rowCount ?? 0) + 1000;
-      cfIndex = { sheet: activeSheet, entries, byRow: cfRowIndex(entries, rows) };
+    if (!cfIndex || cfIndex.sheet !== activeSheet || cfIndex.entries !== entries) cfIndex = { sheet: activeSheet, entries, byRow: new Map() };
+    let list = cfIndex.byRow.get(row);
+    if (!list) {
+      list = entries.filter((e) => e.ranges.some((r) => row >= r.r0 && row <= r.r1));
+      if (cfIndex.byRow.size > 2000) cfIndex.byRow.clear();
+      cfIndex.byRow.set(row, list);
     }
-    return cfIndex.byRow[row] ?? [];
+    return list;
+  }
+  // 범위 함수(COUNTIF 등)의 범위 값 표 — 칸 값이 바뀌면(scheduleCfRepaint) 새로
+  let cfEnv: CfEnv | null = null;
+  function cfEnvNow(): CfEnv {
+    cfEnv ??= {
+      ...(cfFallback ? { fallback: cfFallback } : {}),
+      tables: new Map(),
+      extent: () => {
+        const sheet = structure.get(String(activeSheet));
+        return { rows: sheet?.rowCount ?? 0, cols: sheet?.colCount ?? 0 };
+      },
+    };
+    return cfEnv;
+  }
+  const CF_PAINT_BUDGET_MS = 300;
+  const cfPaintBudget = { started: 0, skipped: false };
+  function showCfSkipNotice(): void {
+    const el = document.getElementById('cf-skip-notice');
+    if (el) el.hidden = false;
   }
   // 범위·함수가 든 규칙 수식(COUNTIF($A:$A,$A2)>1 등)은 수식 엔진으로 계산한다 — 그런 규칙이 있을 때만 따로 불러온다(번들 분리)
   let cfFallback: CfFormulaFallback | null = null;
@@ -3344,6 +3372,7 @@ async function main(): Promise<void> {
     cfEngineLoading = true;
     void import('../xlsx/cfFormulaEngine.js')
       .then(({ createCfFormulaFallback }) => {
+        cfEnv = null;
         cfFallback = createCfFormulaFallback(cfValueAt, () => {
           const sheet = structure.get(String(activeSheet));
           return { rows: sheet?.rowCount ?? 0, cols: sheet?.colCount ?? 0 };
@@ -3356,13 +3385,16 @@ async function main(): Promise<void> {
   let cfRepaintQueued = false;
   function scheduleCfRepaint(): void {
     cfStats = null;
+    cfEnv = null;
     ensureCfEngine();
     if (cfRepaintQueued) return;
     if (cfEntries().length === 0 && !tableEl.querySelector('td[data-cf]')) return;
     cfRepaintQueued = true;
     requestAnimationFrame(() => {
       cfRepaintQueued = false;
+      cfPaintBudget.started = performance.now();
       tableEl.querySelectorAll<HTMLTableCellElement>('td[data-row]').forEach(applyCondFormatOverlay);
+      cfPaintBudget.started = 0;
     });
   }
   cells.observe(scheduleCfRepaint);

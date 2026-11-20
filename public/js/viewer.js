@@ -1870,6 +1870,9 @@ async function initGridView() {
   }
   gridState.styles = meta.styles;
   injectGridStyles(meta.styles);
+  // 서버가 시간 예산·비용 상한 때문에 조건부 서식 일부를 굽지 않았으면 알린다
+  const cfNotice = document.getElementById('grid-cf-notice');
+  if (cfNotice) cfNotice.hidden = !meta.cfSkipped;
 
   const tabs = document.getElementById('sheet-tabs');
   tabs.replaceChildren(

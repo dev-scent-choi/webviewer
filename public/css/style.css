@@ -1331,6 +1331,7 @@ h2 {
 
 /* 틀 고정 칸 — 뒤로 스크롤된 칸이 비치지 않게 불투명(칸 서식 배경 .gsN은 나중에 붙어 이긴다) */
 .g-frozen { background-color: #fff; }
+.grid-cf-notice { color: #9c5700; margin-left: 12px; }
 /* 서식 코드의 채움(*) — 회계 서식의 ₩는 칸 왼쪽 끝, 숫자는 오른쪽 끝(보기·편집 공용) */
 .g-fill { display: flex; justify-content: space-between; white-space: pre; }
 /* 사용자가 기본보다 낮게 정한 행(엑셀 8pt 등) — 칸 여백·행 번호 글자 높이 때문에 행이 커지지 않게 */

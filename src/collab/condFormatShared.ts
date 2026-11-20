@@ -290,7 +290,7 @@ function thresholdOf(
   st: CfStats,
   anchor: CfRect | undefined,
   valueAt: (row: number, col: number) => string,
-  fallback: CfFormulaFallback | undefined,
+  env: CfEnv | undefined,
 ): number | null {
   if (st.min === undefined || st.max === undefined) return null;
   switch (th.type) {
@@ -309,7 +309,7 @@ function thresholdOf(
     case 'percentile':
       return st.sorted ? percentileOf(st.sorted, th.v ?? 0) : null;
     case 'formula': {
-      const v = th.f && anchor ? evalCfValue(th.f, 0, 0, anchor.r0, anchor.c0, valueAt, fallback) : undefined;
+      const v = th.f && anchor ? evalCfValue(th.f, 0, 0, anchor.r0, anchor.c0, valueAt, env) : undefined;
       return typeof v === 'number' ? v : typeof v === 'string' ? cfNumber(v) : null;
     }
     default:
@@ -320,7 +320,7 @@ function thresholdOf(
 /**
  * 칸 하나에 걸리는 강조. entries는 우선순위 순(앞이 높다) — 높은 규칙부터 보며 아직 정해지지 않은 속성만 채우고,
  * "true이면 중지"(stopIfTrue)인 규칙이 맞으면 거기서 멈춘다(엑셀과 같다). stats는 entry.id별 통계(needsStats인 것만).
- * 큰 시트에서는 부르는 쪽이 이 칸이 든 행에 걸리는 규칙만 골라 넘긴다(cfRowIndex).
+ * 큰 시트에서는 부르는 쪽이 이 칸이 든 행에 걸리는 규칙만 골라 넘긴다(cfRowSweeper·편집 화면 행 기억).
  */
 export function paintCell(
   entries: readonly CondFormatEntry[],
@@ -329,7 +329,7 @@ export function paintCell(
   value: string,
   stats: ReadonlyMap<string, CfStats>,
   valueAt: (row: number, col: number) => string,
-  fallback?: CfFormulaFallback,
+  env?: CfEnv,
 ): CfPaint | null {
   const paint: CfPaint = {};
   let any = false;
@@ -344,8 +344,8 @@ export function paintCell(
       case 'cell': {
         const dr = row - anchor.r0;
         const dc = col - anchor.c0;
-        const a = evalCfValue(rule.v1, dr, dc, row, col, valueAt, fallback);
-        const b = rule.v2 === undefined ? undefined : evalCfValue(rule.v2, dr, dc, row, col, valueAt, fallback);
+        const a = evalCfValue(rule.v1, dr, dc, row, col, valueAt, env);
+        const b = rule.v2 === undefined ? undefined : evalCfValue(rule.v2, dr, dc, row, col, valueAt, env);
         matched = cellRuleMatches(rule.op, cellVal(value), a, b);
         break;
       }
@@ -376,7 +376,7 @@ export function paintCell(
       case 'scale': {
         const n = cfNumber(value);
         if (n === null || paint.scale) break;
-        const stops = (rule.th ?? (rule.colors.length === 3 ? DEFAULT_SCALE3 : DEFAULT_SCALE2)).map((th) => thresholdOf(th, st, anchor, valueAt, fallback));
+        const stops = (rule.th ?? (rule.colors.length === 3 ? DEFAULT_SCALE3 : DEFAULT_SCALE2)).map((th) => thresholdOf(th, st, anchor, valueAt, env));
         if (stops.some((s) => s === null)) break;
         const at = stops as number[];
         const colors = rule.colors;
@@ -397,8 +397,8 @@ export function paintCell(
       case 'bar': {
         const n = cfNumber(value);
         if (n === null || paint.bar) break;
-        const lo = thresholdOf(rule.th?.[0] ?? { type: 'min' }, st, anchor, valueAt, fallback);
-        const hi = thresholdOf(rule.th?.[1] ?? { type: 'max' }, st, anchor, valueAt, fallback);
+        const lo = thresholdOf(rule.th?.[0] ?? { type: 'min' }, st, anchor, valueAt, env);
+        const hi = thresholdOf(rule.th?.[1] ?? { type: 'max' }, st, anchor, valueAt, env);
         if (lo === null || hi === null) break;
         const ratio = hi === lo ? 1 : Math.max(0, Math.min(1, (n - lo) / (hi - lo)));
         // 막대 길이는 칸 폭의 minLength~maxLength %(엑셀 기본 10~90, x14 막대는 보통 0~100)
@@ -415,7 +415,7 @@ export function paintCell(
         let level = 0;
         for (let k = Math.min(rule.th.length, icons.length - 1); k >= 1; k -= 1) {
           const th = rule.th[k - 1];
-          const at = thresholdOf(th, st, anchor, valueAt, fallback);
+          const at = thresholdOf(th, st, anchor, valueAt, env);
           if (at !== null && (th.gt ? n > at : n >= at)) {
             level = k;
             break;
@@ -427,7 +427,7 @@ export function paintCell(
         break;
       }
       case 'expr':
-        matched = truthy(evalCfValue(rule.f, row - anchor.r0, col - anchor.c0, row, col, valueAt, fallback) ?? false);
+        matched = truthy(evalCfValue(rule.f, row - anchor.r0, col - anchor.c0, row, col, valueAt, env) ?? false);
         break;
       default:
         break;
@@ -479,23 +479,6 @@ function cellRuleMatches(op: CfCellOp, value: CfVal, a: CfVal | undefined, b: Cf
     case 'ne': return d !== 0;
     default: return false;
   }
-}
-
-/** 규칙(cfRule들)을 행마다 색인한다 — 칸마다 모든 규칙을 훑지 않게(조각난 규칙 수천 개에서 제곱으로 느려지던 문제).
- * rowCount까지만(시트 끝까지인 A:A 범위도 실제 행까지). 우선순위 순서는 그대로다. */
-export function cfRowIndex(entries: readonly CondFormatEntry[], rowCount: number): Array<CondFormatEntry[] | undefined> {
-  const byRow: Array<CondFormatEntry[] | undefined> = new Array(Math.max(0, rowCount));
-  for (const entry of entries) {
-    let last = -1;
-    for (const rect of entry.ranges) {
-      for (let r = rect.r0; r <= Math.min(rect.r1, rowCount - 1); r += 1) {
-        const list = byRow[r] ?? (byRow[r] = []);
-        if (last !== r || list[list.length - 1] !== entry) list.push(entry);
-        last = r;
-      }
-    }
-  }
-  return byRow;
 }
 
 /** 수식 안에 TODAY()·NOW()가 있는지 — 날마다 결과가 바뀌는 규칙(보기 화면 캐시를 날짜별로 다시 만든다) */
@@ -659,17 +642,33 @@ export function evalCfValue(
   row: number,
   col: number,
   valueAt: (row: number, col: number) => string,
-  fallback?: CfFormulaFallback,
+  env?: CfEnv,
 ): CfVal | undefined {
+  // 상수(숫자·글자·논리값)는 수식마다 한 번만 읽는다 — 칸마다 같은 "10"을 다시 해석하지 않게
+  const constant = constantOperand(formula);
+  if (constant !== NOT_CONSTANT) return constant;
   const src = formula.trim().replace(/^=/, '');
   try {
-    return evalSmall(src, dr, dc, row, col, valueAt);
+    return evalSmall(src, dr, dc, row, col, valueAt, env);
   } catch (error) {
-    // 작은 계산기가 모르는 것(범위·다른 시트·모르는 함수·못 읽는 문법)만 수식 엔진으로 — 계산 오류(#VALUE! 등)는 안 맞음
+    // 작은 계산기가 모르는 것(다른 시트·모르는 함수·못 읽는 문법)만 수식 엔진으로 — 계산 오류(#VALUE! 등)는 안 맞음
     const unsupported = error === UNSUPPORTED || (error instanceof Error && error.message === 'cf formula');
-    if (!unsupported || !fallback) return undefined;
-    return fallback(shiftFormulaRefs(`=${src}`, dr, dc).slice(1), row, col);
+    if (!unsupported || !env?.fallback) return undefined;
+    return env.fallback(shiftFormulaRefs(`=${src}`, dr, dc).slice(1), row, col);
   }
+}
+
+const NOT_CONSTANT = Symbol('not-constant');
+const constantMemo = new Map<string, CfVal | typeof NOT_CONSTANT>();
+function constantOperand(formula: string): CfVal | typeof NOT_CONSTANT {
+  let v = constantMemo.get(formula);
+  if (v !== undefined) return v;
+  const t = formula.trim().replace(/^=/, '').trim();
+  const str = /^"((?:[^"]|"")*)"$/.exec(t);
+  v = str ? str[1].replace(/""/g, '"') : /^-?(\d+(\.\d*)?|\.\d+)([eE][-+]?\d+)?$/.test(t) ? Number(t) : /^(TRUE|FALSE)$/i.test(t) ? t.toUpperCase() === 'TRUE' : NOT_CONSTANT;
+  if (constantMemo.size > 10_000) constantMemo.clear();
+  constantMemo.set(formula, v);
+  return v;
 }
 
 /** 조건부 서식 수식 규칙이 이 칸에서 참인지(계산할 수 없으면 거짓 — 엑셀도 오류는 안 맞음으로 본다) */
@@ -680,12 +679,32 @@ export function evalCfFormula(
   row: number,
   col: number,
   valueAt: (row: number, col: number) => string,
-  fallback?: CfFormulaFallback,
+  env?: CfEnv,
 ): boolean {
-  return truthy(evalCfValue(formula, dr, dc, row, col, valueAt, fallback) ?? false);
+  return truthy(evalCfValue(formula, dr, dc, row, col, valueAt, env) ?? false);
 }
 
-function evalSmall(src: string, dr: number, dc: number, row: number, col: number, valueAt: (row: number, col: number) => string): CfVal {
+function evalSmall(src: string, dr: number, dc: number, row: number, col: number, valueAt: (row: number, col: number) => string, env?: CfEnv): CfVal {
+  // 범위(A1:B5, $A:$A)는 범위 함수의 인자로만 — 범위 값 표(rangeTableOf)를 계산 한 번(굽기·화면 한 번)에 한 번만 만든다
+  const rangeArg = (): CfRange | null => {
+    peek();
+    const col = COL_RANGE_TOKEN.exec(rest());
+    if (col) {
+      i += col[0].length;
+      const a = colNumber(col[2]) - 1 + (col[1] ? 0 : dc);
+      const b = colNumber(col[4]) - 1 + (col[3] ? 0 : dc);
+      return { r0: 0, r1: 1_048_575, c0: Math.min(a, b), c1: Math.max(a, b) };
+    }
+    const m = CELL_RANGE_TOKEN.exec(rest());
+    if (!m) return null;
+    i += m[0].length;
+    const r0 = Number(m[4]) - 1 + (m[3] ? 0 : dr);
+    const r1 = Number(m[8]) - 1 + (m[7] ? 0 : dr);
+    const c0 = colNumber(m[2]) - 1 + (m[1] ? 0 : dc);
+    const c1 = colNumber(m[6]) - 1 + (m[5] ? 0 : dc);
+    if (r0 < 0 || c0 < 0 || r1 < 0 || c1 < 0) fail();
+    return { r0: Math.min(r0, r1), r1: Math.max(r0, r1), c0: Math.min(c0, c1), c1: Math.max(c0, c1) };
+  };
   let i = 0;
   const rest = () => src.slice(i);
   const peek = () => {
@@ -748,7 +767,21 @@ function evalSmall(src: string, dr: number, dc: number, row: number, col: number
     const name = FUNC_TOKEN.exec(rest());
     if (name) {
       i += name[0].length;
-      const fn = CF_FUNCS[name[1].toUpperCase()];
+      const upper = name[1].toUpperCase();
+      const rangeFn = CF_RANGE_FUNCS[upper];
+      if (rangeFn) {
+        // 첫 인자가 범위인 함수(COUNTIF·SUM·AVERAGE …) — 범위 값 표를 한 번 만들어 다시 쓴다
+        const range = rangeArg();
+        if (!range || !env?.extent) throw UNSUPPORTED;
+        const rest2: CfVal[] = [];
+        while (peek() === ',') {
+          i += 1;
+          rest2.push(comparison());
+        }
+        expect(')');
+        return rangeFn(rangeTableOf(range, valueAt, env), rest2);
+      }
+      const fn = CF_FUNCS[upper];
       if (!fn) throw UNSUPPORTED;
       const args: CfVal[] = [];
       if (peek() !== ')') {
@@ -832,4 +865,142 @@ function evalSmall(src: string, dr: number, dc: number, row: number, col: number
     fail();
   }
   return v;
+}
+
+
+// ---------- 범위 함수(COUNTIF·SUM·AVERAGE·MIN·MAX·COUNT·COUNTA) — 범위마다 값 표 한 번 ----------
+/** 굽기(또는 편집 화면 한 번 칠하기)에 함께 쓰는 것: 수식 엔진(대체 계산), 범위 값 표 캐시, 시트 크기 */
+export interface CfEnv {
+  readonly fallback?: CfFormulaFallback;
+  /** 범위 키 → 값 표. 칸 값이 바뀌면 새 Map으로 */
+  readonly tables?: Map<string, CfRangeTable>;
+  readonly extent?: () => { rows: number; cols: number };
+}
+
+interface CfRange {
+  readonly r0: number;
+  readonly r1: number;
+  readonly c0: number;
+  readonly c1: number;
+}
+
+export interface CfRangeTable {
+  readonly cells: number;
+  readonly values: readonly CfVal[];
+  counts?: Map<string, number>;
+  sorted?: number[];
+}
+
+const COL_RANGE_TOKEN = /^(\$?)([A-Za-z]{1,3}):(\$?)([A-Za-z]{1,3})(?![\w(])/;
+const CELL_RANGE_TOKEN = /^(\$?)([A-Za-z]{1,3})(\$?)(\d+):(\$?)([A-Za-z]{1,3})(\$?)(\d+)(?![\w(])/;
+function colNumber(letters: string): number {
+  let n = 0;
+  for (const l of letters.toUpperCase()) n = n * 26 + (l.charCodeAt(0) - 64);
+  return n;
+}
+
+function rangeTableOf(range: CfRange, valueAt: (row: number, col: number) => string, env: CfEnv): CfRangeTable {
+  const { rows, cols } = env.extent ? env.extent() : { rows: 0, cols: 0 };
+  const r1 = Math.min(range.r1, rows - 1);
+  const c1 = Math.min(range.c1, cols - 1);
+  const key = `${range.r0}:${range.c0}:${r1}:${c1}`;
+  const hit = env.tables?.get(key);
+  if (hit) return hit;
+  const values: CfVal[] = [];
+  for (let r = range.r0; r <= r1; r += 1) for (let c = range.c0; c <= c1; c += 1) values.push(cellVal(valueAt(r, c)));
+  const table: CfRangeTable = { cells: Math.max(0, (r1 - range.r0 + 1) * (c1 - range.c0 + 1)), values };
+  env.tables?.set(key, table);
+  return table;
+}
+
+const countKey = (v: CfVal): string => (typeof v === 'number' ? `n${v}` : typeof v === 'boolean' ? `b${v}` : `s${String(v ?? '').toLowerCase()}`);
+function countsOf(t: CfRangeTable): Map<string, number> {
+  if (!t.counts) {
+    t.counts = new Map();
+    for (const v of t.values) if (v !== null) t.counts.set(countKey(v), (t.counts.get(countKey(v)) ?? 0) + 1);
+  }
+  return t.counts;
+}
+function sortedOf(t: CfRangeTable): number[] {
+  if (!t.sorted) t.sorted = t.values.filter((v): v is number => typeof v === 'number').sort((a, b) => a - b);
+  return t.sorted;
+}
+/** 오름차순 배열에서 x보다 작은(strict) 또는 작거나 같은 값의 개수 */
+function countBelow(sorted: readonly number[], x: number, inclusive: boolean): number {
+  let lo = 0;
+  let hi = sorted.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (inclusive ? sorted[mid] <= x : sorted[mid] < x) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+/** COUNTIF 조건 — "사과"(같음), 10, ">=10", "<>완료", "사*"(와일드카드) */
+function countIf(t: CfRangeTable, crit: CfVal): number {
+  if (crit === null || crit === '') return t.cells - [...countsOf(t).values()].reduce((a, b) => a + b, 0);
+  if (typeof crit !== 'string') return countsOf(t).get(countKey(crit)) ?? 0;
+  const m = /^(<=|>=|<>|<|>|=)(.*)$/.exec(crit);
+  const op = m ? m[1] : '=';
+  const operand = m ? m[2] : crit;
+  const n = cfNumber(operand);
+  if (op === '=' || op === '<>') {
+    let eq: number;
+    if (operand === '') eq = t.cells - [...countsOf(t).values()].reduce((a, b) => a + b, 0);
+    else if (/[*?]/.test(operand)) {
+      const re = new RegExp(`^${operand.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.')}$`, 'i');
+      eq = t.values.filter((v) => typeof v === 'string' && re.test(v)).length;
+    } else eq = (countsOf(t).get(`s${operand.toLowerCase()}`) ?? 0) + (n !== null ? (countsOf(t).get(`n${n}`) ?? 0) : 0);
+    return op === '=' ? eq : t.cells - eq;
+  }
+  if (n === null) return 0;
+  const s = sortedOf(t);
+  if (op === '<') return countBelow(s, n, false);
+  if (op === '<=') return countBelow(s, n, true);
+  if (op === '>') return s.length - countBelow(s, n, true);
+  return s.length - countBelow(s, n, false);
+}
+
+const CF_RANGE_FUNCS: Readonly<Record<string, (t: CfRangeTable, args: CfVal[]) => CfVal>> = {
+  COUNTIF: (t, a) => countIf(t, a[0] ?? null),
+  COUNT: (t) => sortedOf(t).length,
+  COUNTA: (t) => t.values.filter((v) => v !== null).length,
+  SUM: (t) => sortedOf(t).reduce((x, y) => x + y, 0),
+  AVERAGE: (t) => {
+    const s = sortedOf(t);
+    if (s.length === 0) throw new Error('#DIV/0!');
+    return s.reduce((x, y) => x + y, 0) / s.length;
+  },
+  MIN: (t) => sortedOf(t)[0] ?? 0,
+  MAX: (t) => sortedOf(t)[sortedOf(t).length - 1] ?? 0,
+};
+
+/** 행 순서대로 그 행에 걸린 규칙을 내 준다(행마다 배열을 미리 만들지 않는다 — 규칙 수에 비례하는 메모리). rows는 오름차순으로만 물어야 한다 */
+export function cfRowSweeper(entries: readonly CondFormatEntry[]): (row: number) => readonly CondFormatEntry[] {
+  const order = new Map(entries.map((e, i) => [e, i]));
+  const spans = entries.flatMap((e) => e.ranges.map((r) => ({ e, r0: r.r0, r1: r.r1 }))).sort((a, b) => a.r0 - b.r0);
+  let next = 0;
+  let active: Array<{ e: CondFormatEntry; r1: number }> = [];
+  let cache: readonly CondFormatEntry[] = [];
+  let dirty = true;
+  return (row) => {
+    const before = active.length;
+    active = active.filter((a) => a.r1 >= row);
+    if (active.length !== before) dirty = true;
+    while (next < spans.length && spans[next].r0 <= row) {
+      if (spans[next].r1 >= row) {
+        active.push({ e: spans[next].e, r1: spans[next].r1 });
+        dirty = true;
+      }
+      next += 1;
+    }
+    if (dirty) {
+      const set = [...new Set(active.map((a) => a.e))];
+      set.sort((a, b) => (order.get(a) ?? 0) - (order.get(b) ?? 0));
+      cache = set;
+      dirty = false;
+    }
+    return cache;
+  };
 }

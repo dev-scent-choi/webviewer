@@ -166,6 +166,8 @@ export interface GridDocument {
   readonly styles: readonly GridStyle[];
   /** 보기 화면 전용 — TODAY()·NOW() 조건부 서식을 구운 날(현지 YYYY-MM-DD). 날짜가 바뀌면 그리드를 다시 만든다 */
   readonly cfDay?: string;
+  /** 보기 화면 전용 — 조건부 서식 일부를 시간 예산·비용 상한 때문에 굽지 않았다(화면이 알린다) */
+  readonly cfSkipped?: 1;
 }
 
 /**
@@ -185,8 +187,9 @@ export interface GridHeader {
   /** GRID_CACHE_FORMAT_VERSION 문서 주석 참고. 이 필드가 없거나(구버전 캐시) 현재 버전과 다르면
    * "낡은 캐시"로 취급한다. */
   readonly formatVersion?: number;
-  /** GridDocument.cfDay와 같다 */
+  /** GridDocument.cfDay·cfSkipped와 같다 */
   readonly cfDay?: string;
+  readonly cfSkipped?: 1;
   readonly styles: readonly GridStyle[];
   readonly sheets: ReadonlyArray<Omit<GridSheet, 'rows'>>;
 }
@@ -199,6 +202,7 @@ export function serializeGrid(grid: GridDocument): Buffer {
   const header: GridHeader = {
     formatVersion: GRID_CACHE_FORMAT_VERSION,
     ...(grid.cfDay ? { cfDay: grid.cfDay } : {}),
+    ...(grid.cfSkipped ? { cfSkipped: grid.cfSkipped } : {}),
     styles: grid.styles,
     sheets: grid.sheets.map(({ rows: _rows, ...meta }) => meta),
   };

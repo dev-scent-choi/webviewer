@@ -4,7 +4,8 @@ import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 import { computeStats, paintCell, shiftFormulaRefs, type CfStats, type CondFormatEntry } from '../src/collab/condFormatShared.js';
 import { createCfFormulaFallback } from '../src/xlsx/cfFormulaEngine.js';
 import { parseCondFormats } from '../src/xlsx/condFormatParse.js';
-import { localDayKey } from '../src/xlsx/viewerCondFormat.js';
+import { bakeCondFormats, CF_BAKE_BUDGET_MS, localDayKey } from '../src/xlsx/viewerCondFormat.js';
+import { parseXlsxToGrid } from '../src/spreadsheet.js';
 import { parseViewerGrid } from '../src/xlsx/viewerGrid.js';
 
 const red = { bg: '#FFC7CE', col: '#9C0006' };
@@ -86,7 +87,7 @@ describe('검토 I4 — 우선순위·true이면 중지·문턱값 종류', () =
 describe('검토 10 — 범위·함수가 든 수식 규칙은 수식 엔진으로', () => {
   const values: Record<string, string> = { '0:0': '사과', '1:0': '배', '2:0': '사과', '0:1': '10', '1:1': '20', '2:1': '30' };
   const { valueAt, paint } = sheet(values);
-  const fb = createCfFormulaFallback(valueAt, () => ({ rows: 3, cols: 2 }));
+  const fb = { fallback: createCfFormulaFallback(valueAt, () => ({ rows: 3, cols: 2 })), tables: new Map(), extent: () => ({ rows: 3, cols: 2 }) };
   const A = [{ r0: 0, r1: 2, c0: 0, c1: 0 }];
   test('COUNTIF($A:$A,$A1)>1 — 중복 강조', () => {
     const e: CondFormatEntry[] = [{ id: 'x', ranges: A, rule: { t: 'expr', f: 'COUNTIF($A:$A,$A1)>1', s: red } }];
@@ -156,4 +157,61 @@ describe('검토 C2 — 조각난 규칙 수천 개도 굽기가 거의 선형, 
     const grid = await parseViewerGrid(Buffer.from(zipSync(bytes)));
     expect(grid.cfDay).toBe(localDayKey());
   });
+});
+
+async function bigBook(rows: number, cols: number, cf: string): Promise<Buffer> {
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('s');
+  for (let r = 1; r <= rows; r += 1) for (let c = 1; c <= cols; c += 1) ws.getCell(r, c).value = c === 1 ? `코드${r % 997}` : (r * c) % 101;
+  const b = unzipSync(new Uint8Array(await wb.xlsx.writeBuffer()));
+  b['xl/worksheets/sheet1.xml'] = strToU8(strFromU8(b['xl/worksheets/sheet1.xml']).replace('</sheetData>', `</sheetData>${cf}`));
+  b['xl/styles.xml'] = strToU8(strFromU8(b['xl/styles.xml']).replace('<dxfs count="0"/>', '<dxfs count="1"><dxf><fill><patternFill><bgColor rgb="FFFFC7CE"/></patternFill></fill></dxf></dxfs>'));
+  return Buffer.from(zipSync(b));
+}
+
+/** 굽기만 재기 — 걸린 시간, 가장 긴 이벤트 루프 멈춤, 힙 최고 증가 */
+async function measureBake(x: Buffer) {
+  const grid = await parseXlsxToGrid(x);
+  const mem0 = process.memoryUsage().heapUsed;
+  let peak = mem0;
+  let maxGap = 0;
+  let last = performance.now();
+  const timer = setInterval(() => {
+    const now = performance.now();
+    maxGap = Math.max(maxGap, now - last);
+    last = now;
+    peak = Math.max(peak, process.memoryUsage().heapUsed);
+  }, 1);
+  const t0 = performance.now();
+  const baked = await bakeCondFormats(grid, x);
+  const ms = performance.now() - t0;
+  clearInterval(timer);
+  return { baked, ms, maxGap, memMb: (peak - mem0) / 1e6 };
+}
+
+describe('검토 N2 — 조건부 서식 굽기의 시간 예산·멈춤·메모리', () => {
+  test('COUNTIF($A:$A,$A1)>1 중복 강조 2만 행: 범위 값 표 한 번 — 다 칠하고 예산 안, 멈춤 100ms 미만', async () => {
+    const x = await bigBook(20_000, 2, '<conditionalFormatting sqref="A1:A20000"><cfRule type="expression" dxfId="0" priority="1"><formula>COUNTIF($A:$A,$A1)&gt;1</formula></cfRule></conditionalFormatting>');
+    const { baked, ms, maxGap, memMb } = await measureBake(x);
+    const painted = baked.sheets[0].rows.filter((row) => row[0] && row[0].s !== undefined && baked.styles[row[0].s].bg === '#FFC7CE').length;
+    expect(painted).toBe(20_000);
+    expect(baked.cfSkipped).toBeUndefined();
+    expect(ms).toBeLessThan(CF_BAKE_BUDGET_MS + 1_000);
+    expect(maxGap).toBeLessThan(100);
+    expect(memMb).toBeLessThan(200);
+  }, 120_000);
+  test('겹치는 넓은 규칙 100개(3만×10): 예산에서 멈추고 "일부 생략"을 적는다, 멈춤 100ms 미만', async () => {
+    const many = Array.from({ length: 100 }, (_, i) => `<conditionalFormatting sqref="A1:J30000"><cfRule type="cellIs" dxfId="0" priority="${i + 1}" operator="greaterThan"><formula>${i}</formula></cfRule></conditionalFormatting>`).join('');
+    const { baked, ms, maxGap, memMb } = await measureBake(await bigBook(30_000, 10, many));
+    expect(baked.cfSkipped).toBe(1);
+    expect(ms).toBeLessThan(CF_BAKE_BUDGET_MS + 1_000);
+    expect(maxGap).toBeLessThan(100);
+    expect(memMb).toBeLessThan(300);
+  }, 120_000);
+  test('수식 엔진으로만 되는 무거운 규칙은 미리 어림해 건너뛰고 알린다', async () => {
+    const x = await bigBook(20_000, 2, '<conditionalFormatting sqref="A1:A20000"><cfRule type="expression" dxfId="0" priority="1"><formula>SUMPRODUCT(($A$1:$A$20000=$A1)*1)&gt;1</formula></cfRule></conditionalFormatting>');
+    const { baked, ms } = await measureBake(x);
+    expect(baked.cfSkipped).toBe(1);
+    expect(ms).toBeLessThan(500);
+  }, 120_000);
 });
