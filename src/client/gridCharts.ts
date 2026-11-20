@@ -31,7 +31,7 @@ export interface GridChartHost {
   setChartTabVisible(visible: boolean): void;
 }
 
-const KIND_LABELS: Readonly<Record<ChartKind, string>> = { column: '세로 막대형', bar: '가로 막대형', line: '꺾은선형', pie: '원형' };
+const KIND_LABELS: Readonly<Record<ChartKind, string>> = { column: '세로 막대형', bar: '가로 막대형', line: '꺾은선형', pie: '원형', area: '영역형', doughnut: '도넛형', scatter: '분산형' };
 
 /** 칸 하나만 선택했으면 그 칸을 둘러싼 비어 있지 않은 영역(Excel의 "현재 영역") */
 export function currentRegion(start: { row: number; col: number }, isFilled: (r: number, c: number) => boolean, extent: { rows: number; cols: number }): CellRangeRef | null {
