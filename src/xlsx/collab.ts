@@ -27,6 +27,7 @@ import { parseViewerGrid } from './viewerGrid.js';
 import { sanitizeCellStyle, type BorderSpec } from '../collab/cellBoxCss.js';
 import type { LazyGridSheetMeta, LazyGridStore } from './lazyGridStore.js';
 import { GRID_COND_FORMATS_MAP, shiftSpan, type CondFormatEntry } from '../collab/condFormatShared.js';
+import { rewriteStructuredRefs, shiftTableRows, type TableColumnChanges } from './tableStyles.js';
 import { applyEditedCondFormats, preserveUnsupportedCfRules } from './condFormatExport.js';
 import { getRow } from './lazyGridStore.js';
 import { dateTextToDate, parseTypedNumber } from '../collab/cellValueShared.js';
@@ -778,6 +779,47 @@ function restoreTableHeaderAndButtons(workbook: ExcelJS.Workbook, originalXlsxBy
   }
 }
 
+/**
+ * 표 열 이름을 머리 칸 글자에 맞추고(편집 화면에서 머리 칸을 고치면 엑셀처럼 열 이름이 바뀐다 — 다르면 엑셀이 파일을 "복구"한다),
+ * 이름이 바뀐 열·지운 열을 가리키는 구조적 참조(표1[값] 등)를 모든 수식에서 고친다(바뀐 이름으로 / #REF!로). 바뀐 것이 없으면 수식을 훑지 않는다.
+ */
+function applyTableColumnChanges(workbook: ExcelJS.Workbook, deleted: ReadonlyMap<string, ReadonlySet<string>>): void {
+  const changes = new Map<string, TableColumnChanges>();
+  const boxes: Array<{ ws: ExcelJS.Worksheet; name: string; r0: number; c0: number; r1: number; c1: number }> = [];
+  for (const ws of workbook.worksheets) {
+    for (const { table: m } of ws.getTables() as unknown as Array<{ table: LoadedTableModel }>) {
+      const box = /^\$?([A-Z]+)\$?(\d+):\$?([A-Z]+)\$?(\d+)$/.exec(m.tableRef ?? '');
+      if (!box) continue;
+      const r0 = Number(box[2]) - 1;
+      const c0 = colIndexOf(box[1]);
+      boxes.push({ ws, name: m.name, r0, c0, r1: Number(box[4]) - 1, c1: colIndexOf(box[3]) });
+      const renames = new Map<string, string>();
+      if (m.headerRow !== false) {
+        m.columns.forEach((col, i) => {
+          const text = String(ws.getCell(r0 + 1, c0 + 1 + i).text ?? '').trim();
+          if (text === '' || text === col.name || m.columns.some((o) => o !== col && o.name.toLowerCase() === text.toLowerCase())) return;
+          renames.set(col.name.toLowerCase(), text);
+          col.name = text;
+        });
+      }
+      const gone = deleted.get(m.name.toLowerCase()) ?? new Set<string>();
+      if (renames.size > 0 || gone.size > 0) changes.set(m.name.toLowerCase(), { renames, deleted: gone });
+    }
+  }
+  if (changes.size === 0) return;
+  for (const ws of workbook.worksheets) {
+    ws.eachRow((row, r) => {
+      row.eachCell((cell, c) => {
+        const v = cell.value as { formula?: unknown } | null;
+        if (!v || typeof v !== 'object' || typeof v.formula !== 'string' || !v.formula.includes('[')) return;
+        const own = boxes.find((b) => b.ws === ws && r - 1 >= b.r0 && r - 1 <= b.r1 && c - 1 >= b.c0 && c - 1 <= b.c1)?.name;
+        const next = rewriteStructuredRefs(v.formula, changes, own);
+        if (next !== v.formula) cell.value = { ...(cell.value as object), formula: next } as ExcelJS.CellValue;
+      });
+    });
+  }
+}
+
 /** ExcelJS가 읽어 둔 표(xl/tables/tableN.xml)의 모델 — 저장할 때 tableRef·autoFilterRef·columns를 그대로 쓴다 */
 interface LoadedTableModel {
   name: string;
@@ -794,7 +836,14 @@ interface LoadedTableModel {
  * 넣으면 통째로 내려가고, 지우면 줄어든다(다 지우면 표를 뺀다). 열을 표 안에 넣으면 "열N" 열을 더하고 머리 칸에 이름을 쓴다.
  * 조건부 서식 범위와 같은 구간 계산(shiftSpan)을 쓴다.
  */
-function shiftWorksheetTables(sheet: ExcelJS.Worksheet, onRows: boolean, at: number, count: number, insert: boolean): Array<{ row: number; col: number; names: string[] }> {
+function shiftWorksheetTables(
+  sheet: ExcelJS.Worksheet,
+  onRows: boolean,
+  at: number,
+  count: number,
+  insert: boolean,
+  deletedColumns: Map<string, Set<string>>,
+): Array<{ row: number; col: number; names: string[] }> {
   const headers: Array<{ row: number; col: number; names: string[] }> = [];
   for (const table of sheet.getTables() as unknown as Array<{ table: LoadedTableModel }>) {
     const m = table.table;
@@ -804,11 +853,14 @@ function shiftWorksheetTables(sheet: ExcelJS.Worksheet, onRows: boolean, at: num
     const r0 = Number(box[2]) - 1;
     const c1 = colIndexOf(box[3]);
     const r1 = Number(box[4]) - 1;
-    const span = shiftSpan(onRows ? r0 : c0, onRows ? r1 : c1, at, count, insert);
+    // 행은 화면(tableStyles.ts shiftTables)과 같은 규칙 — 머리 줄 삭제·요약 행 삭제·데이터 행 0개
+    const rowsBox = onRows ? shiftTableRows({ r0, r1, headerRows: m.headerRow === false ? 0 : 1, totalsRows: m.totalsRow ? 1 : 0 }, at, count, insert) : null;
+    const span = onRows ? (rowsBox ? [rowsBox.r0, rowsBox.r1] : null) : shiftSpan(c0, c1, at, count, insert);
     if (!span) {
       sheet.removeTable(m.name);
       continue;
     }
+    if (rowsBox) m.totalsRow = rowsBox.totalsRows > 0;
     const [n0, n1] = span;
     const next = onRows ? { r0: n0, r1: n1, c0, c1 } : { r0, r1, c0: n0, c1: n1 };
     if (!onRows) {
@@ -825,7 +877,13 @@ function shiftWorksheetTables(sheet: ExcelJS.Worksheet, onRows: boolean, at: num
       } else if (!insert) {
         const from = Math.max(at, c0) - c0;
         const to = Math.min(at + count - 1, c1) - c0;
-        if (to >= from) m.columns.splice(from, to - from + 1);
+        if (to >= from) {
+          // 지운 열 이름 — 저장 끝에 그 열을 가리키는 구조적 참조를 #REF!로(applyTableColumnChanges)
+          const gone = deletedColumns.get(m.name.toLowerCase()) ?? new Set<string>();
+          for (const c of m.columns.slice(from, to + 1)) gone.add(c.name.toLowerCase());
+          deletedColumns.set(m.name.toLowerCase(), gone);
+          m.columns.splice(from, to - from + 1);
+        }
       }
     }
     m.tableRef = `${colLettersOf(next.c0)}${next.r0 + 1}:${colLettersOf(next.c1)}${next.r1 + 1}`;
@@ -905,6 +963,8 @@ export async function exportXlsxFromGrid(
     Boolean((sheet as unknown as { sheetProtection?: unknown }).sheetProtection),
   );
 
+  /** 표에서 지운 열(소문자 표 이름 → 열 이름) — 구조적 참조를 #REF!로 바꾼다(applyTableColumnChanges) */
+  const deletedTableColumns = new Map<string, Set<string>>();
   for (let sheetIdx = 0; sheetIdx < store.sheetMeta.length; sheetIdx += 1) {
     if (removedSheets.has(sheetIdx)) continue;
     const target = store.sheetMeta[sheetIdx];
@@ -935,7 +995,7 @@ export async function exportXlsxFromGrid(
       if (op.sheet !== sheetIdx) continue;
       const onRows = op.kind === 'insertRows' || op.kind === 'deleteRows';
       const insert = op.kind === 'insertRows' || op.kind === 'insertCols';
-      const tableHeaders = shiftWorksheetTables(sheet, onRows, op.at, op.count, insert);
+      const tableHeaders = shiftWorksheetTables(sheet, onRows, op.at, op.count, insert, deletedTableColumns);
       if (onRows) {
         if (insert) {
           sheet.spliceRows(op.at + 1, 0, ...Array.from({ length: op.count }, () => [] as unknown[]));
@@ -1025,6 +1085,8 @@ export async function exportXlsxFromGrid(
       await maybeYield();
     }
   }
+
+  applyTableColumnChanges(workbook, deletedTableColumns);
 
   // 자동 필터: 범위를 맞추고 조건에 안 맞는 행을 숨긴다(조건 XML은 쓰기 뒤 writeFilterCriteria가 붙인다)
   const filtersByName = new Map<string, SheetFilter>();

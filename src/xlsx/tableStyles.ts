@@ -54,12 +54,47 @@ export function shiftTables<T extends SheetTable & { readonly sheetName: string 
     const insert = op.kind === 'insertRows' || op.kind === 'insertCols';
     out = out.flatMap((t) => {
       if (t.sheetName !== name) return [t];
-      const span = rows ? shiftSpan(t.r0, t.r1, op.at, op.count, insert) : shiftSpan(t.c0, t.c1, op.at, op.count, insert);
-      if (!span) return [];
-      return [rows ? { ...t, r0: span[0], r1: span[1] } : { ...t, c0: span[0], c1: span[1] }];
+      if (rows) {
+        const box = shiftTableRows(t, op.at, op.count, insert);
+        return box ? [{ ...t, ...box }] : [];
+      }
+      const span = shiftSpan(t.c0, t.c1, op.at, op.count, insert);
+      return span ? [{ ...t, c0: span[0], c1: span[1] }] : [];
     });
   }
   return out;
+}
+
+/** 표 위치와 머리 줄·요약 행 수 */
+export interface TableRows {
+  readonly r0: number;
+  readonly r1: number;
+  readonly headerRows: number;
+  readonly totalsRows: number;
+}
+
+/**
+ * 행 삽입·삭제를 표 하나에 반영한다(저장 collab.ts와 화면 shiftTables가 같은 규칙). null = 표를 뺀다(칸 값은 남는다).
+ * - 표 전체를 지우면 표를 뺀다.
+ * - 머리 줄만 지우면(엑셀은 이 삭제를 막는다 — 편집 화면도 막는다) 표를 일반 범위로 바꾼다(다른 참여자·옛 화면이 보낸 연산 대비).
+ * - 요약 행을 지우면 요약 행을 끈다(마지막 데이터 행이 요약 행으로 바뀌지 않게).
+ * - 데이터 행이 하나도 안 남으면 엑셀처럼 데이터 행 하나를 남긴다(요약 행이 있으면 그 행을, 없으면 표 아래 한 행을 데이터 행으로
+ *   — 편집 화면은 첫 데이터 행을 지우지 않고 비워서 이 경우를 만들지 않는다).
+ */
+export function shiftTableRows(t: TableRows, at: number, count: number, insert: boolean): TableRows | null {
+  const span = shiftSpan(t.r0, t.r1, at, count, insert);
+  if (!span) return null;
+  if (insert) return { ...t, r0: span[0], r1: span[1] };
+  const gone = (row: number) => row >= at && row < at + count;
+  if (t.headerRows > 0 && gone(t.r0)) return null;
+  let totalsRows = t.totalsRows > 0 && gone(t.r1) ? 0 : t.totalsRows;
+  let r1 = span[1];
+  if (r1 - span[0] + 1 - t.headerRows - totalsRows <= 0) {
+    // 데이터 행이 없다 — 요약 행이 있으면 그 행을 데이터 행으로, 없으면 표 아래 한 행을 데이터 행으로
+    if (totalsRows > 0) totalsRows = 0;
+    else r1 = span[0] + t.headerRows;
+  }
+  return { ...t, r0: span[0], r1, totalsRows };
 }
 
 export function parseTableXml(xml: string): SheetTable | null {
@@ -209,4 +244,71 @@ export function withTableLook<T extends object>(base: T, look: TableLook): T {
   }
   if (Object.keys(bd).length > 0) out.bd = bd;
   return out as T;
+}
+
+/** 표 하나의 열 이름 바뀜(소문자 옛 이름 → 새 이름)과 지운 열(소문자 이름) */
+export interface TableColumnChanges {
+  readonly renames: ReadonlyMap<string, string>;
+  readonly deleted: ReadonlySet<string>;
+}
+
+/**
+ * 수식의 구조적 참조(표1[값], 표1[@값], 표1[[#Headers],[값]], 표1[[값]:[비고]], 표 안 칸의 [@값])를 표 열 변경에 맞춘다 — 엑셀처럼
+ * 이름이 바뀐 열은 새 이름으로, 지운 열을 가리키는 참조는 #REF!로. tables: 소문자 표 이름 → 변경. ownTable: 이 칸이 든 표(이름 없는
+ * [@값] 참조용). 따옴표 안 글자는 건드리지 않는다.
+ */
+export function rewriteStructuredRefs(formula: string, tables: ReadonlyMap<string, TableColumnChanges>, ownTable?: string): string {
+  let out = '';
+  let i = 0;
+  while (i < formula.length) {
+    const ch = formula[i];
+    if (ch === '"') {
+      const end = formula.indexOf('"', i + 1);
+      const stop = end < 0 ? formula.length : end + 1;
+      out += formula.slice(i, stop);
+      i = stop;
+      continue;
+    }
+    if (ch !== '[') {
+      out += ch;
+      i += 1;
+      continue;
+    }
+    // 이 '[' 앞의 이름(표 이름) — 없으면 이 칸이 든 표
+    const nameMatch = /[A-Za-z_\\À-￿][\w.À-￿]*$/.exec(out);
+    const name = nameMatch ? nameMatch[0] : ownTable;
+    // 짝 맞는 ']'
+    let depth = 0;
+    let j = i;
+    for (; j < formula.length; j += 1) {
+      if (formula[j] === '[') depth += 1;
+      else if (formula[j] === ']') {
+        depth -= 1;
+        if (depth === 0) break;
+      }
+    }
+    const body = formula.slice(i, j + 1);
+    const changes = name ? tables.get(name.toLowerCase()) : undefined;
+    if (!changes || j >= formula.length) {
+      out += body;
+      i = j + 1;
+      continue;
+    }
+    const inner = body.slice(1, -1);
+    const items = inner.includes('[') ? [...inner.matchAll(/\[([^\]]*)\]/g)].map((m) => m[1]) : [inner];
+    const columns = items.map((x) => x.replace(/^@/, '').trim()).filter((x) => x !== '' && !x.startsWith('#'));
+    if (columns.some((c) => changes.deleted.has(c.toLowerCase()))) {
+      if (nameMatch) out = out.slice(0, out.length - nameMatch[0].length);
+      out += '#REF!';
+    } else {
+      const renameOne = (x: string) => {
+        const at = x.startsWith('@') ? '@' : '';
+        const col = x.slice(at.length);
+        return at + (changes.renames.get(col.trim().toLowerCase()) ?? col);
+      };
+      out += inner.includes('[') ? `[${inner.replace(/\[([^\]]*)\]/g, (_m, x: string) => `[${x.startsWith('#') ? x : renameOne(x)}]`)}]` : `[${inner.startsWith('#') ? inner : renameOne(inner)}]`;
+    }
+    i = j + 1;
+  }
+  return out;
 }

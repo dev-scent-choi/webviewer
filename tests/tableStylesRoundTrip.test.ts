@@ -107,3 +107,105 @@ describe('검토 r3 — 행/열 삽입·삭제 뒤 표 범위(화면 덧칠·저
     });
   }
 });
+
+describe('검토 r4 I2 — 표 경계 사례(머리 줄·데이터 행 전부·요약 행 삭제), 저장과 화면이 같은 규칙', () => {
+  /** T1 = A3:C6(머리 줄 3행, 데이터 4·5행, 요약 6행), T2 = E3:F5(머리 + 데이터 2행), 표 밖 수식 H1·H2 */
+  async function fixture(): Promise<Buffer> {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('S');
+    ws.getCell('A1').value = '제목';
+    ws.addTable({ name: 'T1', ref: 'A3', headerRow: true, totalsRow: true, style: { theme: 'TableStyleMedium2', showRowStripes: true }, columns: [{ name: '이름', totalsRowLabel: '합계' }, { name: '값', totalsRowFunction: 'sum' }, { name: '비고' }], rows: [['a', 1, 'x'], ['b', 2, 'y']] });
+    ws.addTable({ name: 'T2', ref: 'E3', headerRow: true, style: { theme: 'TableStyleLight1' }, columns: [{ name: 'p' }, { name: 'q' }], rows: [['p1', 10], ['p2', 20]] });
+    ws.getCell('H1').value = { formula: 'SUM(T1[값])' } as ExcelJS.CellFormulaValue;
+    ws.getCell('H2').value = { formula: 'COUNTA(T1[비고])+COUNTA(T1[[#Headers],[이름]])' } as ExcelJS.CellFormulaValue;
+    return Buffer.from(await wb.xlsx.writeBuffer());
+  }
+  type Op = { kind: 'insertRows' | 'deleteRows' | 'insertCols' | 'deleteCols'; at: number; count: number };
+  async function saveWith(ops: Op[], dirty: Array<[number, number, string]> = []) {
+    const { applyColShift, applyRowShift } = await import('../src/xlsx/lazyGridStore.js');
+    const { shiftTables } = await import('../src/xlsx/tableStyles.js');
+    const { strFromU8, unzipSync } = await import('fflate');
+    const original = await fixture();
+    const store = await ingestXlsxLazily(randomUUID(), original);
+    try {
+      const extents = store.sheetMeta.map((m) => ({ rowCount: m.rowCount, colCount: m.colCount }));
+      const full = ops.map((op) => ({ sheet: 0, ...op }));
+      for (const op of full) (op.kind.endsWith('Rows') ? applyRowShift : applyColShift)(store, 0, op.at, op.count, op.kind.startsWith('insert'));
+      for (const [r, c, v] of dirty) setDirtyCell(store, 0, r, c, { v });
+      const screen = shiftTables(readSheetExtras(original).tables, full, () => 'S');
+      const saved = await exportXlsxFromGrid(original, store, extents, full);
+      const xml = Object.fromEntries(
+        Object.entries(unzipSync(saved))
+          .filter(([n]) => /^xl\/tables\/table\d+\.xml$/.test(n))
+          .map(([, b]) => {
+            const x = strFromU8(b);
+            return [/\sname="([^"]+)"/.exec(x)![1], x];
+          }),
+      );
+      const reread = new ExcelJS.Workbook();
+      await reread.xlsx.load(saved as unknown as ArrayBuffer);
+      return { screen, xml, ws: reread.getWorksheet('S')!, savedExtras: readSheetExtras(saved).tables };
+    } finally {
+      await closeLazyGridStore(store);
+    }
+  }
+  const a1 = (t: { r0: number; r1: number; c0: number; c1: number }) => `${String.fromCharCode(65 + t.c0)}${t.r0 + 1}:${String.fromCharCode(65 + t.c1)}${t.r1 + 1}`;
+
+  test('머리 줄 행(3행) 삭제: 두 표 모두 일반 범위로 바뀐다(칸 값은 남는다) — 화면도 같다', async () => {
+    const { screen, xml, ws } = await saveWith([{ kind: 'deleteRows', at: 2, count: 1 }]);
+    expect(screen).toEqual([]);
+    expect(Object.keys(xml)).toEqual([]);
+    expect(ws.getCell('A3').value).toBe('a');
+  });
+
+  test('데이터 행 전부(4·5행) 삭제: 데이터 행 하나를 남긴다(요약 행 → 데이터 행) — 화면도 같다', async () => {
+    const { screen, xml, savedExtras } = await saveWith([{ kind: 'deleteRows', at: 3, count: 2 }]);
+    const t1 = screen.find((t) => t.c0 === 0)!;
+    expect(a1(t1)).toBe('A3:C4');
+    expect(t1.totalsRows).toBe(0);
+    expect(xml.T1).toMatch(/<table [^>]*ref="A3:C4"/);
+    expect(xml.T1).not.toMatch(/totalsRowCount="1"/);
+    expect(xml.T1).toMatch(/<autoFilter ref="A3:C4"/);
+    // T2(E3:F5)는 데이터 행 2개를 모두 잃는다 → 표 아래 한 행을 데이터 행으로
+    expect(a1(screen.find((t) => t.c0 === 4)!)).toBe('E3:F4');
+    expect(xml.T2).toMatch(/<table [^>]*ref="E3:F4"/);
+    expect(savedExtras.map(a1).sort()).toEqual(screen.map(a1).sort());
+  });
+
+  test('요약 행(6행) 삭제: 요약 행을 끈다(마지막 데이터 행이 요약 행이 되지 않게) — 화면도 같다', async () => {
+    const { screen, xml } = await saveWith([{ kind: 'deleteRows', at: 5, count: 1 }]);
+    const t1 = screen.find((t) => t.c0 === 0)!;
+    expect(a1(t1)).toBe('A3:C5');
+    expect(t1.totalsRows).toBe(0);
+    expect(xml.T1).toMatch(/<table [^>]*ref="A3:C5"/);
+    expect(xml.T1).not.toMatch(/totalsRowCount="1"/);
+    expect(xml.T1).toMatch(/<autoFilter ref="A3:C5"/);
+  });
+
+  test('표 열 삭제: 그 열을 가리키는 구조적 참조는 #REF!, 다른 열 참조는 그대로', async () => {
+    const { xml, ws } = await saveWith([{ kind: 'deleteCols', at: 1, count: 1 }]);
+    expect(xml.T1).toContain('<tableColumns count="2"');
+    // H열이 G열로 옮겨졌다
+    expect((ws.getCell('G1').value as { formula: string }).formula).toBe('SUM(#REF!)');
+    expect((ws.getCell('G2').value as { formula: string }).formula).toBe('COUNTA(T1[비고])+COUNTA(T1[[#Headers],[이름]])');
+  });
+
+  test('표 머리 칸을 고치면 열 이름이 바뀌고 구조적 참조도 따라간다', async () => {
+    const { xml, ws } = await saveWith([], [[2, 2, '메모'], [2, 0, '품명']]);
+    expect(xml.T1).toContain('name="메모"');
+    expect(xml.T1).toContain('name="품명"');
+    expect((ws.getCell('H2').value as { formula: string }).formula).toBe('COUNTA(T1[메모])+COUNTA(T1[[#Headers],[품명]])');
+    expect((ws.getCell('H1').value as { formula: string }).formula).toBe('SUM(T1[값])');
+  });
+
+  test('구조적 참조 바꾸기(순수 함수): 한정·[@열]·[[열]:[열]]·따옴표 안·이름 없는 표 안 참조', async () => {
+    const { rewriteStructuredRefs } = await import('../src/xlsx/tableStyles.js');
+    const changes = new Map([['t1', { renames: new Map([['값', '금액']]), deleted: new Set(['비고']) }]]);
+    expect(rewriteStructuredRefs('SUM(T1[값])+T1[@값]', changes)).toBe('SUM(T1[금액])+T1[@금액]');
+    expect(rewriteStructuredRefs('SUM(t1[[값]:[이름]])', changes)).toBe('SUM(t1[[금액]:[이름]])');
+    expect(rewriteStructuredRefs('COUNTA(T1[비고])&"T1[값]"', changes)).toBe('COUNTA(#REF!)&"T1[값]"');
+    expect(rewriteStructuredRefs('[@값]*2', changes, 'T1')).toBe('[@금액]*2');
+    expect(rewriteStructuredRefs('[@값]*2', changes)).toBe('[@값]*2');
+    expect(rewriteStructuredRefs('T2[값]', changes)).toBe('T2[값]');
+  });
+});
