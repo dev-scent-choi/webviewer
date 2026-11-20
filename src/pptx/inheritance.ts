@@ -1,5 +1,5 @@
 import { XMLParser } from 'fast-xml-parser';
-import { loadThemeColors } from './theme.js';
+import { loadThemeColors, mediaResolverFor } from './theme.js';
 import { DEFAULT_INSETS_EMU as DEFAULT_INSETS, type ParagraphSpacing, type SlideLevelLook } from '../collab/pptxShared.js';
 
 /**
@@ -155,6 +155,8 @@ interface PartialLevel {
   readonly buFont?: string;
   readonly buClr?: Record<string, unknown>;
   readonly buSize?: { readonly pct: number } | { readonly pts: number };
+  /** 그림 글머리의 zip 안 그림 경로 */
+  readonly bulletImage?: string;
 }
 
 /** <a:lnSpc>/<a:spcBef>/<a:spcAft> 하나 — spcPct(1/1000%) → pct 비율, spcPts(1/100pt) → pts */
@@ -171,8 +173,11 @@ const onOff = (v: unknown): boolean | undefined => (v === undefined ? undefined 
 const EMU_PER_PT = 12700;
 
 /** 문단 속성 노드(<a:lvlNpPr> 또는 <a:pPr>)에서 이 모듈이 다루는 값만 뽑는다. */
-export function partialLevelFrom(node: XmlNode | undefined): PartialLevel {
+export function partialLevelFrom(node: XmlNode | undefined, mediaOf?: MediaOf): PartialLevel {
   if (!node || typeof node !== 'object') return {};
+  // 그림 글머리(buBlip) — 그 수준이 적힌 파트(슬라이드·레이아웃·마스터)의 관계로 그림 파일을 찾는다
+  const blipId = ((node['a:buBlip'] as XmlNode | undefined)?.['a:blip'] as XmlNode | undefined)?.['@_r:embed'];
+  const bulletImage = typeof blipId === 'string' && mediaOf ? mediaOf(blipId) : undefined;
   const sz = num((node['a:defRPr'] as XmlNode | undefined)?.['@_sz']);
   const defRPrFill = (node['a:defRPr'] as XmlNode | undefined)?.['a:solidFill'];
   const algn = node['@_algn'] as string | undefined;
@@ -216,6 +221,7 @@ export function partialLevelFrom(node: XmlNode | undefined): PartialLevel {
     ...(face('a:latin') ? { latin: face('a:latin') } : {}),
     ...(face('a:ea') ? { ea: face('a:ea') } : {}),
     ...(typeof buFont === 'string' && buFont ? { buFont } : {}),
+    ...(bulletImage ? { bulletImage } : {}),
     ...(typeof buClr === 'object' && buClr ? { buClr: buClr as XmlNode } : {}),
     ...(buSzPct !== null ? { buSize: { pct: buSzPct / 100000 } } : buSzPts !== null ? { buSize: { pts: buSzPts / 100 } } : {}),
     ...(sz !== null ? { sizePt: sz / 100 } : {}),
@@ -228,12 +234,14 @@ export function partialLevelFrom(node: XmlNode | undefined): PartialLevel {
 }
 
 /** <a:lstStyle>/<p:titleStyle> 등에서 수준 1~9 */
-function levelsOf(styleNode: XmlNode | undefined): PartialLevel[] {
-  return Array.from({ length: 9 }, (_, i) => partialLevelFrom(styleNode?.[`a:lvl${i + 1}pPr`] as XmlNode | undefined));
+function levelsOf(styleNode: XmlNode | undefined, mediaOf?: MediaOf): PartialLevel[] {
+  return Array.from({ length: 9 }, (_, i) => partialLevelFrom(styleNode?.[`a:lvl${i + 1}pPr`] as XmlNode | undefined, mediaOf));
 }
 
+type MediaOf = (rId: string) => string | undefined;
 
-function shapeLooks(root: XmlNode | null, rootTag: string): ShapeLook[] {
+
+function shapeLooks(root: XmlNode | null, rootTag: string, mediaOf?: MediaOf): ShapeLook[] {
   const spTree = (((root?.[rootTag] as XmlNode | undefined)?.['p:cSld'] as XmlNode | undefined)?.['p:spTree']) as
     | XmlNode
     | undefined;
@@ -261,7 +269,7 @@ function shapeLooks(root: XmlNode | null, rootTag: string): ShapeLook[] {
     const bodyPr = txBody?.['a:bodyPr'] as XmlNode | undefined;
     const anchorRaw = typeof bodyPr === 'object' ? (bodyPr['@_anchor'] as string | undefined) : undefined;
     const wrapRaw = typeof bodyPr === 'object' ? (bodyPr['@_wrap'] as string | undefined) : undefined;
-    const levels = levelsOf(txBody?.['a:lstStyle'] as XmlNode | undefined);
+    const levels = levelsOf(txBody?.['a:lstStyle'] as XmlNode | undefined, mediaOf);
     const { sizePt, align } = levels[0];
     const inset = (key: string) => (typeof bodyPr === 'object' ? num(bodyPr[key]) ?? undefined : undefined);
     const fontRef = (sp['p:style'] as XmlNode | undefined)?.['a:fontRef'] as XmlNode | undefined;
@@ -337,17 +345,18 @@ export function resolveSlideShapeLooks(
   sourceSlidePart: string,
 ): Map<string, InheritedShapeLook> {
   const slidePart = `ppt/slides/${sourceSlidePart}`;
-  const slideShapes = shapeLooks(readXml(zip, slidePart), 'p:sld');
+  const slideShapes = shapeLooks(readXml(zip, slidePart), 'p:sld', mediaResolverFor(zip, slidePart));
   const layoutPart = relTarget(zip, slidePart, 'slideLayout');
-  const layoutShapes = layoutPart ? shapeLooks(readXml(zip, layoutPart), 'p:sldLayout') : [];
+  const layoutShapes = layoutPart ? shapeLooks(readXml(zip, layoutPart), 'p:sldLayout', mediaResolverFor(zip, layoutPart)) : [];
   const masterPart = layoutPart ? relTarget(zip, layoutPart, 'slideMaster') : null;
   const masterRoot = masterPart ? readXml(zip, masterPart) : null;
-  const masterShapes = shapeLooks(masterRoot, 'p:sldMaster');
+  const masterMedia = masterPart ? mediaResolverFor(zip, masterPart) : undefined;
+  const masterShapes = shapeLooks(masterRoot, 'p:sldMaster', masterMedia);
   const txStyles = (masterRoot?.['p:sldMaster'] as XmlNode | undefined)?.['p:txStyles'] as XmlNode | undefined;
   const classLevels = {
-    title: levelsOf(txStyles?.['p:titleStyle'] as XmlNode | undefined),
-    body: levelsOf(txStyles?.['p:bodyStyle'] as XmlNode | undefined),
-    other: levelsOf(txStyles?.['p:otherStyle'] as XmlNode | undefined),
+    title: levelsOf(txStyles?.['p:titleStyle'] as XmlNode | undefined, masterMedia),
+    body: levelsOf(txStyles?.['p:bodyStyle'] as XmlNode | undefined, masterMedia),
+    other: levelsOf(txStyles?.['p:otherStyle'] as XmlNode | undefined, masterMedia),
   };
   const classStyle = { title: classLevels.title[0], body: classLevels.body[0], other: classLevels.other[0] };
   const presentation = readXml(zip, 'ppt/presentation.xml');
@@ -421,6 +430,7 @@ export function resolveSlideShapeLooks(
           marLPt: (first('marLPt') as number | undefined) ?? 0,
           indentPt: (first('indentPt') as number | undefined) ?? 0,
           bullet: bulletSource?.bullet ?? null,
+          ...(bulletSource?.bulletImage ? { bulletImage: bulletSource.bulletImage } : {}),
           ...(autoNum ? { autoNum } : {}),
           ...(line || before || after ? { spacing: { ...(line ? { line } : {}), ...(before ? { before } : {}), ...(after ? { after } : {}) } } : {}),
           ...(bold ? { bold } : {}),

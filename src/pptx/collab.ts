@@ -21,7 +21,7 @@ import { pptxTextSchema } from './textSchema.js';
 import type { NewShapeGeom, SlideEntry, SlideShapeMeta } from '../collab/pptxShared.js';
 import { DEFAULT_INSETS_EMU, NEW_SHAPE_GEOMS } from '../collab/pptxShared.js';
 import { resolveSlideShapeLooks, type InheritedShapeLook } from './inheritance.js';
-import { loadThemeColors, type ThemeColors } from './theme.js';
+import { loadThemeColors, mediaResolverFor, type ThemeColors } from './theme.js';
 
 const SLIDE_TARGET = /Target="(?:[^"]*\/)?(slide\d+\.xml)"/;
 
@@ -262,7 +262,7 @@ export function seedSlideContentFromXml(
   } catch {
     theme = undefined;
   }
-  const shapes = parseSlideShapes(slideXml, theme, trustedFragmentsOf(slideContents));
+  const shapes = parseSlideShapes(slideXml, theme, trustedFragmentsOf(slideContents), mediaResolverFor(zipEntries, `ppt/slides/${sourceSlidePart}`));
   // 레이아웃·마스터 상속(표시 전용) — 어떤 이유로든 실패해도 시딩 자체는 예전처럼 진행한다.
   let looks = new Map<string, InheritedShapeLook>();
   try {

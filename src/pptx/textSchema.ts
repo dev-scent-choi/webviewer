@@ -11,6 +11,14 @@ import { gapCss, lineHeightCss, pPrLook } from './paragraphLook.js';
 /** 글자 크기 1pt의 화면 길이 — 슬라이드 축척(--slide-pt)에 자동 맞춤 글자 배율까지 곱한 값(--slide-fpt, 글상자가 지정). */
 export const FONT_PT = 'var(--slide-fpt, var(--slide-pt, 1pt))';
 
+/** 슬라이드 그림(zip 안 경로)의 화면 주소 — 편집기가 문서 열람 토큰을 넣어 정한다(서버에선 DOM을 그리지 않아 쓰이지 않음).
+ * 경로는 협업자가 쓸 수 있는 값이라 반드시 encodeURIComponent로 넣는다(CSS url("…") 안에 들어간다). */
+let mediaUrlBuilder: (path: string) => string = () => '';
+export function setSlideMediaUrl(build: (path: string) => string): void {
+  mediaUrlBuilder = build;
+}
+export const slideMediaUrl = (path: string): string => mediaUrlBuilder(path);
+
 const nodes: Record<string, NodeSpec> = {
   doc: { content: 'paragraph+' },
   paragraph: {
@@ -24,7 +32,17 @@ const nodes: Record<string, NodeSpec> = {
      * 값(목록 수준 0~8, 글머리 재정의: 문자 / 'none' / null=상속).
      */
     /** endRPr: 원본 <a:endParaRPr …/>(문단 끝 글자 속성 — 빈 문단의 높이를 정한다) 문자열 그대로, 저장 때 되돌린다. */
-    attrs: { align: { default: null }, pPr: { default: null }, lvl: { default: 0 }, bu: { default: null }, endRPr: { default: null } },
+    /** buColor·buImage: 화면 표시 전용 — 문단에 직접 적힌 글머리 색(테마 색을 푼 '#RRGGBB')과 그림 글머리 그림의 zip 경로
+     * (서버가 읽을 때 풀어 둔다. 저장은 pPr 원문이 맡는다). */
+    attrs: {
+      align: { default: null },
+      pPr: { default: null },
+      lvl: { default: 0 },
+      bu: { default: null },
+      endRPr: { default: null },
+      buColor: { default: null },
+      buImage: { default: null },
+    },
     content: 'inline*',
     group: 'block',
     parseDOM: [
@@ -50,6 +68,9 @@ const nodes: Record<string, NodeSpec> = {
       // 작은 번호 원의 숫자가 아래로 밀리던 문제를 막는다(PowerPoint도 줄 높이를 그 줄 글자 크기로 정한다).
       let maxSize = 0;
       let allSized = node.childCount > 0;
+      // 빈 문단(빈 줄)의 높이는 문단 끝 글자 크기(endParaRPr sz)로 — 큰 글자 사이의 빈 줄이 기본 크기로 줄어 보였다
+      const endSz = node.childCount === 0 ? Number(/\bsz="(\d+)"/.exec(String(node.attrs.endRPr ?? ''))?.[1]) / 100 : NaN;
+      if (endSz > 0) styles.push(`font-size: calc(${endSz} * ${FONT_PT})`);
       node.forEach((child) => {
         if (!child.isText) return;
         const size = child.marks.find((mark) => mark.type.name === 'fontSize')?.attrs.size as number | undefined;
@@ -65,11 +86,15 @@ const nodes: Record<string, NodeSpec> = {
       if (look.line) styles.push(`--p-lh: ${lineHeightCss(look.line)}`);
       if (look.before) styles.push(`--p-sb: ${gapCss(look.before)}`);
       if (look.after) styles.push(`--p-sa: ${gapCss(look.after)}`);
-      if (look.bulletColor) styles.push(`--p-bu-color: ${look.bulletColor}`);
+      const buColor = node.attrs.buColor as string | null;
+      if (buColor && /^#[0-9A-Fa-f]{6}$/.test(buColor)) styles.push(`--p-bu-color: ${buColor}`);
+      const buImage = node.attrs.buImage as string | null;
+      if (buImage) styles.push(`--p-bu-img: url("${slideMediaUrl(String(buImage))}")`, '--p-bu-h: 1em');
       if (look.bulletSizePct) styles.push(`--p-bu-size: ${look.bulletSizePct}em`);
       if (look.bulletFont) styles.push(`--p-bu-ff: '${look.bulletFont.replace(/["';<>\\]/g, '')}'`);
       if (styles.length > 0) attrs.style = styles.join('; ');
-      if (node.attrs.bu !== null && node.attrs.bu !== undefined) attrs['data-bu'] = String(node.attrs.bu);
+      if (buImage) attrs['data-bu'] = ''; // 그림 글머리: 글자 대신 그림(--p-bu-img)
+      else if (node.attrs.bu !== null && node.attrs.bu !== undefined) attrs['data-bu'] = String(node.attrs.bu);
       return ['p', attrs, 0];
     },
   },
@@ -140,7 +165,12 @@ const marks: Record<string, MarkSpec> = {
    * 화면엔 하이퍼링크만 보인다(테마 하이퍼링크 색 + 밑줄). */
   runProps: {
     attrs: { raw: {} },
-    toDOM: (mark) => (/<a:hlinkClick\b/.test(String(mark.attrs.raw)) ? ['span', { class: 'slide-hlink' }, 0] : ['span', 0]),
+    // 하이퍼링크 — PowerPoint 2019+ "링크도 글자 색 그대로"(<ahyp:hlinkClr val="tx"/>)면 테마 하이퍼링크 색 대신 글자 색
+    toDOM: (mark) => {
+      const raw = String(mark.attrs.raw);
+      if (!/<a:hlinkClick\b/.test(raw)) return ['span', 0];
+      return ['span', { class: /hlinkClr\b[^>]*\bval="tx"/.test(raw) ? 'slide-hlink slide-hlink-tx' : 'slide-hlink' }, 0];
+    },
   },
   fontFamily: {
     /** 글꼴 이름 — pptx의 <a:rPr><a:latin typeface=".."/>(한글 글리프용 <a:ea>도 같이 내보낸다,

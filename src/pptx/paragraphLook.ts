@@ -22,8 +22,8 @@ export interface PPrLook {
   readonly indentPt?: number;
   /** eaLnBrk — true: 한글 단어를 끊지 않음(eaLnBrk="0"), false: 글자 단위(eaLnBrk="1"), 없으면 상속 */
   readonly keepWords?: boolean;
-  /** 글머리 꾸밈 재정의 — 직접 RGB 색(buClr srgbClr), 크기 비율(buSzPct), 글꼴(buFont) */
-  readonly bulletColor?: string;
+  /** 글머리 꾸밈 재정의 — 크기 비율(buSzPct), 글꼴(buFont). 색(buClr)은 테마 색까지 풀어야 해서 서버가 읽을 때 문단
+   * 속성 buColor로 넣어 둔다(slideContent.ts). */
   readonly bulletSizePct?: number;
   readonly bulletFont?: string;
 }
@@ -63,7 +63,6 @@ export function pPrLook(raw: string | null | undefined): PPrLook {
   const eaLnBrk = /^<a:pPr\b[^>]*\beaLnBrk="([^"]*)"/.exec(raw)?.[1];
   const marL = /^<a:pPr\b[^>]*\bmarL="(-?\d+)"/.exec(raw)?.[1];
   const indent = /^<a:pPr\b[^>]*\bindent="(-?\d+)"/.exec(raw)?.[1];
-  const color = /<a:buClr>\s*<a:srgbClr\s+val="([0-9A-Fa-f]{6})"/.exec(raw)?.[1];
   const sizePct = /<a:buSzPct\s+val="(\d+)"/.exec(raw)?.[1];
   const font = /<a:buFont\b[^>]*\btypeface="([^"]+)"/.exec(raw)?.[1];
   return {
@@ -74,7 +73,6 @@ export function pPrLook(raw: string | null | undefined): PPrLook {
     ...(marL !== undefined ? { marLPt: Number(marL) / 12700 } : {}),
     ...(indent !== undefined ? { indentPt: Number(indent) / 12700 } : {}),
     ...(eaLnBrk !== undefined ? { keepWords: eaLnBrk === '0' || eaLnBrk === 'false' } : {}),
-    ...(color ? { bulletColor: `#${color.toUpperCase()}` } : {}),
     ...(sizePct ? { bulletSizePct: Number(sizePct) / 100000 } : {}),
     ...(font && !font.startsWith('+') ? { bulletFont: decodeXml(font) } : {}),
   };
@@ -107,11 +105,28 @@ const alpha = (n: number) => {
   return s;
 };
 const CJK_DIGITS = '〇一二三四五六七八九';
-const cjk = (n: number) => (n <= 10 ? (n === 10 ? '十' : CJK_DIGITS[n]) : String(n).split('').map((d) => CJK_DIGITS[Number(d)]).join(''));
+/** 한자 수(1~9999): 十一·二十·百五·千 — 10 이상을 자릿수 나열(一一)로 쓰던 것을 바로잡음 */
+const cjk = (n: number): string => {
+  if (n <= 0 || n >= 10000) return String(n);
+  let out = '';
+  for (const [unit, name] of [[1000, '千'], [100, '百'], [10, '十']] as const) {
+    const d = Math.floor(n / unit) % 10;
+    if (d) out += (d === 1 ? '' : CJK_DIGITS[d]) + name;
+  }
+  return out + (n % 10 ? CJK_DIGITS[n % 10] : '');
+};
 const circled = (n: number, base: number) => (n >= 1 && n <= 20 ? String.fromCodePoint(base + n - 1) : String(n));
 const fullWidth = (n: number) => String(n).replace(/\d/g, (d) => String.fromCodePoint(0xff10 + Number(d)));
+const digits = (n: number, zero: number) => String(n).replace(/\d/g, (d) => String.fromCodePoint(zero + Number(d)));
+/** 문자 목록으로 세기(목록을 다 쓰면 같은 글자를 겹쳐 쓴다 — alpha 방식) */
+const letters = (n: number, list: readonly string[]) => list[(n - 1) % list.length].repeat(Math.floor((n - 1) / list.length) + 1);
+const THAI_ALPHA = [...'กขคงจฉชซฌญฎฏฐฑฒณดตถทธนบปผฝพฟภมยรลวศษสหฬอฮ'];
+const HINDI_VOWELS = [...'अआइईउऊऋएऐओऔ'];
+const HINDI_CONSONANTS = [...'कखगघङचछजझञटठडढणतथदधनपफबभमयरलवशषसह'];
+const HEBREW = [...'אבגדהוזחטיכלמנסעפצקרשת'];
 
-/** OOXML 자동 번호 체계(ST_TextAutonumberScheme) n번째 글머리 문자열. 모르는 체계는 "1." 모양. */
+/** OOXML 자동 번호 체계(ST_TextAutonumberScheme, ECMA-376 20.1.10.61의 41가지 전부) n번째 글머리 문자열. 목록 밖 값은 "1." 모양.
+ * 한국어 가나다 체계는 OOXML에 없다(PowerPoint 한국어판도 이 목록 안에서 고른다). */
 export function autoNumberText(scheme: string, n: number): string {
   const m = /^(alphaLc|alphaUc|arabic|romanLc|romanUc)(ParenBoth|ParenR|Period|Plain|Minus)$/.exec(scheme);
   if (m) {
@@ -137,6 +152,34 @@ export function autoNumberText(scheme: string, n: number): string {
     case 'ea1ChsPeriod':
     case 'ea1ChtPeriod':
       return `${cjk(n)}.`;
+    case 'ea1JpnChsDbPeriod':
+      return `${cjk(n)}．`;
+    case 'arabic1Minus':
+      return `${n}-`;
+    case 'arabic2Minus':
+      return `-${n}-`;
+    case 'hebrew2Minus':
+      return `-${letters(n, HEBREW)}-`;
+    case 'thaiAlphaPeriod':
+      return `${letters(n, THAI_ALPHA)}.`;
+    case 'thaiAlphaParenR':
+      return `${letters(n, THAI_ALPHA)})`;
+    case 'thaiAlphaParenBoth':
+      return `(${letters(n, THAI_ALPHA)})`;
+    case 'thaiNumPeriod':
+      return `${digits(n, 0x0e50)}.`;
+    case 'thaiNumParenR':
+      return `${digits(n, 0x0e50)})`;
+    case 'thaiNumParenBoth':
+      return `(${digits(n, 0x0e50)})`;
+    case 'hindiAlphaPeriod':
+      return `${letters(n, HINDI_VOWELS)}.`;
+    case 'hindiAlpha1Period':
+      return `${letters(n, HINDI_CONSONANTS)}.`;
+    case 'hindiNumPeriod':
+      return `${digits(n, 0x0966)}.`;
+    case 'hindiNumParenR':
+      return `${digits(n, 0x0966)})`;
     default:
       return `${n}.`;
   }

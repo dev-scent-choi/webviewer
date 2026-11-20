@@ -1564,9 +1564,13 @@ body.home-hidden .doclist-link { display: none !important; }
   font-size: var(--bu-size, inherit);
   font-weight: normal;
   font-style: normal;
+  /* 그림 글머리(buBlip) — 글자 대신 한 글자 높이의 그림 */
+  background: var(--bu-img, none) left center / 0.8em 0.8em no-repeat;
+  height: var(--bu-h, auto);
 }
-/* 하이퍼링크 글자(<a:hlinkClick>) — PowerPoint처럼 테마 하이퍼링크 색 + 밑줄 */
+/* 하이퍼링크 글자(<a:hlinkClick>) — PowerPoint처럼 테마 하이퍼링크 색 + 밑줄. "링크도 글자 색"(hlinkClr tx)이면 글자 색 그대로 */
 .slide-textbox .slide-hlink { color: var(--hlink, #0563c1); text-decoration: underline; }
+.slide-textbox .slide-hlink.slide-hlink-tx { color: inherit; }
 /* 문단에 직접 적힌 글머리(buChar)·글머리 없음(buNone)이 상속보다 우선 */
 .slide-textbox .ProseMirror p[data-bu]::before { content: attr(data-bu); }
 .slide-textbox .ProseMirror p[data-bu="none"]::before { content: none; }

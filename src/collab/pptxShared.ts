@@ -111,6 +111,8 @@ export interface SlideLevelLook {
   readonly bulletFont?: string;
   readonly bulletColor?: string;
   readonly bulletSize?: { readonly pct: number } | { readonly pts: number };
+  /** 그림 글머리(buBlip) 그림의 zip 경로 — 있으면 글머리 문자 대신 이 그림 */
+  readonly bulletImage?: string;
   /** 자동 번호(buAutoNum) — 있으면 글머리 문자 대신 번호. scheme은 OOXML ST_TextAutonumberScheme. */
   readonly autoNum?: { readonly scheme: string; readonly startAt: number };
 }

@@ -26,7 +26,7 @@ import {
 } from '../collab/pptxShared.js';
 import { DOC_META_MAP, DOC_META_SAVED_AT_KEY, DOC_META_SAVE_ERROR_AT_KEY } from '../collab/gridShared.js';
 import { pickPresenceColorForName, renderPresenceAvatars } from './presence.js';
-import { pptxTextSchema } from '../pptx/textSchema.js';
+import { pptxTextSchema, setSlideMediaUrl, slideMediaUrl } from '../pptx/textSchema.js';
 import { applyAutofit, applyTextboxLook, autoNumberPlugin, refitAutofit, curvedShapePath, ensureLevelRules, turnCss } from './slideTextLook.js';
 
 /** src/pptx/collab.ts가 서버 쪽에서 선언한 것과 같은 모양이지만, 그 파일은 node:crypto/fflate 등
@@ -53,6 +53,8 @@ interface ViewInfo {
 }
 
 const token = new URLSearchParams(location.search).get('token');
+// 그림 글머리 등 슬라이드 그림 주소(textSchema·slideTextLook이 CSS url()로 쓴다)
+setSlideMediaUrl((path) => `/api/view/slide-media?token=${encodeURIComponent(token ?? '')}&path=${encodeURIComponent(path)}`);
 const titleEl = document.getElementById('doc-title')!;
 const connStatusEl = document.getElementById('conn-status')!;
 const railEl = document.getElementById('slides-rail') as HTMLElement;
@@ -427,7 +429,7 @@ function renderSlideVisual(visual: SlideVisual, pageImageUrl: string | null): HT
 
   if (visual.kind === 'image' && visual.mediaPath) {
     const img = document.createElement('img');
-    img.src = `/api/view/slide-media?token=${encodeURIComponent(token ?? '')}&path=${encodeURIComponent(visual.mediaPath)}`;
+    img.src = slideMediaUrl(visual.mediaPath);
     img.alt = '';
     // 그림 자르기(srcRect): 남은 부분이 상자를 채우도록 원본을 키워 잘린 만큼 밀어 둔다(상자가 overflow:hidden)
     if (visual.crop) {

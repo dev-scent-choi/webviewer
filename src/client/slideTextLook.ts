@@ -3,6 +3,7 @@ import { Decoration, DecorationSet } from 'prosemirror-view';
 import type { Node as PMNode } from 'prosemirror-model';
 import { DEFAULT_INSETS_EMU, type SlideLevelLook, type SlideShapeMeta } from '../collab/pptxShared.js';
 import { autoNumberPlan, gapCss, lineHeightCss } from '../pptx/paragraphLook.js';
+import { slideMediaUrl } from '../pptx/textSchema.js';
 
 /**
  * 편집 캔버스 글상자의 "물려받은 모양"(src/pptx/inheritance.ts가 푼 meta)을 화면에 입히는 부분 —
@@ -26,7 +27,8 @@ export function ensureLevelRules(): void {
       ` color: ${v('color', 'inherit')}; font-weight: ${v('fw', 'inherit')}; font-style: ${v('fi', 'inherit')};` +
       ` text-transform: ${v('tt', 'none')}; font-family: ${v('ff', 'inherit')}; word-break: ${v('wb', 'normal')};` +
       ` --lv-lh: ${v('lh', 'calc(1.2 * (1 - var(--ln-red, 0)))')}; --lv-sb: ${v('sb', '0px')}; --lv-sa: ${v('sa', '0px')};` +
-      ` --bu-ff: var(--p-bu-ff, ${v('buff', 'inherit')}); --bu-color: var(--p-bu-color, ${v('buclr', 'inherit')}); --bu-size: var(--p-bu-size, ${v('busz', 'inherit')}); }`
+      ` --bu-ff: var(--p-bu-ff, ${v('buff', 'inherit')}); --bu-color: var(--p-bu-color, ${v('buclr', 'inherit')}); --bu-size: var(--p-bu-size, ${v('busz', 'inherit')});` +
+      ` --bu-img: var(--p-bu-img, ${v('buimg', 'none')}); --bu-h: var(--p-bu-h, ${v('buh', 'auto')}); }`
     );
   });
   const style = document.createElement('style');
@@ -49,7 +51,11 @@ function setLevelVars(dom: HTMLElement, levels: ReadonlyArray<SlideLevelLook>, s
     };
     set('marl', String(level.marLPt));
     set('ind', String(level.indentPt));
-    set('bu', level.bullet === null ? 'none' : JSON.stringify(level.bullet));
+    set('bu', level.bulletImage ? '""' : level.bullet === null ? 'none' : JSON.stringify(level.bullet));
+    if (level.bulletImage) {
+      set('buimg', `url("${slideMediaUrl(level.bulletImage)}")`);
+      set('buh', '1em');
+    }
     set('sz', `calc(${level.sizePt} * ${slidePt})`);
     if (level.color && /^#[0-9A-Fa-f]{6}$/.test(level.color)) set('color', level.color);
     if (level.bold) set('fw', '700');

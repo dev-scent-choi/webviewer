@@ -138,7 +138,6 @@ describe('paragraphLook: 문단 직접 속성·자동 번호', () => {
       keepWords: true,
       marLPt: 27,
       indentPt: -27,
-      bulletColor: '#FF0000',
     });
     expect(pPrLook('<a:pPr><a:buChar char="&amp;"/></a:pPr>').bullet).toEqual({ kind: 'char', char: '&' });
     expect(pPrLook(null)).toEqual({});
@@ -403,5 +402,48 @@ describe('검토 Minor 5: 색 변환은 파일 순서대로, hue·comp·inv·gra
     expect(theme.resolve({ 'a:srgbClr': { '@_val': '102030', 'a:inv': {} } })).toBe('#EFDFCF');
     expect(theme.resolve({ 'a:srgbClr': { '@_val': 'FF0000', 'a:gray': {} } })).toBe('#4D4D4D');
     expect(theme.resolve({ 'a:srgbClr': { '@_val': 'FF0000', 'a:hueOff': { '@_val': '7200000' } } })).toBe('#00FF00');
+  });
+});
+
+describe('검토 Minor 7: 자동 번호 체계 전부(41가지)·한자 수 11 이상', () => {
+  test('대표 값', () => {
+    const cases: Array<[string, number, string]> = [
+      ['ea1JpnKorPlain', 11, '十一'], ['ea1JpnKorPeriod', 20, '二十.'], ['ea1ChsPlain', 105, '百五'], ['ea1JpnChsDbPeriod', 3, '三．'],
+      ['arabic1Minus', 2, '2-'], ['arabic2Minus', 2, '-2-'], ['hebrew2Minus', 1, '-א-'], ['thaiAlphaPeriod', 2, 'ข.'],
+      ['thaiNumParenBoth', 12, '(๑๒)'], ['hindiNumPeriod', 3, '३.'], ['hindiAlphaPeriod', 1, 'अ.'], ['hindiAlpha1Period', 2, 'ख.'],
+      ['circleNumWdBlackPlain', 3, '❸'], ['alphaUcParenBoth', 27, '(AA)'], ['romanLcParenR', 14, 'xiv)'],
+    ];
+    for (const [scheme, n, want] of cases) expect([scheme, autoNumberText(scheme, n)]).toEqual([scheme, want]);
+  });
+});
+
+describe('검토 Minor 4·6·8: 빈 줄 높이, "링크도 글자 색", 테마 색·그림 글머리', () => {
+  const toDOM = (node: ReturnType<typeof schema.node>) => schema.nodes.paragraph.spec.toDOM!(node) as [string, Record<string, string>, number];
+  test('빈 문단은 문단 끝 글자 크기(endParaRPr sz)로 높이를 잡는다', () => {
+    const [, attrs] = toDOM(schema.node('paragraph', { endRPr: '<a:endParaRPr lang="ko-KR" sz="4000"/>' }, []));
+    expect(attrs.style).toContain('font-size: calc(40 *');
+  });
+  test('hlinkClr val="tx" 하이퍼링크는 글자 색 그대로(클래스)', () => {
+    const raw = '<a:rPr><a:hlinkClick r:id="rId2"><a:extLst><a:ext uri="{A12FA001-AC4F-418D-AE19-62706E023703}"><ahyp:hlinkClr xmlns:ahyp="http://schemas.microsoft.com/office/drawing/2018/hyperlinkcolor" val="tx"/></a:ext></a:extLst></a:hlinkClick></a:rPr>';
+    expect(schema.marks.runProps.spec.toDOM!(schema.marks.runProps.create({ raw }), true)).toEqual(['span', { class: 'slide-hlink slide-hlink-tx' }, 0]);
+  });
+  test('문단 직접 글머리 색(schemeClr)은 테마로 풀고, 그림 글머리는 슬라이드 관계로 그림 경로를 찾는다', async () => {
+    const { mediaResolverFor } = await import('../src/pptx/theme.js');
+    const zip = deck(sp(2, '', xfrm(0, 0, 1, 1), '<a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:buClr><a:schemeClr val="accent2"/></a:buClr><a:buChar char="■"/></a:pPr><a:r><a:t>색</a:t></a:r></a:p><a:p><a:pPr><a:buBlip><a:blip r:embed="rId2"/></a:buBlip></a:pPr><a:r><a:t>그림</a:t></a:r></a:p>'));
+    const theme = loadThemeColors(zip, 'slide1.xml');
+    const [shape] = parseSlideShapes(new TextDecoder().decode(zip['ppt/slides/slide1.xml']), theme, new Set(), mediaResolverFor(zip, 'ppt/slides/slide1.xml'));
+    expect(shape.doc.child(0).attrs.buColor).toBe('#C0504D');
+    expect(shape.doc.child(1).attrs.buImage).toBe('ppt/media/image1.png');
+    const [, attrs] = toDOM(shape.doc.child(1));
+    expect(attrs['data-bu']).toBe('');
+    expect(attrs.style).toContain('--p-bu-img: url(');
+  });
+  test('레이아웃 목록 스타일의 그림 글머리는 레이아웃 관계로 찾는다', () => {
+    const zip = deck(
+      sp(2, '<p:ph idx="1"/>', '', '<a:bodyPr/><a:p/>'),
+      sp(3, '<p:ph idx="1"/>', xfrm(1, 1, 1, 1), '<a:bodyPr/><a:lstStyle><a:lvl1pPr><a:buBlip><a:blip r:embed="rIdPic"/></a:buBlip></a:lvl1pPr></a:lstStyle><a:p/>'),
+    );
+    zip['ppt/slideLayouts/_rels/slideLayout1.xml.rels'] = enc(rels([['rId1', 'slideMaster', '../slideMasters/slideMaster1.xml'], ['rIdPic', 'image', '../media/image1.png']]));
+    expect(resolveSlideShapeLooks(zip, 'slide1.xml').get('2')?.levels[0]).toMatchObject({ bullet: '•', bulletImage: 'ppt/media/image1.png' });
   });
 });

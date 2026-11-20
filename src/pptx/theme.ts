@@ -65,6 +65,62 @@ export function relTargetOf(zip: Record<string, Uint8Array>, part: string, typeS
   return out.join('/');
 }
 
+/** src/routes/viewer.ts의 /api/view/slide-media도 Content-Type 헤더를 정하는 데 그대로
+ * 재사용한다 — 여기서 "지원 포맷"으로 판단한 것과 실제로 내려주는 헤더가 어긋나지 않게. */
+export const IMAGE_MIME_BY_EXT: Record<string, string> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  bmp: 'image/bmp',
+  svg: 'image/svg+xml',
+  webp: 'image/webp',
+  // emf/wmf/tiff 등은 의도적으로 뺐다 — 브라우저가 <img>로 직접 그릴 수 없는 포맷이라
+  // data URI를 만들어봐야 화면에 아무것도 안 나온다(깨진 이미지 아이콘보다는 그냥 생략이 낫다).
+};
+
+/** .rels 파일에서 "rId → Target" 매핑만 뽑는다(src/pptx/collab.ts의 slideRelsMap과 같은 패턴). */
+export function relsMap(relsXml: string): Map<string, string> {
+  const map = new Map<string, string>();
+  const relRe = /<Relationship\b[^>]*\/>/g;
+  for (const relTag of relsXml.match(relRe) ?? []) {
+    const idMatch = /\bId="([^"]+)"/.exec(relTag); // 관계 id는 rIdN이 흔하지만 아무 이름이나 된다
+    const targetMatch = /Target="([^"]+)"/.exec(relTag);
+    if (idMatch && targetMatch) map.set(idMatch[1], targetMatch[1]);
+  }
+  return map;
+}
+
+/** .rels의 Target(예: "../media/image1.png")을 슬라이드 파트 기준 zip 내부 절대 경로로 푼다. */
+export function resolveRelativePath(basePart: string, target: string): string {
+  if (target.startsWith('/')) return target.slice(1);
+  const stack = basePart.split('/').slice(0, -1);
+  for (const part of target.split('/')) {
+    if (part === '..') stack.pop();
+    else if (part !== '.') stack.push(part);
+  }
+  return stack.join('/');
+}
+
+/** 파트(슬라이드·레이아웃·마스터) 안 관계 id(r:embed)를 그 파트의 rels로 따라가 브라우저가 그릴 수 있는 그림의 zip 경로로.
+ * 관계가 없거나, 미디어 파트가 없거나(손상), 브라우저가 못 그리는 형식(EMF 등)이면 undefined. rels를 이미 읽었으면 넘긴다. */
+export function mediaResolverFor(zip: Record<string, Uint8Array>, part: string, rels?: Map<string, string>): (rId: string) => string | undefined {
+  let map = rels;
+  return (rId) => {
+    if (!map) {
+      const slash = part.lastIndexOf('/');
+      const bytes = zip[`${part.slice(0, slash)}/_rels/${part.slice(slash + 1)}.rels`];
+      map = bytes ? relsMap(decoder.decode(bytes)) : new Map();
+    }
+    const target = map.get(rId);
+    if (!target) return undefined;
+    const normalized = resolveRelativePath(part, target);
+    if (!zip[normalized]) return undefined; // 관계는 있는데 실제 미디어 파트가 없음(손상)
+    const ext = normalized.split('.').pop()?.toLowerCase() ?? '';
+    return IMAGE_MIME_BY_EXT[ext] ? normalized : undefined; // 브라우저가 못 그리는 포맷(emf/wmf 등)은 빼고
+  };
+}
+
 /* ---------- 색 변환(DrawingML) ---------- */
 
 function hexToRgb(hex: string): [number, number, number] {

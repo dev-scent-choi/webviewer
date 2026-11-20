@@ -1,6 +1,8 @@
 import { XMLBuilder, XMLParser } from 'fast-xml-parser';
 import { partialLevelFrom } from './inheritance.js';
-import { loadThemeColors, relTargetOf, type ThemeColors } from './theme.js';
+import { IMAGE_MIME_BY_EXT, loadThemeColors, mediaResolverFor, relTargetOf, relsMap, type ThemeColors } from './theme.js';
+
+export { IMAGE_MIME_BY_EXT };
 import type { Node as PMNode } from 'prosemirror-model';
 import { pptxTextSchema as schema } from './textSchema.js';
 import { SLIDE_WIDTH_EMU, SLIDE_HEIGHT_EMU, type SlideVisual } from '../collab/pptxShared.js';
@@ -121,6 +123,8 @@ const rawXml = (tag: string, node: unknown) => xmlBuilder.build({ [tag]: typeof 
  */
 export type TrustedFragments = Set<string>;
 type Keep = (xml: string) => string;
+/** 관계 id → 그림 zip 경로(theme.ts mediaResolverFor) */
+type MediaOf = (rId: string) => string | undefined;
 
 /** 이 편집기가 모델링하는 문단 자식 — 그 밖의 자식(수식 mc:AlternateContent/a14:m 등)은 원문째 보존 조각(field 노드) */
 const MODELED_PARAGRAPH_CHILDREN = new Set(['a:pPr', 'a:r', 'a:br', 'a:fld', 'a:endParaRPr']);
@@ -139,7 +143,7 @@ function fragmentText(node: unknown): string {
   return out;
 }
 
-function paragraphFromXml(pNode: XmlNode, theme: ThemeColors | undefined, keep: Keep): PMNode {
+function paragraphFromXml(pNode: XmlNode, theme: ThemeColors | undefined, keep: Keep, mediaOf?: MediaOf): PMNode {
   const items = Object.keys(pNode)
     .filter((tag) => !tag.startsWith('@_') && tag !== '#text' && tag !== 'a:pPr' && tag !== 'a:endParaRPr')
     .flatMap((tag) => asArray<XmlNode>(pNode[tag] as XmlNode | XmlNode[] | undefined).map((node) => ({ tag, node: typeof node === 'object' && node ? node : {} })))
@@ -166,6 +170,10 @@ function paragraphFromXml(pNode: XmlNode, theme: ThemeColors | undefined, keep: 
   const algn = pPr?.['@_algn'] as string | undefined;
   const lvl = Number(pPr?.['@_lvl'] ?? 0);
   const bullet = partialLevelFrom(pPr).bullet;
+  // 문단에 직접 적힌 글머리 색(테마 색 포함 — 화면 표시용으로 풀어 둔다)과 그림 글머리(슬라이드 관계로 찾은 그림 경로)
+  const buColor = theme?.resolve(pPr?.['a:buClr'] as XmlNode | undefined);
+  const blipId = ((pPr?.['a:buBlip'] as XmlNode | undefined)?.['a:blip'] as XmlNode | undefined)?.['@_r:embed'];
+  const buImage = typeof blipId === 'string' ? mediaOf?.(blipId) : undefined;
   return schema.node(
     'paragraph',
     {
@@ -174,6 +182,8 @@ function paragraphFromXml(pNode: XmlNode, theme: ThemeColors | undefined, keep: 
       lvl: Number.isInteger(lvl) && lvl >= 0 && lvl <= 8 ? lvl : 0,
       bu: bullet === null ? 'none' : (bullet ?? null),
       endRPr: endRPr !== undefined ? keep(rawXml('a:endParaRPr', endRPr)) : null,
+      buColor: buColor ?? null,
+      buImage: buImage ?? null,
     },
     inline,
   );
@@ -313,6 +323,7 @@ function collectShapesRecursive(
   shapes: ParsedShape[],
   theme: ThemeColors | undefined,
   keep: Keep,
+  mediaOf?: MediaOf,
 ): void {
   for (const sp of asArray<XmlNode>(node['p:sp'] as XmlNode | XmlNode[] | undefined)) {
     const txBody = sp['p:txBody'] as XmlNode | undefined;
@@ -325,7 +336,7 @@ function collectShapesRecursive(
     const place = placeXfrm(transforms, spPr?.['a:xfrm'] as XmlNode | undefined);
     const geom = (spPr?.['a:prstGeom'] as XmlNode | undefined)?.['@_prst'];
 
-    const paragraphs = asArray<XmlNode>(txBody['a:p'] as XmlNode | XmlNode[] | undefined).map((p) => paragraphFromXml(p, theme, keep));
+    const paragraphs = asArray<XmlNode>(txBody['a:p'] as XmlNode | XmlNode[] | undefined).map((p) => paragraphFromXml(p, theme, keep, mediaOf));
     const doc = schema.node(
       'doc',
       null,
@@ -347,7 +358,7 @@ function collectShapesRecursive(
   for (const grp of asArray<XmlNode>(node['p:grpSp'] as XmlNode | XmlNode[] | undefined)) {
     const groupTransform = groupTransformFromGrpSpPr(grp['p:grpSpPr'] as XmlNode | undefined);
     const nextTransforms = groupTransform ? [...transforms, groupTransform] : transforms;
-    collectShapesRecursive(grp, nextTransforms, shapes, theme, keep);
+    collectShapesRecursive(grp, nextTransforms, shapes, theme, keep, mediaOf);
   }
 }
 
@@ -377,7 +388,7 @@ function tagParagraphChildOrder(xml: string): string {
  * 재질서(저장 시 position은 쓰지 않으므로, hasShape/spliceShapeTxBody/removeShape의 원본 XML
  * 텍스트 기반 매칭은 이 중첩 여부와 무관하게 이미 그대로 동작한다, 이 함수만 읽기 전용으로 몰랐을
  * 뿐이다). */
-export function parseSlideShapes(slideXml: string, theme?: ThemeColors, trusted: TrustedFragments = new Set()): ParsedShape[] {
+export function parseSlideShapes(slideXml: string, theme?: ThemeColors, trusted: TrustedFragments = new Set(), mediaOf?: MediaOf): ParsedShape[] {
   const parsed = parser.parse(tagParagraphChildOrder(slideXml)) as XmlNode;
   const keep: Keep = (xml) => {
     trusted.add(xml);
@@ -386,7 +397,7 @@ export function parseSlideShapes(slideXml: string, theme?: ThemeColors, trusted:
   const sld = parsed['p:sld'] as XmlNode;
   const spTree = (sld['p:cSld'] as XmlNode)['p:spTree'] as XmlNode;
   const shapes: ParsedShape[] = [];
-  collectShapesRecursive(spTree, [], shapes, theme, keep);
+  collectShapesRecursive(spTree, [], shapes, theme, keep, mediaOf);
   return shapes;
 }
 
@@ -759,44 +770,6 @@ export function removeShape(slideXml: string, shapeId: string): string {
  * export되지 않는다(그 요소들이 있던 자리는 원본 XML 그대로 복사되므로 여기서 뭘 하든
  * 저장되는 파일에는 영향이 없다). */
 
-/** .rels 파일에서 "rId → Target" 매핑만 뽑는다(src/pptx/collab.ts의 slideRelsMap과 같은 패턴,
- * 이 파일은 그쪽을 import할 이유가 없을 만큼 단순해 그대로 복제했다). */
-function relsMap(relsXml: string): Map<string, string> {
-  const map = new Map<string, string>();
-  const relRe = /<Relationship\b[^>]*\/>/g;
-  for (const relTag of relsXml.match(relRe) ?? []) {
-    const idMatch = /Id="(rId\d+)"/.exec(relTag);
-    const targetMatch = /Target="([^"]+)"/.exec(relTag);
-    if (idMatch && targetMatch) map.set(idMatch[1], targetMatch[1]);
-  }
-  return map;
-}
-
-/** .rels의 Target(예: "../media/image1.png")을 슬라이드 파트 기준 zip 내부 절대 경로로 푼다. */
-function resolveRelativePath(basePart: string, target: string): string {
-  if (target.startsWith('/')) return target.slice(1);
-  const stack = basePart.split('/').slice(0, -1);
-  for (const part of target.split('/')) {
-    if (part === '..') stack.pop();
-    else if (part !== '.') stack.push(part);
-  }
-  return stack.join('/');
-}
-
-/** src/routes/viewer.ts의 /api/view/slide-media도 Content-Type 헤더를 정하는 데 그대로
- * 재사용한다 — 여기서 "지원 포맷"으로 판단한 것과 실제로 내려주는 헤더가 어긋나지 않게. */
-export const IMAGE_MIME_BY_EXT: Record<string, string> = {
-  png: 'image/png',
-  jpg: 'image/jpeg',
-  jpeg: 'image/jpeg',
-  gif: 'image/gif',
-  bmp: 'image/bmp',
-  svg: 'image/svg+xml',
-  webp: 'image/webp',
-  // emf/wmf/tiff 등은 의도적으로 뺐다 — 브라우저가 <img>로 직접 그릴 수 없는 포맷이라
-  // data URI를 만들어봐야 화면에 아무것도 안 나온다(깨진 이미지 아이콘보다는 그냥 생략이 낫다).
-};
-
 /** presentation.xml의 실제 슬라이드 크기(<p:sldSz cx cy>, EMU). 없거나 읽을 수 없으면 표준 16:9.
  * 4:3(9144000×6858000) 같은 다른 크기의 문서를 16:9 좌표계로 그리면 모든 도형이 왼쪽으로
  * 찌그러지고 비율이 틀어진다 — 공공기관 문서에 흔한 4:3 파일로 실제 재현. */
@@ -1093,14 +1066,7 @@ export function parseSlideVisuals(zipEntries: Record<string, Uint8Array>, source
   const visuals: SlideVisual[] = [];
 
   function resolveImageMediaPath(owner: VisualPart, rId: string | undefined): string | undefined {
-    if (!rId) return undefined;
-    const target = owner.rels.get(rId);
-    if (!target) return undefined;
-    const normalized = resolveRelativePath(owner.part, target);
-    if (!zipEntries[normalized]) return undefined; // 관계는 있는데 실제 미디어 파트가 없음(손상)
-    const ext = normalized.split('.').pop()?.toLowerCase() ?? '';
-    if (!IMAGE_MIME_BY_EXT[ext]) return undefined; // 브라우저가 못 그리는 포맷(emf/wmf 등)
-    return normalized;
+    return rId ? mediaResolverFor(zipEntries, owner.part, owner.rels)(rId) : undefined;
   }
 
   // 배경 — <p:bg>는 <p:spTree> 형제라 도형 루프가 보지 못한다. 슬라이드에 없으면 레이아웃,
