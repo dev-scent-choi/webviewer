@@ -167,6 +167,11 @@ for it in check:
             results.append({'id': it['id'], 'doc': it['doc'], 'where': where, 'item': h, 'ok': norm(h) in sq})
         for h in it.get('not', []):
             results.append({'id': it['id'], 'doc': it['doc'], 'where': where, 'item': 'not ' + h, 'ok': norm(h) not in sq})
+# PPT 편집 화면 DOM 점검(pptx_checks.json, capture.mjs → pptx_dom.mjs가 잰 결과)
+for r in rows:
+    ed = r['_entry'].get('edit')
+    for c in ((ed.get('dom') if isinstance(ed, dict) else None) or []):
+        results.append({'id': c['id'], 'doc': c['doc'], 'where': 'editDom', 'item': f"s{c['slide']} {c['item']}", 'ok': c['ok'], 'got': {k: v for k, v in c['got'].items() if k != 'found'} if c['got'].get('found') else '없음'})
 for r in rows: r.pop('_entry', None)
 
 def mean(xs):

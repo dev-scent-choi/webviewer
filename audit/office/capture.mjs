@@ -5,6 +5,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { chromium } from 'playwright';
+import { runPptxDomChecks } from './pptx_dom.mjs';
 
 const [BASE = 'http://127.0.0.1:8141', CORPUS = 'audit/office/corpus', OUT = 'docs/quality-audit/out', FILTER = ''] = process.argv.slice(2);
 for (const d of ['view', 'edit', 'lo']) fs.mkdirSync(path.join(OUT, d), { recursive: true });
@@ -75,13 +76,15 @@ async function shotSlidesEdit(page, base, name) {
   await settle(page, 3000);
   const n = await page.locator('.slide-card').count();
   const texts = [];
+  const dom = []; // pptx_checks.json DOM 점검(pptx_dom.mjs)
   for (let i = 0; i < n; i += 1) {
     await page.locator('.slide-card').nth(i).click();
     await settle(page, 2500);
     await page.locator('#slide-canvas').screenshot({ path: path.join(OUT, 'edit', `${name}-s${i + 1}.png`) });
     texts.push(await page.locator('#slide-canvas').innerText());
+    dom.push(...(await runPptxDomChecks(page, name, i + 1)));
   }
-  return { slides: n, texts };
+  return { slides: n, texts, dom };
 }
 
 const browser = await chromium.launch();

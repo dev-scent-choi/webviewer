@@ -2,7 +2,7 @@
 // 1) 정답 PDF(MS Office)가 없으면 ref_office.ps1로 만든다(이 PC에 Office가 있을 때만)
 // 2) 이 작업 폴더의 서버를 시험용 포트·전용 데이터/임시/LibreOffice 프로필로 따로 띄운다(운영 8000/8010과 겹치지 않게)
 // 3) capture.mjs로 보기·편집 화면을 찍고 4) compare.py로 나란히 그림과 점수(scores.md)를 낸다 5) 띄운 서버만 끈다
-// 사용: npm run audit:office [-- --port 8141 --only docx]
+// 사용: npm run audit:office [-- --port 8141 --only docx] [--no-office]  (--no-office: 정답 PDF가 없어도 MS Office를 띄우지 않고 멈춘다)
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -20,6 +20,7 @@ for (const d of ['data', 'tmp', 'lo']) fs.mkdirSync(path.join(run, d), { recursi
 const refDir = path.join(OUT, 'ref');
 const want = ['docx', 'xlsx', 'pptx'].flatMap((k) => fs.readdirSync(path.join(CORPUS, k)).filter((f) => !f.startsWith('~$')).map((f) => f.replace(/\.[^.]+$/, '')));
 const missing = want.filter((n) => !fs.existsSync(path.join(refDir, `${n}.pdf`)));
+if (missing.length && process.argv.includes('--no-office')) throw new Error(`정답 PDF ${missing.length}개 없음(${missing.join(', ')}) — --no-office라 MS Office를 띄우지 않는다`);
 if (missing.length && process.platform === 'win32') {
   // 정답은 Office로 다시 저장하기 전 원본(raw)에서 만든다 — git엔 raw가 없으니 먼저 다시 만든다(a1~a3은 ArtCraft 시험 파일이라 corpus 것을 쓴다)
   if (!fs.existsSync(path.join(CORPUS, 'raw'))) {
