@@ -1457,7 +1457,15 @@ function renderGridViewport() {
       if (shown && !(cellStyleObj && cellStyleObj.a) && !isSpillEligible(cellStyleObj, shown)) {
         classes.push(shown === 'TRUE' || shown === 'FALSE' ? 'g-bool' : 'g-num');
       }
-      const value = isEmpty ? '' : isHit ? markMatches(shown, searchState.lastQuery) : escapeHtml(shown);
+      const fillAt = isEmpty ? -1 : shown.indexOf(GRID_FILL_MARK);
+      // 채움(회계 서식의 ₩ … 25,000) — 앞뒤를 칸 양 끝에 붙인다
+      const value = isEmpty
+        ? ''
+        : fillAt >= 0
+          ? `<span class="g-fill"><span>${escapeHtml(shown.slice(0, fillAt))}</span><span>${escapeHtml(shown.slice(fillAt + 1))}</span></span>`
+          : isHit
+            ? markMatches(shown, searchState.lastQuery)
+            : escapeHtml(shown);
       const span = merge ? ` colspan="${merge.cs}"${merge.rs > 1 ? ` rowspan="${merge.rs}"` : ''}` : '';
       // 실제 엑셀처럼 빈 이웃 칸 위로 내용이 넘쳐 보이게 한다(병합 칸이나 값 있는 칸에서 멈춘다).
       // 줄 바꿈 칸은 넘치지 않고 자기 칸 안에서 줄을 바꾼다.
@@ -1707,8 +1715,12 @@ function selectedCellText() {
   if (!sel) return '';
   const cell = cellAt(gridState.active, sel.row, sel.col - 1);
   if (!cell || cell === 0) return '';
-  return cell.v ?? '';
+  // 수식 입력줄은 엑셀처럼 값(서식 전 — (4,321)이 아니라 -4321, ####로 가린 칸도 값)
+  return cell.n ?? cell.v ?? '';
 }
+
+/** 서식 코드의 채움(*) 표시 — 이 글자 앞은 칸 왼쪽 끝, 뒤는 오른쪽 끝(src/collab/numberFormat.ts FILL_MARK와 같은 글자) */
+const GRID_FILL_MARK = '\u0001';
 
 /** 선택된 칸이 바뀔 때마다 툴바 바로 밑의 수식 입력줄 자리(읽기 전용 #grid-formula-ref/
  * #grid-formula-value)를 갱신한다. */

@@ -58,6 +58,7 @@ import type { GridChart } from '../xlsx/chartModel.js';
 import { chartDataOf, renderChartSvg } from '../xlsx/chartSvg.js';
 import { rowTopPx } from '../xlsx/sheetGeometry.js';
 import { cellBoxCssText } from '../collab/cellBoxCss.js';
+import { FILL_MARK } from '../collab/numberFormat.js';
 
 export interface ViewContext {
   readonly claims: ViewClaims;
@@ -351,10 +352,11 @@ function searchGrid(grid: LoadedGrid, query: string, limit: number, skipHidden =
       const cells = JSON.parse(raw) as Array<GridCell | 0>;
       for (let c = 0; c < cells.length; c += 1) {
         const cell = cells[c];
-        if (cell === 0 || hidden?.col(c) || !cell.v.toLowerCase().includes(needle)) continue;
+        // 보이는 글자(채움 표시는 빼고)와 값(서식 전 — ####로 가린 칸, (4,321) → -4321) 둘 다로 찾는다
+        if (cell === 0 || hidden?.col(c) || !(cell.v.replace(FILL_MARK, '').toLowerCase().includes(needle) || (cell.n ?? '').toLowerCase().includes(needle))) continue;
         total += 1;
         if (hits.length < limit) {
-          hits.push({ sheet: sheetIdx, r, c: c + 1, snippet: cell.v.slice(0, 120) });
+          hits.push({ sheet: sheetIdx, r, c: c + 1, snippet: cell.v.replace(FILL_MARK, ' ').slice(0, 120) });
         }
       }
     }

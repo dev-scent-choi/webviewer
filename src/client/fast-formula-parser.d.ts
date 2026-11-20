@@ -112,3 +112,9 @@ declare module 'fast-formula-parser/ssf/ssf.js' {
   };
   export default SSF;
 }
+
+/** ExcelJS 기본 서식 번호 표(번호 → { f: 코드, 'ko-kr': … }) — spreadsheet.ts가 한국어 엑셀 코드로 채운다 */
+declare module 'exceljs/lib/xlsx/defaultnumformats.js' {
+  const table: Record<string, { f?: string; [locale: string]: string | undefined }>;
+  export default table;
+}

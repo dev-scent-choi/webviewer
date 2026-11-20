@@ -23,7 +23,7 @@ import {
 import { dedupeByName, pickPresenceColorForName, renderPresenceAvatars, type AwarenessUserState } from './presence.js';
 import { applyWatermark } from './watermark.js';
 import { parseTypedNumber } from '../collab/cellValueShared.js';
-import { formatValueText, hashIfTooWide, isNumberOrDateValue, isTextNumFmt, type FormattedValue } from '../collab/numberFormat.js';
+import { FILL_MARK, formatValueText, hashIfTooWide, isNumberOrDateValue, isTextNumFmt, type FormattedValue } from '../collab/numberFormat.js';
 import { initOfficeShell } from './officeShell.js';
 import { bindDropdown } from './ribbonMenus.js';
 import { currentRegion, setupGridCharts } from './gridCharts.js';
@@ -628,7 +628,18 @@ async function main(): Promise<void> {
       span.className = 'g-cell-spill';
       td.replaceChildren(span);
     }
-    span.textContent = text;
+    const fillAt = text.indexOf(FILL_MARK);
+    if (fillAt >= 0) {
+      // 채움(회계 서식의 ₩ … 25,000) — 앞뒤를 칸 양 끝에 붙인다(보기 화면과 같은 .g-fill)
+      const fill = document.createElement('span');
+      fill.className = 'g-fill';
+      const left = document.createElement('span');
+      left.textContent = text.slice(0, fillAt);
+      const right = document.createElement('span');
+      right.textContent = text.slice(fillAt + 1);
+      fill.append(left, right);
+      span.replaceChildren(fill);
+    } else span.textContent = text;
     span.style.width = '';
     span.style.marginLeft = '';
     // 글자 회전·세로쓰기(보기 화면과 같은 규칙 — collab/cellBoxCss.ts)

@@ -3,7 +3,35 @@ import type { DocumentStore } from './storage.js';
 import type { DocumentMeta } from './types.js';
 import { buildSheetNameIndex, computeGridCellDisplay } from './xlsx/formulas.js';
 import { dateToDateText, isDateNumFmt, serialToDateText } from './collab/cellValueShared.js';
-import { formatNumberCode, hashIfTooWide, isNumberOrDateValue, isTextNumFmt } from './collab/numberFormat.js';
+import { EXCEL_INDEXED_COLORS, formatNumberCode, hashIfTooWide, isNumberOrDateValue, isTextNumFmt } from './collab/numberFormat.js';
+import excelBuiltinNumFmts from 'exceljs/lib/xlsx/defaultnumformats.js';
+
+/**
+ * 파일에 서식 코드 없이 번호(numFmtId)만 적힌 기본 서식 — 엑셀은 번호의 뜻을 사용자 로캘로 정한다. ExcelJS는 미국식 코드만 알고
+ * 한국어 엑셀의 통화(5~8)·회계(41~44)·한글 날짜(27~36, 50~58)는 아예 몰라 "일반"(날짜는 일련번호)이 됐다.
+ * 우리 사용자는 한국어 엑셀이므로 ExcelJS의 기본 서식 표를 한국어 엑셀 코드로 채운다(읽기 전에 한 번 — 모든 경로가 이 모듈을 거친다).
+ */
+const KO_BUILTIN_NUMFMTS: Readonly<Record<number, string>> = {
+  5: '"₩"#,##0;\\-"₩"#,##0',
+  6: '"₩"#,##0;[Red]\\-"₩"#,##0',
+  7: '"₩"#,##0.00;\\-"₩"#,##0.00',
+  8: '"₩"#,##0.00;[Red]\\-"₩"#,##0.00',
+  14: 'yyyy-mm-dd',
+  22: 'yyyy-mm-dd h:mm',
+  37: '#,##0;-#,##0',
+  38: '#,##0;[Red]-#,##0',
+  39: '#,##0.00;-#,##0.00',
+  40: '#,##0.00;[Red]-#,##0.00',
+  41: '_-* #,##0_-;\\-* #,##0_-;_-* "-"_-;_-@_-',
+  42: '_-"₩"* #,##0_-;\\-"₩"* #,##0_-;_-"₩"* "-"_-;_-@_-',
+  43: '_-* #,##0.00_-;\\-* #,##0.00_-;_-* "-"??_-;_-@_-',
+  44: '_-"₩"* #,##0.00_-;\\-"₩"* #,##0.00_-;_-"₩"* "-"??_-;_-@_-',
+};
+for (const [id, entry] of Object.entries(excelBuiltinNumFmts as Record<string, { f?: string; 'ko-kr'?: string }>)) {
+  const ko = KO_BUILTIN_NUMFMTS[Number(id)] ?? entry['ko-kr'];
+  if (ko) entry.f = ko;
+}
+for (const [id, f] of Object.entries(KO_BUILTIN_NUMFMTS)) (excelBuiltinNumFmts as Record<string, { f?: string }>)[id] ??= { f };
 import type { BorderSpec } from './collab/cellBoxCss.js';
 import { stripDrawings } from './xlsx/drawingPassthrough.js';
 import { unzipSync, strFromU8 } from 'fflate';
@@ -332,21 +360,6 @@ function applyTint(hex: string, tint: number): string {
   return `${toHex(r2)}${toHex(g2)}${toHex(b2)}`.toUpperCase();
 }
 
-/** 레거시 인덱스 팔레트 (표준 0~63) */
-const INDEXED_COLORS: Record<number, string> = {
-  0: '000000', 1: 'FFFFFF', 2: 'FF0000', 3: '00FF00', 4: '0000FF', 5: 'FFFF00',
-  6: 'FF00FF', 7: '00FFFF', 8: '000000', 9: 'FFFFFF', 10: 'FF0000', 11: '00FF00',
-  12: '0000FF', 13: 'FFFF00', 14: 'FF00FF', 15: '00FFFF', 16: '800000', 17: '008000',
-  18: '000080', 19: '808000', 20: '800080', 21: '008080', 22: 'C0C0C0', 23: '808080',
-  24: '9999FF', 25: '993366', 26: 'FFFFCC', 27: 'CCFFFF', 28: '660066', 29: 'FF8080',
-  30: '0066CC', 31: 'CCCCFF', 32: '000080', 33: 'FF00FF', 34: 'FFFF00', 35: '00FFFF',
-  36: '800080', 37: '800000', 38: '008080', 39: '0000FF', 40: '00CCFF', 41: 'CCFFFF',
-  42: 'CCFFCC', 43: 'FFFF99', 44: '99CCFF', 45: 'FF99CC', 46: 'CC99FF', 47: 'FFCC99',
-  48: '3366FF', 49: '33CCCC', 50: '99CC00', 51: 'FFCC00', 52: 'FF9900', 53: 'FF6600',
-  54: '666699', 55: '969696', 56: '003366', 57: '339966', 58: '003300', 59: '333300',
-  60: '993300', 61: '993366', 62: '333399', 63: '333333',
-};
-
 interface ExcelColorLike {
   readonly argb?: string;
   readonly theme?: number;
@@ -368,7 +381,7 @@ export function resolveColor(
     return `#${withTint}`;
   }
   if (color.indexed !== undefined) {
-    const hex = INDEXED_COLORS[color.indexed];
+    const hex = EXCEL_INDEXED_COLORS[color.indexed];
     return hex ? `#${hex}` : undefined;
   }
   return undefined;
@@ -377,20 +390,6 @@ export function resolveColor(
 const EXCEL_EPOCH_MS = Date.UTC(1899, 11, 30);
 /** 숫자·날짜처럼 보이는 글자 — 글자 값인데 이런 모양이면 왼쪽 정렬을 박아 둔다(화면은 모양으로 정렬을 고른다) */
 const NUMERIC_LOOKING_TEXT = /^\s*[-+(]?[₩$€£¥]?\s*(\d[\d,]*(\.\d*)?|\.\d+)([eE][-+]?\d+)?\)?%?\s*$|^\d{4}-\d{2}-\d{2}/;
-
-/** ExcelJS는 파일에 서식 코드 없이 번호만 적힌 기본 서식(numFmtId 14·22·37~40)을 영어(미국) 코드로 바꿔 준다.
- * 한국어 엑셀은 같은 번호를 다르게 보여 준다(38 → -4,321 빨강, 14 → 2026-11-20) — 사용자 PC와 같게 한국어 코드로 바꾼다. */
-const KO_BUILTIN_NUMFMT: Readonly<Record<string, string>> = {
-  'mm-dd-yy': 'yyyy-mm-dd',
-  'm/d/yy "h":mm': 'yyyy-mm-dd h:mm',
-  '#,##0 ;(#,##0)': '#,##0;-#,##0',
-  '#,##0 ;[Red](#,##0)': '#,##0;[Red]-#,##0',
-  '#,##0.00 ;(#,##0.00)': '#,##0.00;-#,##0.00',
-  '#,##0.00 ;[Red](#,##0.00)': '#,##0.00;[Red]-#,##0.00',
-};
-function numFmtOf(cell: Pick<ExcelJS.Cell, 'numFmt'>): string | undefined {
-  return cell.numFmt ? (KO_BUILTIN_NUMFMT[cell.numFmt] ?? cell.numFmt) : undefined;
-}
 
 /** 칸 하나의 표시 글자(text)와 값 글자(value — 수식 계산·편집기·저장이 쓰는 원래 값) */
 export interface CellTexts {
@@ -456,11 +455,11 @@ export function cellTexts(cell: ExcelJS.Cell): CellTexts {
         const formula = `=${cell.formula}`;
         return { text: formula, value: formula };
       }
-      return valueTexts(result, numFmtOf(cell));
+      return valueTexts(result, cell.numFmt);
     }
     if (typeof (value as { error?: unknown }).error !== 'string') return { text: '', value: '' };
   }
-  return valueTexts(value, numFmtOf(cell));
+  return valueTexts(value, cell.numFmt);
 }
 
 /** 칸 표시 글자 — cellTexts(cell).text */
@@ -732,7 +731,7 @@ export function extractStyle(
   if (cell.alignment?.indent) style.ind = cell.alignment.indent;
   if (cell.alignment?.shrinkToFit) style.shr = 1;
   // 날짜 먼저 — "yyyy\"년\"" 같은 글자 붙은 날짜 서식이 통화로 분류되지 않게
-  const numFmt = numFmtOf(cell);
+  const numFmt = cell.numFmt;
   const { nf, nd } = isDateNumFmt(numFmt) ? {} : classifyNumFmt(numFmt);
   if (nf) {
     style.nf = nf;
@@ -913,7 +912,7 @@ export async function parseXlsxToGrid(xlsxBytes: Buffer): Promise<GridDocument> 
         // 캐시된 결과가 없어 수식 원문을 그대로 남긴 칸 — 워크북을 다 읽은 뒤
         // applyComputedFormulaValues가 직접 계산해 채운다(cellTexts 문서 주석 참고).
         if (gridCell.v.startsWith('=') && isFormulaCellValue(cell.value)) {
-          pendingFormulas.push({ sheetIdx, row: r - 1, col: colNumber - 1, numFmt: numFmtOf(cell) });
+          pendingFormulas.push({ sheetIdx, row: r - 1, col: colNumber - 1, numFmt: cell.numFmt });
         }
       });
       rows.push(cells);
