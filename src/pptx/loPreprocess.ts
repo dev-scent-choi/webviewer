@@ -1,4 +1,5 @@
 import JSZip from 'jszip';
+import { assertZipNotTooLarge } from '../zipGuard.js';
 
 /**
  * LibreOffice로 PDF를 만들기 전에 pptx 사본에만 적용하는 전처리(원본·저장 파일은 그대로) — 보기 화면과 편집 화면의
@@ -45,6 +46,9 @@ export function boldTableHeaderXml(tblXml: string, tableStylesXml: string): stri
  * 없으면 원본 바이트를 그대로 돌려준다.
  */
 export async function boldPptxTableHeaders(pptxBytes: Uint8Array): Promise<Uint8Array> {
+  // 압축 폭탄 방어 — 서버의 다른 압축 풀기와 같은 상한(중앙 목록에 적힌 풀린 크기 합). JSZip은 실제 풀린 크기가 적힌 크기와
+  // 다르면 스스로 오류를 낸다. 넘으면 던지고, 부르는 쪽(convertWithSoffice)이 원본 그대로 변환한다(2차 검토 R2-m2).
+  assertZipNotTooLarge(pptxBytes, 'boldPptxTableHeaders');
   const zip = await JSZip.loadAsync(pptxBytes);
   const stylesFile = zip.file('ppt/tableStyles.xml');
   const tableStyles = stylesFile ? await stylesFile.async('string') : '';

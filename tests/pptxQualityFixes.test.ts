@@ -508,3 +508,17 @@ describe('2차 검토 R2-I1: 문단 자식 순서는 속성 값 안의 > 나 주
     }
   });
 });
+
+describe('2차 검토 R2-m2: 표 머리 줄 전처리도 압축 폭탄 상한을 지킨다', () => {
+  test('적힌 풀린 크기가 상한을 넘으면 풀기 전에 거절(ZipTooLargeError)', async () => {
+    const { zipSync } = await import('fflate');
+    const { boldPptxTableHeaders } = await import('../src/pptx/loPreprocess.js');
+    // 0으로 가득 찬 300MB 슬라이드는 수백 KB로 압축된다 → 파일 크기의 20배·1GB 상한 중 큰 값(1GB)보다 작으니, 상한을 넘기려면
+    // 여러 개가 필요하다 — 대신 중앙 목록의 풀린 크기 칸을 크게 고쳐 "적힌 크기" 검사를 확인한다
+    const zip = zipSync({ 'ppt/slides/slide1.xml': new TextEncoder().encode('<a:tbl></a:tbl>') });
+    const view = new DataView(zip.buffer, zip.byteOffset, zip.byteLength);
+    const cd = zip.length - 22 - 46 - 'ppt/slides/slide1.xml'.length; // 중앙 목록 시작(엔트리 1개)
+    view.setUint32(cd + 24, 0xfff00000, true); // 풀린 크기 ≈ 4GB
+    await expect(boldPptxTableHeaders(zip)).rejects.toThrow(/너무 큽니다/);
+  });
+});
