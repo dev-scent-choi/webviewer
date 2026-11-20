@@ -6,6 +6,10 @@
 //   4) 편집 화면 COUNTIF($A:$A,$A1)>1(1,500행·2만 행): 받지 않은 페이지의 중복도 칠하고, 편집으로 중복이 생기고
 //      없어지면 따라 바뀐다. 보기 화면과 같은 결과(검토 r3 E2)
 //   5) x06 차트(축 숨김 c:delete·tickLblPos none 포함) 보기·편집 화면이 그려진다(스크린샷)
+//   6) 서버 답 경로(검토 r4 C1): 내려받기만 되는 토큰 403, 규칙에 없는 범위 skipped, 64범위 × 동시 4요청 뒤에도 서버가 산다
+//   7) 엑셀 표 경계(검토 r4 I2): 머리 줄 삭제는 막고, 데이터 행을 모두 지우면 첫 데이터 행을 비워 남기며(실행 취소·다시 실행
+//      버튼), 요약 행을 지우면 요약 행이 꺼진다
+//   8) SUMPRODUCT((범위=값)*1)는 칠하고, 엔진이 못 하는 규칙은 "일부 생략"을 알린다(검토 r4)
 //
 // 사용법(서버를 먼저 띄워 둘 것 — 업로드·토큰 API가 키 없이 열려 있는 로컬 서버):
 //   node scripts/verify-xlsx-view.mjs [http://127.0.0.1:8144] [스크린샷 폴더]
@@ -62,13 +66,14 @@ const editBg = (page, row, col = 0) => page.evaluate(([r, c]) => {
   return td ? getComputedStyle(td).backgroundColor : null;
 }, [row, col]);
 
-/** span: 규칙이 읽는 범위 행 수. 2만(SUMPRODUCT)이면 너무 무거워 건너뛰고(알림), 500(MATCH — 수식 엔진으로만 됨)이면 나눠 칠한다 */
-async function heavyCfXlsx(span = 20000, count = 40) {
+/** 수식 엔진으로만 되는 MATCH 규칙 count개. span: 규칙이 읽는 범위 행 수 — 2만이면 너무 무거워 건너뛰고(알림), 500이면 나눠 칠한다.
+ * formula를 주면 그 수식(i는 규칙 번호)으로 */
+async function heavyCfXlsx(span = 20000, count = 40, formula) {
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet('s');
   for (let r = 1; r <= 20000; r += 1) ws.getCell(r, 1).value = `코드${r % 997}`;
   const b = unzipSync(new Uint8Array(await wb.xlsx.writeBuffer()));
-  const rules = Array.from({ length: count }, (_, i) => `<conditionalFormatting sqref="A1:A20000"><cfRule type="expression" dxfId="0" priority="${i + 1}"><formula>${span === 20000 ? `SUMPRODUCT(($A$1:$A$20000=$A1)*1)&gt;${i + 1}` : `MATCH($A1,$A$1:$A$${span},0)&gt;${i}`}</formula></cfRule></conditionalFormatting>`).join('');
+  const rules = Array.from({ length: count }, (_, i) => `<conditionalFormatting sqref="A1:A20000"><cfRule type="expression" dxfId="0" priority="${i + 1}"><formula>${formula ? formula(i) : `MATCH($A1,$A$1:$A$${span},0)&gt;${i}`}</formula></cfRule></conditionalFormatting>`).join('');
   b['xl/worksheets/sheet1.xml'] = strToU8(strFromU8(b['xl/worksheets/sheet1.xml']).replace('</sheetData>', `</sheetData>${rules}`));
   b['xl/styles.xml'] = strToU8(strFromU8(b['xl/styles.xml']).replace('<dxfs count="0"/>', '<dxfs count="1"><dxf><fill><patternFill><bgColor rgb="FFFFC7CE"/></patternFill></fill></dxf></dxfs>'));
   return Buffer.from(zipSync(b));
@@ -227,6 +232,140 @@ try {
     await page.screenshot({ path: `${OUT}/3b-cf-sliced-edit.png` });
     await page.close();
     warm.provider.destroy();
+  }
+
+  // 3c) SUMPRODUCT((범위=값)*1) 30개 × 2만 행 — COUNTIF로 바꿔 계산하므로 칠하고, 멈추지 않는다(검토 r4)
+  {
+    const { id, tok, token } = await upload('sumproduct.xlsx', await heavyCfXlsx(20000, 30, (i) => `SUMPRODUCT(($A$1:$A$20000=$A1)*1)&gt;${i + 1}`));
+    const page = await browser.newPage({ viewport: { width: 1200, height: 700 } });
+    await page.goto(BASE + tok.viewerUrl);
+    await page.waitForSelector('#grid-table td[data-r]');
+    await wait(1000);
+    const view = await bgOf(page, '#grid-table td[data-c="1"][data-r="1"]');
+    check('SUMPRODUCT 배열 비교: 보기 화면이 칠한다(코드1은 20번 나옴)', view[0] === PINK, view.join(''));
+    const warm = await connect(id, token);
+    await page.addInitScript(() => {
+      window.__long = [];
+      new PerformanceObserver((list) => list.getEntries().forEach((e) => window.__long.push(Math.round(e.duration)))).observe({ type: 'longtask', buffered: true });
+    });
+    await openEditor(page, tok);
+    await wait(4000);
+    const m = await page.evaluate(() => window.__long);
+    const edit = await editBg(page, 0);
+    check('SUMPRODUCT 배열 비교: 편집 화면도 칠한다(받지 않은 행은 서버 답)', edit === PINK, String(edit));
+    check('SUMPRODUCT 배열 비교: 300ms 넘는 긴 작업 없음', Math.max(0, ...m) < 300, `가장 긴 것 ${Math.max(0, ...m)}ms`);
+    await page.screenshot({ path: `${OUT}/3c-sumproduct-edit.png` });
+    await page.close();
+    warm.provider.destroy();
+  }
+
+  // 8) 엔진이 못 하는 규칙 — 칠하지 않고 알린다
+  {
+    const b = unzipSync(new Uint8Array(await (async () => {
+      const wb = new ExcelJS.Workbook();
+      wb.addWorksheet('s').addRows([['a', 1], ['b', 2], ['a', 3]]);
+      return wb.xlsx.writeBuffer();
+    })()));
+    b['xl/worksheets/sheet1.xml'] = strToU8(strFromU8(b['xl/worksheets/sheet1.xml']).replace('</sheetData>', '</sheetData><conditionalFormatting sqref="A1:A3"><cfRule type="expression" dxfId="0" priority="1"><formula>SUMPRODUCT(($A$1:$A$3=$A1)*($B$1:$B$3&gt;1))&gt;0</formula></cfRule></conditionalFormatting>'));
+    b['xl/styles.xml'] = strToU8(strFromU8(b['xl/styles.xml']).replace('<dxfs count="0"/>', '<dxfs count="1"><dxf><fill><patternFill><bgColor rgb="FFFFC7CE"/></patternFill></fill></dxf></dxfs>'));
+    const { tok } = await upload('unsupported.xlsx', Buffer.from(zipSync(b)));
+    const page = await browser.newPage({ viewport: { width: 1000, height: 500 } });
+    await page.goto(BASE + tok.viewerUrl);
+    await page.waitForSelector('#grid-table td[data-r]');
+    await wait(800);
+    const viewNotice = await page.evaluate(() => {
+      const el = document.getElementById('grid-cf-notice');
+      return Boolean(el && !el.hidden);
+    });
+    await openEditor(page, tok);
+    await wait(2500);
+    const editNotice = await page.evaluate(() => !document.getElementById('cf-skip-notice')?.hidden);
+    check('엔진이 못 하는 규칙: 보기·편집 화면 "일부 생략" 알림', viewNotice && editNotice, `보기 ${viewNotice}, 편집 ${editNotice}`);
+    await page.close();
+  }
+
+  // 6) 서버 답 경로(C1)
+  {
+    const { id, tok, token } = await upload('c1.xlsx', await countifXlsx(20_000));
+    const warm = await connect(id, token);
+    const dl = (await (await fetch(`${BASE}/api/documents/${id}/tokens`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ viewer: 'd', canPrint: false, canDownload: true, canCopy: false, canEdit: false }) })).json()).data;
+    const dlToken = new URL(BASE + dl.viewerUrl).searchParams.get('token');
+    const ask = (t, body) => fetch(`${BASE}/api/view/xlsx-cf-ranges?token=${encodeURIComponent(t)}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    const ranges = Array.from({ length: 64 }, (_, i) => ({ r0: i, c0: 0, r1: 19_999, c1: 0, crit: ['K1'] }));
+    check('서버 답: 내려받기만 되는 토큰은 403', (await ask(dlToken, { sheet: 0, ranges })).status === 403);
+    const t0 = Date.now();
+    const answers = await Promise.all(Array.from({ length: 4 }, () => ask(token, { sheet: 0, ranges }).then((r) => r.json())));
+    const okShape = answers.every((a) => a.data && 'cells' in a.data.ranges[0] && a.data.ranges.slice(1).every((r) => r.skipped));
+    const bytes = Math.max(...answers.map((a) => JSON.stringify(a).length));
+    check('서버 답: 64범위 × 동시 4요청 — 규칙 범위만 답하고 나머지는 skipped, 답이 작다', okShape && bytes < 20_000, `${Date.now() - t0}ms, 답 최대 ${bytes}바이트`);
+    check('서버 답: 그 뒤에도 서버가 응답한다', (await fetch(`${BASE}/api/formats`)).ok);
+    warm.provider.destroy();
+    void tok;
+  }
+
+  // 7) 엑셀 표 경계(I2) — 편집 화면 단추로
+  {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('T');
+    ws.addTable({ name: 'T1', ref: 'A1', headerRow: true, totalsRow: true, style: { theme: 'TableStyleMedium2', showRowStripes: true }, columns: [{ name: '이름', totalsRowLabel: '합계' }, { name: '값', totalsRowFunction: 'sum' }], rows: [['a', 1], ['b', 2], ['c', 3]] });
+    const { tok, token } = await upload('table-edge.xlsx', Buffer.from(await wb.xlsx.writeBuffer()));
+    const page = await browser.newPage({ viewport: { width: 1200, height: 700 } });
+    const extras = async () => (await (await fetch(`${BASE}/api/view/xlsx-extras?token=${encodeURIComponent(token)}`)).json()).data.tables[0] ?? null;
+    const text = (r, c = 0) => page.evaluate(([row, col]) => document.querySelector(`#grid-edit-table td[data-row="${row}"][data-col="${col}"]`)?.textContent ?? null, [r, c]);
+    const dialog = async (ok = true) => {
+      const card = await page.waitForSelector('.office-dialog-runtime .office-dialog-message', { timeout: 5000 }).catch(() => null);
+      const msg = card ? await card.textContent() : null;
+      if (card) await page.click(ok ? '.office-dialog-runtime .btn-mini-primary' : '.office-dialog-runtime .btn-mini:not(.btn-mini-primary)');
+      return msg;
+    };
+    await openEditor(page, tok);
+    await wait(2500);
+    // 머리 줄(1행) 삭제 → 막는다
+    await page.click('#grid-edit-table td[data-row="0"][data-col="0"]');
+    await page.click('#btn-del-row');
+    const refused = await dialog();
+    await wait(800);
+    check('표 경계: 머리 줄 삭제는 막고 알린다', Boolean(refused?.includes('머리글 행은 삭제할 수 없습니다')) && (await extras())?.r1 === 4, String(refused));
+    // 데이터 행 전부(2~4행) 삭제 → 첫 데이터 행을 비워 남긴다
+    await page.click('#grid-edit-table td[data-row="1"][data-col="0"]');
+    await page.click('#grid-edit-table td[data-row="3"][data-col="1"]', { modifiers: ['Shift'] });
+    await page.click('#btn-del-row');
+    await dialog(); // 값이 있어 "삭제할까요?" 확인
+    await wait(2500);
+    const afterDel = await extras();
+    check('표 경계: 데이터 행을 모두 지우면 빈 데이터 행 하나를 남긴다', afterDel?.r1 === 2 && afterDel?.totalsRows === 1 && (await text(1)) === '' && (await text(2)) === '합계', `${JSON.stringify(afterDel)} 2행="${await text(1)}" 3행="${await text(2)}"`);
+    // 실행 취소·다시 실행 단추 — 행 삭제는 되돌릴 수 없다(삭제 확인 창이 알린다). 구조가 바뀌면 실행 취소 기록을 버리므로
+    // 단추를 눌러도 다른 칸에 옛 값이 써지지 않아야 한다
+    const tableBefore = JSON.stringify(await extras());
+    await page.click('#qa-undo');
+    await wait(1000);
+    await page.click('#qa-redo');
+    await wait(1000);
+    const cellsAfter = [await text(0), await text(1), await text(2)];
+    check('표 경계: 행 삭제 뒤 실행 취소·다시 실행 단추가 아무 칸도 바꾸지 않는다', JSON.stringify(cellsAfter) === JSON.stringify(['이름', '', '합계']) && JSON.stringify(await extras()) === tableBefore, cellsAfter.join('|'));
+    // 표 안 칸 편집은 실행 취소·다시 실행 단추로 되돌리고 다시 한다(표 덧칠도 그대로)
+    await page.dblclick('#grid-edit-table td[data-row="1"][data-col="0"]');
+    await page.keyboard.type('새값');
+    await page.keyboard.press('Enter');
+    await wait(800);
+    const typed = await text(1);
+    const bgTyped = await editBg(page, 1, 1); // 옆 칸(선택 표시가 없는 칸)의 표 덧칠
+    await page.click('#qa-undo');
+    await wait(800);
+    const undone = await text(1);
+    await page.click('#qa-redo');
+    await wait(800);
+    const redone = await text(1);
+    check('표 경계: 표 칸 편집을 실행 취소·다시 실행 단추로', typed === '새값' && undone === '' && redone === '새값' && (await editBg(page, 1, 1)) === bgTyped && bgTyped !== null, `덧칠 ${bgTyped} 입력 "${typed}" 취소 "${undone}" 다시 "${redone}"`);
+    await page.screenshot({ path: `${OUT}/7-table-edge-edit.png` });
+    // 요약 행(3행) 삭제 → 요약 행이 꺼진다
+    await page.click('#grid-edit-table td[data-row="2"][data-col="0"]');
+    await page.click('#btn-del-row');
+    await dialog();
+    await wait(2500);
+    const noTotals = await extras();
+    check('표 경계: 요약 행을 지우면 요약 행이 꺼진다', noTotals?.r1 === 1 && noTotals?.totalsRows === 0, JSON.stringify(noTotals));
+    await page.close();
   }
 
   // 4) 편집 화면 COUNTIF($A:$A,$A1)>1 — 받지 않은 페이지의 중복, 편집으로 생기고 없어지는 중복(E2)

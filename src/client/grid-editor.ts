@@ -1085,14 +1085,14 @@ async function main(): Promise<void> {
     // 마지막 남은 행은 지우지 않는다 — 서버도 같은 검사를 하지만(applyGridStructureOp) 여기서
     // 먼저 막아 왕복 없이 곧바로 아무 일도 일어나지 않게 한다.
     if (!sheet || sheet.rowCount <= 1) return;
-    deleteRowsKeepingTables(row, 1);
+    planRowDelete(row, 1)?.();
   }
   /**
    * 행 삭제 — 엑셀 표가 있으면 엑셀과 같게: 표의 머리 줄만 지우는 삭제는 막고(알림), 표의 데이터 행을 모두 지우면 첫 데이터 행은
-   * 지우지 않고 비운다(표에는 데이터 행이 하나 남아야 한다 — 그 행은 자리를 옮기지 않으므로 실행 취소로 값이 제자리에 돌아온다).
+   * 지우지 않고 비운다(표에는 데이터 행이 하나 남아야 한다). 행 삭제는 되돌릴 수 없다(구조가 바뀌면 실행 취소 기록을 버린다 — 위 I-4).
    * 표 전체를 지우면 표도 없어진다. 요약 행을 지우면 요약 행이 꺼진다(저장·화면 규칙은 tableStyles.ts shiftTableRows).
    */
-  function deleteRowsKeepingTables(at: number, count: number): void {
+  function planRowDelete(at: number, count: number): (() => void) | null {
     const sheetName = structure.get(String(activeSheet))?.name;
     const end = at + count - 1;
     let keep = -1;
@@ -1102,7 +1102,7 @@ async function main(): Promise<void> {
       if (at <= t.r0 && end >= t.r1) continue; // 표 전체
       if (t.headerRows > 0 && at <= t.r0 && end >= t.r0) {
         void officeAlert('표의 머리글 행은 삭제할 수 없습니다. 표 전체를 선택해 삭제하거나, 머리글 아래 행만 선택하세요.');
-        return;
+        return null;
       }
       const d0 = t.r0 + t.headerRows;
       const d1 = t.r1 - t.totalsRows;
@@ -1111,16 +1111,15 @@ async function main(): Promise<void> {
         keepCols = [t.c0, t.c1];
       }
     }
-    if (keep < 0) {
-      sendGridStructureOp('deleteRows', at, count);
-      return;
-    }
-    ydoc.transact(() => {
-      for (let c = keepCols[0]; c <= keepCols[1]; c += 1) cells.delete(gridCellKey(activeSheet, keep, c));
-    });
-    // 아래쪽부터 지운다(위쪽 삭제가 아래 위치를 바꾸지 않게)
-    if (end > keep) sendGridStructureOp('deleteRows', keep + 1, end - keep);
-    if (keep > at) sendGridStructureOp('deleteRows', at, keep - at);
+    if (keep < 0) return () => sendGridStructureOp('deleteRows', at, count);
+    return () => {
+      ydoc.transact(() => {
+        for (let c = keepCols[0]; c <= keepCols[1]; c += 1) cells.delete(gridCellKey(activeSheet, keep, c));
+      });
+      // 아래쪽부터 지운다(위쪽 삭제가 아래 위치를 바꾸지 않게)
+      if (end > keep) sendGridStructureOp('deleteRows', keep + 1, end - keep);
+      if (keep > at) sendGridStructureOp('deleteRows', at, keep - at);
+    };
   }
   function insertColumnAt(col: number): void {
     if (!structure.get(String(activeSheet))) return;
@@ -2938,8 +2937,11 @@ async function main(): Promise<void> {
     const span = selectedSpan('row');
     if (!span || span.at >= s.rowCount) return;
     const count = Math.min(span.count, s.rowCount - span.at);
-    if (s.rowCount - count < 1 || !(await confirmSpanDelete('row', span.at, count))) return;
-    deleteRowsKeepingTables(span.at, count);
+    if (s.rowCount - count < 1) return;
+    // 표 규칙(머리 줄 삭제 막기 등)을 먼저 보고, 그다음 "삭제할까요?"
+    const run = planRowDelete(span.at, count);
+    if (!run || !(await confirmSpanDelete('row', span.at, count))) return;
+    run();
   });
   document.getElementById('btn-add-col')?.addEventListener('click', () => {
     const span = selectedSpan('col');
