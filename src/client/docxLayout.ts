@@ -65,7 +65,14 @@ interface PageCursor {
   page: number;
   section: number;
   firstOfSection: boolean;
-  notes: PMNode[];
+  notes: Array<{ node: PMNode; label: string }>;
+}
+
+/** 각주·미주 본문 — 본문 안 번호(w:footnoteRef)도 문서 순서대로 매긴 번호로(복사한 각주는 새 번호, Word와 같다) */
+function noteBodyDOM(content: unknown[] | undefined, label: string): HTMLElement {
+  const body = blocksDOM(content ?? [], 'div');
+  for (const ref of body.querySelectorAll<HTMLElement>('.docx-note-ref')) ref.textContent = label;
+  return body;
 }
 
 /** 쪽 하나가 끝나는 곳의 각주·바닥글 */
@@ -73,7 +80,7 @@ function pageEndDOM(extras: DocxRenderExtras, cur: PageCursor, total: number, la
   const end = el('div', `docx-page-end${last ? ' docx-page-end-last' : ''}`);
   if (cur.notes.length > 0) {
     const notes = el('div', 'docx-footnotes');
-    for (const ref of cur.notes) notes.append(blocksDOM(extras.notes.footnote[String(ref.attrs.noteId)] ?? [], 'div'));
+    for (const ref of cur.notes) notes.append(noteBodyDOM(extras.notes.footnote[String(ref.node.attrs.noteId)], ref.label));
     end.append(notes);
   }
   const section = extras.sections[cur.section];
@@ -177,9 +184,17 @@ function pageDecorations(doc: PMNode, extras: DocxRenderExtras, totalPages: numb
   const cur: PageCursor = { page: 1, section: 0, firstOfSection: true, notes: [] };
   out.push(Decoration.widget(0, () => pageStartDOM(extras, { ...cur }, total, true), { side: -1, key: 'page-1', ignoreSelection: true }));
   let next = 0;
+  // 각주·미주 번호는 문서 순서대로 다시 센다 — 같은 문서 안에서 복사한 참조도 저장 때 새 각주가 되므로(export.ts) 화면도 새 번호로
+  const counters = { footnote: 0, endnote: 0 };
+  const endnoteRefs: Array<{ node: PMNode; label: string }> = [];
   const notesUntil = (limit: number) => {
     doc.nodesBetween(Math.min(next, doc.content.size), Math.min(limit, doc.content.size), (node, pos) => {
-      if (pos >= next && node.type.name === 'ooxml' && node.attrs.kind === 'note' && node.attrs.noteType === 'footnote') cur.notes.push(node);
+      if (pos < next || node.type.name !== 'ooxml' || node.attrs.kind !== 'note' || !node.attrs.noteType) return;
+      const type = node.attrs.noteType === 'endnote' ? 'endnote' : 'footnote';
+      counters[type] += 1;
+      const label = String(counters[type]);
+      if (label !== node.attrs.text) out.push(Decoration.node(pos, pos + node.nodeSize, { 'data-label': label }));
+      (type === 'footnote' ? cur.notes : endnoteRefs).push({ node, label });
     });
     next = limit;
   };
@@ -200,7 +215,7 @@ function pageDecorations(doc: PMNode, extras: DocxRenderExtras, totalPages: numb
         const wrap = el('div', 'docx-page-boundary');
         wrap.append(pageEndDOM(extras, ending, total, false), el('div', 'docx-page-gap'), pageStartDOM(extras, starting, total, false));
         return wrap;
-      }, { side: -1, key: `page-${starting.page}-${starting.section}-${ending.notes.map((n) => n.attrs.noteId).join(',')}`, ignoreSelection: true }),
+      }, { side: -1, key: `page-${starting.page}-${starting.section}-${ending.notes.map((n) => `${n.node.attrs.noteId}:${n.label}`).join(',')}`, ignoreSelection: true }),
     );
   }
   notesUntil(doc.content.size);
@@ -208,14 +223,13 @@ function pageDecorations(doc: PMNode, extras: DocxRenderExtras, totalPages: numb
   out.push(
     Decoration.widget(doc.content.size, () => {
       const end = pageEndDOM(extras, lastPage, total, true);
-      const endnoteIds = Object.keys(extras.notes.endnote);
-      if (endnoteIds.length > 0) {
+      if (endnoteRefs.length > 0) {
         const endnotes = el('div', 'docx-footnotes docx-endnotes');
-        for (const id of endnoteIds) endnotes.append(blocksDOM(extras.notes.endnote[id], 'div'));
+        for (const ref of endnoteRefs) endnotes.append(noteBodyDOM(extras.notes.endnote[String(ref.node.attrs.noteId)], ref.label));
         end.prepend(endnotes);
       }
       return end;
-    }, { side: 1, key: `page-end-${lastPage.page}-${lastPage.notes.map((n) => n.attrs.noteId).join(',')}`, ignoreSelection: true }),
+    }, { side: 1, key: `page-end-${lastPage.page}-${[...lastPage.notes, ...endnoteRefs].map((n) => `${n.node.attrs.noteId}:${n.label}`).join(',')}`, ignoreSelection: true }),
   );
 }
 

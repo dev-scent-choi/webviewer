@@ -193,7 +193,7 @@ describe('docx export: what is displayed survives saving', () => {
     const twiceNote = docxSchema.nodes.paragraph.create(null, [docxSchema.text('복사 '), note, docxSchema.text(' '), note]);
     const withCopy = doc.copy(doc.content.append(docxSchema.nodes.doc.create(null, [twiceNote]).content));
     const xml = strFromU8(unzipSync(exportDocx(bytes, withCopy, null, [], fragments))['word/document.xml']);
-    expect((xml.match(/<w:footnoteReference /g) ?? []).length).toBe(3); // 원래 3개 — 복사본은 쓰지 않는다
+    expect((xml.match(/<w:footnoteReference /g) ?? []).length).toBe(5); // 원래 3개 + 복사 2개 — 복사본은 각주를 복제해 새 번호로(N3)
     const twiceImg = docxSchema.nodes.paragraph.create(null, [img, img]);
     const imgSaved = strFromU8(unzipSync(exportDocx(imgBytes, imgDoc.doc.copy(imgDoc.doc.content.append(docxSchema.nodes.doc.create(null, [twiceImg]).content)), null, [], imgDoc.fragments))['word/document.xml']);
     const ids = [...imgSaved.matchAll(/<wp:docPr\b[^>]*?\bid="(\d+)"/g)].map((m) => m[1]);
@@ -294,5 +294,28 @@ describe('render extras: headers, footers, footnotes', () => {
     const note = docxSchema.nodeFromJSON(extras.notes.footnote['1'][0]);
     expect(note.textContent).toBe('1 각주 1: 관련 법령 제1조 참조. 설비 점검 기준 고시.');
     expect(Object.keys(extras.notes.footnote)).toEqual(['1', '2', '3']);
+  });
+});
+
+describe('N3: 같은 문서 안에서 복사한 각주', () => {
+  test('복사한 각주 참조는 새 각주(본문 복제)를 가리키고, 저장을 거듭해도 footnotes.xml이 늘지 않으며, 복사본을 지우면 복제 각주도 지운다', () => {
+    const bytes = corpus('d06-columns-footnotes.docx');
+    const { doc, fragments } = importDocx(bytes);
+    const note = nodesOf(doc, (n) => n.attrs.kind === 'note')[0];
+    const withCopies = doc.copy(doc.content.append(docxSchema.nodes.doc.create(null, [docxSchema.nodes.paragraph.create(null, [docxSchema.text('복사 '), note, docxSchema.text(' '), note])]).content));
+    const save = (from: Uint8Array, d: PMNode) => exportDocx(from, d, null, [], fragments);
+    const first = save(bytes, withCopies);
+    const refs = (b: Uint8Array) => [...strFromU8(unzipSync(b)['word/document.xml']).matchAll(/<w:footnoteReference w:id="(\d+)"/g)].map((m) => m[1]);
+    expect(refs(first)).toHaveLength(5);
+    expect(new Set(refs(first)).size).toBe(5);
+    const notes = strFromU8(unzipSync(first)['word/footnotes.xml']);
+    for (const id of refs(first)) expect(notes).toContain(`<w:footnote w:id="${id}">`);
+    expect((notes.match(/각주 1: 관련 법령/g) ?? []).length).toBe(3);
+    const third = save(save(first, withCopies), withCopies);
+    expect(strFromU8(unzipSync(third)['word/footnotes.xml'])).toBe(notes);
+    expect(refs(third)).toEqual(refs(first));
+    // 복사본을 지우고 저장 → 복제 각주도 사라진다
+    const cleaned = strFromU8(unzipSync(save(third, doc))['word/footnotes.xml']);
+    expect((cleaned.match(/각주 1: 관련 법령/g) ?? []).length).toBe(1);
   });
 });

@@ -301,11 +301,58 @@ function renderInline(node: PMNode): string {
 function onceRaw(ref: string): string {
   const raw = resolveRef(ref);
   if (raw === undefined) return '';
-  if (ONCE_TAGS.has(refTagOf(ref))) {
-    if (emittedOnce.has(ref)) return '';
+  const tag = refTagOf(ref);
+  if (ONCE_TAGS.has(tag)) {
+    if (emittedOnce.has(ref)) {
+      // 같은 문서 안에서 복사한 각주·미주 참조 — Word처럼 각주를 복제해 새 번호로(책갈피 등은 이름이 겹치므로 버린다)
+      if (tag === 'w:footnoteReference' || tag === 'w:endnoteReference') {
+        const k = (noteCopies.get(ref) ?? 0) + 1;
+        noteCopies.set(ref, k);
+        return cloneNoteReference(tag === 'w:footnoteReference' ? 'footnote' : 'endnote', raw, k);
+      }
+      return '';
+    }
     emittedOnce.add(ref);
   }
   return raw;
+}
+
+/** 각주·미주 파트(저장 중 복제본을 더한다) — exportDocx가 채우고 다시 쓴다 */
+let noteParts: Record<'footnote' | 'endnote', string | null> = { footnote: null, endnote: null };
+let noteCopies = new Map<string, number>();
+let usedNoteClones = new Set<string>();
+const CLONE_MARK = '_docviewNote_';
+
+/**
+ * 복사로 생긴 k번째 각주 참조 → 원래 각주 본문을 새 id로 복제한 각주를 가리키게 한다. 복제본엔 숨은 책갈피 표지(_docviewNote_원id_k)를 넣어
+ * 다음 저장 때 같은 복제본을 다시 쓴다(저장마다 늘지 않게). 쓰이지 않게 된 복제본은 저장 끝에 지운다.
+ */
+function cloneNoteReference(type: 'footnote' | 'endnote', raw: string, k: number): string {
+  const part = noteParts[type];
+  const id = /\bw:id="(-?\d+)"/.exec(raw)?.[1];
+  if (!part || !id) return '';
+  const marker = `${CLONE_MARK}${id}_${k}`;
+  usedNoteClones.add(marker);
+  let cloneId = new RegExp(`<w:${type}\\b[^>]*\\bw:id="(-?\\d+)"[^>]*>(?:(?!</w:${type}>)[\\s\\S])*w:name="${marker}"`).exec(part)?.[1];
+  if (!cloneId) {
+    const body = new RegExp(`<w:${type}\\b[^>]*\\bw:id="${id}"[^>]*>[\\s\\S]*?</w:${type}>`).exec(part)?.[0];
+    if (!body) return '';
+    cloneId = String(Math.max(0, ...[...part.matchAll(new RegExp(`<w:${type}\\b[^>]*\\bw:id="(-?\\d+)"`, 'g'))].map((m) => Number(m[1]))) + 1);
+    const bookmark = `<w:bookmarkStart w:id="${900000 + Number(cloneId)}" w:name="${marker}"/><w:bookmarkEnd w:id="${900000 + Number(cloneId)}"/>`;
+    const clone = body
+      .replace(new RegExp(`(<w:${type}\\b[^>]*\\bw:id=")${id}"`), `$1${cloneId}"`)
+      .replace(/(<w:p\b[^>]*>(?:<w:pPr>[\s\S]*?<\/w:pPr>)?)/, `$1${bookmark}`);
+    noteParts[type] = part.replace(`</w:${type}s>`, `${clone}</w:${type}s>`);
+  }
+  return raw.replace(/(<w:(?:footnote|endnote)Reference\b[^>]*\bw:id=")-?\d+"/, `$1${cloneId}"`);
+}
+
+/** 이번 저장에서 쓰이지 않은 복제 각주(표지가 있는 것)를 지운다 */
+function dropUnusedNoteClones(type: 'footnote' | 'endnote'): void {
+  const part = noteParts[type];
+  if (!part) return;
+  noteParts[type] = part.replace(new RegExp(`<w:${type}\\b[^>]*>(?:(?!</w:${type}>)[\\s\\S])*w:name="(${CLONE_MARK}[\\d_-]+)"[\\s\\S]*?</w:${type}>`, 'g'),
+    (whole, marker: string) => (usedNoteClones.has(marker) ? whole : ''));
 }
 
 /** 갤러리 스타일 id → 이 문서에서 실제로 쓸 w:styleId (exportDocx가 styles.xml을 보고 정한다). */
@@ -854,9 +901,25 @@ export function exportDocx(
   const relsBytes = entries['word/_rels/document.xml.rels'];
   const relIds = new Set([...(relsBytes ? strFromU8(relsBytes) : '').matchAll(/<Relationship\b[^>]*\bId="([^"]+)"/g)].map((m) => m[1]));
   const builtinNumIds = ensureBuiltinLists(doc, entries);
-  entries['word/document.xml'] = strToU8(
-    renderDocumentXml(doc, sectPrXml, styles.ids, commentNumbers, fragments, documentOpenTagOf(originalXml), relIds, builtinNumIds),
-  );
+  noteParts = {
+    footnote: entries['word/footnotes.xml'] ? strFromU8(entries['word/footnotes.xml']) : null,
+    endnote: entries['word/endnotes.xml'] ? strFromU8(entries['word/endnotes.xml']) : null,
+  };
+  noteCopies = new Map();
+  usedNoteClones = new Set();
+  try {
+    entries['word/document.xml'] = strToU8(
+      renderDocumentXml(doc, sectPrXml, styles.ids, commentNumbers, fragments, documentOpenTagOf(originalXml), relIds, builtinNumIds),
+    );
+    for (const type of ['footnote', 'endnote'] as const) {
+      dropUnusedNoteClones(type);
+      const part = noteParts[type];
+      const name = `word/${type}s.xml`;
+      if (part !== null && part !== strFromU8(entries[name])) entries[name] = strToU8(part);
+    }
+  } finally {
+    noteParts = { footnote: null, endnote: null };
+  }
   // 메모가 있거나, 원본에 있던 메모를 모두 지운 경우에만 comments.xml을 새로 쓴다
   if (commentNumbers.size > 0 || entries['word/comments.xml']) {
     entries['word/comments.xml'] = strToU8(renderCommentsXml(commentNumbers, new Map(comments.map((c) => [c.id, c]))));

@@ -3620,6 +3620,9 @@ body[data-app] { --v-accent: var(--app-accent); --v-accent-ink: #ffffff; }
 .editor-surface .ProseMirror .docx-del { color: #c00000; }
 .editor-surface .docx-link { color: #0563c1; text-decoration: underline; }
 .editor-surface .ProseMirror .docx-note-ref { font-size: 0.7em; }
+/* 문서 순서대로 다시 센 각주 번호(docxLayout.ts의 data-label) — 원래 글자 대신 보인다 */
+.editor-surface .ProseMirror .docx-note-ref[data-label] { font-size: 0; }
+.editor-surface .ProseMirror .docx-note-ref[data-label]::after { content: attr(data-label); font-size: 0.65rem; }
 .editor-surface .ProseMirror .docx-preserved-block { margin: 0.4em 0; user-select: none; }
 /* 탭: 폭은 탭 정지에 맞춰 docxLayout.ts가 재어 정한다. 점선·실선 채움 */
 .editor-surface .ProseMirror .docx-tab { display: inline-block; overflow: hidden; white-space: pre; color: transparent; vertical-align: baseline; text-indent: 0; }
