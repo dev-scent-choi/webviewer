@@ -300,13 +300,14 @@ function tabStopsOf(block: HTMLElement): TabStop[] {
  * k번째 탭을 한꺼번에 잰다(읽기를 모두 한 뒤 쓰기를 모두) — 문서 전체 다시 배치가 탭 수가 아니라 "문단 안 탭 수의 최대값"만큼만 일어난다.
  * 예전엔 탭마다 폭을 쓰고 곧바로 위치를 읽어 400쪽 문서에서 글자 하나에 12~15초가 걸렸다.
  */
-function layoutBlocks(root: HTMLElement, blocks: readonly HTMLElement[], defaultTabPx: number): void {
+function layoutBlocks(root: HTMLElement, blocks: readonly HTMLElement[], defaultTabPx: number, withLabels: boolean): void {
   if (blocks.length === 0) return;
   // 화면 배율(편집기 확대·축소 CSS zoom) — 잰 값(화면 px)을 문서 px로 되돌린다(편집 영역 전체 한 번)
   const scale = root.offsetWidth > 0 ? root.getBoundingClientRect().width / root.offsetWidth : 1;
   const own = (block: HTMLElement, selector: string) =>
     [...block.querySelectorAll<HTMLElement>(selector)].filter((t) => t.parentElement?.closest(BLOCK_SELECTOR) === block);
-  const work = blocks.map((block) => ({ block, labels: own(block, '.docx-num[data-tab]'), tabs: own(block, '.docx-tab'), stops: tabStopsOf(block) }));
+  // 번호 글자 폭은 번호와 들여쓰기에만 달렸다 — 문단 안 글자만 바뀐 때는 다시 재지 않는다(쓰고 읽기가 강제 다시 배치를 부른다)
+  const work = blocks.map((block) => ({ block, labels: withLabels ? own(block, '.docx-num[data-tab]') : [], tabs: own(block, '.docx-tab'), stops: tabStopsOf(block) }));
   // 쓰기: 모두 처음 상태로
   for (const w of work) {
     for (const label of w.labels) label.style.width = '';
@@ -492,6 +493,44 @@ export function docxStyleSheetText(rules: readonly DocxStyleRule[]): string[] {
 
 const PAGINATION_META = 'docxPagination';
 
+/**
+ * ProseMirror는 화면을 고칠 때마다 본문 직속 블록마다 DecorationSet.forChild를 부르는데, 그 안에서 장식 목록을 처음부터 훑는다
+ * (prosemirror-view 1.42 — 블록 수 × 장식 수). 번호 1,600개·쪽 경계 800개인 400쪽 문서에서 글자 하나에 0.1초 넘게 걸린 원인이다.
+ * 같은 결과를 블록 위치 → 하위 장식 표(한 번 만들어 둠)로 바로 찾는다. 줄 안 장식(inline, 이 플러그인은 만들지 않음)이 있으면 원래 방법으로.
+ * shortcut: DecorationSet 내부 필드(local·children)를 읽는다 — prosemirror-view를 올릴 때 이 필드 이름이 그대로인지 확인할 것.
+ */
+const DecorationSetCtor = DecorationSet as unknown as new (local: Decoration[], children: unknown[]) => DecorationSet;
+class IndexedDecorationSet extends DecorationSetCtor {
+  private index: Map<number, DecorationSet> | null = null;
+  private readonly hasInline: boolean;
+
+  constructor(from: DecorationSet) {
+    const inner = from as unknown as { local: Decoration[]; children: unknown[] };
+    super(inner.local, inner.children);
+    this.hasInline = inner.local.some((d) => (d as unknown as { inline: boolean }).inline);
+  }
+
+  override forChild(offset: number, node: PMNode): DecorationSet {
+    if (this.hasInline) return super.forChild(offset, node) as DecorationSet;
+    if (node.isLeaf) return DecorationSet.empty;
+    if (!this.index) {
+      this.index = new Map();
+      const children = (this as unknown as { children: unknown[] }).children;
+      for (let i = 0; i < children.length; i += 3) this.index.set(children[i] as number, children[i + 2] as DecorationSet);
+    }
+    return this.index.get(offset) ?? DecorationSet.empty;
+  }
+}
+const indexed = new WeakMap<DecorationSet, DecorationSet>();
+function indexedOf(set: DecorationSet): DecorationSet {
+  let fast = indexed.get(set);
+  if (!fast) {
+    fast = new IndexedDecorationSet(set);
+    indexed.set(set, fast);
+  }
+  return fast;
+}
+
 /** 편집기에 Word 문서 모양 장식을 붙이는 플러그인 — 번호·쪽 경계·구역 폭 장식, 탭 폭, 넘침 쪽 나눔(성능은 파일 위 설명). */
 export function docxLayoutPlugin(extras: DocxRenderExtras, totalPages: number | null): Plugin<LayoutState> {
   const defaultTabPx = extras.defaultTabStopDxa / TWIPS_PER_PX;
@@ -509,7 +548,11 @@ export function docxLayoutPlugin(extras: DocxRenderExtras, totalPages: number | 
       },
     },
     props: {
-      decorations: (state) => layoutKey.getState(state)?.deco,
+      decorations: (state) => {
+        const deco = layoutKey.getState(state)?.deco;
+        return deco ? indexedOf(deco) : null;
+      },
+      attributes: extras.sections.length > 0 ? { class: 'docx-paged' } : {},
     },
     view: (view: EditorView) => {
       let frame = 0;
@@ -517,9 +560,10 @@ export function docxLayoutPlugin(extras: DocxRenderExtras, totalPages: number | 
       let paginateTimer = 0;
       const flush = () => {
         frame = 0;
+        const all = pending === 'all';
         const targets = pending === 'all' ? blocksWithTabs(view.dom) : [...pending].filter((b) => b.isConnected);
         pending = new Set();
-        layoutBlocks(view.dom, targets, defaultTabPx);
+        layoutBlocks(view.dom, targets, defaultTabPx, all);
       };
       const schedule = (what: 'all' | HTMLElement[]) => {
         if (what === 'all') pending = 'all';
@@ -552,7 +596,7 @@ export function docxLayoutPlugin(extras: DocxRenderExtras, totalPages: number | 
               v.state.doc.nodesBetween(Math.max(0, from), Math.min(v.state.doc.content.size, to), (node, pos) => {
                 if (!node.isTextblock) return true;
                 const dom = v.nodeDOM(pos);
-                if (dom instanceof HTMLElement && dom.querySelector('.docx-tab, .docx-num[data-tab]')) touched.push(dom);
+                if (dom instanceof HTMLElement && dom.querySelector('.docx-tab')) touched.push(dom);
                 return false;
               });
             }

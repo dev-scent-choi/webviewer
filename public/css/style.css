@@ -3595,9 +3595,10 @@ body[data-app] { --v-accent: var(--app-accent); --v-accent-ink: #ffffff; }
 .editor-surface .ProseMirror .page-break.ProseMirror-selectednode { border-top-color: var(--app-accent, var(--v-accent)); }
 
 /* ---------- Word 편집기: 원본 모양 그대로 그리기(src/client/docxLayout.ts·schema.ts ooxml 노드) ---------- */
-/* 쪽 경계(머리글·바닥글·쪽 간격)를 그리면 쪽 나누기 점선은 겹치므로 숨긴다(선택했을 때만 보인다) */
-.editor-surface .ProseMirror:has(.docx-page-boundary) .page-break:not(.ProseMirror-selectednode) { height: 0; margin: 0; border-top: 0; }
-.editor-surface .ProseMirror:has(.docx-page-boundary) .page-break:not(.ProseMirror-selectednode)::after { content: none; }
+/* 쪽 경계(머리글·바닥글·쪽 간격)를 그리면 쪽 나누기 점선은 겹치므로 숨긴다(선택했을 때만 보인다). :has()는 글자 하나마다
+   문서 전체 스타일을 다시 계산하게 해 큰 문서에서 느려 쓰지 않는다 — 쪽 장식 플러그인이 docx-paged 클래스를 단다 */
+.editor-surface .ProseMirror.docx-paged .page-break:not(.ProseMirror-selectednode) { height: 0; margin: 0; border-top: 0; }
+.editor-surface .ProseMirror.docx-paged .page-break:not(.ProseMirror-selectednode)::after { content: none; }
 /* 그림: 줄 안 그림은 글자처럼, 떠 있는 그림·글상자는 float(문서의 크기 그대로) */
 .editor-surface .ProseMirror .docx-img { display: inline-block; vertical-align: baseline; max-width: 100%; height: auto; }
 .editor-surface .ProseMirror .docx-img[style*="height"] { object-fit: fill; }
