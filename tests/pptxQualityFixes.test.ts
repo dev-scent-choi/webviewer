@@ -459,3 +459,23 @@ describe('검토 Minor 9: 뒤집힌 도형의 그라데이션은 뒤집지 않�
     expect(unmirroredFill('radial-gradient(#000 0%, #fff 100%)', { flipH: true })).toBe('radial-gradient(#000 0%, #fff 100%)');
   });
 });
+
+describe('스마트아트 그림 대체본(dsp:drawing) — 합성 표본(실제 PowerPoint 스마트아트 파일로는 미확인)', () => {
+  test('그래픽 틀 → 데이터 파트의 dataModelExt → 그림 파트 도형(틀 기준 좌표·채우기·글자)', () => {
+    const gf =
+      `<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="4" name="다이어그램"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="1000" y="2000"/><a:ext cx="9000" cy="3000"/></p:xfrm>` +
+      '<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/diagram"><dgm:relIds xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram" r:dm="rId3" r:lo="rId4" r:qs="rId5" r:cs="rId6"/></a:graphicData></a:graphic></p:graphicFrame>';
+    const zip = deck(gf);
+    zip['ppt/slides/_rels/slide1.xml.rels'] = enc(rels([['rId1', 'slideLayout', '../slideLayouts/slideLayout1.xml'], ['rId3', 'diagramData', '../diagrams/data1.xml'], ['rId7', 'diagramDrawing', '../diagrams/drawing1.xml']]));
+    zip['ppt/diagrams/data1.xml'] = enc('<dgm:dataModel xmlns:dgm="d" xmlns:dsp="s"><dgm:extLst><a:ext uri="http://schemas.microsoft.com/office/drawing/2008/diagram"><dsp:dataModelExt relId="rId7" minVer="http://schemas.openxmlformats.org/drawingml/2006/diagram"/></a:ext></dgm:extLst></dgm:dataModel>');
+    zip['ppt/diagrams/drawing1.xml'] = enc(
+      `<dsp:drawing xmlns:dsp="http://schemas.microsoft.com/office/drawing/2008/diagram" ${NS}><dsp:spTree><dsp:nvGrpSpPr><dsp:cNvPr id="0" name=""/><dsp:cNvGrpSpPr/></dsp:nvGrpSpPr><dsp:grpSpPr/>` +
+        '<dsp:sp modelId="{A}"><dsp:nvSpPr><dsp:cNvPr id="0" name=""/><dsp:cNvSpPr/></dsp:nvSpPr><dsp:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="4000" cy="3000"/></a:xfrm><a:prstGeom prst="roundRect"><a:avLst/></a:prstGeom><a:solidFill><a:schemeClr val="accent1"/></a:solidFill></dsp:spPr>' +
+        '<dsp:style><a:lnRef idx="0"><a:scrgbClr r="0" g="0" b="0"/></a:lnRef><a:fillRef idx="1"><a:scrgbClr r="0" g="0" b="0"/></a:fillRef><a:effectRef idx="0"><a:scrgbClr r="0" g="0" b="0"/></a:effectRef><a:fontRef idx="minor"><a:schemeClr val="lt1"/></a:fontRef></dsp:style>' +
+        '<dsp:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>계획</a:t></a:r></a:p><a:p><a:r><a:t>1단계</a:t></a:r></a:p></dsp:txBody></dsp:sp></dsp:spTree></dsp:drawing>',
+    );
+    const [v] = parseSlideVisuals(zip, 'slide1.xml');
+    expect(v).toMatchObject({ kind: 'placeholder', label: '스마트아트', x: 1000, y: 2000, snapshot: true });
+    expect(v.parts).toEqual([expect.objectContaining({ kind: 'shape', x: 0, y: 0, w: 4000, h: 3000, fill: '#4F81BD', geom: 'roundRect', text: '계획\n1단계', textColor: '#FFFFFF' })]);
+  });
+});

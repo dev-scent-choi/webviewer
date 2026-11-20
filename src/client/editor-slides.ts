@@ -486,7 +486,20 @@ function renderSlideVisual(visual: SlideVisual, pageImageUrl: string | null): HT
       el.append(tr);
     }
   } else if (visual.kind === 'placeholder') {
-    el.textContent = visual.label ?? '콘텐츠';
+    if (visual.parts?.length) {
+      // 스마트아트 그림 대체본(dsp:drawing) — 틀 안에 도형들을 그대로 그린다
+      el.classList.add('slide-visual-drawing');
+      for (const part of visual.parts) el.append(renderSlideVisual(part, null));
+    } else {
+      el.textContent = visual.label ?? '콘텐츠';
+    }
+  }
+  if (visual.kind === 'shape' && visual.text) {
+    const label = document.createElement('div');
+    label.className = 'slide-visual-text';
+    label.textContent = visual.text;
+    if (visual.textColor && /^#[0-9A-Fa-f]{6}$/.test(visual.textColor)) label.style.color = visual.textColor;
+    el.append(label);
   }
   return el;
 }

@@ -1,6 +1,6 @@
 import { XMLBuilder, XMLParser } from 'fast-xml-parser';
 import { partialLevelFrom } from './inheritance.js';
-import { IMAGE_MIME_BY_EXT, loadThemeColors, mediaResolverFor, relTargetOf, relsMap, type ThemeColors } from './theme.js';
+import { IMAGE_MIME_BY_EXT, loadThemeColors, mediaResolverFor, relTargetOf, relsMap, resolveRelativePath, type ThemeColors } from './theme.js';
 
 export { IMAGE_MIME_BY_EXT };
 import type { Node as PMNode } from 'prosemirror-model';
@@ -1199,7 +1199,8 @@ export function parseSlideVisuals(zipEntries: Record<string, Uint8Array>, source
         push(gf, 'p:nvGraphicFramePr', { kind: 'table', x, y, w, h, rows, snapshot: true });
       } else {
         const label = uri === CHART_GRAPHIC_URI ? '차트' : uri?.includes('/diagram') ? '스마트아트' : '콘텐츠';
-        push(gf, 'p:nvGraphicFramePr', { kind: 'placeholder', x, y, w, h, label, snapshot: true });
+        const parts = uri?.includes('/diagram') ? smartArtDrawing(owner, graphicData) : undefined;
+        push(gf, 'p:nvGraphicFramePr', { kind: 'placeholder', x, y, w, h, label, snapshot: true, ...(parts?.length ? { parts } : {}) });
       }
     }
 
@@ -1251,6 +1252,56 @@ export function parseSlideVisuals(zipEntries: Record<string, Uint8Array>, source
       const nextTransforms = groupTransform ? [...transforms, groupTransform] : transforms;
       collectVisualsRecursive(owner, grp, nextTransforms, template);
     }
+  }
+
+  /**
+   * 스마트아트의 그림 대체본(PowerPoint가 함께 저장하는 ppt/diagrams/drawingN.xml, dsp:drawing) — 쪽 그림(원본 렌더링)이 없을
+   * 때(새로 만든 빈 슬라이드에 복사된 경우 등) 대신 그릴 도형 목록. 좌표는 그래픽 틀 왼쪽 위 기준(EMU). 찾는 길: 그래픽 틀의
+   * <dgm:relIds r:dm> → 데이터 파트의 <dsp:dataModelExt relId> → 슬라이드 관계 → 그림 파트. 못 찾으면 undefined.
+   * shortcut: 실제 PowerPoint 스마트아트 파일 없이 ECMA/Microsoft 확장 구조대로 만든 합성 시험으로만 확인 — 표본이 생기면 확인할 것.
+   */
+  function smartArtDrawing(owner: VisualPart, graphicData: XmlNode | undefined): SlideVisual[] | undefined {
+    const relIds = graphicData?.['dgm:relIds'] as XmlNode | undefined;
+    const dmTarget = owner.rels.get(String(relIds?.['@_r:dm'] ?? ''));
+    const dataBytes = dmTarget ? zipEntries[resolveRelativePath(owner.part, dmTarget)] : undefined;
+    const drawingRelId = dataBytes ? /<dsp:dataModelExt\b[^>]*\brelId="([^"]+)"/.exec(Buffer.from(dataBytes).toString('utf-8'))?.[1] : undefined;
+    const drawingTarget = drawingRelId ? owner.rels.get(drawingRelId) : undefined;
+    const drawingBytes = drawingTarget ? zipEntries[resolveRelativePath(owner.part, drawingTarget)] : undefined;
+    if (!drawingBytes) return undefined;
+    let tree: XmlNode | undefined;
+    try {
+      tree = ((parser.parse(Buffer.from(drawingBytes).toString('utf-8')) as XmlNode)['dsp:drawing'] as XmlNode | undefined)?.['dsp:spTree'] as XmlNode | undefined;
+    } catch {
+      return undefined;
+    }
+    const parts: SlideVisual[] = [];
+    for (const dsp of asArray<XmlNode>(tree?.['dsp:sp'] as XmlNode | XmlNode[] | undefined)) {
+      const spPr = dsp['dsp:spPr'] as XmlNode | undefined;
+      const style = dsp['dsp:style'] as XmlNode | undefined;
+      const place = placeXfrm([], spPr?.['a:xfrm'] as XmlNode | undefined);
+      if (place.x === null) continue;
+      const fill = fillColorFromSpPr(spPr, theme, style);
+      const stroke = strokeFromSpPr(spPr, theme, style);
+      const geom = presetGeomFromSpPr(spPr);
+      const text = asArray<XmlNode>((dsp['dsp:txBody'] as XmlNode | undefined)?.['a:p'] as XmlNode | XmlNode[] | undefined)
+        .map((p) => fragmentText(p))
+        .filter(Boolean)
+        .join('\n');
+      parts.push({
+        kind: 'shape',
+        x: place.x,
+        y: place.y,
+        w: place.w,
+        h: place.h,
+        fill,
+        ...turnOf(place),
+        ...(geom ? { geom } : {}),
+        ...(stroke && STROKABLE_GEOMS.has(geom) ? { stroke } : {}),
+        ...(text ? { text } : {}),
+        ...(text && theme?.resolve(style?.['a:fontRef'] as XmlNode | undefined) ? { textColor: theme.resolve(style?.['a:fontRef'] as XmlNode | undefined) } : {}),
+      });
+    }
+    return parts;
   }
 
   const hides = (p: VisualPart | null) => p?.root['@_showMasterSp'] === '0' || p?.root['@_showMasterSp'] === 'false';

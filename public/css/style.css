@@ -1661,6 +1661,12 @@ body.home-hidden .doclist-link { display: none !important; }
   white-space: nowrap;
   vertical-align: top;
 }
+/* 스마트아트 그림 대체본(쪽 그림이 없을 때) — 틀 표시 없이 안의 도형들만 */
+.slide-visual-placeholder.slide-visual-drawing { border: none; background: none; }
+.slide-visual-text {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  text-align: center; white-space: pre-line; padding: 4%; color: #fff; font-size: 0.75rem;
+}
 .slide-visual-placeholder {
   display: flex;
   align-items: center;

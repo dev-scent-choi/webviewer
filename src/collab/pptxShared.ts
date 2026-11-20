@@ -175,6 +175,12 @@ export interface SlideVisual {
   readonly rows?: readonly (readonly string[])[];
   /** kind:'placeholder' — 표시할 라벨(예: "차트", "스마트아트") */
   readonly label?: string;
+  /** kind:'placeholder'(스마트아트) — 원본 렌더링 조각이 없을 때 대신 그릴 그림 대체본(dsp:drawing)의 도형들, 좌표는 틀 기준 */
+  readonly parts?: readonly SlideVisual[];
+  /** kind:'shape'(스마트아트 대체본 도형) — 도형 안 글자(문단은 줄 바꿈) */
+  readonly text?: string;
+  /** 위 글자의 색(도형 스타일 fontRef, '#RRGGBB') — 없으면 흰색 */
+  readonly textColor?: string;
 }
 
 /** 새로 추가한(원본에 없던) 텍스트박스의 기본 위치/크기 — 슬라이드 중앙에 가로 60%, 세로 20%.
