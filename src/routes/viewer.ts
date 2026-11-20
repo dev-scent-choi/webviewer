@@ -57,7 +57,7 @@ import { buildViewerGridFile, saveGridFile } from '../xlsx/viewerGrid.js';
 import type { GridChart } from '../xlsx/chartModel.js';
 import { chartDataOf, renderChartSvg } from '../xlsx/chartSvg.js';
 import { rowTopPx } from '../xlsx/sheetGeometry.js';
-import { cellBoxCssText } from '../collab/cellBoxCss.js';
+import { cellBoxCssText, sanitizeCellStyle } from '../collab/cellBoxCss.js';
 import { FILL_MARK } from '../collab/numberFormat.js';
 
 export interface ViewContext {
@@ -1023,7 +1023,11 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
       }
       const grid = await loadGrid(view.meta.id);
       // 테두리 선 종류·색, 무늬 채우기, 글자 회전·들여쓰기 CSS는 편집 화면과 같은 함수(collab/cellBoxCss.ts)로 만들어 함께 보낸다
-      const styles = grid.header.styles.map((style) => ({ ...style, ...cellBoxCssText(style) }));
+      // 서식 값은 한 번 더 검사한다(큰 파일은 편집 방의 서식이 그대로 그리드 파일에 들어간다) — 보기 화면 <style>로 들어가는 값이다
+      const styles = grid.header.styles.map((style) => {
+        const safe = sanitizeCellStyle(style);
+        return { ...safe, ...cellBoxCssText(safe) };
+      });
       return { success: true, data: { ...grid.header, styles } };
     },
   );

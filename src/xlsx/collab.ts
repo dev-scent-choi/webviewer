@@ -24,7 +24,7 @@ import {
 import type { GridCell, GridDocument, GridStyle } from '../spreadsheet.js';
 import { gridCellValue, yieldToEventLoop, YIELD_EVERY_N_ROWS } from '../spreadsheet.js';
 import { parseViewerGrid } from './viewerGrid.js';
-import type { BorderSpec } from '../collab/cellBoxCss.js';
+import { sanitizeCellStyle, type BorderSpec } from '../collab/cellBoxCss.js';
 import type { LazyGridSheetMeta, LazyGridStore } from './lazyGridStore.js';
 import { GRID_COND_FORMATS_MAP, type CondFormatEntry } from '../collab/condFormatShared.js';
 import { applyEditedCondFormats, preserveUnsupportedCfRules } from './condFormatExport.js';
@@ -73,7 +73,9 @@ export function toCellStyleAttrs(style: GridStyle): CellStyleAttrs {
  * 동일한 서식을 찾기 때문에, 같은 서식이 키 순서만 달라 서로 다른 항목으로 중복 등록되면 스타일
  * 배열이 편집할 때마다 계속 늘어난다.
  */
-export function fromCellStyleAttrs(attrs: CellStyleAttrs): GridStyle {
+export function fromCellStyleAttrs(input: CellStyleAttrs): GridStyle {
+  // 편집자가 보낸 값 — 보기 화면 CSS로 흘러가므로 여기(서버 진입점)에서 검사한다(색은 #RRGGBB, 이름은 알려진 것만)
+  const attrs = sanitizeCellStyle(input);
   const style: { -readonly [K in keyof GridStyle]?: GridStyle[K] } = {};
   if (attrs.b) style.b = 1;
   if (attrs.i) style.i = 1;

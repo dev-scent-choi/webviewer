@@ -113,3 +113,87 @@ export function cellBoxCssText(style: CellBoxStyle): { x?: string; xi?: string }
   const xi = toText(inner);
   return { ...(x ? { x } : {}), ...(xi ? { xi } : {}) };
 }
+
+const HEX = /^#[0-9a-f]{6}$/i;
+const PATTERNS = new Set([
+  'darkGray', 'mediumGray', 'lightGray', 'gray125', 'gray0625', 'darkHorizontal', 'darkVertical', 'darkDown', 'darkUp', 'darkGrid', 'darkTrellis',
+  'lightHorizontal', 'lightVertical', 'lightDown', 'lightUp', 'lightGrid', 'lightTrellis',
+]);
+const ICON_CHAR = /^[\u2190-\u2bff\u25a0-\u25ff\u2600-\u27bf!]{1,2}$/u;
+const intIn = (v: unknown, lo: number, hi: number) => typeof v === 'number' && Number.isInteger(v) && v >= lo && v <= hi;
+
+/**
+ * 칸 서식 값 검사 — 화면 CSS(보기 화면 <style>, 편집 화면 style 속성)로 들어가는 값은 여기를 거친다. 편집자가 보낸 서식(Y 맵)은
+ * 서버 진입점(xlsx/collab.ts fromCellStyleAttrs)에서, 보기 화면에 내려 보내는 서식은 routes/viewer.ts grid/meta에서 한 번 더.
+ * 색은 #RRGGBB만, 선 종류·무늬·정렬은 알려진 이름만, 숫자는 범위 안 정수만 남기고 나머지 칸은 버린다.
+ */
+export function sanitizeCellStyle<T extends object>(style: T): T {
+  const out: Record<string, unknown> = {};
+  for (const [key, v] of Object.entries(style as Record<string, unknown>)) {
+    switch (key) {
+      case 'b': case 'i': case 'u': case 'st': case 'w': case 'wrap': case 'df': case 'lk': case 'nu': case 'shr':
+        if (v === 1) out[key] = 1;
+        break;
+      case 'col': case 'bg': case 'fc':
+        if (typeof v === 'string' && HEX.test(v)) out[key] = v;
+        break;
+      case 'a':
+        if (v === 'l' || v === 'c' || v === 'r') out[key] = v;
+        break;
+      case 'va':
+        if (v === 't' || v === 'm' || v === 'b') out[key] = v;
+        break;
+      case 'nf':
+        if (v === 'number' || v === 'currency' || v === 'percent') out[key] = v;
+        break;
+      case 'nd':
+        if (intIn(v, 0, 30)) out[key] = v;
+        break;
+      case 'fs':
+        if (typeof v === 'number' && Number.isFinite(v) && v > 0 && v <= 600) out[key] = v;
+        break;
+      case 'ff':
+        if (typeof v === 'string') out[key] = v.replace(/["\<>;{}()]/g, '').slice(0, 64);
+        break;
+      case 'fmt':
+        if (typeof v === 'string' && v.length <= 255) out[key] = v;
+        break;
+      case 'bt': case 'br': case 'bb': case 'bl':
+        if (v === 1 || v === 2) out[key] = v;
+        break;
+      case 'rot':
+        if (intIn(v, 1, 180) || v === 255) out[key] = v;
+        break;
+      case 'ind':
+        if (intIn(v, 1, 15)) out[key] = v;
+        break;
+      case 'bd': {
+        if (!v || typeof v !== 'object') break;
+        const sides: Record<string, BorderSpec> = {};
+        for (const side of ['t', 'r', 'b', 'l'] as const) {
+          const spec = (v as Record<string, unknown>)[side];
+          if (!Array.isArray(spec) || typeof spec[0] !== 'string' || !(spec[0] in BORDER_CSS)) continue;
+          sides[side] = typeof spec[1] === 'string' && HEX.test(spec[1]) ? [spec[0], spec[1]] : [spec[0]];
+        }
+        if (Object.keys(sides).length > 0) out[key] = sides;
+        break;
+      }
+      case 'pat': {
+        if (!Array.isArray(v) || typeof v[0] !== 'string' || !PATTERNS.has(v[0])) break;
+        const fg = typeof v[1] === 'string' && HEX.test(v[1]) ? v[1] : undefined;
+        const bg = typeof v[2] === 'string' && HEX.test(v[2]) ? v[2] : undefined;
+        out[key] = bg ? [v[0], fg ?? '#000000', bg] : fg ? [v[0], fg] : [v[0]];
+        break;
+      }
+      case 'cb':
+        if (Array.isArray(v) && typeof v[0] === 'string' && HEX.test(v[0]) && intIn(v[1], 0, 100)) out[key] = [v[0], v[1]];
+        break;
+      case 'ci':
+        if (Array.isArray(v) && typeof v[0] === 'string' && ICON_CHAR.test(v[0]) && typeof v[1] === 'string' && HEX.test(v[1])) out[key] = v[2] === 1 ? [v[0], v[1], 1] : [v[0], v[1]];
+        break;
+      default:
+        break; // 모르는 칸은 버린다
+    }
+  }
+  return out as T;
+}
