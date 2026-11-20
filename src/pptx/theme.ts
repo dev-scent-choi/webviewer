@@ -14,7 +14,8 @@ import { XMLParser } from 'fast-xml-parser';
 
 type XmlNode = Record<string, unknown>;
 
-const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_', parseTagValue: false, isArray: (n) => n === 'Relationship' });
+// htmlEntities: 테마 글꼴 이름의 숫자 문자 참조(&#xB9D1;)를 푼다 — slideContent.ts와 같은 이유
+const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_', parseTagValue: false, htmlEntities: true, isArray: (n) => n === 'Relationship' });
 const decoder = new TextDecoder();
 
 /** 지정 색 이름(prstClr) 중 실제 문서에 자주 나오는 것들 */

@@ -41,14 +41,27 @@ const parser = new XMLParser({
   // <a:r>가 하나뿐이면 배열이 아니라 객체로 파싱되는 fast-xml-parser의 기본 동작을 막는다 —
   // 문단 하나에 런이 하나뿐인 경우가 흔해서, 이 옵션 없이는 매번 "배열인지 객체인지" 분기해야 한다.
   isArray: (name) => ['a:p', 'a:r', 'a:br', 'a:fld', 'p:sp'].includes(name),
+  // 숫자 문자 참조(&#xAC00; — ASCII로 쓰는 생성기가 만든다)를 글자로 푼다. 예전엔 "&#xAC00;"가 화면에 그대로
+  // 보이고, 한 글자만 고쳐도 저장에서 "&amp;#xAC00;"로 영구히 바뀌었다(검토 I3). 쓸 때는 xmlBuilder가 다시 이스케이프.
+  htmlEntities: true,
 });
 
 type XmlNode = Record<string, unknown>;
 
-/** 원본 색 노드(<a:solidFill>의 내용)를 XML 문자열로 되돌린다 — 테마 색을 저장에서 그대로 유지하기 위함 */
-const colorBuilder = new XMLBuilder({ ignoreAttributes: false, attributeNamePrefix: '@_', suppressEmptyNode: true });
-/** 원본 조각(<a:rPr>·<a:fld>·<a:endParaRPr>)을 문자열로 되돌리는 빌더 — colorBuilder와 같은 설정 */
-const xmlBuilder = colorBuilder;
+const escapeText = (v: unknown) => String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+/** 속성 값 이스케이프 — 줄 바꿈·탭은 문자 참조로(그대로 쓰면 XML 읽기에서 공백으로 바뀐다: 글꼴 이름 "Evil&#10;Font") */
+const escapeAttr = (v: unknown) =>
+  escapeText(v).replace(/"/g, '&quot;').replace(/\t/g, '&#9;').replace(/\n/g, '&#10;').replace(/\r/g, '&#13;');
+/** 원본 조각(색 노드·<a:pPr>·<a:rPr>·<a:fld>·<a:endParaRPr> 등)을 XML 문자열로 되돌리는 빌더 — 파서가 푼 글자를
+ * 직접 다시 이스케이프한다(빌더 기본 이스케이프는 줄 바꿈 문자 참조를 못 만든다). */
+const xmlBuilder = new XMLBuilder({
+  ignoreAttributes: false,
+  attributeNamePrefix: '@_',
+  suppressEmptyNode: true,
+  processEntities: false,
+  attributeValueProcessor: (_name, value) => escapeAttr(value),
+  tagValueProcessor: (_name, value) => escapeText(value),
+});
 
 function asArray<T>(value: T | T[] | undefined): T[] {
   if (value === undefined) return [];
@@ -70,7 +83,7 @@ function marksFromRPr(rPr: XmlNode | undefined, theme?: ThemeColors, withRaw = t
   } else if (solidFill && typeof solidFill === 'object' && Object.keys(solidFill).length > 0) {
     // 테마 색(schemeClr)·밝기 조정이 붙은 색 등 — 원본 XML을 그대로 보관하고(저장 때 되돌림) 화면엔
     // 테마로 풀어 낸 색을 쓴다. 테마를 모르면(저장 기준선 비교 등) 표시 색 없이 원본만 보관.
-    const raw = colorBuilder.build(solidFill) as string;
+    const raw = xmlBuilder.build(solidFill) as string;
     marks.push(schema.marks.textColor.create({ color: theme?.resolve(solidFill) ?? '', raw }));
   }
   const sz = rPr['@_sz'] as string | undefined;
@@ -131,13 +144,11 @@ function paragraphFromXml(pNode: XmlNode, theme?: ThemeColors): PMNode {
   );
 }
 
-const pPrBuilder = new XMLBuilder({ ignoreAttributes: false, attributeNamePrefix: '@_', suppressEmptyNode: true });
-
 /** 파싱된 <a:pPr>를 algn만 뺀 원래 XML로 되돌린다(정렬은 align 속성이 따로 맡는다). 자식 요소
  * 순서는 파서가 문서 순서대로 담아 두므로 스키마 순서(lnSpc, spcBef, …, buChar, defRPr)가 유지된다. */
 function pPrXmlWithoutAlgn(pPr: XmlNode): string {
   const { '@_algn': _algn, ...rest } = pPr;
-  return pPrBuilder.build({ 'a:pPr': rest }) as string;
+  return xmlBuilder.build({ 'a:pPr': rest }) as string;
 }
 
 /** 저장할 <a:pPr>: 보관해 둔 원본(algn 제외)에 현재 정렬만 다시 얹는다. */

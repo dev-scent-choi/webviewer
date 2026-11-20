@@ -282,3 +282,22 @@ describe('검토 I1: 표 머리 줄 전처리는 바뀐 슬라이드만 다시 �
     expect(new TextDecoder().decode(back['ppt/slides/slide1.xml'])).toContain('b="1"');
   }, 20000);
 });
+
+describe('검토 I3: 숫자 문자 참조(&#xAC00;)는 글자로 읽고, 편집 후 저장에서 망가지지 않는다', () => {
+  const xml =
+    `<p:sld ${NS}>` +
+    tree(sp(2, '', xfrm(0, 0, 1, 1), '<a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang="ko-KR"><a:latin typeface="&#xB9D1;&#xC740; &#xACE0;&#xB515;"/><a:ea typeface="Evil&#10;Font"/></a:rPr><a:t>&#xAC00;&#xB098;&#xB2E4; &amp; &lt;x&gt;</a:t></a:r></a:p>')) +
+    '</p:sld>';
+  test('화면 글자는 "가나다", 한 글자 고친 저장본은 글자·글꼴 이름을 올바르게 다시 쓴다', () => {
+    const doc = parseSlideShapes(xml)[0].doc;
+    expect(doc.textContent).toBe('가나다 & <x>');
+    const run = doc.child(0).child(0);
+    expect(run.marks.find((m) => m.type.name === 'fontFamily')?.attrs.family).toBe('Evil\nFont');
+    const edited = schema.node('doc', null, [schema.node('paragraph', null, [schema.text('가나다! & <x>', run.marks)])]);
+    const out = serializeTxBodyXml(edited);
+    expect(out).toContain('<a:t>가나다! &amp; &lt;x&gt;</a:t>');
+    expect(out).toContain('typeface="맑은 고딕"');
+    expect(out).toContain('typeface="Evil&#10;Font"');
+    expect(out).not.toContain('&amp;#');
+  });
+});

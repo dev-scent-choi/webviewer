@@ -54,6 +54,7 @@ const parser = new XMLParser({
   attributeNamePrefix: '@_',
   parseTagValue: false,
   isArray: (name) => ['p:sp', 'p:grpSp', 'Relationship'].includes(name),
+  htmlEntities: true, // 글꼴 이름·글머리 문자의 숫자 문자 참조(&#x2022;)를 푼다 — slideContent.ts와 같은 이유
 });
 
 const decoder = new TextDecoder();
