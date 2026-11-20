@@ -1,7 +1,7 @@
 import { strFromU8 } from 'fflate';
-import { XMLParser } from 'fast-xml-parser';
 import { guardedUnzipSync } from '../zipGuard.js';
-import { Node as PMNode, type NodeType } from 'prosemirror-model';
+import { type Mark, Node as PMNode, type NodeType } from 'prosemirror-model';
+import { IMAGE_MIME_BY_EXT } from '../pptx/slideContent.js';
 import {
   docxSchema,
   type CellBorderSide,
@@ -12,65 +12,121 @@ import {
   type ParagraphSpacing,
   type DocxComment,
   type RowHeight,
+  type TabStop,
   GALLERY_STYLE_NAMES,
   HIGHLIGHT_COLORS,
 } from './schema.js';
+import {
+  attrsOf,
+  childrenOf,
+  deepTextOf,
+  extrasOf,
+  findAll,
+  findDeep,
+  findFirst,
+  onOff,
+  parser,
+  tagOf,
+  textOf,
+  xmlOf,
+  type XmlNode,
+} from './ooxml.js';
+import { parseNumberingXml, type NumberingDefs } from './numbering.js';
 
-/**
- * fast-xml-parser를 preserveOrder 모드로 쓴다 — OOXML은 같은 태그(w:p, w:tbl 등)가
- * 반복되며 형제 순서가 의미를 가지므로(문단과 표가 번갈아 나오는 문서 등),
- * 태그별로 묶어버리는 기본 모드는 순서 정보를 잃어버려 부적합하다.
- */
-const parser = new XMLParser({
-  ignoreAttributes: false,
-  attributeNamePrefix: '@_',
-  preserveOrder: true,
-  textNodeName: '#text',
-  trimValues: false,
-});
-
-type XmlNode = Record<string, unknown>;
-
-function tagOf(node: XmlNode): string | undefined {
-  return Object.keys(node).find((key) => key !== ':@');
+/** 문서 파트 하나(본문·머리글·각주 등)를 읽는 동안 함께 쓰는 값 */
+interface ImportCtx {
+  readonly styles: readonly XmlNode[];
+  readonly defaultAlign: string | null;
+  readonly styleTableCellMargin: CellMarginSides | null;
+  /** 이 파트의 관계(r:id → 대상) — 그림·하이퍼링크 주소 */
+  readonly rels: ReadonlyMap<string, { readonly target: string; readonly external: boolean }>;
+  readonly contentWidthPx: number | null;
+  readonly themeXml: string | undefined;
+  /** 각주·미주 번호(문서에 나온 순서) */
+  readonly noteCount: { footnote: number; endnote: number };
+  /** 각주·미주 본문을 읽는 중이면 그 번호(w:footnoteRef가 보여 줄 글자) */
+  readonly noteLabel: string | null;
 }
 
-function attrsOf(node: XmlNode): Record<string, string> {
-  return (node[':@'] as Record<string, string> | undefined) ?? {};
+/** 표 스타일이 칸 안 글자에 물려주는 값(굵게·색·글꼴)과 문단 간격 */
+interface RunDefaults {
+  readonly strong?: boolean;
+  readonly em?: boolean;
+  readonly color?: string | null;
+  readonly font?: { readonly ascii: string | null; readonly eastAsia: string | null } | null;
+}
+interface CellDefaults {
+  readonly run: RunDefaults;
+  readonly spacing: ParagraphSpacing | null;
+}
+const NO_CELL_DEFAULTS: CellDefaults = { run: {}, spacing: null };
+
+const HEX6 = /^[0-9A-Fa-f]{6}$/;
+const hexColor = (val: string | undefined): string | null => (val && HEX6.test(val) ? `#${val.toLowerCase()}` : null);
+
+// ── 스타일 ───────────────────────────────────────────────────────────────
+
+// 문단마다 스타일 목록을 다시 훑지 않게 styles 배열 인스턴스별로 "종류:id → 노드" Map을 한 번만 만든다
+const styleMapCache = new WeakMap<readonly XmlNode[], ReadonlyMap<string, XmlNode>>();
+
+function styleMapOf(styles: readonly XmlNode[]): ReadonlyMap<string, XmlNode> {
+  const cached = styleMapCache.get(styles);
+  if (cached) return cached;
+  const map = new Map<string, XmlNode>();
+  for (const s of findAll(styles, 'w:style')) {
+    const attrs = attrsOf(s);
+    const key = `${attrs['@_w:type']}:${attrs['@_w:styleId']}`;
+    if (!map.has(key)) map.set(key, s); // 같은 id가 또 있으면 먼저 나온 것(Word와 같다)
+  }
+  styleMapCache.set(styles, map);
+  return map;
 }
 
-function childrenOf(node: XmlNode): XmlNode[] {
-  const tag = tagOf(node);
-  if (!tag) return [];
-  const value = node[tag];
-  return Array.isArray(value) ? (value as XmlNode[]) : [];
+function styleOf(styles: readonly XmlNode[], type: string, id: string): XmlNode | undefined {
+  return styleMapOf(styles).get(`${type}:${id}`);
 }
 
-function findAll(list: readonly XmlNode[], tag: string): XmlNode[] {
-  return list.filter((node) => tagOf(node) === tag);
+/** 스타일과 그 기반(w:basedOn) 사슬 — 기반이 앞, 파생이 뒤(뒤 것이 앞 것을 덮는다). */
+function styleChainOf(styles: readonly XmlNode[], type: string, id: string | undefined): XmlNode[] {
+  const chain: XmlNode[] = [];
+  let current = id ? styleOf(styles, type, id) : undefined;
+  while (current && chain.length < 12 && !chain.includes(current)) {
+    chain.unshift(current);
+    const basedOn = findFirst(childrenOf(current), 'w:basedOn');
+    current = basedOn ? styleOf(styles, type, attrsOf(basedOn)['@_w:val'] ?? '') : undefined;
+  }
+  return chain;
 }
 
-function findFirst(list: readonly XmlNode[], tag: string): XmlNode | undefined {
-  return list.find((node) => tagOf(node) === tag);
+/** 사슬의 각 스타일에서 w:pPr(또는 w:rPr) 자식 목록 — 기반부터 */
+function chainPr(chain: readonly XmlNode[], prTag: string): XmlNode[][] {
+  return chain.map((s) => {
+    const pr = findFirst(childrenOf(s), prTag);
+    return pr ? childrenOf(pr) : [];
+  });
 }
 
-function textOf(list: readonly XmlNode[]): string {
-  return list
-    .filter((node) => '#text' in node)
-    .map((node) => String((node as { '#text': unknown })['#text']))
-    .join('');
+/** 여러 단계의 자식 목록 중 tag가 마지막으로 나온 요소(파생이 이긴다) */
+function lastOf(levels: readonly (readonly XmlNode[])[], tag: string): XmlNode | undefined {
+  for (let i = levels.length - 1; i >= 0; i -= 1) {
+    const el = findFirst(levels[i], tag);
+    if (el) return el;
+  }
+  return undefined;
 }
 
-/** w:pStyle val="Heading1".."Heading6" → 제목 레벨. 그 외(본문 등)는 문단으로 취급한다. */
-function headingLevel(pPrChildren: readonly XmlNode[]): number | null {
-  const pStyle = findFirst(pPrChildren, 'w:pStyle');
-  if (!pStyle) return null;
-  const val = attrsOf(pStyle)['@_w:val'] ?? '';
-  const match = /^Heading([1-6])$/i.exec(val);
-  return match ? Number(match[1]) : null;
+/** w:pStyle 값 → 제목 수준. 스타일 이름이 "heading N"이면(한국어 Word는 id가 "1"이다) 또는 id가 HeadingN이면. */
+function headingLevelOf(styles: readonly XmlNode[], styleId: string | undefined): number | null {
+  if (!styleId) return null;
+  const byId = /^Heading([1-6])$/i.exec(styleId);
+  if (byId) return Number(byId[1]);
+  const style = styleOf(styles, 'paragraph', styleId);
+  const name = style ? attrsOf(findFirst(childrenOf(style), 'w:name') ?? {})['@_w:val'] ?? '' : '';
+  const byName = /^heading ([1-6])$/i.exec(name);
+  return byName ? Number(byName[1]) : null;
 }
 
-const JC_TO_ALIGN: Record<string, string> = { center: 'center', right: 'right', both: 'justify' };
+const JC_TO_ALIGN: Record<string, string> = { center: 'center', right: 'right', end: 'right', both: 'justify', distribute: 'justify' };
 
 /** w:jc val="center"/"right"/"both" → ProseMirror align 속성. left/미지정은 null(기본값)로 둔다. */
 function alignOf(pPrChildren: readonly XmlNode[]): string | null {
@@ -86,46 +142,54 @@ interface NamedStyleInfo {
 }
 
 /**
- * 문단이 참조하는 특정 이름의 스타일(w:pStyle)이 직접 지정한 정렬(jc)·굵기(rPr/b)를 읽는다.
- * 그 스타일이 다시 무엇을 기반(w:basedOn)으로 하는지는 따라가지 않는다 — 문서 전체의 "기본"
- * 스타일 해석은 defaultParagraphStyleInfoOf가 이미 별도로 처리하고, 여기서는 "이 특정
- * 스타일이 직접 얹은 값"만 본다(실제 사례 — 표 제목/헤더가 참조하는 커스텀 스타일이 직접
- * jc=center + w:b를 지정하는 경우 — 에서 이 정도로 충분했다). 문단 자신의 직접 서식이
- * 여전히 이 값보다 우선한다(호출부에서 ?? 로 처리).
+ * 문단이 참조하는 스타일(w:pStyle)이 직접 지정한 정렬(jc)·굵기(rPr/b) — 문단에 직접 얹는다(표 제목 칸 등이 직접 서식
+ * 없이 이런 스타일만 참조하는 실제 사례). 스타일의 나머지 모양(색·크기·글꼴·간격, 기반 스타일 포함)은 편집기가 스타일 CSS로
+ * 입힌다(docxStyleSheetOf). 문단 자신의 직접 서식이 여전히 이 값보다 우선한다.
  */
-// namedStyleInfoOf는 문단마다(표 안이면 셀마다) 호출되므로, 매번 findAll(...).find(...)로 전체
-// 스타일 목록을 다시 훑으면 O(문단 수 × 스타일 수)가 된다 — 큰 표가 있는 문서에서 체감되는 비용.
-// stylesChildren은 importDocx 한 번의 호출 동안 항상 같은 배열 인스턴스이므로, 그 인스턴스를
-// 키로 한 번만 styleId→노드 Map을 만들어 WeakMap에 캐시해두면 이후 조회가 전부 O(1)이 된다.
-const paragraphStyleMapCache = new WeakMap<readonly XmlNode[], ReadonlyMap<string, XmlNode>>();
-
-function paragraphStyleMapOf(stylesChildren: readonly XmlNode[]): ReadonlyMap<string, XmlNode> {
-  const cached = paragraphStyleMapCache.get(stylesChildren);
-  if (cached) return cached;
-  const map = new Map<string, XmlNode>();
-  for (const s of findAll(stylesChildren, 'w:style')) {
-    const attrs = attrsOf(s);
-    const id = attrs['@_w:styleId'];
-    // .find()의 "첫 매치 우선" 순서를 그대로 보존한다 — 이미 있는 styleId는 덮어쓰지 않는다.
-    if (attrs['@_w:type'] === 'paragraph' && typeof id === 'string' && !map.has(id)) {
-      map.set(id, s);
-    }
-  }
-  paragraphStyleMapCache.set(stylesChildren, map);
-  return map;
-}
-
-function namedStyleInfoOf(styleId: string, stylesChildren: readonly XmlNode[]): NamedStyleInfo | null {
-  const style = paragraphStyleMapOf(stylesChildren).get(styleId);
+function namedStyleInfoOf(styleId: string, styles: readonly XmlNode[]): NamedStyleInfo | null {
+  const style = styleOf(styles, 'paragraph', styleId);
   if (!style) return null;
   const styleChildren = childrenOf(style);
   const pPr = findFirst(styleChildren, 'w:pPr');
   const rPr = findFirst(styleChildren, 'w:rPr');
   return {
     align: alignOf(pPr ? childrenOf(pPr) : []),
-    bold: rPr ? findFirst(childrenOf(rPr), 'w:b') !== undefined : false,
+    bold: rPr ? onOff(childrenOf(rPr), 'w:b') === true : false,
   };
 }
+
+/** 문단 스타일 사슬과 문단 자신의 w:pPr에서 번호·쪽 나눔·탭 정지를 합친다(파생·직접이 이긴다). */
+function paragraphLayoutOf(pPrChildren: readonly XmlNode[], styles: readonly XmlNode[], styleId: string | undefined) {
+  const levels = [...chainPr(styleChainOf(styles, 'paragraph', styleId), 'w:pPr'), pPrChildren];
+  let numId: string | null = null;
+  let ilvl: number | null = null;
+  const tabs = new Map<number, TabStop>();
+  let breakBefore = false;
+  for (const level of levels) {
+    const numPr = findFirst(level, 'w:numPr');
+    if (numPr) {
+      const id = attrsOf(findFirst(childrenOf(numPr), 'w:numId') ?? {})['@_w:val'];
+      const lv = attrsOf(findFirst(childrenOf(numPr), 'w:ilvl') ?? {})['@_w:val'];
+      if (id !== undefined) numId = id;
+      if (lv !== undefined) ilvl = Number(lv);
+    }
+    const pbb = onOff(level, 'w:pageBreakBefore');
+    if (pbb !== undefined) breakBefore = pbb;
+    const tabsEl = findFirst(level, 'w:tabs');
+    for (const tab of tabsEl ? findAll(childrenOf(tabsEl), 'w:tab') : []) {
+      const a = attrsOf(tab);
+      const pos = Number(a['@_w:pos']);
+      if (!Number.isFinite(pos)) continue;
+      if (a['@_w:val'] === 'clear') tabs.delete(pos);
+      else tabs.set(pos, { pos, val: a['@_w:val'] ?? 'left', leader: a['@_w:leader'] && a['@_w:leader'] !== 'none' ? a['@_w:leader'] : null });
+    }
+  }
+  const num = numId && numId !== '0' ? { numId, ilvl: ilvl ?? 0 } : null;
+  const tabList = [...tabs.values()].filter((t) => t.val !== 'num' && t.val !== 'bar').sort((a, b) => a.pos - b.pos);
+  return { num, breakBefore, tabs: tabList.length > 0 ? tabList : null };
+}
+
+// ── 글자(실행문) ──────────────────────────────────────────────────────────
 
 interface RunMarks {
   readonly strong: boolean;
@@ -137,150 +201,411 @@ interface RunMarks {
   readonly font: { readonly ascii: string | null; readonly eastAsia: string | null } | null;
   readonly vertAlign: 'subscript' | 'superscript' | null;
   readonly highlight: string | null;
+  /** 모델링하지 않는 w:rPr 자식(원본 XML)과 문자 스타일 */
+  readonly extra: { readonly xml: string[] | null; readonly rStyle: string | null } | null;
   readonly comments?: readonly string[];
+  readonly link?: Mark | null;
 }
+
+const NO_MARKS: RunMarks = {
+  strong: false, em: false, underline: false, strike: false, color: null, fontSizePt: null, font: null, vertAlign: null, highlight: null, extra: null,
+};
 
 /** w:shd@w:fill — 6자리 hex만 색으로 본다("auto"·무늬 채움 등은 음영 없음). */
 function shadingFillOf(children: readonly XmlNode[]): string | null {
   const shd = findFirst(children, 'w:shd');
-  const fill = shd ? attrsOf(shd)['@_w:fill'] : undefined;
-  return fill && /^[0-9A-Fa-f]{6}$/.test(fill) ? `#${fill.toLowerCase()}` : null;
+  return hexColor(shd ? attrsOf(shd)['@_w:fill'] : undefined);
 }
 
-function runMarksOf(runChildren: readonly XmlNode[], forceBold: boolean): RunMarks {
+function runMarksOf(runChildren: readonly XmlNode[], inherited: RunDefaults): RunMarks {
   const rPr = findFirst(runChildren, 'w:rPr');
   const rPrChildren = rPr ? childrenOf(rPr) : [];
-  const has = (tag: string) => findFirst(rPrChildren, tag) !== undefined;
   const underline = findFirst(rPrChildren, 'w:u');
-  const color = findFirst(rPrChildren, 'w:color');
   const sz = findFirst(rPrChildren, 'w:sz');
-  const colorVal = color ? attrsOf(color)['@_w:val'] : undefined;
   const szVal = sz ? attrsOf(sz)['@_w:val'] : undefined;
-  // 테마 글꼴(w:asciiTheme 등)만 있으면 글꼴 마크를 만들지 않는다 — 문서 기본 글꼴을 그대로 물려받는다.
+  // 직접 이름(literal)이 있는 글꼴만 글꼴 마크로 — 테마 글꼴만 있으면 원본 그대로 두고(저장 때 되돌림) 화면은 문서 기본 글꼴을 물려받는다
   const rFonts = findFirst(rPrChildren, 'w:rFonts');
   const fontAttrs = rFonts ? attrsOf(rFonts) : {};
   const ascii = fontAttrs['@_w:ascii'] ?? fontAttrs['@_w:hAnsi'] ?? null;
   const eastAsia = fontAttrs['@_w:eastAsia'] ?? null;
   const vertAlignEl = findFirst(rPrChildren, 'w:vertAlign');
   const vertAlignVal = vertAlignEl ? attrsOf(vertAlignEl)['@_w:val'] : undefined;
-  const highlightEl = findFirst(rPrChildren, 'w:highlight');
-  const highlightName = highlightEl ? attrsOf(highlightEl)['@_w:val'] : undefined;
+  const highlightName = attrsOf(findFirst(rPrChildren, 'w:highlight') ?? {})['@_w:val'];
+  const namedHighlight = highlightName ? HIGHLIGHT_COLORS[highlightName] : undefined;
+  const shdHighlight = namedHighlight ? null : shadingFillOf(rPrChildren);
+  const bold = onOff(rPrChildren, 'w:b');
+  const italic = onOff(rPrChildren, 'w:i');
+  const strike = onOff(rPrChildren, 'w:strike');
+  const colorVal = attrsOf(findFirst(rPrChildren, 'w:color') ?? {})['@_w:val'];
+  const color = hexColor(colorVal);
+  const underlineOn = underline !== undefined && attrsOf(underline)['@_w:val'] !== 'none';
+  const sizePt = szVal && Number.isFinite(Number(szVal)) ? Number(szVal) / 2 : null;
+  const fontMark = ascii || eastAsia ? { ascii, eastAsia } : null;
+  // 위에서 마크로 옮긴 것만 "모델링함" — 나머지(끄기 값 w:b val=0, 테마 글꼴, 문자 스타일 등)는 원본 그대로 보존한다
+  const modeled = new Set<string>();
+  if (fontMark) modeled.add('w:rFonts');
+  if (bold) modeled.add('w:b');
+  if (italic) modeled.add('w:i');
+  if (strike) modeled.add('w:strike');
+  if (color) modeled.add('w:color');
+  if (sizePt) { modeled.add('w:sz'); modeled.add('w:szCs'); }
+  if (namedHighlight) modeled.add('w:highlight');
+  if (shdHighlight) modeled.add('w:shd');
+  if (underlineOn) modeled.add('w:u');
+  if (vertAlignVal === 'subscript' || vertAlignVal === 'superscript') modeled.add('w:vertAlign');
+  const extraXml = extrasOf(rPrChildren, modeled);
+  const rStyle = attrsOf(findFirst(rPrChildren, 'w:rStyle') ?? {})['@_w:val'] ?? null;
   return {
-    strong: has('w:b') || forceBold,
-    em: has('w:i'),
-    underline: underline !== undefined && attrsOf(underline)['@_w:val'] !== 'none',
-    strike: has('w:strike'),
-    color: colorVal && /^[0-9A-Fa-f]{6}$/.test(colorVal) ? `#${colorVal.toLowerCase()}` : null,
-    fontSizePt: szVal && !Number.isNaN(Number(szVal)) ? Number(szVal) / 2 : null,
-    font: ascii || eastAsia ? { ascii, eastAsia } : null,
+    strong: bold ?? inherited.strong ?? false,
+    em: italic ?? inherited.em ?? false,
+    underline: underlineOn,
+    strike: strike ?? false,
+    color: color ?? (colorVal === undefined ? (inherited.color ?? null) : null),
+    fontSizePt: sizePt,
+    font: fontMark ?? inherited.font ?? null,
     vertAlign: vertAlignVal === 'subscript' || vertAlignVal === 'superscript' ? vertAlignVal : null,
-    highlight: (highlightName && HIGHLIGHT_COLORS[highlightName]) || shadingFillOf(rPrChildren),
+    highlight: namedHighlight ?? shdHighlight,
+    extra: extraXml || rStyle ? { xml: extraXml, rStyle } : null,
   };
+}
+
+function marksOf(marks: RunMarks): Mark[] {
+  const m = docxSchema.marks;
+  return [
+    marks.strong ? m.strong.create() : null,
+    marks.em ? m.em.create() : null,
+    marks.underline ? m.underline.create() : null,
+    marks.strike ? m.strike.create() : null,
+    marks.color ? m.textColor.create({ color: marks.color }) : null,
+    marks.fontSizePt ? m.fontSize.create({ size: marks.fontSizePt }) : null,
+    marks.font ? m.fontFamily.create(marks.font) : null,
+    marks.vertAlign ? m[marks.vertAlign].create() : null,
+    marks.highlight ? m.highlight.create({ color: marks.highlight }) : null,
+    marks.extra ? m.runExtra.create(marks.extra) : null,
+    marks.link ?? null,
+    ...(marks.comments ?? []).map((id) => m.comment.create({ id })),
+  ].filter((mark): mark is Mark => mark !== null);
 }
 
 /** 마크가 적용된 텍스트 조각을 ProseMirror text 노드로 변환한다 (빈 문자열은 제외). */
 function textNodeWithMarks(text: string, marks: RunMarks): PMNode | null {
-  if (text === '') return null;
-  const markList = [
-    marks.strong ? docxSchema.marks.strong.create() : null,
-    marks.em ? docxSchema.marks.em.create() : null,
-    marks.underline ? docxSchema.marks.underline.create() : null,
-    marks.strike ? docxSchema.marks.strike.create() : null,
-    marks.color ? docxSchema.marks.textColor.create({ color: marks.color }) : null,
-    marks.fontSizePt ? docxSchema.marks.fontSize.create({ size: marks.fontSizePt }) : null,
-    marks.font ? docxSchema.marks.fontFamily.create(marks.font) : null,
-    marks.vertAlign ? docxSchema.marks[marks.vertAlign].create() : null,
-    marks.highlight ? docxSchema.marks.highlight.create({ color: marks.highlight }) : null,
-    ...(marks.comments ?? []).map((id) => docxSchema.marks.comment.create({ id })),
-  ].filter((mark): mark is NonNullable<typeof mark> => mark !== null);
-  return docxSchema.text(text, markList);
+  return text === '' ? null : docxSchema.text(text, marksOf(marks));
+}
+
+const EMU_PER_PX = 9525;
+const emuToPx = (value: string | undefined): number | null => {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? Math.round((n / EMU_PER_PX) * 10) / 10 : null;
+};
+
+/** 관계 대상(word/ 기준 상대 경로) → zip 안 그림 경로. word/media/ 바로 아래 브라우저가 그릴 수 있는 그림만(그 밖은 null). */
+function mediaPathOf(ctx: ImportCtx, rId: string | undefined): string | null {
+  const rel = rId ? ctx.rels.get(rId) : undefined;
+  if (!rel || rel.external) return null;
+  // 대상은 보통 word/ 기준 상대 경로("media/image1.png"), 가끔 패키지 절대 경로("/word/media/…")
+  const path = rel.target.startsWith('/') ? rel.target.slice(1) : `word/${rel.target}`;
+  const ext = path.split('.').pop()?.toLowerCase() ?? '';
+  return /^word\/media\/[^/]+$/.test(path) && IMAGE_MIME_BY_EXT[ext] ? path : null;
+}
+
+type OoxmlAttrs = Record<string, unknown>;
+
+/** 글상자 안(w:txbxContent) 문단들을 화면용 PM JSON으로 */
+function textboxContentOf(list: readonly XmlNode[], ctx: ImportCtx): unknown[] | null {
+  const boxes: XmlNode[] = [];
+  const collect = (nodes: readonly XmlNode[]) => {
+    for (const node of nodes) {
+      if (tagOf(node) === 'w:txbxContent') boxes.push(node);
+      else collect(childrenOf(node));
+    }
+  };
+  collect(list);
+  if (boxes.length === 0) return null;
+  return boxes.flatMap((box) => blocksOf(childrenOf(box), ctx, false).map((n) => n.toJSON()));
+}
+
+/** DrawingML 채우기·선 색(a:solidFill/a:srgbClr) */
+function shapeBoxOf(list: readonly XmlNode[]): { fill: string | null; line: string | null; lineW: number | null } {
+  const spPr = findDeep(list, 'wps:spPr');
+  const spChildren = spPr ? childrenOf(spPr) : [];
+  const fill = findFirst(spChildren, 'a:solidFill');
+  const ln = findFirst(spChildren, 'a:ln');
+  const lnFill = ln ? findFirst(childrenOf(ln), 'a:solidFill') : undefined;
+  const colorIn = (el: XmlNode | undefined) => hexColor(attrsOf(findFirst(el ? childrenOf(el) : [], 'a:srgbClr') ?? {})['@_val']);
+  return { fill: colorIn(fill), line: colorIn(lnFill), lineW: ln ? Math.max(1, Math.round((emuToPx(attrsOf(ln)['@_w']) ?? 1))) : null };
+}
+
+/** w:drawing(줄 안 그림·떠 있는 그림·글상자·도형·차트) → ooxml 노드의 화면 속성 */
+function drawingAttrsOf(drawing: XmlNode, ctx: ImportCtx): OoxmlAttrs {
+  const children = childrenOf(drawing);
+  const container = findFirst(children, 'wp:inline') ?? findFirst(children, 'wp:anchor');
+  const inner = container ? childrenOf(container) : [];
+  const extent = attrsOf(findFirst(inner, 'wp:extent') ?? {});
+  const widthPx = emuToPx(extent['@_cx']);
+  const heightPx = emuToPx(extent['@_cy']);
+  let float: string | null = null;
+  if (container && tagOf(container) === 'wp:anchor') {
+    const posH = findFirst(inner, 'wp:positionH');
+    const align = posH ? textOf(childrenOf(findFirst(childrenOf(posH), 'wp:align') ?? {})) : '';
+    const offset = posH ? emuToPx(textOf(childrenOf(findFirst(childrenOf(posH), 'wp:posOffset') ?? {}))) : null;
+    const half = (ctx.contentWidthPx ?? 600) / 2;
+    float = align === 'right' || align === 'outside' || (!align && offset !== null && offset + (widthPx ?? 0) / 2 > half) ? 'right' : 'left';
+  }
+  const docPr = attrsOf(findFirst(inner, 'wp:docPr') ?? {});
+  const label = docPr['@_descr'] || docPr['@_name'] || '';
+  const content = textboxContentOf(inner, ctx);
+  if (content) return { kind: 'textbox', widthPx, heightPx, float, content, box: shapeBoxOf(inner), text: content.length ? deepTextOf(inner) : '' };
+  const blip = findDeep(inner, 'a:blip');
+  if (blip) return { kind: 'image', widthPx, heightPx, float, media: mediaPathOf(ctx, attrsOf(blip)['@_r:embed']), text: label };
+  const graphicData = attrsOf(findDeep(inner, 'a:graphicData') ?? {})['@_uri'] ?? '';
+  return { kind: 'image', widthPx, heightPx, float, media: null, text: /chart/.test(graphicData) ? '차트' : label || '도형' };
+}
+
+/** VML(w:pict·w:object) — 옛 형식 그림·글상자. 크기는 v:shape의 style(pt). */
+function vmlAttrsOf(el: XmlNode, ctx: ImportCtx): OoxmlAttrs {
+  const list = childrenOf(el);
+  const shape = findDeep(list, 'v:shape') ?? findDeep(list, 'v:rect') ?? findDeep(list, 'v:roundrect');
+  const style = shape ? attrsOf(shape)['@_style'] ?? '' : '';
+  const pt = (name: string) => {
+    const m = new RegExp(`(?:^|;)\\s*${name}:\\s*([\\d.]+)(pt|in|px)?`).exec(style);
+    if (!m) return null;
+    const v = Number(m[1]);
+    return Math.round(m[2] === 'in' ? v * 96 : m[2] === 'px' ? v : (v * 4) / 3);
+  };
+  const float = /mso-position-horizontal:\s*right/.test(style) ? 'right' : /position:\s*absolute/.test(style) ? 'left' : null;
+  const content = textboxContentOf(list, ctx);
+  if (content) return { kind: 'textbox', widthPx: pt('width'), heightPx: pt('height'), float, content, box: {}, text: deepTextOf(list) };
+  const imagedata = findDeep(list, 'v:imagedata');
+  return { kind: 'image', widthPx: pt('width'), heightPx: pt('height'), float, media: mediaPathOf(ctx, imagedata ? attrsOf(imagedata)['@_r:id'] : undefined), text: '그림' };
+}
+
+/** 원본 실행문(w:r)의 rPr과 자식 하나만 담은 원본 XML — 실행문 속성(xmlns 선언 포함)을 그대로 지닌다 */
+function runPieceXml(run: XmlNode, child: XmlNode): string {
+  const rPr = findFirst(childrenOf(run), 'w:rPr');
+  const node: XmlNode = { 'w:r': rPr ? [rPr, child] : [child] };
+  if (run[':@']) node[':@'] = run[':@'];
+  return xmlOf(node);
+}
+
+function ooxmlNode(attrs: OoxmlAttrs, marks: RunMarks): PMNode {
+  return docxSchema.nodes.ooxml.create(attrs, null, marksOf(marks));
+}
+
+/** 실행문 안에서 버리는 것 — Word가 다시 만드는 표시(마지막 쪽 나눔 위치·맞춤법 표시)와 메모 참조(메모 마크로 다시 만든다) */
+const DROPPED_RUN_CHILDREN = new Set(['w:rPr', 'w:lastRenderedPageBreak', 'w:commentReference', 'w:annotationRef']);
+
+/** 실행문의 텍스트·줄바꿈·탭이 아닌 자식 하나 → 원본 그대로 보존하는 ooxml 노드 */
+function preservedRunChild(run: XmlNode, child: XmlNode, marks: RunMarks, ctx: ImportCtx): PMNode {
+  const tag = tagOf(child) ?? '';
+  const xml = runPieceXml(run, child);
+  if (tag === 'w:drawing') return ooxmlNode({ xml, ...drawingAttrsOf(child, ctx) }, marks);
+  if (tag === 'mc:AlternateContent') {
+    const choiceDrawing = findDeep(childrenOf(findFirst(childrenOf(child), 'mc:Choice') ?? {}), 'w:drawing');
+    const fallbackPict = findDeep(childrenOf(findFirst(childrenOf(child), 'mc:Fallback') ?? {}), 'w:pict');
+    if (choiceDrawing) return ooxmlNode({ xml, ...drawingAttrsOf(choiceDrawing, ctx) }, marks);
+    if (fallbackPict) return ooxmlNode({ xml, ...vmlAttrsOf(fallbackPict, ctx) }, marks);
+  }
+  if (tag === 'w:pict' || tag === 'w:object') return ooxmlNode({ xml, ...vmlAttrsOf(child, ctx) }, marks);
+  if (tag === 'w:footnoteReference' || tag === 'w:endnoteReference') {
+    const noteType = tag === 'w:footnoteReference' ? 'footnote' : 'endnote';
+    ctx.noteCount[noteType] += 1;
+    return ooxmlNode({ xml, kind: 'note', noteType, noteId: attrsOf(child)['@_w:id'] ?? null, text: String(ctx.noteCount[noteType]) }, marks);
+  }
+  if (tag === 'w:footnoteRef' || tag === 'w:endnoteRef') return ooxmlNode({ xml, kind: 'note', text: ctx.noteLabel ?? '' }, marks);
+  if (tag === 'w:sym') {
+    const code = parseInt(attrsOf(child)['@_w:char'] ?? '', 16);
+    return ooxmlNode({ xml, kind: 'text', text: Number.isFinite(code) ? String.fromCharCode(code >= 0xf000 ? code - 0xf000 : code) : '' }, marks);
+  }
+  if (tag === 'w:noBreakHyphen') return ooxmlNode({ xml, kind: 'text', text: '‑' }, marks);
+  if (tag === 'w:ptab') return ooxmlNode({ xml, kind: 'text', text: '\t' }, marks);
+  const hiddenTags = ['w:softHyphen', 'w:fldChar', 'w:instrText', 'w:separator', 'w:continuationSeparator', 'w:delInstrText'];
+  if (hiddenTags.includes(tag)) return ooxmlNode({ xml, kind: 'hidden' }, marks);
+  return ooxmlNode({ xml, kind: 'text', text: deepTextOf([child]) }, marks);
 }
 
 /**
- * w:r 하나의 자식들을 등장 순서대로 훑어 텍스트(w:t)와 줄바꿈(w:br)을 PM 노드로 만든다.
- * w:br을 무시하고 w:t만 이어붙이면 "첫 줄"과 "둘째 줄"이 구분 없이 "첫 줄둘째 줄"처럼
- * 뭉쳐버리므로, 각 w:t는 자기 위치 그대로 별개 text 노드로, w:br은 hard_break 노드로 만든다.
- * findAll이 반환하는 w:t는 "래퍼" 노드(예: { 'w:t': [...], ':@': {...} })라 텍스트는 그 안의
- * childrenOf(wt)를 다시 한 번 textOf로 펼쳐야 나온다.
+ * w:r 하나의 자식들을 등장 순서대로: 글자(w:t)·줄바꿈(w:br·w:cr)·탭(w:tab)은 고칠 수 있는 노드로, 그 밖(그림·글상자·각주 참조·
+ * 필드 문자 등)은 원본 그대로 담은 ooxml 노드로 만든다 — 예전엔 w:t·w:br 말고는 전부 버려 그림·탭이 사라졌다.
  */
-function runInlineNodesOf(runChildren: readonly XmlNode[], marks: RunMarks): PMNode[] {
+function runInlineNodesOf(run: XmlNode, marks: RunMarks, ctx: ImportCtx): PMNode[] {
   const nodes: PMNode[] = [];
-  for (const child of runChildren) {
+  for (const child of childrenOf(run)) {
     const tag = tagOf(child);
+    if (!tag || tag === '#text' || DROPPED_RUN_CHILDREN.has(tag)) continue;
     if (tag === 'w:t') {
       const node = textNodeWithMarks(textOf(childrenOf(child)), marks);
       if (node) nodes.push(node);
-    } else if (tag === 'w:br') {
-      nodes.push(
-        attrsOf(child)['@_w:type'] === 'page' ? docxSchema.nodes.page_break.create() : docxSchema.nodes.hard_break.create(),
-      );
+    } else if (tag === 'w:br' || tag === 'w:cr') {
+      const type = attrsOf(child)['@_w:type'];
+      if (type === 'page') nodes.push(docxSchema.nodes.page_break.create());
+      else if (type === 'column') nodes.push(preservedRunChild(run, child, marks, ctx)); // 단 나누기 — 원본 그대로
+      else nodes.push(docxSchema.nodes.hard_break.create(null, null, marksOf(marks)));
+    } else if (tag === 'w:tab') {
+      nodes.push(docxSchema.nodes.tab.create(null, null, marksOf(marks)));
+    } else {
+      nodes.push(preservedRunChild(run, child, marks, ctx));
     }
   }
   return nodes;
 }
 
-/** w:p의 자식을 순회하며 인라인(텍스트·줄바꿈) 콘텐츠를 뽑아낸다. 이미지(w:drawing)는 건너뛴다(v1 미지원). */
 /** 지금 열려 있는(w:commentRangeStart는 지났고 End는 아직인) 메모 id — 범위가 문단을 넘어갈 수 있어
  * importDocx 한 번 동안 문서 순서대로 이어서 쓴다. */
 let openCommentIds = new Set<string>();
 
+const fldCharTypeOf = (run: XmlNode): string[] =>
+  findAll(childrenOf(run), 'w:fldChar').map((f) => attrsOf(f)['@_w:fldCharType'] ?? '');
+
 /**
- * 문단 자식을 문서 순서대로 훑는다 — 실행문(w:r)뿐 아니라 하이퍼링크(w:hyperlink)·변경 내용
- * 삽입(w:ins) 안의 실행문도 글자로 읽고(예전엔 이 안의 글자가 통째로 빠졌다), 메모 범위 표시
- * (w:commentRangeStart/End)로 그 사이 글자에 메모 마크를 단다.
+ * 복합 필드(w:fldChar begin … separate … end) 하나를 한 덩어리 ooxml 노드로 — 원본 실행문들을 그대로 담고 화면엔 필드 결과 글자를
+ * 보인다(PAGE·NUMPAGES는 편집기가 쪽 번호로 바꿔 그린다). 문단 안에서 끝나지 않는 필드(목차 등)는 이렇게 묶지 않는다.
  */
-function inlineContentOf(pChildren: readonly XmlNode[], forceBold: boolean): PMNode[] {
+function fieldNodeOf(items: readonly XmlNode[], inherited: RunDefaults, ctx: ImportCtx): PMNode {
+  let depth = 0;
+  let afterSeparate = false;
+  let instr = '';
+  let result = '';
+  let resultMarks: RunMarks | null = null;
+  for (const item of items) {
+    if (tagOf(item) !== 'w:r') {
+      if (afterSeparate && depth === 1) result += deepTextOf([item]);
+      continue;
+    }
+    for (const child of childrenOf(item)) {
+      const tag = tagOf(child);
+      if (tag === 'w:fldChar') {
+        const type = attrsOf(child)['@_w:fldCharType'];
+        if (type === 'begin') depth += 1;
+        else if (type === 'end') depth -= 1;
+        else if (type === 'separate' && depth === 1) afterSeparate = true;
+      } else if (tag === 'w:instrText' && depth === 1 && !afterSeparate) instr += textOf(childrenOf(child));
+      else if (afterSeparate && depth === 1 && (tag === 'w:t' || tag === 'w:tab')) {
+        result += tag === 'w:t' ? textOf(childrenOf(child)) : '\t';
+        resultMarks ??= runMarksOf(childrenOf(item), inherited);
+      }
+    }
+  }
+  const field = /^\s*([A-Z]+)/i.exec(instr)?.[1]?.toUpperCase() ?? null;
+  return ooxmlNode({ xml: items.map(xmlOf).join(''), kind: 'field', field, text: result }, resultMarks ?? NO_MARKS);
+}
+
+/** w:hyperlink의 속성(원본 이름 그대로) — 저장 때 같은 속성으로 다시 감싼다 */
+function linkMarkOf(el: XmlNode, ctx: ImportCtx): Mark {
+  const attrs: Record<string, string> = {};
+  for (const [key, value] of Object.entries(attrsOf(el))) attrs[key.replace(/^@_/, '')] = String(value);
+  const rel = attrs['r:id'] ? ctx.rels.get(attrs['r:id']) : undefined;
+  const href = rel?.external ? rel.target : attrs['w:anchor'] ? `#${attrs['w:anchor']}` : null;
+  return docxSchema.marks.link.create({ attrs, href });
+}
+
+/**
+ * 문단 자식을 문서 순서대로 훑는다 — 실행문·하이퍼링크(링크 마크로)·변경 내용 삽입 안의 글자를 읽고, 메모 범위로 메모 마크를 달고,
+ * 그 밖의 문단 자식(책갈피·단순 필드·내용 컨트롤·수식·변경 내용 삭제분 등)은 원본 그대로 담는다.
+ */
+function inlineContentOf(pChildren: readonly XmlNode[], inherited: RunDefaults, ctx: ImportCtx, link: Mark | null = null): PMNode[] {
   const nodes: PMNode[] = [];
+  let field: XmlNode[] | null = null;
+  let depth = 0;
+  const plainRun = (run: XmlNode) => {
+    const marks = runMarksOf(childrenOf(run), inherited);
+    nodes.push(...runInlineNodesOf(run, { ...marks, link, comments: [...openCommentIds] }, ctx));
+  };
   for (const child of pChildren) {
     const tag = tagOf(child);
+    if (!tag || tag === '#text' || tag === 'w:pPr') continue;
+    if (field) {
+      field.push(child);
+      if (tag === 'w:r') for (const type of fldCharTypeOf(child)) depth += type === 'begin' ? 1 : type === 'end' ? -1 : 0;
+      if (depth === 0) {
+        nodes.push(fieldNodeOf(field, inherited, ctx));
+        field = null;
+      }
+      continue;
+    }
     if (tag === 'w:r') {
-      const runChildren = childrenOf(child);
-      const marks = runMarksOf(runChildren, forceBold);
-      nodes.push(...runInlineNodesOf(runChildren, { ...marks, comments: [...openCommentIds] }));
-    } else if (tag === 'w:hyperlink' || tag === 'w:ins' || tag === 'w:smartTag') {
-      nodes.push(...inlineContentOf(childrenOf(child), forceBold));
+      const types = fldCharTypeOf(child);
+      if (types[0] === 'begin') {
+        depth = types.reduce((d, t) => d + (t === 'begin' ? 1 : t === 'end' ? -1 : 0), 0);
+        if (depth > 0) {
+          field = [child];
+          continue;
+        }
+      }
+      plainRun(child);
+    } else if (tag === 'w:hyperlink') {
+      nodes.push(...inlineContentOf(childrenOf(child), inherited, ctx, linkMarkOf(child, ctx)));
+    } else if (tag === 'w:ins' || tag === 'w:moveTo' || tag === 'w:smartTag' || tag === 'w:customXml') {
+      nodes.push(...inlineContentOf(childrenOf(child), inherited, ctx, link));
     } else if (tag === 'w:commentRangeStart') {
       const id = attrsOf(child)['@_w:id'];
       if (id !== undefined) openCommentIds.add(String(id));
     } else if (tag === 'w:commentRangeEnd') {
       openCommentIds.delete(String(attrsOf(child)['@_w:id']));
+    } else if (tag === 'w:proofErr') {
+      // 맞춤법 검사 표시 — Word가 다시 만든다
+    } else if (tag === 'w:del' || tag === 'w:moveFrom') {
+      nodes.push(ooxmlNode({ xml: xmlOf(child), kind: 'del', text: deepTextOf(childrenOf(child)) }, NO_MARKS));
+    } else if (tag === 'w:fldSimple') {
+      const field2 = /^\s*([A-Z]+)/i.exec(attrsOf(child)['@_w:instr'] ?? '')?.[1]?.toUpperCase() ?? null;
+      const firstRun = findFirst(childrenOf(child), 'w:r');
+      const marks = firstRun ? runMarksOf(childrenOf(firstRun), inherited) : NO_MARKS;
+      nodes.push(ooxmlNode({ xml: xmlOf(child), kind: 'field', field: field2, text: deepTextOf(childrenOf(child)) }, marks));
+    } else if (/^w:(bookmarkStart|bookmarkEnd|permStart|permEnd|moveFromRangeStart|moveFromRangeEnd|moveToRangeStart|moveToRangeEnd)$/.test(tag)) {
+      nodes.push(ooxmlNode({ xml: xmlOf(child), kind: 'hidden' }, NO_MARKS));
+    } else {
+      // 내용 컨트롤(w:sdt)·수식(m:oMath) 등 — 원본 그대로, 화면엔 그 안의 글자
+      nodes.push(ooxmlNode({ xml: xmlOf(child), kind: 'text', text: deepTextOf(childrenOf(child)) }, NO_MARKS));
     }
+  }
+  // 문단 안에서 끝나지 않은 필드(목차처럼 여러 문단에 걸친 것) — 묶지 않고 하나씩(필드 문자는 숨은 조각으로) 읽는다
+  if (field) for (const item of field) {
+    if (tagOf(item) === 'w:r') plainRun(item);
+    else nodes.push(...inlineContentOf([item], inherited, ctx, link));
   }
   return nodes;
 }
 
-function paragraphFrom(
-  pNode: XmlNode,
-  defaultAlign: string | null,
-  stylesChildren: readonly XmlNode[],
-): { node: PMNode; isListItem: boolean } {
+// ── 문단 ─────────────────────────────────────────────────────────────────
+
+function paragraphFrom(pNode: XmlNode, ctx: ImportCtx, cell: CellDefaults, sect: number | null): PMNode {
   const pChildren = childrenOf(pNode);
   const pPr = findFirst(pChildren, 'w:pPr');
   const pPrChildren = pPr ? childrenOf(pPr) : [];
-  const level = headingLevel(pPrChildren);
-  const pStyleEl = findFirst(pPrChildren, 'w:pStyle');
-  const pStyleId = pStyleEl ? attrsOf(pStyleEl)['@_w:val'] : undefined;
-  // 문단이 이름 있는 스타일을 참조하면(예: "테이블 제목") 그 스타일 자체가 직접 지정한
-  // 정렬·굵기를 물려받는다 — 실제 문서에서 표 제목/헤더 셀이 직접 서식 없이 이런 스타일만
-  // 참조하면서 center+bold를 적용받는 경우가 있었다.
-  const namedStyle = pStyleId ? namedStyleInfoOf(pStyleId, stylesChildren) : null;
-  // 문단 자신의 w:jc가 없고, 참조하는 이름 있는 스타일도 정렬을 안 지정하면 — 아무 스타일도
-  // 참조하지 않을 때만(=암묵적으로 "기본" 스타일을 쓸 때만) 문서 기본 정렬을 물려받는다.
-  // 제목(heading)은 별도 스타일 캐스케이드를 아직 풀지 않으므로 이 폴백에서 제외한다.
-  const align = alignOf(pPrChildren) ?? namedStyle?.align ?? (level === null && !pStyleId ? defaultAlign : null);
-  const isListItem = findFirst(pPrChildren, 'w:numPr') !== undefined;
-  const inline = inlineContentOf(pChildren, namedStyle?.bold ?? false);
-  const format = { align, indent: indentOf(pPrChildren), spacing: spacingOf(pPrChildren), shading: shadingFillOf(pPrChildren) };
-  const node =
-    level !== null
-      ? docxSchema.nodes.heading.create({ level, ...format }, inline)
-      : docxSchema.nodes.paragraph.create({ ...format, styleId: pStyleId ? galleryStyleIdOf(pStyleId, stylesChildren) : null }, inline);
-  return { node, isListItem };
+  const pStyleId = attrsOf(findFirst(pPrChildren, 'w:pStyle') ?? {})['@_w:val'];
+  const level = headingLevelOf(ctx.styles, pStyleId);
+  // 문단이 이름 있는 스타일을 참조하면(예: "테이블 제목") 그 스타일 자체가 직접 지정한 정렬·굵기를 물려받는다
+  const namedStyle = pStyleId ? namedStyleInfoOf(pStyleId, ctx.styles) : null;
+  // 문단 자신의 w:jc가 없고 참조 스타일도 정렬을 안 정하면 — 아무 스타일도 참조하지 않을 때만 문서 기본 정렬을 물려받는다
+  const align = alignOf(pPrChildren) ?? namedStyle?.align ?? (level === null && !pStyleId ? ctx.defaultAlign : null);
+  const inherited: RunDefaults = { ...cell.run, strong: namedStyle?.bold || cell.run.strong };
+  const inline = inlineContentOf(pChildren, inherited, ctx);
+  const indent = indentOf(pPrChildren);
+  const ownSpacing = spacingOf(pPrChildren);
+  // 표 스타일의 문단 간격(예: Table Grid의 뒤 0·1줄)은 칸 안 문단이 따로 안 정했을 때 직접 값으로 얹는다
+  const spacing = ownSpacing ?? (pStyleId ? null : cell.spacing);
+  const shading = shadingFillOf(pPrChildren);
+  const modeled = new Set(['w:pStyle', 'w:jc']);
+  if (indent) modeled.add('w:ind');
+  if (ownSpacing) modeled.add('w:spacing');
+  if (shading) modeled.add('w:shd');
+  if (!alignOf(pPrChildren) && findFirst(pPrChildren, 'w:jc')) modeled.delete('w:jc'); // left·start 등 — 원본 그대로
+  const layout = paragraphLayoutOf(pPrChildren, ctx.styles, pStyleId);
+  const format = {
+    align, indent, spacing, shading,
+    pPrExtra: extrasOf(pPrChildren, modeled),
+    num: layout.num,
+    breakBefore: layout.breakBefore,
+    tabs: layout.tabs,
+    sect,
+  };
+  return level !== null
+    ? docxSchema.nodes.heading.create({ level, ...format, styleId: pStyleId }, inline)
+    : docxSchema.nodes.paragraph.create({ ...format, styleId: pStyleId ? galleryStyleIdOf(pStyleId, ctx.styles) : null }, inline);
 }
 
 /** 이름(w:name)이 갤러리 스타일과 같으면 그 표준 id로(한국어 Word의 "a5" → "Title"), 아니면 원래 id 그대로. */
-function galleryStyleIdOf(styleId: string, stylesChildren: readonly XmlNode[]): string {
-  const style = paragraphStyleMapOf(stylesChildren).get(styleId);
+function galleryStyleIdOf(styleId: string, styles: readonly XmlNode[]): string {
+  const style = styleOf(styles, 'paragraph', styleId);
   const nameEl = style ? findFirst(childrenOf(style), 'w:name') : undefined;
   const name = nameEl ? (attrsOf(nameEl)['@_w:val'] ?? '').toLowerCase() : '';
   const match = (Object.entries(GALLERY_STYLE_NAMES) as Array<[string, string]>).find(([, galleryName]) => galleryName === name);
@@ -331,34 +656,39 @@ function dxaToPx(dxa: number): number {
   return Math.round(dxa / DXA_PER_PX);
 }
 
-/** w:tcPr/w:shd@w:fill — 셀 음영 색. "auto"나 6자리 hex가 아니면(무늬 채움 등) 음영 없음으로 취급한다. */
-function backgroundOf(tcPrChildren: readonly XmlNode[]): string | null {
-  const shd = findFirst(tcPrChildren, 'w:shd');
-  if (!shd) return null;
-  const fill = attrsOf(shd)['@_w:fill'];
-  return fill && /^[0-9A-Fa-f]{6}$/.test(fill) ? `#${fill.toLowerCase()}` : null;
+// ── 블록(문단·표·보존 조각) ────────────────────────────────────────────────
+
+/**
+ * 블록 목록(본문·표 칸·글상자·머리글·각주 안)을 PM 블록으로 — 문단·표는 고칠 수 있게, 내용 컨트롤(w:sdt) 등은 원본 그대로 담은
+ * ooxml_block으로. topLevel이면 구역(w:sectPr) 번호를 문단에 매긴다(쪽 나눔·머리글·다단 계산용).
+ */
+function blocksOf(children: readonly XmlNode[], ctx: ImportCtx, topLevel: boolean, cell: CellDefaults = NO_CELL_DEFAULTS, sections?: XmlNode[]): PMNode[] {
+  const blocks: PMNode[] = [];
+  for (const child of children) {
+    const tag = tagOf(child);
+    if (!tag || tag === '#text' || tag === 'w:sectPr' || tag === 'w:tcPr') continue;
+    if (tag === 'w:p') {
+      const sectPr = topLevel && sections ? findFirst(childrenOf(findFirst(childrenOf(child), 'w:pPr') ?? {}), 'w:sectPr') : undefined;
+      if (sectPr && sections) sections.push(sectPr);
+      blocks.push(paragraphFrom(child, ctx, cell, sectPr && sections ? sections.length - 1 : null));
+    } else if (tag === 'w:tbl') {
+      blocks.push(tableFrom(child, ctx));
+    } else if (tag === 'w:customXml') {
+      blocks.push(...blocksOf(childrenOf(child), ctx, topLevel, cell, sections));
+    } else {
+      const sdtContent = tag === 'w:sdt' ? findFirst(childrenOf(child), 'w:sdtContent') : undefined;
+      const content = sdtContent ? blocksOf(childrenOf(sdtContent), ctx, false, cell).map((n) => n.toJSON()) : null;
+      blocks.push(docxSchema.nodes.ooxml_block.create({ xml: xmlOf(child), content, text: deepTextOf(childrenOf(child)) }));
+    }
+  }
+  return blocks;
 }
 
-function tableCellFrom(
-  tcNode: XmlNode,
-  colspan: number,
-  rowspan: number,
-  colwidth: readonly number[] | null,
-  borders: CellBorders,
-  defaultAlign: string | null,
-  stylesChildren: readonly XmlNode[],
-  cellPadding: CellPadding,
-): PMNode {
-  const tcChildren = childrenOf(tcNode);
-  const paragraphs = findAll(tcChildren, 'w:p').map((p) => paragraphFrom(p, defaultAlign, stylesChildren).node);
-  const content = paragraphs.length > 0 ? paragraphs : [docxSchema.nodes.paragraph.create()];
-  const tcPrChildren = tcPrChildrenOf(tcNode);
-  const background = backgroundOf(tcPrChildren);
-  const verticalAlign = verticalAlignOf(tcPrChildren);
-  return docxSchema.nodes.table_cell.create(
-    { colspan, rowspan, colwidth: colwidth ? [...colwidth] : null, background, borders, verticalAlign, cellPadding },
-    content,
-  );
+// ── 표 ───────────────────────────────────────────────────────────────────
+
+/** w:tcPr/w:shd@w:fill — 셀 음영 색 */
+function backgroundOf(tcPrChildren: readonly XmlNode[]): string | null {
+  return shadingFillOf(tcPrChildren);
 }
 
 function tcPrChildrenOf(tcNode: XmlNode): XmlNode[] {
@@ -375,33 +705,27 @@ interface CellMarginSides {
 
 /** w:tblCellMar 또는 w:tcMar의 자식들에서 4변을 읽는다(dxa, 없는 변은 undefined). */
 function cellMarginSidesOf(marChildren: readonly XmlNode[]): CellMarginSides {
-  const sideOf = (tag: string): number | undefined => {
-    const el = findFirst(marChildren, tag);
+  const sideOf = (...tags: string[]): number | undefined => {
+    const el = tags.map((t) => findFirst(marChildren, t)).find(Boolean);
     if (!el) return undefined;
     const val = Number(attrsOf(el)['@_w:w']);
     return Number.isFinite(val) && val >= 0 ? val : undefined;
   };
-  return { top: sideOf('w:top'), right: sideOf('w:right'), bottom: sideOf('w:bottom'), left: sideOf('w:left') };
+  return { top: sideOf('w:top'), right: sideOf('w:right', 'w:end'), bottom: sideOf('w:bottom'), left: sideOf('w:left', 'w:start') };
 }
 
 /** Word 자체의 표준 기본 셀 여백(관례상의 "Normal Table" 기본값) — 위/아래 0, 좌/우 108dxa(0.075in). */
 const STANDARD_CELL_MARGIN_DXA: CellMarginSides = { top: 0, right: 108, bottom: 0, left: 108 };
 
 /** w:tblPr/w:tblCellMar — 이 표 자체가 지정한 기본 셀 여백. 없으면 null. */
-function tableCellMarginOf(tblChildren: readonly XmlNode[]): CellMarginSides | null {
-  const tblPr = findFirst(tblChildren, 'w:tblPr');
-  const tblPrChildren = tblPr ? childrenOf(tblPr) : [];
+function tableCellMarginOf(tblPrChildren: readonly XmlNode[]): CellMarginSides | null {
   const tblCellMar = findFirst(tblPrChildren, 'w:tblCellMar');
   return tblCellMar ? cellMarginSidesOf(childrenOf(tblCellMar)) : null;
 }
 
-/**
- * "기본" 표 스타일(w:type="table" w:default="1") 자체의 w:tblCellMar — w:tblStyle을 지정하지
- * 않은 모든 표가 암묵적으로 상속받는다(문단의 "기본" 스타일과 같은 구조). 실제 문서에서
- * 이 스타일이 좌우 108dxa 같은 표준값을 명시하는 경우가 흔하다.
- */
-function defaultTableStyleCellMarginOf(stylesChildren: readonly XmlNode[]): CellMarginSides | null {
-  const style = findAll(stylesChildren, 'w:style').find((s) => {
+/** "기본" 표 스타일(w:type="table" w:default="1") 자체의 w:tblCellMar — w:tblStyle을 지정하지 않은 모든 표가 암묵적으로 상속받는다. */
+function defaultTableStyleCellMarginOf(styles: readonly XmlNode[]): CellMarginSides | null {
+  const style = findAll(styles, 'w:style').find((s) => {
     const attrs = attrsOf(s);
     return attrs['@_w:type'] === 'table' && attrs['@_w:default'] === '1';
   });
@@ -417,14 +741,8 @@ function cellMarginOverrideOf(tcPrChildren: readonly XmlNode[]): CellMarginSides
 }
 
 /**
- * 표 자체 지정 > 기본 표 스타일 > Word 표준 기본값 순으로 표 여백을 정하고, 그 위에
- * 이 셀만의 재정의를 얹어 최종 4변 여백(px)을 확정한다. 여백은 테두리와 달리 "0"과
- * "지정 안 함"을 구분할 필요가 없어(0도 유효한 여백값) ?? 체인으로 충분하다.
- *
- * dxaToPx(정수로 반올림)를 쓰지 않고 소수점까지 그대로 둔다 — 이 여백이 딱 맞는 셀 안에서
- * 텍스트가 원본처럼 한 줄에 들어가느냐 두 줄로 줄바꿈되느냐를 가르는 값이라, 반올림으로
- * 잃는 0.x px가 곧 줄바꿈 여부를 뒤집을 수 있다(예: 108dxa는 정확히 7.2px, 7px로
- * 반올림하면 그만큼 텍스트 폭이 넓어져 원본과 다시 어긋난다).
+ * 표 자체 지정 > 표 스타일 > Word 표준 기본값 순으로 표 여백을 정하고, 그 위에 이 셀만의 재정의를 얹어 최종 4변 여백(px)을
+ * 확정한다. 반올림하지 않는다 — 딱 맞는 칸에서 0.x px가 줄바꿈 여부를 가른다(108dxa = 정확히 7.2px).
  */
 function resolveCellMargin(
   tableDefault: CellMarginSides | null,
@@ -432,8 +750,7 @@ function resolveCellMargin(
   cellOverride: CellMarginSides | null,
 ): CellPadding {
   const pick = (side: keyof CellMarginSides): number =>
-    (cellOverride?.[side] ?? tableDefault?.[side] ?? styleDefault?.[side] ?? STANDARD_CELL_MARGIN_DXA[side]!) /
-    DXA_PER_PX;
+    (cellOverride?.[side] ?? tableDefault?.[side] ?? styleDefault?.[side] ?? STANDARD_CELL_MARGIN_DXA[side]!) / DXA_PER_PX;
   return { topPx: pick('top'), rightPx: pick('right'), bottomPx: pick('bottom'), leftPx: pick('left') };
 }
 
@@ -455,11 +772,7 @@ function gridSpanOf(tcPrChildren: readonly XmlNode[]): number {
   return Number.isFinite(val) && val > 0 ? val : 1;
 }
 
-/**
- * w:tcPr/w:vMerge — 세로 병합 상태. 'restart'면 이 칸이 병합의 시작(눈에 보이는 셀),
- * @_w:val이 없거나 "continue"면 위 칸에 이어지는 자리(빈 자리표시자, 실제 셀로 만들지 않는다).
- * 태그 자체가 없으면 세로 병합과 무관한 일반 칸이다.
- */
+/** w:tcPr/w:vMerge — 'restart'면 세로 병합의 시작 칸, 값이 없거나 "continue"면 위 칸에 이어지는 자리. 태그 자체가 없으면 null. */
 function vMergeOf(tcPrChildren: readonly XmlNode[]): 'restart' | 'continue' | null {
   const vMerge = findFirst(tcPrChildren, 'w:vMerge');
   if (!vMerge) return null;
@@ -473,19 +786,50 @@ function gridColWidthsOf(tblChildren: readonly XmlNode[]): number[] {
   return findAll(childrenOf(tblGrid), 'w:gridCol').map((col) => Number(attrsOf(col)['@_w:w']) || 0);
 }
 
+/**
+ * 열 너비(dxa) — Word는 칸 너비(w:tcW)를 따르고 w:tblGrid는 참고값이다(python-docx 등이 만든 파일은 tblGrid가 균등이고
+ * tcW만 실제 값이다). 병합하지 않은 칸의 dxa tcW가 가장 많은 행을 기준으로, 모르는 열은 tblGrid 값으로 채운다.
+ */
+function columnWidthsDxaOf(tblChildren: readonly XmlNode[], trNodes: readonly XmlNode[]): number[] {
+  const grid = gridColWidthsOf(tblChildren);
+  let best: Array<number | null> = [];
+  let bestCount = 0;
+  for (const tr of trNodes) {
+    const widths: Array<number | null> = [];
+    let count = 0;
+    for (const tc of findAll(childrenOf(tr), 'w:tc')) {
+      const tcPr = tcPrChildrenOf(tc);
+      const span = gridSpanOf(tcPr);
+      const tcW = attrsOf(findFirst(tcPr, 'w:tcW') ?? {});
+      const w = Number(tcW['@_w:w']);
+      const isDxa = (tcW['@_w:type'] ?? 'dxa') === 'dxa' && Number.isFinite(w) && w > 0;
+      if (span === 1 && isDxa) count += 1;
+      for (let i = 0; i < span; i += 1) widths.push(span === 1 && isDxa ? w : null);
+    }
+    if (count > bestCount) {
+      best = widths;
+      bestCount = count;
+    }
+  }
+  const total = Math.max(grid.length, best.length);
+  return Array.from({ length: total }, (_, i) => best[i] ?? grid[i] ?? 0);
+}
+
 /** docx 테두리 스타일(w:val) → CSS border-style. 알 수 없는 값은 실선으로 대체한다. */
 const OOXML_BORDER_STYLE_TO_CSS: Record<string, string> = {
   double: 'double',
+  triple: 'double',
+  thinThickSmallGap: 'double',
+  thickThinSmallGap: 'double',
   dashed: 'dashed',
   dashSmallGap: 'dashed',
+  dotDash: 'dashed',
   dotted: 'dotted',
 };
 
-/** 한 변(w:top/w:bottom/w:left/w:right/w:insideH/w:insideV) 하나를 CellBorderSide로 변환한다. */
 /**
- * undefined(이 변 요소 자체가 XML에 없음 — 상위 기본값을 따라야 한다)와 null(요소는 있지만
- * "테두리 없음"으로 명시됨 — 상위 기본값을 따르면 안 되고 실제로 안 그려야 한다)을 구분해야
- * w:tcBorders가 특정 변만 "nil"로 재정의했을 때 표 기본 테두리로 잘못 되돌아가지 않는다.
+ * 한 변(w:top/w:bottom/w:left/w:right/w:insideH/w:insideV)을 CellBorderSide로. undefined(요소 자체가 없음 — 상위 값을 따름)와
+ * null(요소는 있지만 "테두리 없음"으로 명시)을 구분해야 특정 변만 "nil"로 재정의했을 때 기본 테두리로 잘못 되돌아가지 않는다.
  */
 function borderSideOf(el: XmlNode | undefined): CellBorderSide | null | undefined {
   if (!el) return undefined;
@@ -493,13 +837,10 @@ function borderSideOf(el: XmlNode | undefined): CellBorderSide | null | undefine
   const val = attrs['@_w:val'];
   if (!val || val === 'none' || val === 'nil') return null;
   const sz = Number(attrs['@_w:sz']);
-  // w:sz는 1/8pt 단위. px = pt * (96/72) = pt * 4/3, pt = sz/8 → px = sz/6.
-  // 0.5px 단위로 반올림하고 최소 1px은 되게 한다 — Word의 표준 얇은 테두리(sz=4, 0.5pt≈0.67px)가
-  // 그대로면 브라우저 화면에서 거의 안 보일 만큼 얇아지기 때문이다.
+  const style = OOXML_BORDER_STYLE_TO_CSS[val] ?? 'solid';
+  // w:sz는 1/8pt 단위 → px = sz/6. 0.5px 단위로 반올림하고 최소 1px(이중선이 두 줄로 보이는 폭은 화면에서 정한다 — schema.ts)
   const widthPx = Number.isFinite(sz) && sz > 0 ? Math.max(1, Math.round((sz / 6) * 2) / 2) : 1;
-  const colorRaw = attrs['@_w:color'];
-  const color = colorRaw && /^[0-9A-Fa-f]{6}$/.test(colorRaw) ? `#${colorRaw.toLowerCase()}` : '#000000';
-  return { style: OOXML_BORDER_STYLE_TO_CSS[val] ?? 'solid', widthPx, color };
+  return { style, widthPx, color: hexColor(attrs['@_w:color']) ?? '#000000' };
 }
 
 interface BorderSet {
@@ -513,7 +854,7 @@ interface BorderSet {
 
 const EMPTY_BORDER_SET: BorderSet = { top: null, right: null, bottom: null, left: null, insideH: null, insideV: null };
 
-/** w:tblBorders 또는 w:tcBorders의 자식들에서 6개 변을 모두 읽는다(없는 변은 null). */
+/** w:tblBorders 또는 w:tcBorders의 자식들에서 6개 변을 읽는다(없는 변은 undefined). */
 function borderSetOf(borderChildren: readonly XmlNode[]): BorderSet {
   return {
     top: borderSideOf(findFirst(borderChildren, 'w:top')),
@@ -525,29 +866,124 @@ function borderSetOf(borderChildren: readonly XmlNode[]): BorderSet {
   };
 }
 
-/** w:tblPr/w:tblBorders — 표 전체에 적용되는 기본 테두리(개별 셀이 따로 지정하지 않으면 이걸 쓴다). */
-function tableBorderDefaultsOf(tblChildren: readonly XmlNode[]): BorderSet {
-  const tblPr = findFirst(tblChildren, 'w:tblPr');
-  const tblPrChildren = tblPr ? childrenOf(tblPr) : [];
-  const tblBorders = findFirst(tblPrChildren, 'w:tblBorders');
-  return tblBorders ? borderSetOf(childrenOf(tblBorders)) : EMPTY_BORDER_SET;
+/** 뒤 묶음에 있는 변만 앞 묶음을 덮는다 */
+function overlayBorders(base: BorderSet, top: BorderSet | null): BorderSet {
+  if (!top) return base;
+  const pick = (side: keyof BorderSet) => (top[side] !== undefined ? top[side] : base[side]);
+  return { top: pick('top'), right: pick('right'), bottom: pick('bottom'), left: pick('left'), insideH: pick('insideH'), insideV: pick('insideV') };
 }
 
-/** w:tcPr/w:tcBorders — 이 셀만의 테두리 재정의(있는 변만 표 기본값을 덮어쓴다). */
-function cellBorderOverrideOf(tcPrChildren: readonly XmlNode[]): BorderSet | null {
-  const tcBorders = findFirst(tcPrChildren, 'w:tcBorders');
-  return tcBorders ? borderSetOf(childrenOf(tcBorders)) : null;
+function bordersIn(children: readonly XmlNode[], tag: string): BorderSet | null {
+  const el = findFirst(children, tag);
+  return el ? borderSetOf(childrenOf(el)) : null;
 }
+
+/** 표 스타일의 한 영역(전체·첫 행·줄무늬 등)이 정한 모양 */
+interface TableStyleRegion {
+  readonly borders: BorderSet | null;
+  readonly shd: string | null;
+  readonly run: RunDefaults;
+  readonly spacing: ParagraphSpacing | null;
+}
+
+interface TableStyleInfo {
+  readonly tableBorders: BorderSet | null;
+  readonly cellMargin: CellMarginSides | null;
+  readonly whole: TableStyleRegion;
+  readonly regions: ReadonlyMap<string, TableStyleRegion>;
+}
+
+/** 스타일 묶음 하나(w:style 또는 w:tblStylePr)의 pPr·rPr·tcPr에서 영역 모양을 읽어 앞 값 위에 얹는다 */
+function regionOf(children: readonly XmlNode[], base: TableStyleRegion | undefined, ctx: ImportCtx): TableStyleRegion {
+  const rPrChildren = childrenOf(findFirst(children, 'w:rPr') ?? {});
+  const tcPrChildren = childrenOf(findFirst(children, 'w:tcPr') ?? {});
+  const pPrChildren = childrenOf(findFirst(children, 'w:pPr') ?? {});
+  const bold = onOff(rPrChildren, 'w:b');
+  const italic = onOff(rPrChildren, 'w:i');
+  const color = hexColor(attrsOf(findFirst(rPrChildren, 'w:color') ?? {})['@_w:val']);
+  const font = resolveFontFamilyFromRFonts(findFirst(rPrChildren, 'w:rFonts'), ctx.themeXml);
+  const run: RunDefaults = {
+    strong: bold ?? base?.run.strong,
+    em: italic ?? base?.run.em,
+    color: color ?? base?.run.color ?? null,
+    font: font ? { ascii: font.ascii, eastAsia: font.eastAsia } : (base?.run.font ?? null),
+  };
+  return {
+    borders: base?.borders ? overlayBorders(base.borders, bordersIn(tcPrChildren, 'w:tcBorders')) : bordersIn(tcPrChildren, 'w:tcBorders'),
+    shd: shadingFillOf(tcPrChildren) ?? base?.shd ?? null,
+    run,
+    spacing: spacingOf(pPrChildren) ?? base?.spacing ?? null,
+  };
+}
+
+/** w:tblStyle이 가리키는 표 스타일(기반 사슬 포함)의 테두리·여백·영역별(첫 행·줄무늬 등) 모양 */
+function tableStyleInfoOf(styleId: string | undefined, ctx: ImportCtx): TableStyleInfo | null {
+  const chain = styleChainOf(ctx.styles, 'table', styleId);
+  if (chain.length === 0) return null;
+  let tableBorders: BorderSet | null = null;
+  let cellMargin: CellMarginSides | null = null;
+  let whole: TableStyleRegion | undefined;
+  const regions = new Map<string, TableStyleRegion>();
+  for (const style of chain) {
+    const children = childrenOf(style);
+    const tblPr = childrenOf(findFirst(children, 'w:tblPr') ?? {});
+    const borders = bordersIn(tblPr, 'w:tblBorders');
+    if (borders) tableBorders = tableBorders ? overlayBorders(tableBorders, borders) : borders;
+    cellMargin = tableCellMarginOf(tblPr) ?? cellMargin;
+    whole = regionOf(children, whole, ctx);
+    for (const cond of findAll(children, 'w:tblStylePr')) {
+      const type = attrsOf(cond)['@_w:type'] ?? '';
+      regions.set(type, regionOf(childrenOf(cond), regions.get(type), ctx));
+    }
+  }
+  return { tableBorders, cellMargin, whole: whole!, regions };
+}
+
+/** w:tblLook — 표 스타일의 어느 영역을 쓰는지(첫 행·첫 열·줄무늬 등). 옛 문서는 16진 w:val 비트로만 적는다. */
+function tableLookOf(tblPrChildren: readonly XmlNode[]) {
+  const a = attrsOf(findFirst(tblPrChildren, 'w:tblLook') ?? {});
+  const bits = parseInt(a['@_w:val'] ?? '04A0', 16);
+  const flag = (name: string, bit: number) => (a[`@_w:${name}`] !== undefined ? a[`@_w:${name}`] === '1' || a[`@_w:${name}`] === 'true' : (bits & bit) !== 0);
+  return {
+    firstRow: flag('firstRow', 0x20),
+    lastRow: flag('lastRow', 0x40),
+    firstColumn: flag('firstColumn', 0x80),
+    lastColumn: flag('lastColumn', 0x100),
+    noHBand: flag('noHBand', 0x200),
+    noVBand: flag('noVBand', 0x400),
+  };
+}
+
+/** 칸 위치 → 적용되는 표 스타일 영역(낮은 우선순위부터: 줄무늬 열 → 줄무늬 행 → 첫/끝 열 → 첫/끝 행 → 모서리) */
+function regionTypesOf(look: ReturnType<typeof tableLookOf>, row: number, col: number, lastRow: boolean, lastCol: boolean, totalRows: number): string[] {
+  const types: string[] = [];
+  const isFirstRow = look.firstRow && row === 0;
+  const isLastRow = look.lastRow && lastRow && totalRows > 1;
+  const isFirstCol = look.firstColumn && col === 0;
+  const isLastCol = look.lastColumn && lastCol;
+  if (!look.noVBand && !isFirstCol && !isLastCol) types.push((col - (look.firstColumn ? 1 : 0)) % 2 === 0 ? 'band1Vert' : 'band2Vert');
+  if (!look.noHBand && !isFirstRow && !isLastRow) types.push((row - (look.firstRow ? 1 : 0)) % 2 === 0 ? 'band1Horz' : 'band2Horz');
+  if (isFirstCol) types.push('firstCol');
+  if (isLastCol) types.push('lastCol');
+  if (isFirstRow) types.push('firstRow');
+  if (isLastRow) types.push('lastRow');
+  if (isFirstRow && isFirstCol) types.push('nwCell');
+  if (isFirstRow && isLastCol) types.push('neCell');
+  if (isLastRow && isFirstCol) types.push('swCell');
+  if (isLastRow && isLastCol) types.push('seCell');
+  return types;
+}
+
+const ROW_REGIONS = new Set(['firstRow', 'lastRow', 'band1Horz', 'band2Horz']);
 
 /**
- * 표 기본 테두리(바깥 변 top/right/bottom/left, 안쪽 grid선 insideH/insideV)와 이 셀만의
- * 재정의를 합쳐, 이 셀이 화면에 그려야 할 4변을 확정한다. 셀이 표의 가장자리에 있으면
- * 바깥 변(top/right/bottom/left)을, 안쪽에 있으면 insideH/insideV를 기본값으로 쓴다.
- * (Word의 실제 인접 셀 간 우선순위 비교 알고리즘까지는 재현하지 않는 v1 단순화 — 이 셀
- * 재정의가 있으면 무조건 그걸 쓴다.)
+ * 표 기본 테두리와 영역·칸 재정의를 합쳐 이 칸의 4변을 확정한다. 표 가장자리 칸은 바깥 변을, 안쪽은 insideH/insideV를 쓴다.
+ * 영역(첫 행 등)의 테두리는 그 영역을 한 덩어리로 보고 같은 규칙으로 얹는다. 이웃 칸끼리의 우선순위는 브라우저의
+ * border-collapse(굵은 선이 이김)에 맡긴다.
  */
 function resolveCellBorders(
   tableDefault: BorderSet,
+  regions: ReadonlyArray<{ type: string; borders: BorderSet | null }>,
   cellOverride: BorderSet | null,
   pos: { row: number; col: number; colspan: number; endRow: number; totalRows: number; totalCols: number },
 ): CellBorders {
@@ -555,18 +991,19 @@ function resolveCellBorders(
   const isLastRow = pos.endRow >= pos.totalRows - 1;
   const isFirstCol = pos.col === 0;
   const isLastCol = pos.col + pos.colspan >= pos.totalCols;
-  // override가 undefined(그 변 자체를 안 건드림)일 때만 기본값으로 넘어간다 — null(명시적
-  // "테두리 없음")은 그대로 존중해야 하므로 ?? 를 쓰면 안 된다(null도 "값 없음"으로 취급해버림).
-  const pick = (
-    overrideVal: CellBorderSide | null | undefined,
-    fallback: CellBorderSide | null | undefined,
-  ): CellBorderSide | null => (overrideVal !== undefined ? overrideVal : fallback ?? null);
-  return {
-    top: pick(cellOverride?.top, isFirstRow ? tableDefault.top : tableDefault.insideH),
-    right: pick(cellOverride?.right, isLastCol ? tableDefault.right : tableDefault.insideV),
-    bottom: pick(cellOverride?.bottom, isLastRow ? tableDefault.bottom : tableDefault.insideH),
-    left: pick(cellOverride?.left, isFirstCol ? tableDefault.left : tableDefault.insideV),
-  };
+  const sideOf = (set: BorderSet, rowRegion: boolean | null) => ({
+    top: rowRegion === true || isFirstRow ? set.top : set.insideH,
+    bottom: rowRegion === true || isLastRow ? set.bottom : set.insideH,
+    left: rowRegion === false || isFirstCol ? set.left : set.insideV,
+    right: rowRegion === false || isLastCol ? set.right : set.insideV,
+  });
+  let result: Record<'top' | 'right' | 'bottom' | 'left', CellBorderSide | null | undefined> = sideOf(tableDefault, null);
+  const layers = [...regions.map((r) => (r.borders ? sideOf(r.borders, ROW_REGIONS.has(r.type)) : null)), cellOverride];
+  for (const layer of layers) {
+    if (!layer) continue;
+    for (const side of ['top', 'right', 'bottom', 'left'] as const) if (layer[side] !== undefined) result = { ...result, [side]: layer[side] };
+  }
+  return { top: result.top ?? null, right: result.right ?? null, bottom: result.bottom ?? null, left: result.left ?? null };
 }
 
 interface CellPlacement {
@@ -577,26 +1014,16 @@ interface CellPlacement {
   rowspan: number;
 }
 
-/**
- * OOXML의 표 병합(w:gridSpan=가로, w:vMerge=세로)을 ProseMirror의 colspan/rowspan 모델로
- * 옮긴다. ProseMirror(prosemirror-tables)는 세로 병합을 "이어지는 칸"을 아예 만들지 않고
- * 시작 칸의 rowspan만 늘리는 방식으로 표현하므로, w:vMerge가 "continue"인 <w:tc>는 새 셀을
- * 만들지 않고 같은 열의 시작 칸(originByCol) rowspan만 1 늘린 뒤 건너뛴다.
- */
 /** w:tblPr/w:jc — 표 자체가 페이지 안에서 왼쪽/가운데/오른쪽 중 어디 놓이는지(셀 안 문단 정렬과 무관). */
-function tableAlignOf(tblChildren: readonly XmlNode[]): string | null {
-  const tblPr = findFirst(tblChildren, 'w:tblPr');
-  const tblPrChildren = tblPr ? childrenOf(tblPr) : [];
+function tableAlignOf(tblPrChildren: readonly XmlNode[]): string | null {
   const jc = findFirst(tblPrChildren, 'w:jc');
   if (!jc) return null;
   const val = attrsOf(jc)['@_w:val'];
-  return val === 'center' || val === 'right' ? val : null;
+  return val === 'center' || val === 'right' || val === 'end' ? (val === 'end' ? 'right' : val) : null;
 }
 
 /** w:trPr/w:trHeight — 행 높이. hRule="auto"(또는 요소 자체가 없음)는 "지정 없음"과 동일하게 null. */
-function rowHeightOf(trChildren: readonly XmlNode[]): RowHeight | null {
-  const trPr = findFirst(trChildren, 'w:trPr');
-  const trPrChildren = trPr ? childrenOf(trPr) : [];
+function rowHeightOf(trPrChildren: readonly XmlNode[]): RowHeight | null {
   const trHeight = findFirst(trPrChildren, 'w:trHeight');
   if (!trHeight) return null;
   const attrs = attrsOf(trHeight);
@@ -608,10 +1035,8 @@ function rowHeightOf(trChildren: readonly XmlNode[]): RowHeight | null {
 }
 
 /**
- * w:tblGrid 열 폭 합이 페이지 내용 폭(contentWidthPx)보다 넓으면, Word가 실제로 그러듯
- * (AutoFit) 비율을 유지한 채 내용 폭에 맞춰 축소한다. contentWidthPx를 모르거나(sectPr 없음)
- * 이미 내용 폭 이내면 그대로 둔다 — 원본보다 좁은 표를 억지로 늘리지는 않는다(과거에 고친
- * width:100% 강제 확장 버그의 재발 방지).
+ * 열 폭 합이 페이지 내용 폭(contentWidthPx)보다 넓으면, Word가 실제로 그러듯 비율을 유지한 채 내용 폭에 맞춰 축소한다.
+ * contentWidthPx를 모르거나 이미 내용 폭 이내면 그대로 둔다(원본보다 좁은 표를 억지로 늘리지 않는다).
  */
 function fitGridColWidthsPx(gridColWidthsPx: readonly number[], contentWidthPx: number | null): number[] {
   const total = gridColWidthsPx.reduce((sum, w) => sum + w, 0);
@@ -620,33 +1045,32 @@ function fitGridColWidthsPx(gridColWidthsPx: readonly number[], contentWidthPx: 
   return gridColWidthsPx.map((w) => Math.max(1, Math.round(w * scale)));
 }
 
-function tableFrom(
-  tblNode: XmlNode,
-  contentWidthPx: number | null,
-  defaultAlign: string | null,
-  styleTableCellMargin: CellMarginSides | null,
-  stylesChildren: readonly XmlNode[],
-): PMNode {
+/**
+ * OOXML 표 → PM 표. 병합(w:gridSpan=가로, w:vMerge=세로)은 prosemirror-tables의 colspan/rowspan으로("이어지는 칸"은 만들지 않고
+ * 시작 칸의 rowspan만 늘린다). 표 스타일(w:tblStyle)의 테두리·음영·줄무늬·첫 행/열 글자 모양은 칸마다 계산해 칸 속성과 글자에 얹고,
+ * 원본 w:tblPr·w:trPr·w:tcPr 중 모델링하지 않는 자식은 그대로 담아 저장 때 되돌린다.
+ */
+function tableFrom(tblNode: XmlNode, ctx: ImportCtx): PMNode {
   const tblChildren = childrenOf(tblNode);
+  const tblPrChildren = childrenOf(findFirst(tblChildren, 'w:tblPr') ?? {});
   const trNodes = findAll(tblChildren, 'w:tr');
-  const gridColWidths = fitGridColWidthsPx(gridColWidthsOf(tblChildren).map(dxaToPx), contentWidthPx);
-  const tableBorderDefaults = tableBorderDefaultsOf(tblChildren);
-  const tableCellMarginDefault = tableCellMarginOf(tblChildren);
-  const tableAlign = tableAlignOf(tblChildren);
-  const rowHeights: Array<RowHeight | null> = [];
+  const colWidths = fitGridColWidthsPx(columnWidthsDxaOf(tblChildren, trNodes).map(dxaToPx), ctx.contentWidthPx);
+  const styleId = attrsOf(findFirst(tblPrChildren, 'w:tblStyle') ?? {})['@_w:val'];
+  const style = tableStyleInfoOf(styleId, ctx);
+  const ownBorders = bordersIn(tblPrChildren, 'w:tblBorders');
+  const tableBorderDefaults = overlayBorders(style?.tableBorders ?? EMPTY_BORDER_SET, ownBorders);
+  const tableCellMarginDefault = tableCellMarginOf(tblPrChildren);
+  const look = tableLookOf(tblPrChildren);
 
   const rowPlacements: CellPlacement[][] = [];
   const originByCol = new Map<number, CellPlacement>();
-
   trNodes.forEach((tr, row) => {
-    rowHeights.push(rowHeightOf(childrenOf(tr)));
     const placements: CellPlacement[] = [];
     let col = 0;
     for (const tc of findAll(childrenOf(tr), 'w:tc')) {
       const tcPrChildren = tcPrChildrenOf(tc);
       const gridSpan = gridSpanOf(tcPrChildren);
-      const vMerge = vMergeOf(tcPrChildren);
-      if (vMerge === 'continue') {
+      if (vMergeOf(tcPrChildren) === 'continue') {
         const origin = originByCol.get(col);
         if (origin) origin.rowspan += 1;
         col += gridSpan;
@@ -661,63 +1085,57 @@ function tableFrom(
   });
 
   const totalRows = rowPlacements.length;
-  const totalCols = Math.max(
-    0,
-    ...rowPlacements.map((placements) => placements.reduce((sum, p) => sum + p.colspan, 0)),
-  );
+  const totalCols = Math.max(0, ...rowPlacements.map((placements) => placements.reduce((sum, p) => sum + p.colspan, 0)));
+  const TC_MODELED = new Set(['w:tcW', 'w:gridSpan', 'w:vMerge', 'w:tcBorders', 'w:shd', 'w:vAlign', 'w:tcMar']);
 
-  const rows = rowPlacements.map((placements, row) =>
-    docxSchema.nodes.table_row.create(
-      { height: rowHeights[row] },
+  const rows = rowPlacements.map((placements, row) => {
+    const trPrChildren = childrenOf(findFirst(childrenOf(trNodes[row]), 'w:trPr') ?? {});
+    return docxSchema.nodes.table_row.create(
+      { height: rowHeightOf(trPrChildren), trPrExtra: extrasOf(trPrChildren, new Set(['w:trHeight'])) },
       placements.map((p) => {
-        const widths = gridColWidths.slice(p.col, p.col + p.colspan);
-        const colwidth = widths.length === p.colspan ? widths : null;
+        const widths = colWidths.slice(p.col, p.col + p.colspan);
+        const colwidth = widths.length === p.colspan && widths.every((w) => w > 0) ? widths : null;
         const tcPrChildren = tcPrChildrenOf(p.tc);
-        const cellOverride = cellBorderOverrideOf(tcPrChildren);
-        const borders = resolveCellBorders(tableBorderDefaults, cellOverride, {
-          row: p.row,
-          col: p.col,
-          colspan: p.colspan,
-          endRow: p.row + p.rowspan - 1,
-          totalRows,
-          totalCols,
-        });
-        const cellPadding = resolveCellMargin(
-          tableCellMarginDefault,
-          styleTableCellMargin,
-          cellMarginOverrideOf(tcPrChildren),
+        const endRow = p.row + p.rowspan - 1;
+        const regionTypes = style ? regionTypesOf(look, p.row, p.col, endRow >= totalRows - 1, p.col + p.colspan >= totalCols, totalRows) : [];
+        const regions = regionTypes.map((type) => ({ type, region: style!.regions.get(type) })).filter((r) => r.region);
+        const layered = [style?.whole, ...regions.map((r) => r.region)].filter((r): r is TableStyleRegion => !!r);
+        const run = layered.reduce<RunDefaults>((acc, r) => ({
+          strong: r.run.strong ?? acc.strong,
+          em: r.run.em ?? acc.em,
+          color: r.run.color ?? acc.color,
+          font: r.run.font ?? acc.font,
+        }), {});
+        const spacing = layered.reduce<ParagraphSpacing | null>((acc, r) => r.spacing ?? acc, null);
+        const borders = resolveCellBorders(
+          tableBorderDefaults,
+          regions.map((r) => ({ type: r.type, borders: r.region!.borders })),
+          bordersIn(tcPrChildren, 'w:tcBorders'),
+          { row: p.row, col: p.col, colspan: p.colspan, endRow, totalRows, totalCols },
         );
-        return tableCellFrom(p.tc, p.colspan, p.rowspan, colwidth, borders, defaultAlign, stylesChildren, cellPadding);
+        const background = backgroundOf(tcPrChildren) ?? layered.reduce<string | null>((acc, r) => r.shd ?? acc, null);
+        const cellPadding = resolveCellMargin(tableCellMarginDefault, style?.cellMargin ?? ctx.styleTableCellMargin, cellMarginOverrideOf(tcPrChildren));
+        const content = blocksOf(childrenOf(p.tc), ctx, false, { run, spacing });
+        return docxSchema.nodes.table_cell.create(
+          {
+            colspan: p.colspan,
+            rowspan: p.rowspan,
+            colwidth,
+            background,
+            borders,
+            verticalAlign: verticalAlignOf(tcPrChildren),
+            cellPadding,
+            tcPrExtra: extrasOf(tcPrChildren, TC_MODELED),
+          },
+          content.length > 0 ? content : [docxSchema.nodes.paragraph.create()],
+        );
       }),
-    ),
+    );
+  });
+  return docxSchema.nodes.table.create(
+    { align: tableAlignOf(tblPrChildren), tblPrExtra: extrasOf(tblPrChildren, new Set(['w:jc'])) },
+    rows,
   );
-  return docxSchema.nodes.table.create({ align: tableAlign }, rows);
-}
-
-/**
- * 연속된 목록 문단(w:numPr 보유)을 bullet_list로 묶는다.
- * 원본이 번호 매기기였는지 글머리 기호였는지는(numbering.xml 미해석) 구분하지 않고
- * 전부 글머리 기호 목록으로 가져온다 — v1 스코프의 알려진 단순화.
- */
-function groupListItems(blocks: ReadonlyArray<{ node: PMNode; isListItem: boolean }>): PMNode[] {
-  const result: PMNode[] = [];
-  let pendingItems: PMNode[] = [];
-  const flush = () => {
-    if (pendingItems.length === 0) return;
-    const items = pendingItems.map((paragraph) => docxSchema.nodes.list_item.create(null, paragraph));
-    result.push(docxSchema.nodes.bullet_list.create(null, items));
-    pendingItems = [];
-  };
-  for (const block of blocks) {
-    if (block.isListItem) {
-      pendingItems.push(block.node);
-    } else {
-      flush();
-      result.push(block.node);
-    }
-  }
-  flush();
-  return result;
 }
 
 /** word/comments.xml의 w:comment들 — 메모 본문은 문단마다 줄을 바꿔 글자만 모은다. */
@@ -753,7 +1171,7 @@ function commentsOf(xml: string): DocxComment[] {
 
 export interface DocxImportResult {
   readonly doc: PMNode;
-  /** 이미지 등 v1 미지원 요소가 포함되어 편집·재저장 시 유실될 수 있는지 */
+  /** 저장하면 모양이 바뀌는 요소(변경 내용 추적 삽입 표시)가 있는지 — LOSSY_ON_SAVE */
   readonly hasUnsupportedContent: boolean;
   /** 페이지 크기·여백(w:sectPr/w:pgSz·w:pgMar) — 화면에 실제 Word 페이지 비율로 그리기 위함. 없으면 null. */
   readonly pageSetup: PageSetup | null;
@@ -761,15 +1179,17 @@ export interface DocxImportResult {
   readonly comments: readonly DocxComment[];
 }
 
+/** 저장하면 모양이 바뀌는 요소 — 변경 내용 추적의 삽입 표시(w:ins·w:moveTo)는 글자로만 읽어 저장 때 "수락된" 글자가 된다. */
+const LOSSY_ON_SAVE = /<w:ins\b|<w:moveTo\b/;
+
 /**
- * 이미지/OLE 개체 등 v1 미지원 요소가 있는지만 빠르게 검사한다(전체 파싱 없이).
- * 편집기 진입 전 "저장하면 이미지가 사라집니다" 경고를 띄우는 용도(src/routes/viewer.ts).
+ * 편집기 진입 전 경고용 빠른 검사(전체 파싱 없이, src/routes/viewer.ts). 그림·글상자·필드 등은 이제 원본 그대로 보존되어
+ * 저장해도 남는다 — 남은 손실은 변경 내용 추적의 삽입 표시뿐이다.
  */
 export function docxHasUnsupportedContent(docxBytes: Uint8Array): boolean {
   const entries = guardedUnzipSync(docxBytes, 'docxHasUnsupportedContent', { filter: (f) => f.name === 'word/document.xml' });
   const documentXmlBytes = entries['word/document.xml'];
-  if (!documentXmlBytes) return false;
-  return /<w:drawing\b|<w:object\b|<w:pict\b/.test(strFromU8(documentXmlBytes));
+  return documentXmlBytes ? LOSSY_ON_SAVE.test(strFromU8(documentXmlBytes)) : false;
 }
 
 /** w:sectPr(파싱된 트리)에서 페이지 크기·여백을 읽는다. w:pgSz가 없으면(비정상 문서) null.
@@ -1006,7 +1426,71 @@ export function getDocxPageSetup(docxBytes: Uint8Array): PageSetup | null {
   return pageSetupOf(sectPr);
 }
 
-/** docx(zip) 바이트 → ProseMirror 문서. 알려지지 않은 요소(이미지·머리글 등)는 건너뛴다. */
+
+/** word/_rels/<파트>.rels → r:id → 대상(파트 폴더 기준 상대 경로) */
+function relsOf(entries: Record<string, Uint8Array>, partPath: string): Map<string, { target: string; external: boolean }> {
+  const slash = partPath.lastIndexOf('/');
+  const relsBytes = entries[`${partPath.slice(0, slash)}/_rels/${partPath.slice(slash + 1)}.rels`];
+  const map = new Map<string, { target: string; external: boolean }>();
+  if (!relsBytes) return map;
+  for (const m of strFromU8(relsBytes).matchAll(/<Relationship\b[^>]*>/g)) {
+    const id = /\bId="([^"]*)"/.exec(m[0])?.[1];
+    const target = /\bTarget="([^"]*)"/.exec(m[0])?.[1];
+    if (id && target) map.set(id, { target: target.replace(/&amp;/g, '&'), external: /TargetMode="External"/.test(m[0]) });
+  }
+  return map;
+}
+
+/** 압축을 푼 docx에서 스타일·테마 등 가져오기 공통값을 한 번에 */
+function baseCtxOf(entries: Record<string, Uint8Array>, partPath: string, contentWidthPx: number | null): ImportCtx {
+  const stylesXmlBytes = entries['word/styles.xml'];
+  const styles = stylesXmlBytes ? stylesChildrenOf(strFromU8(stylesXmlBytes)) : [];
+  const themeBytes = entries['word/theme/theme1.xml'];
+  return {
+    styles,
+    defaultAlign: stylesXmlBytes ? defaultParagraphStyleInfoOf(styles).align : null,
+    styleTableCellMargin: stylesXmlBytes ? defaultTableStyleCellMarginOf(styles) : null,
+    rels: relsOf(entries, partPath),
+    contentWidthPx,
+    themeXml: themeBytes ? strFromU8(themeBytes) : undefined,
+    noteCount: { footnote: 0, endnote: 0 },
+    noteLabel: null,
+  };
+}
+
+/** w:sectPr의 다단(w:cols num>1). python-docx처럼 w:cols를 두 번 쓴 파일은 단 수가 있는 쪽을 쓴다(Word와 같다). */
+function columnsOf(sectPr: XmlNode | undefined): { count: number; spacePx: number; sep: boolean } | null {
+  const cols = findAll(childrenOf(sectPr ?? {}), 'w:cols').map(attrsOf).filter((a) => Number(a['@_w:num']) > 1).pop();
+  if (!cols) return null;
+  return { count: Number(cols['@_w:num']), spacePx: dxaToPx(Number(cols['@_w:space'] ?? 720)), sep: cols['@_w:sep'] === '1' || cols['@_w:sep'] === 'true' };
+}
+
+/** 다단 구역에 속한 연속 블록을 columns 노드로 감싼다 — 구역 k는 sect=k인 문단에서 끝난다(마지막 구역은 본문 끝까지). */
+function groupColumns(blocks: readonly PMNode[], sections: readonly XmlNode[]): PMNode[] {
+  const out: PMNode[] = [];
+  let section = 0;
+  let pending: PMNode[] = [];
+  let pendingCols: ReturnType<typeof columnsOf> = null;
+  const flush = () => {
+    if (pending.length > 0 && pendingCols) out.push(docxSchema.nodes.columns.create(pendingCols, pending));
+    pending = [];
+  };
+  for (const block of blocks) {
+    pendingCols ??= columnsOf(sections[section]);
+    if (pendingCols) pending.push(block);
+    else out.push(block);
+    const sect = block.attrs.sect;
+    if (typeof sect === 'number') {
+      flush();
+      pendingCols = null;
+      section = sect + 1;
+    }
+  }
+  flush();
+  return out;
+}
+
+/** docx(zip) 바이트 → ProseMirror 문서. 직접 고치지 않는 요소(그림·글상자·필드 등)는 원본 XML 그대로 ooxml 노드에 담는다. */
 export function importDocx(docxBytes: Uint8Array): DocxImportResult {
   const entries = guardedUnzipSync(docxBytes, 'importDocx');
   const documentXmlBytes = entries['word/document.xml'];
@@ -1014,43 +1498,22 @@ export function importDocx(docxBytes: Uint8Array): DocxImportResult {
     throw new Error('word/document.xml을 찾을 수 없습니다 — 올바른 docx 파일이 아닙니다.');
   }
   const documentXml = strFromU8(documentXmlBytes);
-  const hasUnsupportedContent = /<w:drawing\b|<w:object\b|<w:pict\b/.test(documentXml);
-
   const parsed = parser.parse(documentXml) as XmlNode[];
   const documentEl = findFirst(parsed, 'w:document');
   const bodyEl = documentEl && findFirst(childrenOf(documentEl), 'w:body');
   const bodyChildren = bodyEl ? childrenOf(bodyEl) : [];
-  const pageSetup = pageSetupOf(findFirst(bodyChildren, 'w:sectPr'));
+  const finalSectPr = findFirst(bodyChildren, 'w:sectPr');
+  const pageSetup = pageSetupOf(finalSectPr);
   const contentWidthPx = pageSetup ? pageSetup.widthPx - pageSetup.marginLeftPx - pageSetup.marginRightPx : null;
-  // pStyle 없이 암묵적으로 "기본" 문단/표 스타일을 쓰는 문단·표(대부분의 실제 문서가 이렇다)가
-  // 실제로 상속받는 정렬·셀 여백 — w:jc가 없다고 곧 left, w:tblCellMar가 없다고 곧 우리 CSS
-  // 기본값(0.4rem 0.6rem)인 게 아니라, "기본" 스타일 자체가 다른 값을 지정하고 있을 수 있다
-  // (paragraphFrom/tableFrom 참고).
-  const stylesXmlBytes = entries['word/styles.xml'];
-  const stylesChildren = stylesXmlBytes ? stylesChildrenOf(strFromU8(stylesXmlBytes)) : [];
-  const defaultAlign = stylesXmlBytes ? defaultParagraphStyleInfoOf(stylesChildren).align : null;
-  const styleTableCellMargin = stylesXmlBytes ? defaultTableStyleCellMarginOf(stylesChildren) : null;
+  const ctx = baseCtxOf(entries, 'word/document.xml', contentWidthPx);
 
   openCommentIds = new Set();
-  const blocks: PMNode[] = [];
-  const paragraphRun: Array<{ node: PMNode; isListItem: boolean }> = [];
-  const flushParagraphRun = () => {
-    blocks.push(...groupListItems(paragraphRun));
-    paragraphRun.length = 0;
-  };
-  for (const child of bodyChildren) {
-    const tag = tagOf(child);
-    if (tag === 'w:p') {
-      paragraphRun.push(paragraphFrom(child, defaultAlign, stylesChildren));
-    } else if (tag === 'w:tbl') {
-      flushParagraphRun();
-      blocks.push(tableFrom(child, contentWidthPx, defaultAlign, styleTableCellMargin, stylesChildren));
-    }
-    // w:sectPr 등 그 외 body 직속 요소는 무시한다 (v1 미지원 영역)
-  }
-  flushParagraphRun();
+  const sections: XmlNode[] = [];
+  const blocks = blocksOf(bodyChildren, ctx, true, NO_CELL_DEFAULTS, sections);
+  if (finalSectPr) sections.push(finalSectPr);
+  const grouped = groupColumns(blocks, sections);
 
-  const content = blocks.length > 0 ? blocks : [docxSchema.nodes.paragraph.create()];
+  const content = grouped.length > 0 ? grouped : [docxSchema.nodes.paragraph.create()];
   const doc = (docxSchema.nodes.doc as NodeType).create(null, content);
   const commentsXml = entries['word/comments.xml'];
   const used = new Set<string>();
@@ -1058,5 +1521,194 @@ export function importDocx(docxBytes: Uint8Array): DocxImportResult {
     for (const mark of node.marks) if (mark.type === docxSchema.marks.comment) used.add(mark.attrs.id as string);
   });
   const comments = commentsXml ? commentsOf(strFromU8(commentsXml)).filter((c) => used.has(c.id)) : [];
-  return { doc, hasUnsupportedContent, pageSetup, comments };
+  return { doc, hasUnsupportedContent: LOSSY_ON_SAVE.test(documentXml), pageSetup, comments };
+}
+
+// ── 편집기 화면용 부가 정보(머리글·바닥글·각주·번호·스타일) ─────────────────────
+
+/** 스타일 하나의 화면 모양 — 편집기가 CSS 규칙으로 바꾼다(docxLayout.ts). kind: p 문단 스타일, h 제목 수준, r 문자 스타일 */
+export interface DocxStyleRule {
+  readonly kind: 'p' | 'h' | 'r';
+  readonly key: string;
+  readonly color?: string | null;
+  readonly sizePt?: number | null;
+  readonly bold?: boolean | null;
+  readonly italic?: boolean | null;
+  readonly underline?: boolean | null;
+  readonly caps?: boolean | null;
+  readonly font?: ScriptFontFamily | null;
+  readonly align?: string | null;
+  readonly spacing?: ParagraphSpacing | null;
+  readonly indent?: ParagraphIndent | null;
+  readonly borderBottom?: CellBorderSide | null;
+  readonly borderTop?: CellBorderSide | null;
+  readonly shading?: string | null;
+}
+
+/** 구역 하나 — 쪽 나눔 종류와 그 구역의 머리글·바닥글(앞 구역에서 물려받은 것 포함, PM JSON 블록) */
+export interface DocxSectionInfo {
+  readonly type: string;
+  readonly titlePg: boolean;
+  readonly header: Readonly<Record<'default' | 'first' | 'even', unknown[] | null>>;
+  readonly footer: Readonly<Record<'default' | 'first' | 'even', unknown[] | null>>;
+  /** 쪽 위 끝에서 머리글까지, 아래 끝에서 바닥글까지(px) */
+  readonly headerPx: number;
+  readonly footerPx: number;
+}
+
+export interface DocxRenderExtras {
+  readonly numbering: NumberingDefs | null;
+  readonly styles: readonly DocxStyleRule[];
+  readonly sections: readonly DocxSectionInfo[];
+  /** 각주·미주 본문(id → PM JSON 블록) */
+  readonly notes: Readonly<Record<'footnote' | 'endnote', Readonly<Record<string, unknown[]>>>>;
+  /** 기본 탭 간격(dxa, word/settings.xml w:defaultTabStop) */
+  readonly defaultTabStopDxa: number;
+}
+
+/** 스타일 사슬(기반부터)을 합친 화면 모양 */
+function styleRuleOf(kind: DocxStyleRule['kind'], key: string, chain: readonly XmlNode[], ctx: ImportCtx, fallbackSizePt: number | null): DocxStyleRule {
+  const rLevels = chainPr(chain, 'w:rPr');
+  const pLevels = chainPr(chain, 'w:pPr');
+  const flag = (tag: string): boolean | null => {
+    for (let i = rLevels.length - 1; i >= 0; i -= 1) {
+      const v = onOff(rLevels[i], tag);
+      if (v !== undefined) return v;
+    }
+    return null;
+  };
+  const sz = Number(attrsOf(lastOf(rLevels, 'w:sz') ?? {})['@_w:val']);
+  const u = lastOf(rLevels, 'w:u');
+  const pBdr = childrenOf(lastOf(pLevels, 'w:pBdr') ?? {});
+  const spacing = pLevels.reduce<ParagraphSpacing | null>((acc, level) => {
+    const s = spacingOf(level);
+    if (!s) return acc;
+    return { line: s.line ?? acc?.line ?? null, lineRule: s.line !== null ? s.lineRule : (acc?.lineRule ?? null), before: s.before ?? acc?.before ?? null, after: s.after ?? acc?.after ?? null };
+  }, null);
+  let font: ScriptFontFamily | null = null;
+  for (const level of rLevels) font = resolveFontFamilyFromRFonts(findFirst(level, 'w:rFonts'), ctx.themeXml) ?? font;
+  return {
+    kind,
+    key,
+    color: hexColor(attrsOf(lastOf(rLevels, 'w:color') ?? {})['@_w:val']),
+    sizePt: Number.isFinite(sz) && sz > 0 ? sz / 2 : fallbackSizePt,
+    bold: flag('w:b') ?? (kind === 'h' ? false : null),
+    italic: flag('w:i'),
+    underline: u ? attrsOf(u)['@_w:val'] !== 'none' : null,
+    caps: flag('w:caps'),
+    font,
+    align: alignOf(pLevels.flatMap((l) => (findFirst(l, 'w:jc') ? [findFirst(l, 'w:jc')!] : [])).slice(-1)),
+    spacing,
+    indent: pLevels.reduce<ParagraphIndent | null>((acc, l) => indentOf(l) ?? acc, null),
+    borderBottom: borderSideOf(findFirst(pBdr, 'w:bottom')) ?? null,
+    borderTop: borderSideOf(findFirst(pBdr, 'w:top')) ?? null,
+    shading: pLevels.reduce<string | null>((acc, l) => shadingFillOf(l) ?? acc, null),
+  };
+}
+
+/** 문서의 문단·문자 스타일 → 화면 규칙. 제목은 수준(h1~h6)으로, 문단은 편집기가 쓰는 styleId(갤러리 이름 맞춤)로. */
+function styleRulesOf(ctx: ImportCtx): DocxStyleRule[] {
+  const defaultSizePt = defaultParagraphStyleInfoOf(ctx.styles).sizePt ?? defaultFontSizePtOf(findFirst(ctx.styles, 'w:docDefaults'));
+  const rules: DocxStyleRule[] = [];
+  for (const style of findAll(ctx.styles, 'w:style')) {
+    const a = attrsOf(style);
+    const id = a['@_w:styleId'];
+    if (!id || a['@_w:default'] === '1') continue;
+    if (a['@_w:type'] === 'paragraph') {
+      const chain = styleChainOf(ctx.styles, 'paragraph', id);
+      const level = headingLevelOf(ctx.styles, id);
+      rules.push(level !== null
+        ? styleRuleOf('h', String(level), chain, ctx, defaultSizePt)
+        : styleRuleOf('p', galleryStyleIdOf(id, ctx.styles), chain, ctx, null));
+    } else if (a['@_w:type'] === 'character') {
+      rules.push(styleRuleOf('r', id, styleChainOf(ctx.styles, 'character', id), ctx, null));
+    }
+  }
+  return rules;
+}
+
+/** 파트 하나(머리글·바닥글 등)의 뿌리 요소 자식들 */
+function partRootChildrenOf(entries: Record<string, Uint8Array>, partPath: string, rootTag: string): XmlNode[] | null {
+  const bytes = entries[partPath];
+  const root = bytes ? findFirst(parser.parse(strFromU8(bytes)) as XmlNode[], rootTag) : undefined;
+  return root ? childrenOf(root) : null;
+}
+
+/** 압축을 푼 docx → 편집기 화면용 부가 정보. 원본 파트는 건드리지 않는다(머리글·각주는 저장 때 그대로 남는다). */
+export function getDocxRenderExtras(docxBytes: Uint8Array): DocxRenderExtras {
+  const entries = guardedUnzipSync(docxBytes, 'getDocxRenderExtras');
+  const documentXml = entries['word/document.xml'] ? strFromU8(entries['word/document.xml']) : '';
+  const pageSetup = getDocxPageSetup(docxBytes);
+  const contentWidthPx = pageSetup ? pageSetup.widthPx - pageSetup.marginLeftPx - pageSetup.marginRightPx : null;
+  const base = baseCtxOf(entries, 'word/document.xml', contentWidthPx);
+  const docRels = base.rels;
+  const blocksFromPart = (partPath: string, rootTag: string): unknown[] | null => {
+    const children = partRootChildrenOf(entries, partPath, rootTag);
+    if (!children) return null;
+    const ctx: ImportCtx = { ...base, rels: relsOf(entries, partPath), noteCount: { footnote: 0, endnote: 0 } };
+    return blocksOf(children, ctx, false).map((n) => n.toJSON());
+  };
+
+  // 구역: 문단 안 w:sectPr들(문서 순서) + 본문 끝 w:sectPr — importDocx의 sect 번호와 같은 순서
+  const sectXmls = documentXml.match(/<w:sectPr\b[^>]*(?:\/>|>[\s\S]*?<\/w:sectPr>)/g) ?? [];
+  const sections: DocxSectionInfo[] = [];
+  const parts = new Map<string, unknown[] | null>();
+  const partFor = (rId: string | undefined, rootTag: string): unknown[] | null => {
+    const rel = rId ? docRels.get(rId) : undefined;
+    if (!rel || rel.external) return null;
+    const path = `word/${rel.target}`;
+    if (!parts.has(path)) parts.set(path, blocksFromPart(path, rootTag));
+    return parts.get(path) ?? null;
+  };
+  for (const xml of sectXmls) {
+    const sect = findFirst(parser.parse(xml) as XmlNode[], 'w:sectPr');
+    const children = childrenOf(sect ?? {});
+    const prev = sections[sections.length - 1];
+    const refs = (tag: string, rootTag: string, inherited: DocxSectionInfo['header'] | undefined) => {
+      const out: Record<'default' | 'first' | 'even', unknown[] | null> = { default: inherited?.default ?? null, first: inherited?.first ?? null, even: inherited?.even ?? null };
+      for (const ref of findAll(children, tag)) {
+        const a = attrsOf(ref);
+        const type = (a['@_w:type'] ?? 'default') as 'default' | 'first' | 'even';
+        if (type in out) out[type] = partFor(a['@_r:id'], rootTag);
+      }
+      return out;
+    };
+    const pgMar = attrsOf(findFirst(children, 'w:pgMar') ?? {});
+    sections.push({
+      type: attrsOf(findFirst(children, 'w:type') ?? {})['@_w:val'] ?? 'nextPage',
+      titlePg: onOff(children, 'w:titlePg') === true,
+      header: refs('w:headerReference', 'w:hdr', prev?.header),
+      footer: refs('w:footerReference', 'w:ftr', prev?.footer),
+      headerPx: dxaToPx(Number(pgMar['@_w:header'] ?? 720)),
+      footerPx: dxaToPx(Number(pgMar['@_w:footer'] ?? 720)),
+    });
+  }
+
+  // 각주·미주: 문서에 나온 순서대로 번호를 매긴다(구분선 등 특수 항목은 뺀다)
+  const notes: Record<'footnote' | 'endnote', Record<string, unknown[]>> = { footnote: {}, endnote: {} };
+  for (const type of ['footnote', 'endnote'] as const) {
+    const bytes = entries[`word/${type}s.xml`];
+    if (!bytes) continue;
+    const order = [...documentXml.matchAll(new RegExp(`<w:${type}Reference\\b[^>]*w:id="(-?\\d+)"`, 'g'))].map((m) => m[1]);
+    const root = findFirst(parser.parse(strFromU8(bytes)) as XmlNode[], `w:${type}s`);
+    for (const note of findAll(childrenOf(root ?? {}), `w:${type}`)) {
+      const a = attrsOf(note);
+      const id = a['@_w:id'] ?? '';
+      if (a['@_w:type'] && a['@_w:type'] !== 'normal') continue;
+      const label = order.indexOf(id) >= 0 ? String(order.indexOf(id) + 1) : '';
+      const ctx: ImportCtx = { ...base, rels: relsOf(entries, `word/${type}s.xml`), noteCount: { footnote: 0, endnote: 0 }, noteLabel: label };
+      notes[type][id] = blocksOf(childrenOf(note), ctx, false).map((n) => n.toJSON());
+    }
+  }
+
+  const settings = entries['word/settings.xml'] ? strFromU8(entries['word/settings.xml']) : '';
+  const tabStop = Number(/<w:defaultTabStop\b[^>]*w:val="(\d+)"/.exec(settings)?.[1]);
+  const numberingBytes = entries['word/numbering.xml'];
+  return {
+    numbering: numberingBytes ? parseNumberingXml(strFromU8(numberingBytes)) : null,
+    styles: styleRulesOf(base),
+    sections,
+    notes,
+    defaultTabStopDxa: Number.isFinite(tabStop) && tabStop > 0 ? tabStop : 720,
+  };
 }

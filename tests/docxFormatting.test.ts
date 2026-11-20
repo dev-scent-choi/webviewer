@@ -185,7 +185,8 @@ describe('검토: 메모 왕복', () => {
     const out = unzipSync(exportDocx(new Uint8Array(bytes), doc, null, comments));
     const xml = strFromU8(out['word/document.xml']);
     expect(xml).toContain('xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"');
-    expect(xml).toMatch(/<w:commentRangeStart w:id="0"\/><w:r><w:t xml:space="preserve">메모 대상 링크 글자<\/w:t><\/w:r><w:commentRangeEnd w:id="0"\/><w:r><w:commentReference w:id="0"\/><\/w:r><w:r><w:t xml:space="preserve"> 뒤/);
+    // 하이퍼링크는 원본 속성 그대로 다시 감싼다(예전엔 링크가 풀려 일반 글자가 됐다)
+    expect(xml).toMatch(/<w:commentRangeStart w:id="0"\/><w:r><w:t xml:space="preserve">메모 대상<\/w:t><\/w:r><w:hyperlink r:id="rId9"><w:r><w:t xml:space="preserve"> 링크 글자<\/w:t><\/w:r><\/w:hyperlink><w:commentRangeEnd w:id="0"\/><w:r><w:commentReference w:id="0"\/><\/w:r><w:r><w:t xml:space="preserve"> 뒤/);
     const cxml = strFromU8(out['word/comments.xml']);
     expect(cxml).toContain('<w:comment w:id="0" w:author="김경호" w:date="2026-07-24T09:00:00Z" w:initials="김">');
     expect(cxml).toContain('둘째 줄');

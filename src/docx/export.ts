@@ -1,7 +1,8 @@
 import { strFromU8, strToU8, zipSync } from 'fflate';
 import { guardedUnzipSync } from '../zipGuard.js';
 import type { Mark, Node as PMNode } from 'prosemirror-model';
-import { extractSectPrXml } from './import.js';
+import { extractSectPrXml, importDocx } from './import.js';
+import { prXml } from './ooxml.js';
 import {
   GALLERY_PARAGRAPH_STYLES,
   GALLERY_STYLE_NAMES,
@@ -32,8 +33,33 @@ function hexOf(color: unknown): string | null {
 
 const HIGHLIGHT_NAME_BY_HEX = new Map(Object.entries(HIGHLIGHT_COLORS).map(([name, hex]) => [hex.slice(1).toUpperCase(), name]));
 
-/** w:rPr 자식은 스키마가 정한 순서를 지켜야 한다(rFonts, b, i, strike, color, sz, highlight, u, shd, vertAlign). */
+/**
+ * 원본 문서에 실제로 있던 보존 조각(그림·필드 등 ooxml 노드의 xml, 속성 묶음의 나머지 자식)만 그대로 되돌려 쓴다 — Yjs로 들어온
+ * 값은 서버가 검사하지 않으므로, 다른 참여자가 임의 XML(원격 그림·필드 등)을 끼워 넣지 못하게 원본에서 다시 읽은 조각과 맞춰 본다.
+ */
+let activeAllowRaw: (xml: string) => boolean = () => false;
+
+/** 문서 안 모든 보존 조각 — exportDocx가 원본을 다시 읽어 허용 목록을 만든다 */
+export function rawFragmentsOf(doc: PMNode): Set<string> {
+  const out = new Set<string>();
+  const add = (value: unknown) => {
+    if (typeof value === 'string' && value) out.add(value);
+    else if (Array.isArray(value)) for (const v of value) add(v);
+  };
+  doc.descendants((node) => {
+    if (node.type.name === 'ooxml' || node.type.name === 'ooxml_block') add(node.attrs.xml);
+    for (const key of ['pPrExtra', 'tcPrExtra', 'trPrExtra', 'tblPrExtra']) add(node.attrs[key]);
+    for (const mark of node.marks) if (mark.type.name === 'runExtra') add(mark.attrs.xml);
+  });
+  return out;
+}
+
+/** 실행문 하나 — 모델링한 서식(rFonts·b·i·strike·color·sz·highlight·u·shd·vertAlign)과 보존한 나머지 w:rPr 자식을 스키마 순서로 합친다. */
 function renderRun(text: string, marks: readonly Mark[]): string {
+  return renderRunXml(`<w:t xml:space="preserve">${escapeXml(text)}</w:t>`, marks);
+}
+
+function renderRunXml(contentXml: string, marks: readonly Mark[]): string {
   const markOf = (name: string) => marks.find((mark) => mark.type.name === name);
   const rPrParts: string[] = [];
   const font = markOf('fontFamily');
@@ -63,14 +89,17 @@ function renderRun(text: string, marks: readonly Mark[]): string {
   if (highlightHex && !highlightName) rPrParts.push(`<w:shd w:val="clear" w:color="auto" w:fill="${highlightHex}"/>`);
   if (markOf('subscript')) rPrParts.push('<w:vertAlign w:val="subscript"/>');
   else if (markOf('superscript')) rPrParts.push('<w:vertAlign w:val="superscript"/>');
-  const rPr = rPrParts.length > 0 ? `<w:rPr>${rPrParts.join('')}</w:rPr>` : '';
-  return `<w:r>${rPr}<w:t xml:space="preserve">${escapeXml(text)}</w:t></w:r>`;
+  const rPr = prXml('w:rPr', rPrParts, markOf('runExtra')?.attrs.xml, activeAllowRaw);
+  return `<w:r>${rPr}${contentXml}</w:r>`;
 }
 
 const ALIGN_TO_JC: Record<string, string> = { center: 'center', right: 'right', justify: 'both' };
 
-/** w:pPr 자식 순서: pStyle, shd, spacing, ind, jc (CT_PPr 스키마 순서). */
-function pPrXml(styleXml: string, attrs: Record<string, unknown>): string {
+/** 구역(w:sectPr)을 지닌 문단이 편집 중 둘로 나뉘면 둘 다 같은 w:sectPr를 갖게 된다 — 구역은 마지막 문단에만 남긴다. */
+let sectionHolders = new Map<string, PMNode>();
+
+/** w:pPr — 모델링한 값(pStyle·shd·spacing·ind·jc)과 보존한 나머지 자식(번호·탭·테두리·구역 등)을 스키마 순서로. */
+function pPrXml(styleXml: string, attrs: Record<string, unknown>, node?: PMNode): string {
   const parts: string[] = [styleXml];
   const shading = hexOf(attrs.shading);
   if (shading) parts.push(`<w:shd w:val="clear" w:color="auto" w:fill="${shading}"/>`);
@@ -96,8 +125,10 @@ function pPrXml(styleXml: string, attrs: Record<string, unknown>): string {
   }
   const jc = typeof attrs.align === 'string' ? ALIGN_TO_JC[attrs.align] : undefined;
   if (jc) parts.push(`<w:jc w:val="${jc}"/>`);
-  const inner = parts.filter(Boolean).join('');
-  return inner ? `<w:pPr>${inner}</w:pPr>` : '';
+  const extras = Array.isArray(attrs.pPrExtra)
+    ? (attrs.pPrExtra as unknown[]).filter((x) => typeof x !== 'string' || !x.startsWith('<w:sectPr') || sectionHolders.get(x) === node)
+    : null;
+  return prXml('w:pPr', parts, extras, activeAllowRaw);
 }
 
 /**
@@ -205,18 +236,44 @@ function addDocumentRelationship(entries: Record<string, Uint8Array>, relationsh
   entries['word/_rels/document.xml.rels'] = strToU8(xml.replace('</Relationships>', `${relationship}</Relationships>`));
 }
 
+/** w:hyperlink 여는 태그 — 원본 속성 이름 그대로(이름은 XML 이름 모양만, 값은 이스케이프) */
+function hyperlinkOpenXml(mark: Mark): string {
+  const attrs = (mark.attrs.attrs ?? {}) as Record<string, unknown>;
+  const list = Object.entries(attrs)
+    .filter(([name]) => /^[A-Za-z][\w.-]*(:[A-Za-z][\w.-]*)?$/.test(name))
+    .map(([name, value]) => ` ${name}="${escapeAttr(String(value))}"`)
+    .join('');
+  return `<w:hyperlink${list}>`;
+}
+
 function renderInline(node: PMNode): string {
   let xml = '';
+  let link: Mark | null = null;
   node.forEach((child) => {
+    const childLink = child.marks.find((mark) => mark.type.name === 'link') ?? null;
+    if (link && !(childLink && link.eq(childLink))) {
+      xml += '</w:hyperlink>';
+      link = null;
+    }
+    if (childLink && !link) {
+      xml += hyperlinkOpenXml(childLink);
+      link = childLink;
+    }
     if (child.isText) {
       xml += commentTransitionXml(child.marks);
       xml += renderRun(child.text ?? '', child.marks);
     } else if (child.type.name === 'hard_break') {
-      xml += '<w:r><w:br/></w:r>';
+      xml += renderRunXml('<w:br/>', child.marks);
     } else if (child.type.name === 'page_break') {
       xml += '<w:r><w:br w:type="page"/></w:r>';
+    } else if (child.type.name === 'tab') {
+      xml += renderRunXml('<w:tab/>', child.marks);
+    } else if (child.type.name === 'ooxml') {
+      const raw = String(child.attrs.xml ?? '');
+      if (activeAllowRaw(raw)) xml += raw;
     }
   });
+  if (link) xml += '</w:hyperlink>';
   return xml;
 }
 
@@ -296,13 +353,14 @@ function renderParagraph(node: PMNode, prefix = '', styleIds: StyleIdMap = activ
   const prefixRun = prefix ? renderRun(prefix, []) : '';
   const styleId = node.attrs.styleId as string | null;
   const resolved = styleId ? (styleIds.get(styleId) ?? styleId) : null;
-  const pPr = pPrXml(resolved ? `<w:pStyle w:val="${escapeAttr(resolved)}"/>` : '', node.attrs);
+  const pPr = pPrXml(resolved ? `<w:pStyle w:val="${escapeAttr(resolved)}"/>` : '', node.attrs, node);
   return `<w:p>${pPr}${prefixRun}${renderInline(node)}</w:p>`;
 }
 
 function renderHeading(node: PMNode): string {
   const level = node.attrs.level as number;
-  const pPr = pPrXml(`<w:pStyle w:val="Heading${level}"/>`, node.attrs);
+  const styleId = typeof node.attrs.styleId === 'string' && node.attrs.styleId ? node.attrs.styleId : `Heading${level}`;
+  const pPr = pPrXml(`<w:pStyle w:val="${escapeAttr(styleId)}"/>`, node.attrs, node);
   return `<w:p>${pPr}${renderInline(node)}</w:p>`;
 }
 
@@ -397,11 +455,10 @@ interface PendingVMerge {
  * 없었을 것이다) 열 번호를 따로 계산할 필요 없이 앞에서부터 순서대로 배치하면 된다.
  */
 /** table_row의 height 속성(atLeast/exact, px)을 <w:trPr><w:trHeight .../></w:trPr>로 직렬화한다. 없으면 빈 문자열(자동 높이). */
-function renderRowHeightXml(height: unknown): string {
-  if (!height || typeof height !== 'object') return '';
-  const h = height as RowHeight;
-  const hRule = h.rule === 'exact' ? 'exact' : 'atLeast';
-  return `<w:trPr><w:trHeight w:val="${pxToDxa(h.px)}" w:hRule="${hRule}"/></w:trPr>`;
+function renderTrPrXml(row: PMNode): string {
+  const h = row.attrs.height as RowHeight | null;
+  const height = h && typeof h === 'object' ? `<w:trHeight w:val="${pxToDxa(h.px)}" w:hRule="${h.rule === 'exact' ? 'exact' : 'atLeast'}"/>` : '';
+  return prXml('w:trPr', [height], row.attrs.trPrExtra, activeAllowRaw);
 }
 
 function renderTableRow(
@@ -412,7 +469,7 @@ function renderTableRow(
   const cells: PMNode[] = [];
   row.forEach((cell) => cells.push(cell));
 
-  const trPrXml = renderRowHeightXml(row.attrs.height);
+  const trPrXml = renderTrPrXml(row);
   let cellsXml = '';
   let col = 0;
   let cellIndex = 0;
@@ -463,9 +520,13 @@ function renderTableRow(
           ? `<w:vAlign w:val="${verticalAlign}"/>`
           : '';
     const cellMarginXml = renderCellMarginXml(cell.attrs.cellPadding);
-    cellsXml +=
-      `<w:tc><w:tcPr><w:tcW w:w="${totalWidthDxa}" w:type="dxa"/>` +
-      `${gridSpanXml}${vMergeXml}${bordersXml}${shdXml}${vAlignXml}${cellMarginXml}</w:tcPr>${cellBody}</w:tc>`;
+    const tcPr = prXml(
+      'w:tcPr',
+      [`<w:tcW w:w="${totalWidthDxa}" w:type="dxa"/>`, gridSpanXml, vMergeXml, bordersXml, shdXml, vAlignXml, cellMarginXml],
+      cell.attrs.tcPrExtra,
+      activeAllowRaw,
+    );
+    cellsXml += `<w:tc>${tcPr}${cellBody}</w:tc>`;
     if (rowspan > 1) pendingVMerge.set(col, { remaining: rowspan - 1, colspan, widthDxa: totalWidthDxa });
     col += colspan;
   }
@@ -500,10 +561,12 @@ function renderTable(node: PMNode): string {
   const align = node.attrs.align;
   const jcXml = align === 'center' || align === 'right' ? `<w:jc w:val="${align}"/>` : '';
 
-  return (
-    `<w:tbl><w:tblPr><w:tblW w:w="0" w:type="auto"/>${jcXml}<w:tblBorders>${BORDER}</w:tblBorders></w:tblPr>` +
-    `<w:tblGrid>${gridCols}</w:tblGrid>${rowsXml}</w:tbl>`
-  );
+  // 가져온 표는 원본 w:tblPr(표 스타일·너비 등)를 그대로, 편집기에서 새로 만든 표는 기본 너비·테두리
+  const extras = Array.isArray(node.attrs.tblPrExtra) ? node.attrs.tblPrExtra : null;
+  const tblPr = extras
+    ? prXml('w:tblPr', [jcXml], extras, activeAllowRaw) || '<w:tblPr/>'
+    : `<w:tblPr><w:tblW w:w="0" w:type="auto"/>${jcXml}<w:tblBorders>${BORDER}</w:tblBorders></w:tblPr>`;
+  return `<w:tbl>${tblPr}<w:tblGrid>${gridCols}</w:tblGrid>${rowsXml}</w:tbl>`;
 }
 
 function renderBlock(node: PMNode): string {
@@ -518,6 +581,17 @@ function renderBlock(node: PMNode): string {
       return renderList(node, true);
     case 'table':
       return renderTable(node);
+    case 'columns': {
+      let xml = '';
+      node.forEach((child) => {
+        xml += renderBlock(child);
+      });
+      return xml;
+    }
+    case 'ooxml_block': {
+      const raw = String(node.attrs.xml ?? '');
+      return activeAllowRaw(raw) ? raw : '';
+    }
     default:
       return '';
   }
@@ -536,9 +610,16 @@ export function renderDocumentXml(
   sectPrXml: string = '<w:sectPr/>',
   styleIds: StyleIdMap = new Map(),
   commentNumbers: Map<string, number> = new Map(),
+  allowRaw: (xml: string) => boolean = () => false,
+  documentOpenTag: string = `<w:document xmlns:w="${NS_W}" xmlns:r="${NS_R}">`,
 ): string {
   let body = '';
   activeStyleIds = styleIds;
+  activeAllowRaw = allowRaw;
+  sectionHolders = new Map();
+  doc.descendants((node) => {
+    if (Array.isArray(node.attrs.pPrExtra)) for (const x of node.attrs.pPrExtra) if (typeof x === 'string' && x.startsWith('<w:sectPr')) sectionHolders.set(x, node);
+  });
   commentState = { numbers: commentNumbers, open: new Set() };
   try {
     doc.forEach((node) => {
@@ -549,12 +630,20 @@ export function renderDocumentXml(
     if (state.open.size > 0) body += `<w:p>${[...state.open].map((id) => closeCommentXml(state, id)).join('')}</w:p>`;
   } finally {
     activeStyleIds = new Map();
+    activeAllowRaw = () => false;
+    sectionHolders = new Map();
     commentState = null;
   }
-  // 원본 sectPr를 그대로 쓰므로 그 안의 머리글/바닥글 참조(r:id)를 위해 r 네임스페이스도 선언한다
-  return (
-    `${DOCUMENT_XML_HEADER}<w:document xmlns:w="${NS_W}" xmlns:r="${NS_R}"><w:body>${body}${sectPrXml}</w:body></w:document>`
-  );
+  // 원본 w:document 여는 태그(네임스페이스 선언 전부)를 그대로 쓴다 — 보존 조각(그림 wp:·a:, 글상자 wps:, VML v: 등)과
+  // 원본 sectPr의 머리글/바닥글 참조(r:id)가 그 선언을 쓴다
+  return `${DOCUMENT_XML_HEADER}${documentOpenTag}<w:body>${body}${sectPrXml}</w:body></w:document>`;
+}
+
+/** 원본 document.xml의 w:document 여는 태그 — r 네임스페이스가 없으면(손으로 만든 파일) 덧붙인다 */
+function documentOpenTagOf(documentXml: string | null): string | undefined {
+  const tag = documentXml ? /<w:document\b[^>]*>/.exec(documentXml)?.[0] : undefined;
+  if (!tag) return undefined;
+  return tag.includes('xmlns:r=') ? tag : tag.replace('<w:document', `<w:document xmlns:r="${NS_R}"`);
 }
 
 /**
@@ -646,7 +735,11 @@ export function exportDocx(
     if (!stylesEntry) registerStylesPart(entries);
   }
   const commentNumbers = new Map<string, number>();
-  entries['word/document.xml'] = strToU8(renderDocumentXml(doc, sectPrXml, styles.ids, commentNumbers));
+  const allowed = rawFragmentsOf(importDocx(originalDocxBytes).doc);
+  const originalXml = originalDocumentXml ? strFromU8(originalDocumentXml) : null;
+  entries['word/document.xml'] = strToU8(
+    renderDocumentXml(doc, sectPrXml, styles.ids, commentNumbers, (xml) => allowed.has(xml), documentOpenTagOf(originalXml)),
+  );
   // 메모가 있거나, 원본에 있던 메모를 모두 지운 경우에만 comments.xml을 새로 쓴다
   if (commentNumbers.size > 0 || entries['word/comments.xml']) {
     entries['word/comments.xml'] = strToU8(renderCommentsXml(commentNumbers, new Map(comments.map((c) => [c.id, c]))));

@@ -16,17 +16,14 @@ describe('docx import', () => {
     expect(doc.child(1).textContent).toBe('Second paragraph');
   });
 
-  test('flags documents containing drawings as having unsupported content', () => {
-    const withDrawing = makeSampleDocx(['plain text']);
-    const entries = unzipSync(withDrawing);
-    const xml = strFromU8(entries['word/document.xml']).replace(
-      '<w:sectPr/>',
-      '<w:p><w:r><w:drawing/></w:r></w:p><w:sectPr/>',
-    );
-    entries['word/document.xml'] = strToU8(xml);
-    const rezipped = Buffer.from(zipSync(entries));
-    const { hasUnsupportedContent } = importDocx(rezipped);
-    expect(hasUnsupportedContent).toBe(true);
+  test('drawings are preserved (no warning); only tracked insertions are flagged as changing on save', () => {
+    const withXml = (inner: string) => {
+      const entries = unzipSync(makeSampleDocx(['plain text']));
+      entries['word/document.xml'] = strToU8(strFromU8(entries['word/document.xml']).replace('<w:sectPr/>', `${inner}<w:sectPr/>`));
+      return Buffer.from(zipSync(entries));
+    };
+    expect(importDocx(withXml('<w:p><w:r><w:drawing/></w:r></w:p>')).hasUnsupportedContent).toBe(false);
+    expect(importDocx(withXml('<w:p><w:ins w:id="1" w:author="a"><w:r><w:t>x</w:t></w:r></w:ins></w:p>')).hasUnsupportedContent).toBe(true);
   });
 });
 
@@ -673,7 +670,9 @@ describe('docx export', () => {
     // 재압축 결과가 여전히 유효한 zip이며 다른 파트(styles.xml)는 그대로 보존됐는지 확인한다
     const entries = unzipSync(exported);
     expect(entries['word/styles.xml']).toBeDefined();
-    expect(strFromU8(entries['word/document.xml'])).toBe(xml);
+    // 여는 태그는 원본 것(네임스페이스 선언 전부)을 그대로 쓴다 — 본문은 같아야 한다
+    const bodyOf = (x: string) => x.slice(x.indexOf('<w:body>'));
+    expect(bodyOf(strFromU8(entries['word/document.xml']))).toBe(bodyOf(xml));
 
     const reimported = importDocx(exported);
     expect(reimported.doc.child(0).type.name).toBe('heading');
