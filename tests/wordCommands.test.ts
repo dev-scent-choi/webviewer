@@ -15,6 +15,7 @@ import {
   setLineSpacing,
   setParagraphStyle,
   setShading,
+  splitParagraphKeepFormat,
   stepFontSize,
 } from '../src/client/wordCommands.js';
 
@@ -137,5 +138,33 @@ describe('Word 레이아웃 탭 명령', () => {
     state = run(state, setIndentSide('left', 1134));
     state = run(state, setSpacingSide('after', 240));
     expect(currentParagraphBox(state)).toEqual({ left: 1134, right: 567, before: null, after: 240 });
+  });
+});
+
+describe('Enter: Word처럼 번호·서식을 이어받는다', () => {
+  const numPr = '<w:numPr><w:ilvl w:val="0"/><w:numId w:val="3"/></w:numPr>';
+  const sectPr = '<w:sectPr><w:type w:val="continuous"/></w:sectPr>';
+  function numbered(text: string, extra: string[] = [numPr]): EditorState {
+    const para = nodes.paragraph.create({ num: { numId: '3', ilvl: 0 }, pPrExtra: extra, indent: { left: 720, hanging: 360, firstLine: 0 }, sect: extra.includes(sectPr) ? 0 : null }, text ? docxSchema.text(text) : []);
+    const state = EditorState.create({ schema: docxSchema, doc: nodes.doc.create(null, [para]) });
+    return state.apply(state.tr.setSelection(TextSelection.create(state.doc, 1 + text.length)));
+  }
+
+  test('문단 끝 Enter → 새 문단도 같은 번호(num·numPr)·들여쓰기, 구역 나눔은 원래 문단에만', () => {
+    const next = run(numbered('항목', [numPr, sectPr]), splitParagraphKeepFormat);
+    expect(next.doc.childCount).toBe(2);
+    const [first, second] = [next.doc.child(0), next.doc.child(1)];
+    expect(second.attrs.num).toEqual({ numId: '3', ilvl: 0 });
+    expect(second.attrs.pPrExtra).toEqual([numPr]);
+    expect(second.attrs.indent).toEqual(first.attrs.indent);
+    expect(second.attrs.sect).toBeNull();
+    expect(first.attrs.pPrExtra).toEqual([numPr, sectPr]);
+  });
+
+  test('빈 번호 문단에서 Enter → 번호를 끝낸다(문단은 나누지 않는다)', () => {
+    const next = run(numbered(''), splitParagraphKeepFormat);
+    expect(next.doc.childCount).toBe(1);
+    expect(next.doc.child(0).attrs.num).toBeNull();
+    expect(next.doc.child(0).attrs.pPrExtra).toBeNull();
   });
 });

@@ -55,6 +55,7 @@ import {
   insertPageBreak,
   setIndentSide,
   setSpacingSide,
+  splitParagraphKeepFormat,
   multilevelList,
   pasteFormat,
   replaceAll,
@@ -383,7 +384,7 @@ function buildKeymap(defaultSizePt: number): Record<string, Command> {
     'Mod-Shift-n': setParagraphStyle(null),
     Tab: chainCommands(sinkListItem(nodes.list_item), goToNextCell(1)),
     'Shift-Tab': chainCommands(liftListItem(nodes.list_item), goToNextCell(-1)),
-    Enter: chainCommands(splitListItem(nodes.list_item), baseKeymap.Enter),
+    Enter: chainCommands(splitListItem(nodes.list_item), splitParagraphKeepFormat, baseKeymap.Enter),
   };
 }
 

@@ -4,6 +4,7 @@
  */
 
 import type { Mark, MarkType, Node as PMNode } from 'prosemirror-model';
+import { splitBlockAs } from 'prosemirror-commands';
 import { liftListItem, sinkListItem, wrapInList } from 'prosemirror-schema-list';
 import { TextSelection, type Command, type EditorState, type Transaction } from 'prosemirror-state';
 import { docxSchema, type ParagraphIndent, type ParagraphSpacing } from '../docx/schema.js';
@@ -337,6 +338,27 @@ export function replaceAll(state: EditorState, dispatch: (tr: Transaction) => vo
 export const insertPageBreak: Command = (state, dispatch) => {
   if (dispatch) dispatch(state.tr.replaceSelectionWith(nodes.page_break.create()).scrollIntoView());
   return true;
+};
+
+const isRawOf = (tag: string) => (x: unknown) => typeof x === 'string' && x.startsWith(`<${tag}`);
+
+/**
+ * Enter — Word처럼 새 문단이 번호·들여쓰기·간격·스타일을 이어받는다(기본 동작은 문단 끝에서 Enter를 치면 서식 없는 문단을 만들어
+ * 번호 목록이 끊겼다). 구역 나눔(w:sectPr)은 원래 문단에 남긴다. 직접 번호가 붙은 빈 문단에서 Enter는 번호를 끝낸다(Word와 같다).
+ */
+export const splitParagraphKeepFormat: Command = (state, dispatch) => {
+  const { $from } = state.selection;
+  const node = $from.parent;
+  if (!(state.selection instanceof TextSelection) || node.type !== nodes.paragraph) return false;
+  const extras = Array.isArray(node.attrs.pPrExtra) ? (node.attrs.pPrExtra as unknown[]) : null;
+  if (node.attrs.num && node.content.size === 0 && extras?.some(isRawOf('w:numPr'))) {
+    const rest = extras.filter((x) => !isRawOf('w:numPr')(x));
+    if (dispatch) dispatch(state.tr.setNodeMarkup($from.before(), undefined, { ...node.attrs, num: null, pPrExtra: rest.length > 0 ? rest : null }));
+    return true;
+  }
+  const rest = extras?.filter((x) => !isRawOf('w:sectPr')(x)) ?? null;
+  const attrs = { ...node.attrs, sect: null, breakBefore: false, pPrExtra: rest && rest.length > 0 ? rest : null };
+  return splitBlockAs(() => ({ type: node.type, attrs }))(state, dispatch);
 };
 
 /** 레이아웃 탭의 왼쪽/오른쪽 들여쓰기 값(dxa)을 선택한 문단들에 넣는다. */
