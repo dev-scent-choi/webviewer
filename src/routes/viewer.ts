@@ -55,6 +55,7 @@ import { isViewOnly, type DocumentMeta, type ViewClaims } from '../types.js';
 import { isOpenable, waitForInitialConversion } from '../conversionGate.js';
 import { buildViewerGridFile, saveGridFile } from '../xlsx/viewerGrid.js';
 import { localDayKey } from '../xlsx/viewerCondFormat.js';
+import { singleFlightWithBackoff } from '../xlsx/singleFlight.js';
 import type { GridChart } from '../xlsx/chartModel.js';
 import { chartDataOf, renderChartSvg } from '../xlsx/chartSvg.js';
 import { rowTopPx } from '../xlsx/sheetGeometry.js';
@@ -269,14 +270,14 @@ async function loadGridUncached(docId: string, allowRegenerate = true): Promise<
   } catch (error) {
     // 아직 만들지 않았다 — 메모리 저장 모드(향기랩)는 편집기로만 열어서 보기용 그리드를 미리 만들지 않는다
     // (documents.ts). 누가 보기 화면을 열면 그때 만든다.
-    if (!allowRegenerate || !(await regenerateStaleGridCache(docId))) throw error;
+    if (!allowRegenerate || !(await gridRegen.run(docId, () => regenerateStaleGridCache(docId)))) throw error;
     return loadGridUncached(docId, false);
   }
   if (allowRegenerate && gridIsStale(peekGridHeader(buffer))) {
     // 재생성이 성공하면 방금 막 저장한 최신 버퍼를 처음부터 다시 읽어 이어간다(아래 재귀 호출,
     // allowRegenerate=false로 무한 재귀를 막는다) — 실패하면(위 문서 주석) 그냥 아래로 흘러가
     // 지금 손에 있는(낡았을 수 있는) buffer를 기존 경로 그대로 서빙한다.
-    if (await regenerateStaleGridCache(docId)) {
+    if (await gridRegen.run(docId, () => regenerateStaleGridCache(docId))) {
       return loadGridUncached(docId, false);
     }
   }
@@ -299,12 +300,22 @@ async function loadGridUncached(docId: string, allowRegenerate = true): Promise<
   return grid;
 }
 
+/** 보기 그리드 재생성은 문서마다 한 번에 하나, 실패하면 10분 쉰다(요청마다 전체를 다시 만드는 폭주 방지) */
+const gridRegen = singleFlightWithBackoff(10 * 60_000);
+/** 날짜가 바뀐 그리드를 다시 불러오는 중인 것(문서마다 하나) */
+const staleReloads = new Map<string, Promise<LoadedGrid>>();
+
 export async function loadGrid(docId: string): Promise<LoadedGrid> {
   const grid = await gridCache.getOrLoad(docId, () => loadGridUncached(docId));
-  // 메모리에 남은 그리드도 날짜가 바뀌었으면(TODAY() 조건부 서식) 다시 만든다
-  if (!gridIsStale(grid.header)) return grid;
-  invalidateViewCaches(docId);
-  return gridCache.getOrLoad(docId, () => loadGridUncached(docId));
+  // 메모리에 남은 그리드도 날짜가 바뀌었으면(TODAY() 조건부 서식) 다시 만든다 — 최근에 재생성이 실패했으면 쉬는 동안은 있는 그대로
+  if (!gridIsStale(grid.header) || gridRegen.backingOff(docId)) return grid;
+  let reload = staleReloads.get(docId);
+  if (!reload) {
+    invalidateViewCaches(docId);
+    reload = gridCache.getOrLoad(docId, () => loadGridUncached(docId)).finally(() => staleReloads.delete(docId));
+    staleReloads.set(docId, reload);
+  }
+  return reload;
 }
 
 /**
