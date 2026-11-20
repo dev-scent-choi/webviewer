@@ -11,12 +11,16 @@ import type { DocumentStore } from '../storage.js';
 import {
   computeLineOffsets,
   GRID_CACHE_FORMAT_VERSION,
+  gridCellValue,
   parseXlsxToGrid,
   serializeGrid,
   yieldToEventLoop,
   YIELD_EVERY_N_ROWS,
+  type GridCell,
   type GridHeader,
+  type GridStyle,
 } from '../spreadsheet.js';
+import { numFmtCodeOf, formatValueText } from '../collab/numberFormat.js';
 import { declaredEntrySizes } from '../zipGuard.js';
 import { closeLazyGridStore, getRowCells, ingestXlsxLazily, type LazyGridStore } from './lazyGridStore.js';
 
@@ -32,6 +36,15 @@ export function worksheetXmlBytes(xlsx: Uint8Array): number {
 
 export function isLargeXlsx(xlsx: Uint8Array): boolean {
   return worksheetXmlBytes(xlsx) > LARGE_SHEET_XML_BYTES;
+}
+
+/** 편집으로 바뀐 칸은 값 글자만 들고 있다 — 서식 코드가 있는 칸은 값에서 표시 글자를 다시 만든다(파일에서 읽은 칸은 결과가 같다).
+ * shortcut: 서식 코드의 글자 색([Red])은 이 경로에서 싣지 않는다 — 큰 파일을 편집한 뒤 보기 화면에서만, 필요하면 store.styles에 fc 서식을 더한다 */
+function displayCellOf(cell: GridCell | 0, styles: readonly GridStyle[]): GridCell | 0 {
+  if (cell === 0 || cell.s === undefined || !numFmtCodeOf(styles[cell.s])) return cell;
+  const value = gridCellValue(cell);
+  const text = formatValueText(value, styles[cell.s]).text;
+  return text === value ? { v: text, s: cell.s } : { v: text, n: value, s: cell.s };
 }
 
 /** 편집기용 지연 그리드(현재 편집 상태 포함)에서 그리드 파일을 만든다 — 행을 하나씩 읽어 붙이므로 메모리가 작다 */
@@ -64,7 +77,7 @@ export async function serializeGridFromLazyStore(store: LazyGridStore): Promise<
       const end = Math.min(start + BATCH, rowCount);
       const rows = await Promise.all(Array.from({ length: end - start }, (_, i) => getRowCells(store, s, start + i, colCount)));
       for (const row of rows) {
-        const cells = [...row];
+        const cells = row.map((cell) => displayCellOf(cell, store.styles));
         while (cells.length > 0 && cells[cells.length - 1] === 0) cells.pop();
         parts.push(newline, Buffer.from(JSON.stringify(cells), 'utf8'));
       }

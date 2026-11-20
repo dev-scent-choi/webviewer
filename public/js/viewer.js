@@ -1103,7 +1103,7 @@ const gridState = {
   active: 0,
   /** 지금 시트의 행 높이 계산(GridRowLayout) — activateSheet가 만든다 */
   layout: new GridRowLayout(GRID_DEFAULT_ROW_H, []),
-  /** 파일에 있는 그림(로고 등) — /api/view/xlsx-images */
+  /** 파일에 있는 그림(로고 등)·차트 — /api/view/xlsx-images, /api/view/xlsx-chart-images */
   images: [],
   chunks: new Map(), // `${sheet}:${chunkIdx}` -> rows | 'loading'
   mergeStarts: new Map(),
@@ -1140,6 +1140,8 @@ function injectGridStyles(styles) {
     // 칸 글꼴(돋움·굴림 등) — 없는 PC에서는 엑셀 기본 글꼴로
     if (style.ff) parts.push(`font-family:"${String(style.ff).replace(/["\<>;{}]/g, '')}",${GRID_FONT_STACK}`);
     if (style.col) parts.push(`color:${style.col}`);
+    // 서식 코드가 값에 따라 정한 색([Red] 등) — 칸 글자 색보다 이긴다
+    if (style.fc) parts.push(`color:${style.fc}`);
     if (style.bg) parts.push(`background:${style.bg}`);
     if (style.a === 'c') parts.push('text-align:center');
     if (style.a === 'r') parts.push('text-align:right');
@@ -1301,24 +1303,6 @@ function markMatches(rawText, query) {
 // 이 정규식과 일치하는 텍스트는 항상 날짜다(리터럴 날짜 칸은 displayValue가, 수식 결과 날짜는
 // formatFormulaResult가 둘 다 이 formatDate를 그대로 호출한다).
 const DATE_LIKE_TEXT = /^\d{4}-\d{2}-\d{2}( \d{2}:\d{2})?$/;
-/**
- * 칸의 숫자 표시 형식(style.nf: 백분율/통화/쉼표 + nd 소수 자릿수)을 화면에서만 입힌다 — 동시편집기
- * (src/client/grid-editor.ts formatNumberForDisplay)와 같은 규칙. 저장된 텍스트는 수식 계산에도
- * 쓰이는 "값"이라(백분율 칸은 0.4) 서버에서 미리 꾸밀 수 없고, 예전엔 뷰어가 이 단계를 빠뜨려
- * 40%가 0.4로, ₩2,500이 2,500으로 보였다(편집기에서는 정상 — 실측).
- */
-function formatGridNumber(text, style) {
-  if (!style || !style.nf || text.trim() === '') return text;
-  const num = Number(text.replace(/[,₩\s]/g, ''));
-  if (!Number.isFinite(num)) return text;
-  const decimals = style.nd || 0;
-  const opts = { minimumFractionDigits: decimals, maximumFractionDigits: decimals };
-  if (style.nf === 'percent') return `${(num * 100).toLocaleString('ko-KR', opts)}%`;
-  if (style.nf === 'currency') return `₩${num.toLocaleString('ko-KR', opts)}`;
-  if (style.nf === 'number') return num.toLocaleString('ko-KR', opts);
-  return text;
-}
-
 /** 숫자처럼 보이는 글자(쉼표·통화·% 포함) — 엑셀은 숫자를 옆 칸으로 넘기지 않는다 */
 function isGridNumericText(rawText) {
   const stripped = String(rawText).trim().replace(/[₩$€£¥,%s()]/g, '');
@@ -1329,7 +1313,7 @@ function isSpillEligible(style, rawText) {
   if (style) {
     if (style.a === 'c' || style.a === 'r') return false; // 명시적 가운데/오른쪽 정렬 — 절대 안 넘친다
     if (style.a === 'l') return true; // 명시적 왼쪽 정렬 — 항상 넘친다
-    if (style.nf) return false; // 숫자 서식이 걸려 있으면 기본 오른쪽 정렬
+    if (style.nf || (style.fmt && style.fmt !== '@')) return false; // 숫자·날짜 서식이 걸려 있으면 기본 오른쪽 정렬(글자 값이면 서버가 a:'l'을 박아 둔다)
   }
   if (rawText === 'TRUE' || rawText === 'FALSE') return false; // 논리값도 엑셀 기본은 가운데 정렬
   if (DATE_LIKE_TEXT.test(rawText.trim())) return false; // 날짜도 엑셀 기본은 오른쪽 정렬(위 주석 참고)
@@ -1437,7 +1421,8 @@ function renderGridViewport() {
       if (hitKey === gridCurrentHit) classes.push('g-hit-current');
       if (gridState.selected && gridState.selected.row === r && gridState.selected.col === c) classes.push('g-selected');
       const cellStyleObj = isEmpty || cell.s === undefined ? undefined : gridState.styles[cell.s];
-      const shown = isEmpty ? '' : formatGridNumber(cell.v, cellStyleObj);
+      // 표시 글자는 서버가 칸 서식(numberFormat.ts — 편집 화면과 같은 서식기)대로 이미 만들어 둔다
+      const shown = isEmpty ? '' : cell.v;
       // 엑셀 기본 정렬 — 정렬을 따로 지정하지 않은 칸에서 숫자·날짜는 오른쪽, 논리값은 가운데.
       // (판정은 넘침 여부와 같은 규칙: isSpillEligible이 "기본 왼쪽 정렬인 텍스트"만 true를 준다.)
       if (shown && !(cellStyleObj && cellStyleObj.a) && !isSpillEligible(cellStyleObj, shown)) {
@@ -1807,12 +1792,15 @@ async function initGridView() {
   const meta = await fetchJsonView(`/api/view/grid/meta?${tokenQuery}`);
   gridState.sheets = meta.sheets;
   // 그림은 늦게 와도 된다 — 도착하면 지금 시트에 얹는다
-  void fetchJsonView(`/api/view/xlsx-images?${tokenQuery}`)
-    .then((data) => {
-      gridState.images = (data && data.images) || [];
-      renderGridImages();
-    })
-    .catch(() => undefined);
+  // 차트는 서버가 편집 화면과 같은 그리기(xlsx/chartSvg.ts)로 만든 SVG 그림이라 그림과 같이 얹는다
+  for (const kind of ['xlsx-images', 'xlsx-chart-images']) {
+    void fetchJsonView(`/api/view/${kind}?${tokenQuery}`)
+      .then((data) => {
+        gridState.images = gridState.images.concat((data && data.images) || []);
+        renderGridImages();
+      })
+      .catch(() => undefined);
+  }
   gridState.styles = meta.styles;
   injectGridStyles(meta.styles);
 

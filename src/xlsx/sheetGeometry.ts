@@ -125,6 +125,16 @@ export function encodeRowHeights(entries: Iterable<readonly [number, number]>, d
   return runs;
 }
 
+/** row(0-based) 행의 위쪽 끝(px) — 첫 행 위가 0 */
+export function rowTopPx(runs: RowHeightRuns, defaultPx: number, row: number): number {
+  let top = row * defaultPx;
+  for (const [start, count, px] of runs) {
+    if (start >= row) break;
+    top += (Math.min(start + count, row) - start) * (px - defaultPx);
+  }
+  return top;
+}
+
 /** 행 삽입/삭제에 맞춰 높이 묶음을 옮긴다 — 끼워 넣은 행은 기본 높이, 지운 행의 높이는 사라진다. */
 export function shiftRowHeightRuns(runs: RowHeightRuns, at: number, count: number, insert: boolean): RowHeightRuns {
   const out: Array<[number, number, number]> = [];

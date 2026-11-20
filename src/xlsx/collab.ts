@@ -22,7 +22,7 @@ import {
   type SheetStructure,
 } from '../collab/gridShared.js';
 import type { GridCell, GridDocument, GridStyle } from '../spreadsheet.js';
-import { parseXlsxToGrid, unformattedCellValue, yieldToEventLoop, YIELD_EVERY_N_ROWS } from '../spreadsheet.js';
+import { gridCellValue, parseXlsxToGrid, yieldToEventLoop, YIELD_EVERY_N_ROWS } from '../spreadsheet.js';
 import type { LazyGridSheetMeta, LazyGridStore } from './lazyGridStore.js';
 import { GRID_COND_FORMATS_MAP, type CondFormatEntry } from '../collab/condFormatShared.js';
 import { applyEditedCondFormats, preserveUnsupportedCfRules } from './condFormatExport.js';
@@ -46,6 +46,7 @@ export function toCellStyleAttrs(style: GridStyle): CellStyleAttrs {
   if (style.nf) attrs.nf = style.nf;
   if (style.nd) attrs.nd = style.nd;
   if (style.df) attrs.df = 1;
+  if (style.fmt) attrs.fmt = style.fmt;
   if (style.lk) attrs.lk = 1;
   if (style.nu) attrs.nu = 1;
   if (style.bt) attrs.bt = style.bt;
@@ -81,6 +82,7 @@ export function fromCellStyleAttrs(attrs: CellStyleAttrs): GridStyle {
   if (attrs.nf) style.nf = attrs.nf;
   if (attrs.nd) style.nd = attrs.nd;
   if (attrs.df) style.df = 1;
+  if (attrs.fmt) style.fmt = attrs.fmt;
   if (attrs.lk) style.lk = 1;
   if (attrs.nu) style.nu = 1;
   if (attrs.bt) style.bt = attrs.bt;
@@ -134,12 +136,6 @@ function mergeCoveredCells(merges: readonly GridMergeShape[]): Set<string> {
   return covered;
 }
 
-/** parseXlsxToGrid가 만든 표시용 텍스트(예: "2,287")를 협업 문서의 실제 셀 값으로 그대로 심으면
- * 안 된다 — Number("2,287")는 NaN이라, 이 값을 참조하는 다른 수식(SUM 등)이 이 셀을 숫자가 아닌
- * 것으로 취급해 조용히 0으로 계산해버린다(실제 재현된 버그: 합계 열이 항상 0으로 보임).
- * 규칙 자체는 읽기전용 뷰어의 수식 계산 패스와 똑같아야 하므로 spreadsheet.ts에 한 번만 두고
- * 여기서는 그대로 가져다 쓴다(unformattedCellValue 문서 주석 참고). */
-const seedableCellValue = unformattedCellValue;
 
 /** 읽기전용 그리드 뷰(parseXlsxToGrid의 결과)를 협업용 Y.Doc에 시딩한다.
  * 큰 시트를 셀 하나하나 동기로 심으면 그동안 서버 전체가 멈추므로(spreadsheet.ts의
@@ -182,7 +178,7 @@ export async function seedGridFromXlsx(ydoc: Y.Doc, grid: GridDocument): Promise
             const key = gridCellKey(sheetIdx, r, c);
             const style = cell.s !== undefined ? grid.styles[cell.s] : undefined;
             if (cell.v !== '') {
-              const value = seedableCellValue(cell.v, style);
+              const value = gridCellValue(cell);
               cells.set(key, value);
             }
             if (style) {
@@ -206,7 +202,7 @@ export async function seedGridFromXlsx(ydoc: Y.Doc, grid: GridDocument): Promise
  * 지웠다"로 해석해 canonical을 0(빈 칸)으로 되돌린다. 페이지를 비우는 것(unseed)도 똑같이 키
  * 삭제이므로, 표식이 없으면 "스크롤해서 화면에서 사라진 500행"이 canonical에서 통째로 지워지고
  * 그 상태가 그대로 파일에 저장된다 — 사용자가 아무것도 지우지 않았는데 데이터가 날아간다.
- * 반대로 페이지를 채우는 것(seed)은 seedableCellValue로 서식이 벗겨진 편집용 텍스트를 쓰므로
+ * 반대로 페이지를 채우는 것(seed)은 gridCellValue(서식 전 값 글자)를 쓰므로
  * (예: "1,000" → "1000"), 표식이 없으면 canonical의 올바른 표시 텍스트를 그 벗겨진 값으로
  * 덮어쓴다(seedRoom이 최초 시딩을 관찰 시작 "전"에 하는 것과 같은 이유의 문제 — 윈도잉에서는
  * 시딩이 관찰이 걸린 뒤에도 계속 일어나므로 시점으로는 피할 수 없다).
@@ -291,7 +287,7 @@ function resolveGridCell(
  * 시트 전체를 선점적으로 읽는 게 비대칭이었고 그게 바로 이 비용의 정체였다.
  *
  * 고치는 방법은 콘텐츠가 이미 쓰는 패턴을 그대로 따르는 것이다: 이 함수는 어차피 페이지의 각 셀을
- * `resolveGridCell`로 읽으면서 `seedableCellValue`(쉼표 서식 판정) 때문에 그 셀의 style을 이미
+ * `resolveGridCell`로 읽으면서 그 셀의 style을 이미
  * 구해 두고 있었다 — 그 style을 그대로 GRID_STYLES_MAP에도 같이 쓰기만 하면, 서식도 콘텐츠와
  * **정확히 같은 시점에, 정확히 같은 창(구독된 페이지)만** 채워진다. 추가 디스크 읽기도, 추가
  * 청크 루프도 없다.
@@ -345,7 +341,7 @@ export async function seedGridPageFromXlsx(
           const key = gridCellKey(sheetIdx, r, c);
           const style = cell.s !== undefined ? store.styles[cell.s] : undefined;
           if (cell.v !== '') {
-            const value = seedableCellValue(cell.v, style);
+            const value = gridCellValue(cell);
             cells.set(key, value);
           }
           // 서식도 콘텐츠와 같은 창(이 페이지)만, 같은 시점에 채운다 — 함수 docblock의
@@ -514,6 +510,7 @@ const BORDER_WEIGHT_TO_EXCEL: Record<1 | 2, ExcelJS.BorderStyle> = {
 const PX_TO_PT = 72 / 96;
 
 function numFmtStringFor(style: CellStyleAttrs): string | undefined {
+  if (style.fmt) return style.fmt; // 파일에 있던 서식 코드 그대로(툴바로 바꾸면 편집기가 fmt를 지운다)
   if (!style.nf) return style.df ? 'yyyy-mm-dd' : undefined;
   const decimals = style.nd ? `.${'0'.repeat(style.nd)}` : '';
   switch (style.nf) {
@@ -573,7 +570,7 @@ export function applyStyleToCell(cell: ExcelJS.Cell, style: CellStyleAttrs | und
 /** canonicalGrid 셀(GridCell | 0)에서 표시 텍스트만 뽑는다 — 빈 칸(0 sentinel)은 빈 문자열로
  * 취급한다. */
 export function cellText(cell: GridCell | 0 | undefined): string {
-  return cell === 0 || cell === undefined ? '' : cell.v;
+  return cell === 0 || cell === undefined ? '' : gridCellValue(cell);
 }
 
 /** 셀이 참조하는 스타일 인덱스를 실제 GridStyle로 해석한다 — LazyGridStore.styles는 공용 스타일

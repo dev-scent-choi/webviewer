@@ -47,12 +47,16 @@ import {
   type GridCell,
   type GridSheet,
   type GridHeader,
+  gridCellValue,
 } from '../spreadsheet.js';
 import { store } from '../storage.js';
 import { LEGACY_EDIT_TARGET, legacyDownload } from '../legacyOffice.js';
 import { isViewOnly, type DocumentMeta, type ViewClaims } from '../types.js';
 import { isOpenable, waitForInitialConversion } from '../conversionGate.js';
 import { buildViewerGridFile, saveGridFile } from '../xlsx/viewerGrid.js';
+import type { GridChart } from '../xlsx/chartModel.js';
+import { chartDataOf, renderChartSvg } from '../xlsx/chartSvg.js';
+import { rowTopPx } from '../xlsx/sheetGeometry.js';
 
 export interface ViewContext {
   readonly claims: ViewClaims;
@@ -389,6 +393,44 @@ function sliceRows(
     rows.push(JSON.parse(grid.buffer.toString('utf8', begin, finish)));
   }
   return rows;
+}
+
+/** 차트를 보기 화면용 그림(SVG data URL)으로 — 크기는 그 시트의 열 폭·행 높이로 앵커에서 계산한다 */
+function chartImagesOf(charts: readonly GridChart[], grid: LoadedGrid) {
+  const rowCache = new Map<string, Array<GridCell | 0>>();
+  const valueText = (sheetName: string, r: number, c: number): string => {
+    const s = grid.header.sheets.findIndex((sh) => sh.name === sheetName);
+    if (s < 0 || r >= grid.header.sheets[s].rowCount) return '';
+    const key = `${s}:${r}`;
+    let row = rowCache.get(key);
+    if (!row) rowCache.set(key, (row = sliceRows(grid, s, r + 1, 1)[0] ?? []));
+    const cell = row[c];
+    return cell ? gridCellValue(cell) : '';
+  };
+  return charts.flatMap((chart) => {
+    const sheet = grid.header.sheets.find((sh) => sh.name === chart.sheetName);
+    if (!sheet) return [];
+    const colLeft = (col: number) => {
+      let x = 0;
+      for (let i = 0; i < col; i += 1) x += sheet.colWidths[i] ?? sheet.defaultColWidth;
+      return x;
+    };
+    const rowTop = (row: number) => rowTopPx(sheet.rowHeights, sheet.defaultRowHeight, row);
+    const to = chart.to ?? { row: chart.from.row + 15, col: chart.from.col + 7, dx: 0, dy: 0 };
+    const width = Math.round(chart.size?.width ?? colLeft(to.col) + to.dx - colLeft(chart.from.col) - chart.from.dx);
+    const height = Math.round(chart.size?.height ?? rowTop(to.row) + to.dy - rowTop(chart.from.row) - chart.from.dy);
+    if (!(width > 0 && height > 0)) return [];
+    const svg = renderChartSvg(chart.kind, chartDataOf(chart, valueText), width, height);
+    return [{
+      id: chart.id,
+      sheetName: chart.sheetName,
+      name: chart.title,
+      from: chart.from,
+      to: chart.to,
+      size: { width, height },
+      src: `data:image/svg+xml;base64,${Buffer.from(svg, 'utf8').toString('base64')}`,
+    }];
+  });
 }
 
 /**
@@ -812,6 +854,25 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
         return { success: true, data: { images: await getFileImages(view.meta.id) } };
       } catch (error) {
         request.log.warn(error, 'xlsx image read failed');
+        return { success: true, data: { images: [] } };
+      }
+    },
+  );
+
+  // 파일에 있는 차트 — 보기 화면은 편집 화면과 같은 그리기(xlsx/chartSvg.ts)로 서버가 만든 SVG를 그림처럼 칸 위치에 얹는다.
+  // 값은 지금 그리드의 칸 값(편집 후 저장된 값)으로 다시 계산하고, 칸이 비면 파일에 저장된 값을 쓴다.
+  app.get<{ Querystring: TokenQuery }>(
+    '/api/view/xlsx-chart-images',
+    { schema: { querystring: tokenQuerySchema } },
+    async (request, reply) => {
+      const view = await resolveView(request.query.token, reply);
+      if (!view) return reply;
+      if (view.meta.ext !== 'xlsx') return { success: true, data: { images: [] } };
+      try {
+        const [charts, grid] = await Promise.all([getFileCharts(view.meta.id), loadGrid(view.meta.id)]);
+        return { success: true, data: { images: chartImagesOf(charts, grid) } };
+      } catch (error) {
+        request.log.warn(error, 'xlsx chart image failed');
         return { success: true, data: { images: [] } };
       }
     },

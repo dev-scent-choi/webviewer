@@ -41,6 +41,7 @@ import { invalidateViewCaches } from '../routes/viewer.js';
 import { store } from '../storage.js';
 import { waitForInitialConversion } from '../conversionGate.js';
 import {
+  gridCellValue,
   saveGridDerived,
   yieldToEventLoop,
   MAX_COLS,
@@ -779,7 +780,8 @@ async function applyStylesChangeToCanonical(
       // 낡은 사본으로 쓰면 방금 들어온 새 값을 지운다(아래 서식 적용 경로와 같은 이유).
       const latest = latestCell(store, c.sheetIdx, c.row, c.col, current);
       if (latest === 0 || latest === undefined) continue;
-      setDirtyCell(store, c.sheetIdx, c.row, c.col, latest.v === '' ? 0 : { v: latest.v });
+      // 값 글자(n)도 함께 남긴다 — 표시 글자만 남기면 "(4,321)" 같은 서식 모양이 저장 때 글자 값으로 들어간다
+      setDirtyCell(store, c.sheetIdx, c.row, c.col, latest.v === '' ? 0 : { v: latest.v, ...(latest.n !== undefined ? { n: latest.n } : {}) });
       continue;
     }
     // 들어온 서식을 canonical의 현재 서식 **위에 얹는다**(통째로 갈아치우지 않는다) — 아래
@@ -796,6 +798,7 @@ async function applyStylesChangeToCanonical(
     const latest = latestCell(store, c.sheetIdx, c.row, c.col, current);
     setDirtyCell(store, c.sheetIdx, c.row, c.col, {
       v: latest === 0 || latest === undefined ? '' : latest.v,
+      ...(latest !== 0 && latest !== undefined && latest.n !== undefined ? { n: latest.n } : {}),
       s: styleIndex,
     });
   }
@@ -2756,7 +2759,7 @@ export function getChangeLog(docId: string): readonly object[] {
 }
 
 function cellTextOf(cell: GridCell | 0): string {
-  return cell === 0 ? '' : cell.v;
+  return cell === 0 ? '' : gridCellValue(cell);
 }
 
 /** getCellChangeLog의 실제 계산부 — room 객체를 직접 받는다(rooms.get 조회 없이). closeConn이

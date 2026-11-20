@@ -10,8 +10,7 @@ import JSZip from 'jszip';
 import {
   autoFitRowPx,
   mergeRolesByRow,
-  displayValue,
-  extractStyle,
+  gridCellFromExcel,
   parseMergeRange,
   StylePalette,
   yieldToEventLoop,
@@ -407,7 +406,7 @@ export async function ingestXlsxLazily(docId: string, xlsxBytes: Buffer): Promis
         // 스트리밍 워크시트 리더는 데이터 유효성 검사(xl/worksheets/sheetN.xml의 <dataValidations>)를
         // 전혀 파싱하지 않는다(worksheet-reader.js에 해당 케이스 자체가 없음) — 그런데 Cell.prototype
         // .dataValidation 게터(doc/cell.js)는 `this.worksheet.dataValidations.find(...)`를 무조건
-        // 호출해서, 이 프로퍼티가 없으면 (extractStyle이 읽자마자) 곧바로 던진다. sheetProtected와
+        // 호출해서, 이 프로퍼티가 없으면 (칸 서식을 읽자마자) 곧바로 던진다. sheetProtected와
         // 같은 이유로 알려진 스코프 제한으로 받아들이고 — 항상 "검사 없음"으로 답하는 최소 구현을
         // 붙여 크래시만 막는다(nu 스타일 비트가 스트리밍 경로에서는 항상 비어 있게 됨).
         rawWorksheetReader.dataValidations = { find: () => undefined };
@@ -464,13 +463,12 @@ export async function ingestXlsxLazily(docId: string, xlsxBytes: Buffer): Promis
           let rowHasValue = false;
           row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
             if (colNumber > MAX_COLS) return;
-            const text = displayValue(cell);
-            const styleRef = extractStyle(cell, palette, themeColors, sheetProtected);
-            if (text === '' && styleRef === undefined) return;
+            const gridCell = gridCellFromExcel(cell, palette, themeColors, sheetProtected);
+            if (!gridCell) return;
             if (colNumber > maxColWithValue) maxColWithValue = colNumber;
             while (cells.length < colNumber) cells.push(0);
-            cells[colNumber - 1] = styleRef === undefined ? { v: text } : { v: text, s: styleRef };
-            if (text !== '') rowHasValue = true;
+            cells[colNumber - 1] = gridCell;
+            if (gridCell.v !== '') rowHasValue = true;
           });
           if (rowHasValue) maxRowWithValue = row.number;
           if (hiddenRows.has(originalRow)) {

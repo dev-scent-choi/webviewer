@@ -123,6 +123,9 @@ export interface CellStyleAttrs {
    * 날짜로 보여주기 위한 표시. nf와 별개 필드다: nf에 'date'를 섞으면 서식 드롭다운·내보내기 쪽
    * switch가 전부 영향을 받는다(spreadsheet.ts classifyNumFmt 주석 참고). */
   readonly df?: 1;
+  /** 파일의 엑셀 표시 형식 코드 그대로(일반이 아닐 때) — 있으면 nf/nd/df보다 이것으로 그린다(numberFormat.ts).
+   * 툴바로 표시 형식을 바꾸면 지운다. */
+  readonly fmt?: string;
   /** 시트 보호가 걸려 있고 이 셀이 잠겨 있음(=편집 불가) — 엑셀의 "시트 보호 + 셀 잠금" 그대로. */
   readonly lk?: 1;
   /** 엑셀 데이터 유효성 검사(정수/소수)가 걸려 있음 — 숫자가 아닌 값 입력을 막고 안내를 띄운다. */

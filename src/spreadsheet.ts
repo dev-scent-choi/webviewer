@@ -2,7 +2,8 @@ import ExcelJS from 'exceljs';
 import type { DocumentStore } from './storage.js';
 import type { DocumentMeta } from './types.js';
 import { buildSheetNameIndex, computeGridCellDisplay } from './xlsx/formulas.js';
-import { isDateNumFmt, serialToDateText } from './collab/cellValueShared.js';
+import { dateToDateText, isDateNumFmt, serialToDateText } from './collab/cellValueShared.js';
+import { formatNumberCode, hashIfTooWide, isNumberOrDateValue, isTextNumFmt } from './collab/numberFormat.js';
 import { stripDrawings } from './xlsx/drawingPassthrough.js';
 import { unzipSync, strFromU8 } from 'fflate';
 import {
@@ -41,7 +42,10 @@ export const YIELD_EVERY_N_FORMULA_CELLS = 500;
 
 /** 그리드 뷰 데이터 모델 — 원본 파일 대신 표시용 값·스타일만 담는다. */
 export interface GridCell {
+  /** 화면에 보일 글자(칸 서식을 입힌 모양) */
   readonly v: string;
+  /** 값 글자 — 서식 때문에 v와 다를 때만(예: v "(4,321)" → n "-4321"). gridCellValue 참고 */
+  readonly n?: string;
   readonly s?: number;
 }
 
@@ -99,6 +103,10 @@ export interface GridStyle {
   readonly nd?: number;
   /** 날짜 표시 형식 칸(gridShared.ts CellStyleAttrs.df와 같은 의미). */
   readonly df?: 1;
+  /** 원본 엑셀 표시 형식 코드(일반 서식이 아닐 때) — 보기·편집 화면 모두 이 코드로 numberFormat.ts가 그린다 */
+  readonly fmt?: string;
+  /** 서식 코드가 값에 따라 정한 글자 색([Red] 등) — 보기 화면 전용(편집 화면은 값마다 다시 계산한다) */
+  readonly fc?: string;
   /** 시트 보호가 걸려 있고 이 셀이 잠겨 있음(=편집 불가) */
   readonly lk?: 1;
   /** 엑셀 데이터 유효성 검사(정수/소수)가 걸려 있음 */
@@ -124,7 +132,7 @@ export interface GridDocument {
  * (routes/viewer.ts의 loadGridUncached 참고) — 기존 문서를 한꺼번에 마이그레이션하지 않는다(그 자체가
  * 새로운 리스크이므로). 앞으로 계산 로직이 바뀔 때마다(예: 새로운 함수 지원, 다른 계산 버그 수정)
  * 이 값을 올리면 같은 메커니즘이 그대로 재사용된다. */
-export const GRID_CACHE_FORMAT_VERSION = 4;
+export const GRID_CACHE_FORMAT_VERSION = 5;
 
 /** JSONL 헤더(1행): 셀 데이터를 제외한 시트 메타 정보 */
 export interface GridHeader {
@@ -352,111 +360,131 @@ export function resolveColor(
   return undefined;
 }
 
-/** toLocaleString은 부를 때마다 서식기를 새로 만든다(3만 행 파일에서 1.8초) — 한 번 만들어 재사용한다(결과는 같다) */
-const KO_GROUPED_NUMBER = new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 6 });
+const EXCEL_EPOCH_MS = Date.UTC(1899, 11, 30);
+/** 숫자·날짜처럼 보이는 글자 — 글자 값인데 이런 모양이면 왼쪽 정렬을 박아 둔다(화면은 모양으로 정렬을 고른다) */
+const NUMERIC_LOOKING_TEXT = /^\s*[-+(]?[₩$€£¥]?\s*(\d[\d,]*(\.\d*)?|\.\d+)([eE][-+]?\d+)?\)?%?\s*$|^\d{4}-\d{2}-\d{2}/;
 
-function formatNumber(value: number, numFmt?: string): string {
-  if (!Number.isFinite(value)) return String(value);
-  if (numFmt && /[#0],/.test(numFmt)) {
-    return KO_GROUPED_NUMBER.format(value);
+/** ExcelJS는 파일에 서식 코드 없이 번호만 적힌 기본 서식(numFmtId 14·22·37~40)을 영어(미국) 코드로 바꿔 준다.
+ * 한국어 엑셀은 같은 번호를 다르게 보여 준다(38 → -4,321 빨강, 14 → 2026-11-20) — 사용자 PC와 같게 한국어 코드로 바꾼다. */
+const KO_BUILTIN_NUMFMT: Readonly<Record<string, string>> = {
+  'mm-dd-yy': 'yyyy-mm-dd',
+  'm/d/yy "h":mm': 'yyyy-mm-dd h:mm',
+  '#,##0 ;(#,##0)': '#,##0;-#,##0',
+  '#,##0 ;[Red](#,##0)': '#,##0;[Red]-#,##0',
+  '#,##0.00 ;(#,##0.00)': '#,##0.00;-#,##0.00',
+  '#,##0.00 ;[Red](#,##0.00)': '#,##0.00;[Red]-#,##0.00',
+};
+function numFmtOf(cell: Pick<ExcelJS.Cell, 'numFmt'>): string | undefined {
+  return cell.numFmt ? (KO_BUILTIN_NUMFMT[cell.numFmt] ?? cell.numFmt) : undefined;
+}
+
+/** 칸 하나의 표시 글자(text)와 값 글자(value — 수식 계산·편집기·저장이 쓰는 원래 값) */
+export interface CellTexts {
+  readonly text: string;
+  readonly value: string;
+  /** 서식 코드의 글자 색([Red] 등) */
+  readonly color?: string;
+  /** 값이 글자(문자열)다 — 엑셀은 숫자처럼 보여도 왼쪽 정렬한다 */
+  readonly isText?: true;
+}
+
+/** 계산 결과·캐시 결과·리터럴 값 하나를 칸 서식대로(표시·값 글자). 서식은 numberFormat.ts 하나로만 한다. */
+function valueTexts(value: unknown, numFmt: string | undefined): CellTexts {
+  if (value === null || value === undefined) return { text: '', value: '' };
+  const code = numFmt && numFmt !== 'General' ? numFmt : undefined;
+  if (value instanceof Date) {
+    const raw = dateToDateText(value);
+    return code ? { ...formatNumberCode((value.getTime() - EXCEL_EPOCH_MS) / 86_400_000, code), value: raw } : { text: raw, value: raw };
   }
-  return String(value);
-}
-
-function formatDate(value: Date): string {
-  const y = value.getUTCFullYear();
-  const m = String(value.getUTCMonth() + 1).padStart(2, '0');
-  const d = String(value.getUTCDate()).padStart(2, '0');
-  const hh = value.getUTCHours();
-  const mm = value.getUTCMinutes();
-  return hh === 0 && mm === 0
-    ? `${y}-${m}-${d}`
-    : `${y}-${m}-${d} ${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
-}
-
-export function displayValue(cell: ExcelJS.Cell): string {
-  const value = cell.value;
-  if (value === null || value === undefined) return '';
-  if (value instanceof Date) return formatDate(value);
-  // 리터럴(수식이 아닌) 논리값 칸 — typeof는 'object'가 아니라 'boolean'이라 아래 object 분기에
-  // 걸리지 않고 이 체크가 없으면 맨 아래 String(value)로 떨어져 소문자 "true"/"false"가 된다.
-  // formatFormulaResult(수식 계산 결과용, 이 파일 아래쪽)는 이미 대문자 "TRUE"/"FALSE"를 쓰고
-  // 실제 엑셀도 논리값 칸을 대문자로 보여주므로, 여기서도 같은 규칙으로 맞춘다 — 그래야
-  // isSpillEligible(viewer.js/grid-editor.ts)의 rawText==='TRUE'||'FALSE' 특례가 계산된 수식
-  // 결과뿐 아니라 리터럴 논리값 칸에도 똑같이 걸린다(이전엔 대소문자가 달라 리터럴 칸에는
-  // 전혀 걸리지 않았다).
-  if (typeof value === 'boolean') return value ? 'TRUE' : 'FALSE';
-  if (typeof value === 'number') return formatNumber(value, cell.numFmt);
-  if (typeof value === 'object') {
-    const rich = value as ExcelJS.CellRichTextValue;
-    if (Array.isArray(rich.richText)) return rich.richText.map((run) => run.text).join('');
-    const link = value as ExcelJS.CellHyperlinkValue;
-    if (typeof link.text === 'string') return link.text;
-    const formula = value as ExcelJS.CellFormulaValue;
-    if ('formula' in formula) {
-      const result = formula.result;
-      // 캐시된 계산 결과가 없는 경우(우리 export가 저장한 수식은 결과를 캐시하지 않는다) —
-      // 빈 값 대신 수식 원문을 그대로 돌려준다. 이 함수 단독으로는 여기서 끝이지만,
-      // parseXlsxToGrid는 워크북을 다 읽은 뒤 2차 패스(applyComputedFormulaValues)에서 이렇게
-      // 표시된 칸을 서버에서 직접 계산해 그 결과로 바꿔 넣는다 — 그래야 읽기전용 뷰어도
-      // 동시편집기와 똑같은 값을 보여준다. 계산이 실패하면(#REF! 등 에러 값이 아니라 정말로
-      // 값을 만들지 못하면) 이 수식 원문이 그대로 남아, 최소한 "여기 수식이 있다"는 건 알 수 있다.
-      if (result === null || result === undefined) return `=${formula.formula}`;
-      if (result instanceof Date) return formatDate(result);
-      // 엑셀이 이미 캐시해 둔 논리값 결과("=A1>0" 등) — 위 리터럴 논리값과 같은 이유로 대문자로
-      // 맞춘다. 캐시가 없어 서버가 직접 계산하는 경로는 formatFormulaResult가 이미 대문자를 쓴다.
-      if (typeof result === 'boolean') return result ? 'TRUE' : 'FALSE';
-      if (typeof result === 'number') return formatNumber(result, cell.numFmt);
-      return String(result);
-    }
-    return '';
-  }
-  return String(value);
-}
-
-/** displayValue가 만든 표시용 텍스트(예: "2,287")를 계산·편집에 쓸 수 있는 "값 텍스트"(예: "2287")로
- * 되돌린다. Number("2,287")은 NaN이라, 이 텍스트를 그대로 수식 엔진에 먹이면 그 셀을 숫자가 아닌
- * 것으로 취급해 조용히 0으로 계산해버린다(실제 재현된 버그: 합계 열이 항상 0). 쉼표 구분 표시
- * 형식(number/currency)이 걸린 칸만, 숫자로 되돌릴 수 있을 때에만 벗겨낸다 — 되돌린 결과가 유한한
- * 숫자가 아니면(예: 수식 원문 "=SUM(B3,M3)", 쉼표가 들어간 일반 텍스트) 원문을 그대로 돌려준다.
- * "화면에 어떻게 보일지"는 style.nf/nd로 이미 따로 전달되므로 여기서는 순수 값만 복원하면 된다.
- *
- * 동시편집 시딩(xlsx/collab.ts의 seedGridFromXlsx/seedGridPageFromXlsx)과 읽기전용 뷰어의 수식
- * 계산 패스(이 파일의 applyComputedFormulaValues)가 **같은 규칙**을 써야 하므로 여기서 한 번만
- * 정의한다 — 한쪽만 고치면 "편집기에서는 맞는데 뷰어에서는 0" 같은 불일치가 다시 생긴다. */
-export function unformattedCellValue(text: string, style: GridStyle | undefined): string {
-  if (!style?.nf || (style.nf !== 'number' && style.nf !== 'currency')) return text;
-  const stripped = text.replace(/[₩,\s]/g, '');
-  return Number.isFinite(Number(stripped)) && stripped !== '' ? stripped : text;
-}
-
-/** displayValue가 "수식 원문 그대로" 폴백을 탄 칸인지 가려내기 위한 판정 — 값이 ExcelJS의 수식
- * 값 객체여야 한다. 표시 텍스트가 '='로 시작한다는 것만으로는 부족하다: 사용자가 진짜로 "=abc"
- * 라는 **문자열**을 입력해 둔 칸도 똑같이 '='로 시작하는데, 그런 칸까지 계산해 '#ERROR!'로
- * 덮어써버리면 멀쩡히 보이던 텍스트가 깨진다. */
-function isFormulaCellValue(value: ExcelJS.CellValue): boolean {
-  return value !== null && typeof value === 'object' && !(value instanceof Date) && 'formula' in value;
-}
-
-/** computeGridCellDisplay가 돌려준 값(number | string | boolean | 에러 이름 문자열 ...)을 그리드에
- * 저장할 표시 텍스트로 만든다. 숫자는 displayValue가 일반 숫자 칸에 쓰는 것과 **같은**
- * formatNumber(value, cell.numFmt)를 그대로 태운다 — 계산된 합계가 엑셀이 캐시해 둔 결과와 같은
- * 자릿수·쉼표 서식으로 보여야 하기 때문이다. '#REF!'/'#ERROR!' 같은 에러 이름은 문자열이라
- * 그대로 통과해, 엑셀이 깨진 수식에 보여주는 것과 같은 모양으로 표시된다. */
-function formatFormulaResult(value: unknown, numFmt?: string): string {
-  if (value === null || value === undefined) return '';
-  if (value instanceof Date) return formatDate(value);
-  if (typeof value === 'boolean') return value ? 'TRUE' : 'FALSE';
-  // 날짜 형식 칸의 수식 결과(날짜 일련번호, 예: =A4+7 → 46215)는 엑셀처럼 날짜로 보여준다.
-  if (typeof value === 'number' && Number.isFinite(value) && isDateNumFmt(numFmt)) return serialToDateText(value);
+  // 리터럴 논리값·캐시된 논리값 결과 모두 엑셀처럼 대문자(isSpillEligible의 'TRUE'/'FALSE' 특례가 이 모양을 본다)
+  if (typeof value === 'boolean') return value ? { text: 'TRUE', value: 'TRUE' } : { text: 'FALSE', value: 'FALSE' };
   if (typeof value === 'number') {
-    // 부동소수 잡음(0.1+0.2=0.30000000000000004) 제거 — formatComputedValueForStorage
-    // (xlsx/formulas.ts)가 동시편집기 쪽에 쓰는 것과 같은 반올림 규칙. 절댓값이 너무 커서
-    // value*1e10이 Infinity가 되는 경우에는 반올림을 건너뛴다(그 자릿수에서는 잡음도 없다).
-    const rounded = Math.round(value * 1e10) / 1e10;
-    return formatNumber(Number.isFinite(rounded) ? rounded : value, numFmt);
+    // 부동소수 잡음(0.1+0.2) 제거 — 엑셀처럼 유효 숫자 15자리(큰 수에 1e10을 곱했다 나누면 오히려 잡음이 생겼다)
+    const n = Number.isFinite(value) ? Number(value.toPrecision(15)) : value;
+    // 날짜 형식 칸의 수(=A4+7 같은 계산 결과)는 값도 날짜 글자로 둔다 — 편집기·수식이 날짜로 다룬다
+    const raw = Number.isFinite(n) && isDateNumFmt(numFmt) ? serialToDateText(n) : String(n);
+    return { ...formatNumberCode(n, code), value: raw };
   }
-  return String(value);
+  if (typeof value === 'object' && typeof (value as { error?: unknown }).error === 'string') {
+    // 엑셀 오류값(#DIV/0! 등) — ExcelJS는 { error: '#DIV/0!' } 객체로 준다(예전엔 "[object Object]"로 보였다)
+    const err = (value as { error: string }).error;
+    return { text: err, value: err };
+  }
+  const text = String(value);
+  return { text, value: text, isText: true };
+}
+
+/** 수식 칸인지 — 일반 수식과, ExcelJS가 { sharedFormula, result }로 주는 공유 수식 복제 칸 둘 다.
+ * 표시 텍스트가 '='로 시작한다는 것만으로는 부족하다: 사용자가 "=abc"라는 **문자열**을 넣어 둔 칸도 있다. */
+function isFormulaCellValue(value: ExcelJS.CellValue): boolean {
+  return value !== null && typeof value === 'object' && !(value instanceof Date) && ('formula' in value || 'sharedFormula' in value);
+}
+
+export function cellTexts(cell: ExcelJS.Cell): CellTexts {
+  const value = cell.value;
+  if (value === null || value === undefined) return { text: '', value: '' };
+  if (typeof value === 'object' && !(value instanceof Date)) {
+    const rich = value as ExcelJS.CellRichTextValue;
+    if (Array.isArray(rich.richText)) {
+      const text = rich.richText.map((run) => run.text).join('');
+      return { text, value: text, isText: true };
+    }
+    const link = value as ExcelJS.CellHyperlinkValue;
+    if (typeof link.text === 'string') return { text: link.text, value: link.text, isText: true };
+    if (isFormulaCellValue(value)) {
+      const result = (value as ExcelJS.CellFormulaValue).result;
+      // 캐시된 계산 결과가 없는 경우(우리 export가 저장한 수식은 결과를 캐시하지 않는다) — 수식 원문을 남기고,
+      // parseXlsxToGrid의 2차 패스(applyComputedFormulaValues)가 서버에서 계산해 바꿔 넣는다. 계산도 못 하면 원문이
+      // 그대로 남아 최소한 "여기 수식이 있다"는 건 알 수 있다.
+      if (result === null || result === undefined) {
+        const formula = `=${cell.formula}`;
+        return { text: formula, value: formula };
+      }
+      return valueTexts(result, numFmtOf(cell));
+    }
+    if (typeof (value as { error?: unknown }).error !== 'string') return { text: '', value: '' };
+  }
+  return valueTexts(value, numFmtOf(cell));
+}
+
+/** 칸 표시 글자 — cellTexts(cell).text */
+export function displayValue(cell: ExcelJS.Cell): string {
+  return cellTexts(cell).text;
+}
+
+/** 칸의 값 글자 — 표시 글자(v)가 서식 때문에 값과 다르면 n에 원래 값이 있다(수식 계산·편집기 시딩·저장은 이것을 쓴다) */
+export function gridCellValue(cell: GridCell): string {
+  return cell.n ?? cell.v;
+}
+
+/** 표시·값 글자로 그리드 칸을 만든다(값이 표시와 같으면 n은 싣지 않는다 — 파일 크기·메모리) */
+function gridCellOf(t: CellTexts, styleRef: number | undefined): GridCell {
+  const cell: { v: string; n?: string; s?: number } = { v: t.text };
+  if (t.value !== t.text) cell.n = t.value;
+  if (styleRef !== undefined) cell.s = styleRef;
+  return cell;
+}
+
+/** 값에 따라 달라지는 서식을 덧붙인다: 서식 코드의 글자 색(fc), 숫자처럼 보이는 글자 값의 왼쪽 정렬(엑셀 기본) */
+function valueStyleRef(palette: StylePalette, styleRef: number | undefined, t: CellTexts): number | undefined {
+  const base: GridStyle = styleRef === undefined ? {} : palette.toArray()[styleRef];
+  const extra: { fc?: string; a?: 'l' } = {};
+  if (t.color) extra.fc = t.color;
+  if (t.isText && !base.a && t.text !== '' && (NUMERIC_LOOKING_TEXT.test(t.text) || base.fmt || base.nf)) extra.a = 'l';
+  return extra.fc || extra.a ? palette.register({ ...base, ...extra }) : styleRef;
+}
+
+/** ExcelJS 칸 → 그리드 칸(표시·값·서식). 값도 서식도 없으면 null — parseXlsxToGrid와 스트리밍 읽기(lazyGridStore)가 함께 쓴다 */
+export function gridCellFromExcel(
+  cell: ExcelJS.Cell,
+  palette: StylePalette,
+  themeColors: readonly string[],
+  sheetProtected: boolean,
+): GridCell | null {
+  const t = cellTexts(cell);
+  const styleRef = extractStyle(cell, palette, themeColors, sheetProtected);
+  if (t.text === '' && styleRef === undefined) return null;
+  return gridCellOf(t, valueStyleRef(palette, styleRef, t));
 }
 
 /** 수식 계산 패스가 계산해 채워야 하는 칸 하나(= displayValue가 수식 원문을 그대로 남긴 칸). */
@@ -466,48 +494,6 @@ interface PendingFormulaCell {
   readonly col: number;
   /** 원본 엑셀 서식 코드 — 계산 결과를 일반 숫자 칸과 같은 규칙으로 서식화하기 위해 들고 다닌다. */
   readonly numFmt?: string;
-}
-
-/** 수식 계산 패스가 읽을 입력 그리드를 만든다 — 표시용 그리드와 내용은 같지만, 쉼표 서식이 걸린
- * 숫자 칸의 텍스트만 unformattedCellValue로 값 텍스트로 되돌려 둔다(그래야 SUM 등이 그 칸을
- * 숫자로 본다).
- *
- * 메모리: 수식이 **하나도 없는** 시트는 원본 시트 객체를 그대로 재사용하고, 수식이 있는 시트
- * 안에서도 서식이 벗겨질 칸이 하나도 없는 행은 원본 행 배열을 그대로 공유한다 — 실제로 새로
- * 할당되는 건 "쉼표 서식 숫자가 한 칸이라도 있는 행"뿐이다. 수십만 행 문서에서 표시용 그리드를
- * 통째로 복제하지 않기 위한 조치다. */
-async function buildFormulaInputGrid(
-  sheets: readonly GridSheet[],
-  styles: readonly GridStyle[],
-  sheetsWithFormulas: ReadonlySet<number>,
-): Promise<GridDocument> {
-  const inputSheets: GridSheet[] = [];
-  for (let sheetIdx = 0; sheetIdx < sheets.length; sheetIdx += 1) {
-    const sheet = sheets[sheetIdx];
-    if (!sheetsWithFormulas.has(sheetIdx)) {
-      inputSheets.push(sheet);
-      continue;
-    }
-    const inputRows: Array<ReadonlyArray<GridCell | 0>> = [];
-    for (let r = 0; r < sheet.rows.length; r += 1) {
-      const row = sheet.rows[r];
-      let unformatted: Array<GridCell | 0> | null = null;
-      for (let c = 0; c < row.length; c += 1) {
-        const cell = row[c];
-        if (cell === 0) continue;
-        const raw = unformattedCellValue(cell.v, cell.s === undefined ? undefined : styles[cell.s]);
-        if (raw === cell.v) continue;
-        // 이 행에서 처음으로 서식을 벗길 칸을 만난 순간에만 행을 복제한다(copy-on-write).
-        if (!unformatted) unformatted = row.slice();
-        // 계산 엔진은 v만 읽으므로 스타일 참조는 싣지 않는다(이 그리드는 순수 값 전용).
-        unformatted[c] = { v: raw };
-      }
-      inputRows.push(unformatted ?? row);
-      if ((r + 1) % YIELD_EVERY_N_ROWS === 0) await yieldToEventLoop();
-    }
-    inputSheets.push({ ...sheet, rows: inputRows });
-  }
-  return { sheets: inputSheets, styles };
 }
 
 /**
@@ -531,36 +517,27 @@ async function buildFormulaInputGrid(
  * 않으므로 여기서 한 번만 만들어 모든 pending 셀에 걸쳐 재사용한다(buildSheetNameIndex 문서
  * 주석 참고).
  *
- * **계산이 다 끝난 뒤에야 표시용 그리드에 써 넣는 이유(중요)**: buildFormulaInputGrid는 메모리를
- * 아끼려고 "서식을 벗길 칸이 없는 행"의 배열을 표시용 그리드와 **그대로 공유**한다. 그래서 계산
- * 도중에 결과를 표시용 그리드에 바로 써 넣으면 그게 입력 그리드까지 같이 바꿔버린다 — 예를 들어
- * 이 프로젝트의 실제 파일처럼 `B49=SUM(B3:B48)`(수식)이고 `N49=SUM(B49:M49)`(그 수식들의 합)인
- * 경우, 먼저 계산된 B49의 표시 텍스트("12,153")가 입력 그리드에 덮어씌워져 N49가 그 칸을 더 이상
- * 수식으로도 숫자로도 보지 못하고 0을 내놓는다(실제로 재현됨). 결과를 전부 모은 뒤 한 번에
- * 반영하면, 모든 계산이 "파일을 막 읽었을 때의 원본 상태"만 보게 되어 이 종류의 별칭(aliasing)
- * 문제가 원천적으로 사라진다. memo 캐시 키가 좌표뿐인 것도 이 불변식(패스 동안 입력이 바뀌지
- * 않음) 위에서만 안전하다.
+ * **계산이 다 끝난 뒤에야 표시용 그리드에 써 넣는 이유(중요)**: 계산 입력은 표시용 그리드 그 자체다. 계산 도중에
+ * 결과를 써 넣으면 아직 계산 중인 다른 수식(예: `N49=SUM(B49:M49)`)이 반쯤 바뀐 입력을 보게 된다(memo 캐시 키가 좌표뿐인
+ * 것도 패스 동안 입력이 바뀌지 않는다는 불변식 위에서만 안전하다). 결과를 전부 모은 뒤 한 번에 반영한다.
  */
 async function applyComputedFormulaValues(
   sheets: readonly GridSheet[],
   sheetRows: ReadonlyArray<Array<Array<GridCell | 0>>>,
-  styles: readonly GridStyle[],
+  palette: StylePalette,
   pending: readonly PendingFormulaCell[],
 ): Promise<void> {
   if (pending.length === 0) return;
-  const inputGrid = await buildFormulaInputGrid(
-    sheets,
-    styles,
-    new Set(pending.map((p) => p.sheetIdx)),
-  );
+  // 계산 엔진은 칸의 값 글자(gridCellValue — 서식 전 값)를 읽으므로 표시용 그리드를 그대로 넘긴다
+  const inputGrid: GridDocument = { sheets, styles: palette.toArray() };
   const memo = new Map<string, unknown>();
   const tainted = new Set<string>();
   const sheetNameIndex = buildSheetNameIndex(inputGrid);
-  const computedTexts: string[] = new Array(pending.length).fill('');
+  const computedTexts: Array<CellTexts | null> = new Array(pending.length).fill(null);
   for (let i = 0; i < pending.length; i += 1) {
     const { sheetIdx, row, col, numFmt } = pending[i];
     try {
-      computedTexts[i] = formatFormulaResult(
+      computedTexts[i] = valueTexts(
         computeGridCellDisplay(inputGrid, sheetIdx, row, col, new Set(), memo, tainted, sheetNameIndex),
         numFmt,
       );
@@ -568,24 +545,40 @@ async function applyComputedFormulaValues(
       // 계산이 예외로 끝나면(예: 지원하지 않는 구문으로 인한 깊은 재귀) 빈 문자열로 남겨 아래에서
       // 수식 원문을 그대로 두게 한다 — 업로드 자체가 실패하는 것보다 "여기 수식이 있다"고
       // 보여주는 편이 낫다(이 변경 이전의 동작으로 폴백).
-      computedTexts[i] = '';
+      computedTexts[i] = null;
     }
     if ((i + 1) % YIELD_EVERY_N_FORMULA_CELLS === 0) await yieldToEventLoop();
   }
 
   for (let i = 0; i < pending.length; i += 1) {
-    const text = computedTexts[i];
-    // 빈 결과는 반영하지 않는다: 칸을 비워 버리면 "여기 수식이 있다"는 정보까지 사라지고,
-    // 값 없는 꼬리 행 트리밍이 이미 끝난 뒤라 행 수 계산과도 어긋난다.
-    if (text === '') continue;
+    const t = computedTexts[i];
+    // 계산이 실패한 칸(null)은 반영하지 않는다 — 수식 원문이 남아 "여기 수식이 있다"는 건 알 수 있다.
+    // 계산 결과가 빈 글자(=IF(D13="","",…))면 엑셀처럼 빈 칸으로 보인다(칸 자체는 서식과 함께 남는다).
+    if (!t) continue;
     const { sheetIdx, row, col } = pending[i];
     const cells = sheetRows[sheetIdx]?.[row];
     const cell = cells?.[col];
     // 꼬리 행 트리밍으로 사라진 칸일 수 있으므로 존재 여부를 먼저 본다.
-    if (!cells || cell === 0 || cell === undefined || cell.v === text) continue;
-    cells[col] = cell.s === undefined ? { v: text } : { v: text, s: cell.s };
+    if (!cells || cell === 0 || cell === undefined) continue;
+    cells[col] = gridCellOf(t, valueStyleRef(palette, cell.s, t));
     if ((i + 1) % YIELD_EVERY_N_FORMULA_CELLS === 0) await yieldToEventLoop();
   }
+}
+
+/** 칸 폭보다 긴 서식 숫자·날짜는 엑셀처럼 '####'으로 보인다(값 n은 그대로 남긴다). 병합 칸은 폭이 달라 건너뛴다. */
+function hashOverflowingNumbers(sheet: GridSheet, styles: readonly GridStyle[]): void {
+  const merged = new Set(sheet.merges.map((m) => `${m.r - 1}:${m.c - 1}`));
+  sheet.rows.forEach((row, r) => {
+    const cells = row as Array<GridCell | 0>;
+    for (let c = 0; c < cells.length; c += 1) {
+      const cell = cells[c];
+      if (cell === 0 || cell.s === undefined || cell.v === '') continue;
+      const style = styles[cell.s];
+      if (!style.fmt || isTextNumFmt(style.fmt) || style.w || merged.has(`${r}:${c}`) || !isNumberOrDateValue(gridCellValue(cell))) continue;
+      const shown = hashIfTooWide(cell.v, sheet.colWidths[c] ?? sheet.defaultColWidth, style.fs ?? EXCEL_DEFAULT_FONT_PX);
+      if (shown !== cell.v) cells[c] = { ...cell, v: shown, n: gridCellValue(cell) };
+    }
+  });
 }
 
 export function parseMergeRange(range: string): GridMerge | null {
@@ -660,28 +653,7 @@ export function extractStyle(
   themeColors: readonly string[],
   sheetProtected: boolean,
 ): number | undefined {
-  const style: {
-    b?: 1;
-    i?: 1;
-    u?: 1;
-    st?: 1;
-    fs?: number;
-    ff?: string;
-    col?: string;
-    bg?: string;
-    a?: 'l' | 'c' | 'r';
-    va?: 't' | 'm' | 'b';
-    w?: 1;
-    nf?: NumberFormatKind;
-    nd?: number;
-    df?: 1;
-    lk?: 1;
-    nu?: 1;
-    bt?: BorderWeight;
-    br?: BorderWeight;
-    bb?: BorderWeight;
-    bl?: BorderWeight;
-  } = {};
+  const style: { -readonly [K in keyof GridStyle]?: GridStyle[K] } = {};
   const font = cell.font;
   if (font?.bold) style.b = 1;
   if (font?.italic) style.i = 1;
@@ -716,13 +688,16 @@ export function extractStyle(
   else if (vertical === 'middle') style.va = 'm';
   else if (vertical === 'bottom') style.va = 'b';
   if (cell.alignment?.wrapText) style.w = 1;
-  const { nf, nd } = classifyNumFmt(cell.numFmt);
+  // 날짜 먼저 — "yyyy\"년\"" 같은 글자 붙은 날짜 서식이 통화로 분류되지 않게
+  const numFmt = numFmtOf(cell);
+  const { nf, nd } = isDateNumFmt(numFmt) ? {} : classifyNumFmt(numFmt);
   if (nf) {
     style.nf = nf;
     if (nd) style.nd = nd;
-  } else if (isDateNumFmt(cell.numFmt)) {
+  } else if (isDateNumFmt(numFmt)) {
     style.df = 1;
   }
+  if (numFmt && numFmt !== 'General') style.fmt = numFmt;
   // 시트 보호가 걸려 있을 때만 잠금 여부가 실제로 의미를 가진다(엑셀도 그렇게 동작함) — 그렇지
   // 않은 대부분의 일반 문서는 셀마다 protection.locked가 true(엑셀 기본값)라도 편집 가능해야 한다.
   if (sheetProtected && cell.protection?.locked !== false) style.lk = 1;
@@ -879,14 +854,13 @@ export async function parseXlsxToGrid(xlsxBytes: Buffer): Promise<GridDocument> 
         if (colNumber > MAX_COLS) return;
         if (colNumber > maxColUsed) maxColUsed = colNumber;
         while (cells.length < colNumber) cells.push(0);
-        const text = displayValue(cell);
-        const styleRef = extractStyle(cell, palette, themeColors, sheetProtected);
-        if (text === '' && styleRef === undefined) return;
-        cells[colNumber - 1] = styleRef === undefined ? { v: text } : { v: text, s: styleRef };
-        // displayValue가 캐시된 결과가 없어 수식 원문을 그대로 남긴 칸 — 워크북을 다 읽은 뒤
-        // applyComputedFormulaValues가 직접 계산해 채운다(displayValue 문서 주석 참고).
-        if (text.startsWith('=') && isFormulaCellValue(cell.value)) {
-          pendingFormulas.push({ sheetIdx, row: r - 1, col: colNumber - 1, numFmt: cell.numFmt });
+        const gridCell = gridCellFromExcel(cell, palette, themeColors, sheetProtected);
+        if (!gridCell) return;
+        cells[colNumber - 1] = gridCell;
+        // 캐시된 결과가 없어 수식 원문을 그대로 남긴 칸 — 워크북을 다 읽은 뒤
+        // applyComputedFormulaValues가 직접 계산해 채운다(cellTexts 문서 주석 참고).
+        if (gridCell.v.startsWith('=') && isFormulaCellValue(cell.value)) {
+          pendingFormulas.push({ sheetIdx, row: r - 1, col: colNumber - 1, numFmt: numFmtOf(cell) });
         }
       });
       rows.push(cells);
@@ -966,10 +940,10 @@ export async function parseXlsxToGrid(xlsxBytes: Buffer): Promise<GridDocument> 
     sheetRows.push(rows);
   }
 
-  const styles = palette.toArray();
   // 2차 패스 — 시트를 전부 만든 뒤에야 수식이 참조하는 칸이 모두 채워져 있다.
-  await applyComputedFormulaValues(sheets, sheetRows, styles, pendingFormulas);
-  return { sheets, styles };
+  await applyComputedFormulaValues(sheets, sheetRows, palette, pendingFormulas);
+  for (const sheet of sheets) hashOverflowingNumbers(sheet, palette.toArray());
+  return { sheets, styles: palette.toArray() };
 }
 
 /** 간단한 RFC4180 CSV 파서 (따옴표·이스케이프 지원) */

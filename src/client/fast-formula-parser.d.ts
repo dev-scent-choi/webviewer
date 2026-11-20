@@ -103,3 +103,12 @@ declare module 'fast-formula-parser' {
     static readonly FormulaHelpers: FormulaHelpersApi;
   }
 }
+
+/** fast-formula-parser가 TEXT 함수용으로 함께 싣고 있는 SheetJS SSF(Apache-2.0) 서식기 — 엑셀 표시 형식 코드 해석. */
+declare module 'fast-formula-parser/ssf/ssf.js' {
+  const SSF: {
+    format(fmt: string, value: number | string): string;
+    _split(fmt: string): string[];
+  };
+  export default SSF;
+}

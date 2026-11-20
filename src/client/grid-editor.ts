@@ -22,7 +22,8 @@ import {
 } from '../collab/gridShared.js';
 import { dedupeByName, pickPresenceColorForName, renderPresenceAvatars, type AwarenessUserState } from './presence.js';
 import { applyWatermark } from './watermark.js';
-import { parseTypedNumber, serialToDateText } from '../collab/cellValueShared.js';
+import { parseTypedNumber } from '../collab/cellValueShared.js';
+import { formatValueText, hashIfTooWide, isNumberOrDateValue, isTextNumFmt, type FormattedValue } from '../collab/numberFormat.js';
 import { initOfficeShell } from './officeShell.js';
 import { bindDropdown } from './ribbonMenus.js';
 import { currentRegion, setupGridCharts } from './gridCharts.js';
@@ -40,7 +41,7 @@ import {
   type CondFormatEntry,
 } from '../collab/condFormatShared.js';
 import type { CellRangeRef, ChartKind } from '../xlsx/chartModel.js';
-import { RowLayout } from '../xlsx/sheetGeometry.js';
+import { EXCEL_DEFAULT_FONT_PX, RowLayout } from '../xlsx/sheetGeometry.js';
 import { compareCells, filteredRows, GRID_FILTERS_MAP, shiftFormulaRows, sortOrder, type SheetFilter } from './gridSort.js';
 import { officeAlert, officeConfirm } from './officeDialog.js';
 
@@ -215,7 +216,7 @@ function applyStyleToTd(td: HTMLTableCellElement, style: CellStyleAttrs | undefi
   td.style.fontWeight = style?.b ? '700' : '400';
   td.style.fontStyle = style?.i ? 'italic' : 'normal';
   td.style.textDecoration = [style?.u ? 'underline' : '', style?.st ? 'line-through' : ''].filter(Boolean).join(' ');
-  td.style.color = style?.col ?? '';
+  td.style.color = td.dataset.fc ?? style?.col ?? ''; // dataset.fc: 서식 코드의 글자 색(renderCellDisplay가 값마다 정한다)
   td.style.background = style?.bg ?? '';
   td.style.fontFamily = style?.ff ? `"${style.ff}", ${DEFAULT_CELL_FONT_STACK}` : '';
   td.style.fontSize = style?.fs ? `${style.fs}px` : '';
@@ -226,8 +227,8 @@ function applyStyleToTd(td: HTMLTableCellElement, style: CellStyleAttrs | undefi
   td.style.whiteSpace = style?.wrap ? 'normal' : '';
   if (style?.a) {
     td.style.textAlign = ALIGN_TO_CSS[style.a];
-  } else if (style?.nf) {
-    td.style.textAlign = 'right'; // 숫자 서식이 있으면 서식이 적용된 텍스트(₩1,000 등)라 정규식 판정이 안 먹는다
+  } else if (style?.nf || (style?.fmt && !isTextNumFmt(style.fmt))) {
+    td.style.textAlign = 'right'; // 숫자 서식이 있으면 서식이 적용된 텍스트(₩1,000·(4,321)·날짜 등)라 정규식 판정이 안 먹는다
   } else {
     td.style.textAlign = NUMERIC_VALUE.test((td.textContent ?? '').trim()) ? 'right' : '';
   }
@@ -511,38 +512,15 @@ async function main(): Promise<void> {
     return String(Math.round(value * 1e10) / 1e10);
   }
 
-  /** 소수 자릿수별 숫자 서식기 — toLocaleString은 칸마다 서식기를 새로 만들어 스크롤이 느려진다 */
-  const numberFormatters = new Map<number, Intl.NumberFormat>();
-  function numberFormatter(decimals: number): Intl.NumberFormat {
-    let fmt = numberFormatters.get(decimals);
-    if (!fmt) {
-      fmt = new Intl.NumberFormat('ko-KR', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
-      numberFormatters.set(decimals, fmt);
-    }
-    return fmt;
+  /** 원본 값(또는 수식 계산 결과)에 칸의 표시 형식을 입힌다 — 보기 화면(서버)과 같은 서식기(numberFormat.ts) 하나만 쓴다.
+   * 저장된 값 자체는 절대 안 바꾸고 "화면에 어떻게 보일지"만 바꾼다. */
+  function formatNumberForDisplay(text: string, style: CellStyleAttrs | undefined): FormattedValue {
+    return formatValueText(text, style);
   }
 
-  /** 원본 값(또는 수식 계산 결과)에 셀의 숫자 표시 형식(쉼표/통화/백분율)을 입힌다 — 저장된 값
-   * 자체는 절대 안 바꾸고 "화면에 어떻게 보일지"만 바꾼다(수식 계산 결과 표시와 같은 원리). */
-  function formatNumberForDisplay(text: string, style: CellStyleAttrs | undefined): string {
-    // 날짜 형식 칸에 숫자(날짜 일련번호 — 예: =A4+7의 계산 결과)가 오면 엑셀처럼 날짜로 보여준다.
-    // 날짜 텍스트 자체("2026-07-05")는 숫자가 아니라 그대로 통과한다.
-    if (style?.df && text.trim() !== '' && Number.isFinite(Number(text))) return serialToDateText(Number(text));
-    if (!style?.nf || text.trim() === '') return text;
-    const num = Number(text);
-    if (!Number.isFinite(num)) return text;
-    if (num === 0) return ''; // 값 없음(0)은 화면을 어지럽히지 않게 빈 칸으로 보여준다
-    const fmt = numberFormatter(style.nd ?? 0);
-    switch (style.nf) {
-      case 'percent':
-        return `${fmt.format(num * 100)}%`;
-      case 'currency':
-        return `₩${fmt.format(num)}`;
-      case 'number':
-        return fmt.format(num);
-      default:
-        return text;
-    }
+  function colWidthOfSheet(sheetIdx: number, col: number): number {
+    const sheet = structure.get(String(sheetIdx));
+    return sheet?.colWidths?.[col] ?? sheet?.defaultColWidth ?? DEFAULT_COL_WIDTH_PX;
   }
 
   /** 하이퍼링크(바로가기)·목록 상자 — 아래 setupGridLinks로 채운다(그 전에 그려진 칸은 받은 뒤 다시 표시) */
@@ -559,7 +537,7 @@ async function main(): Promise<void> {
       return;
     }
     const style = styles.get(key);
-    const text = !raw.startsWith('=')
+    const shown = !raw.startsWith('=')
       ? formatNumberForDisplay(raw, style)
       : formatNumberForDisplay(
           formatComputedValue(
@@ -570,6 +548,16 @@ async function main(): Promise<void> {
           ),
           style,
         );
+    const parsedKey = parseGridCellKey(key);
+    // 서식 숫자·날짜가 칸 폭보다 길면 엑셀처럼 '####'(보기 화면과 같은 어림 — numberFormat.ts)
+    const text =
+      style?.fmt && !isTextNumFmt(style.fmt) && !style.wrap && parsedKey && td.colSpan <= 1 && isNumberOrDateValue(raw.startsWith('=') ? String(computeCellDisplay(parsedKey.sheetIdx, parsedKey.row, parsedKey.col)) : raw)
+        ? hashIfTooWide(shown.text, colWidthOfSheet(parsedKey.sheetIdx, parsedKey.col), style.fs ?? EXCEL_DEFAULT_FONT_PX)
+        : shown.text;
+    // 서식 코드의 글자 색([Red] 등)은 값마다 다르다 — 없으면 칸 서식 색으로 되돌린다(조건부 서식이 그 위에 덧입힌다)
+    if (shown.color) td.dataset.fc = shown.color;
+    else delete td.dataset.fc;
+    td.style.color = shown.color ?? style?.col ?? '';
     applySpillDisplay(td, key, text);
     condFormatOverlay?.(td); // 값이 바뀌면 강조도 바뀐다(이 경로는 applyStyleToTd를 안 거칠 때가 있다)
     if (gridLinks) {
@@ -598,12 +586,12 @@ async function main(): Promise<void> {
    * 경로는 formatDate(src/spreadsheet.ts) 단 하나뿐이고, 원본 서식 코드가 무엇이든 항상 이
    * 모양(YYYY-MM-DD, 시:분이 있으면 그 뒤에 공백+HH:MM)으로만 렌더링되므로 이 정규식과 일치하는
    * 텍스트는 항상 날짜다. */
-  const DATE_LIKE_TEXT = /^\d{4}-\d{2}-\d{2}( \d{2}:\d{2})?$/;
+  const DATE_LIKE_TEXT = /^\d{4}-\d{2}-\d{2}( \d{2}:\d{2}(:\d{2})?)?$/;
   function isSpillEligible(style: CellStyleAttrs | undefined, text: string): boolean {
     if (style) {
       if (style.a === 'c' || style.a === 'r') return false; // 명시적 가운데/오른쪽 정렬 — 절대 안 넘친다
       if (style.a === 'l') return true; // 명시적 왼쪽 정렬 — 항상 넘친다
-      if (style.nf) return false; // 숫자 서식이 걸려 있으면 기본 오른쪽 정렬
+      if (style.nf || (style.fmt && !isTextNumFmt(style.fmt))) return false; // 숫자·날짜 서식이 걸려 있으면 기본 오른쪽 정렬
     }
     if (text === 'TRUE' || text === 'FALSE') return false; // 논리값도 엑셀 기본은 가운데 정렬
     if (DATE_LIKE_TEXT.test(text.trim())) return false; // 날짜도 엑셀 기본은 오른쪽 정렬(위 주석 참고)
@@ -1154,7 +1142,7 @@ async function main(): Promise<void> {
       if (typed) {
         cells.set(key, String(typed.value));
         const currentStyle = styles.get(key) ?? {};
-        if (!currentStyle.nf && !currentStyle.df) {
+        if (!currentStyle.nf && !currentStyle.df && !currentStyle.fmt) {
           styles.set(key, { ...currentStyle, nf: typed.kind, ...(typed.decimals ? { nd: typed.decimals } : {}) });
         }
       } else {
@@ -3250,7 +3238,7 @@ async function main(): Promise<void> {
     // 기본 서식(applyStyleToTd와 같은 값)으로 되돌린 뒤 규칙 색을 얹는다 — 규칙이 더는 안 맞으면 원래 모습이 된다
     const base = styles.get(gridCellKey(activeSheet, row, col));
     td.style.background = paint?.style?.bg ?? paint?.scale ?? base?.bg ?? '';
-    td.style.color = paint?.style?.col ?? base?.col ?? '';
+    td.style.color = paint?.style?.col ?? td.dataset.fc ?? base?.col ?? '';
     td.style.fontWeight = paint?.style?.b || base?.b ? '700' : '400';
     if (paint?.bar) {
       td.style.backgroundImage = `linear-gradient(90deg, ${paint.bar.color} 0%, ${paint.bar.color}33 100%)`;
@@ -3432,7 +3420,8 @@ async function main(): Promise<void> {
   const numfmtSelect = document.getElementById('cell-numfmt-select') as HTMLSelectElement | null;
   numfmtSelect?.addEventListener('change', () => {
     updateStyle((current) => {
-      const next = { ...current };
+      // 툴바로 고르면 파일의 원래 서식 코드(fmt)는 버린다 — 남아 있으면 그것이 이겨 화면이 안 바뀐다
+      const { fmt: _fmt, ...next } = current;
       if (numfmtSelect.value === 'general') {
         delete next.nf;
         delete next.nd;
@@ -3444,13 +3433,13 @@ async function main(): Promise<void> {
     });
   });
   function applyQuickNumFmt(nf: NonNullable<CellStyleAttrs['nf']>, nd: number): void {
-    updateStyle((current) => ({ ...current, nf, nd }));
+    updateStyle(({ fmt: _fmt, ...current }) => ({ ...current, nf, nd }));
   }
   document.getElementById('btn-numfmt-currency')?.addEventListener('click', () => applyQuickNumFmt('currency', 2));
   document.getElementById('btn-numfmt-percent')?.addEventListener('click', () => applyQuickNumFmt('percent', 0));
   document.getElementById('btn-numfmt-comma')?.addEventListener('click', () => applyQuickNumFmt('number', 0));
   function stepDecimals(delta: number): void {
-    updateStyle((current) => {
+    updateStyle(({ fmt: _fmt, ...current }) => {
       const nextDecimals = Math.max(0, (current.nd ?? 0) + delta);
       return { ...current, nf: current.nf ?? 'number', nd: nextDecimals };
     });
