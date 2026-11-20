@@ -636,6 +636,9 @@ async function main(): Promise<void> {
     for (const prop of ['writing-mode', 'text-orientation', 'letter-spacing', 'display', 'transform', 'transform-origin']) span.style.removeProperty(prop);
     for (const [prop, value] of Object.entries(inner)) span.style.setProperty(prop, value);
     if (styles.get(key)?.shr) shrinkToFit(td, span);
+    // 내용이 행 높이를 넘어도 행이 늘어나지 않게(엑셀·보기 화면처럼 잘린다 — 사용자가 정한 8pt 행이 커지던 문제)
+    const at = parseGridCellKey(key);
+    span.style.maxHeight = at && at.sheetIdx === activeSheet ? `${Math.max(0, rowLayout.top(at.row + td.rowSpan) - rowLayout.top(at.row) - 1)}px` : '';
     if (!text.trim() || td.colSpan > 1) return; // 병합 칸은 이미 colspan으로 넓어져 있어 스필이 필요 없다
     // 줄 바꿈 칸은 넘치지 않고 자기 칸 안에서 줄을 바꾼다(엑셀과 같다). 가운데 정렬 글자는 양옆 빈 칸으로
     // 고르게, 오른쪽 정렬 글자(숫자 아님)는 왼쪽 빈 칸으로 넘친다.

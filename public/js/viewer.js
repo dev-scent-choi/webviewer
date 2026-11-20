@@ -1414,9 +1414,24 @@ function renderGridViewport() {
   for (let i = 1; i <= colCount; i += 1) totalColWidthPx += colWidthAt(sheet, i);
 
   const rowsHtml = [];
-  for (let r = renderFirst; r <= lastVisible; r += 1) {
+  // 엑셀 "틀 고정" — 위 freezeRows행·왼쪽 freezeCols열은 스크롤해도 붙어 있다(position:sticky). 고정 행은 아래로 스크롤해도
+  // 늘 그리고, 그 높이만큼 표를 덜 내려 그 아래 행들이 제자리에 오게 한다(고정 행이 그 위를 덮는다).
+  const freezeRows = Math.min(sheet.freezeRows || 0, sheet.rowCount);
+  const freezeCols = sheet.freezeCols || 0;
+  const bodyFirst = Math.max(renderFirst, freezeRows + 1);
+  const rowNumbers = [];
+  for (let r = 1; r <= Math.min(freezeRows, renderFirst - 1); r += 1) rowNumbers.push(r);
+  for (let r = renderFirst; r <= lastVisible; r += 1) rowNumbers.push(r);
+  const frozenColLeft = [];
+  for (let c = 1, x = GRID_ROWNUM_W; c <= freezeCols; c += 1) {
+    frozenColLeft[c] = x;
+    x += colWidthAt(sheet, c);
+  }
+  for (const r of rowNumbers) {
     const rowH = layout.height(r - 1);
-    const cells = [`<td class="g-rownum">${rowH > 0 ? r : ''}</td>`];
+    const frozenRow = r <= freezeRows;
+    const rowStick = frozenRow ? `position:sticky;top:${layout.top(r - 1)}px;z-index:4` : '';
+    const cells = [`<td class="g-rownum"${frozenRow ? ` style="${rowStick};z-index:5"` : ''}>${rowH > 0 ? r : ''}</td>`];
     for (let c = 1; c <= colCount; c += 1) {
       // 이 칸을 덮는 병합이 있어도, 그 병합이 degradedMerges에 있으면(위 상한 때문에 앵커를 당겨오지
       // 못한 병합) 이 칸을 "덮인 칸"으로 건너뛰지 않고 아래에서 보통 셀처럼 그린다 — mergeStarts에
@@ -1484,8 +1499,12 @@ function renderGridViewport() {
       const content = value && !hiddenCol && cellH > 0
         ? `<span class="g-cell-spill" style="${boxStyle}${spillStyle ? ';' + spillStyle.slice(8, -1) : ''}">${value}</span>`
         : '';
-      const clsFinal = classes.length > 0 ? ` class="${classes.join(' ')}"` : '';
-      cells.push(`<td data-r="${r}" data-c="${c}"${clsFinal}${span}>${content}</td>`);
+      const colStick = c <= freezeCols ? `position:sticky;left:${frozenColLeft[c]}px;z-index:${frozenRow ? 4 : 3}` : '';
+      // 고정 행·열이 겹치는 왼쪽 위 칸이 맨 위(고정 행의 나머지 칸이 가로로 밀려 와도 그 위에 그려진다)
+      const stick = frozenRow ? (colStick ? `${rowStick};left:${frozenColLeft[c]}px;z-index:6` : rowStick) : colStick;
+      if (stick) classes.push('g-frozen');
+      const clsSticky = classes.length > 0 ? ` class="${classes.join(' ')}"` : '';
+      cells.push(`<td data-r="${r}" data-c="${c}"${clsSticky}${span}${stick ? ` style="${stick}"` : ''}>${content}</td>`);
     }
     rowsHtml.push(`<tr${rowH === 0 ? ' class="g-hidden-row"' : ''} style="height:${rowH}px">${cells.join('')}</tr>`);
   }
@@ -1499,7 +1518,13 @@ function renderGridViewport() {
     if (span && room > 0 && span.scrollWidth > room) span.style.fontSize = `${(parseFloat(getComputedStyle(span).fontSize) * room) / span.scrollWidth}px`;
   }
   table.style.width = `${totalColWidthPx}px`;
-  table.style.transform = `translateY(${layout.top(renderFirst - 1)}px)`;
+  // 고정 행을 앞에 덧붙였으면 그만큼 덜 내린다 — 그래야 bodyFirst행이 제 위치(layout.top)에 온다
+  const prepended = rowNumbers.length > 0 && rowNumbers[0] < renderFirst ? layout.top(Math.min(freezeRows, renderFirst - 1)) : 0;
+  const tableY = layout.top((prepended ? bodyFirst : renderFirst) - 1) - prepended;
+  // 고정 행·열(sticky)은 transform을 모른다(위치 계산이 transform 전 자리 기준) — 틀 고정 시트는 top으로 옮긴다
+  const sticky = freezeRows > 0 || freezeCols > 0;
+  table.style.transform = sticky ? 'none' : `translateY(${tableY}px)`;
+  table.style.top = sticky ? `${tableY}px` : '';
 }
 
 function renderGridHead() {
@@ -1508,10 +1533,20 @@ function renderGridHead() {
   const scroll = document.getElementById('grid-scroll');
   const cells = [`<div class="g-head-cell g-head-corner" style="width:${GRID_ROWNUM_W}px"></div>`];
   for (let c = 1; c <= displayColCount(sheet); c += 1) {
-    cells.push(`<div class="g-head-cell" style="width:${colWidthAt(sheet, c)}px">${colLetter(c)}</div>`);
+    const frozen = c <= (sheet.freezeCols || 0) ? ' g-head-frozen' : '';
+    cells.push(`<div class="g-head-cell${frozen}" style="width:${colWidthAt(sheet, c)}px">${colLetter(c)}</div>`);
   }
   head.innerHTML = `<div class="g-head-track">${cells.join('')}</div>`;
-  head.firstChild.style.transform = `translateX(${-scroll.scrollLeft}px)`;
+  syncGridHead();
+}
+
+/** 열 머리글을 가로 스크롤에 맞춘다 — 틀 고정 열의 머리글은 칸처럼 제자리에 남는다 */
+function syncGridHead() {
+  const track = document.querySelector('.g-head-track');
+  const scroll = document.getElementById('grid-scroll');
+  if (!track || !scroll) return;
+  track.style.transform = `translateX(${-scroll.scrollLeft}px)`;
+  for (const cell of track.querySelectorAll('.g-head-frozen')) cell.style.transform = `translateX(${scroll.scrollLeft}px)`;
 }
 
 /* ==================== 그리드 확대/축소 ====================
@@ -1532,9 +1567,7 @@ function scheduleGridZoomRefit() {
     gridZoomRefitScheduled = false;
     if (gridState.sheets.length === 0) return;
     renderGridViewport();
-    const headTrack = document.querySelector('.g-head-track');
-    const scroll = document.getElementById('grid-scroll');
-    if (headTrack && scroll) headTrack.style.transform = `translateX(${-scroll.scrollLeft}px)`;
+    syncGridHead();
   });
 }
 
@@ -1850,7 +1883,7 @@ async function initGridView() {
     requestAnimationFrame(() => {
       ticking = false;
       renderGridViewport();
-      document.querySelector('.g-head-track').style.transform = `translateX(${-scroll.scrollLeft}px)`;
+      syncGridHead();
     });
   });
 

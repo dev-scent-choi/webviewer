@@ -1329,6 +1329,10 @@ h2 {
   z-index: 2;
 }
 
+/* 틀 고정 칸 — 뒤로 스크롤된 칸이 비치지 않게 불투명(칸 서식 배경 .gsN은 나중에 붙어 이긴다) */
+.g-frozen { background-color: #fff; }
+.g-head-cell.g-head-frozen { position: relative; z-index: 1; background: #f3f4f7; }
+
 /* 읽기 전용 뷰어의 셀 선택 표시 — 수정은 못 해도 "지금 이 칸을 보고 있다"는 참조용
    하이라이트다. 검색 히트(.g-hit-current, 주황/노랑)와 색이 겹치지 않게 문서 종류별
    --v-accent(엑셀은 초록)를 쓴다. */
