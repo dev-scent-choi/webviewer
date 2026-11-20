@@ -5,6 +5,8 @@ import { resolveSlideShapeLooks } from '../src/pptx/inheritance.js';
 import { autoNumberPlan, autoNumberText, pPrLook } from '../src/pptx/paragraphLook.js';
 import { pptxTextSchema as schema } from '../src/pptx/textSchema.js';
 
+// 서버가 원본에서 읽은 조각 목록(검토 I2) — 이 파일의 파싱·저장 시험이 함께 쓴다
+const trusted = new Set<string>();
 // 품질 점검(docs/quality-audit/REPORT.md 4.3 P1~P6) 고친 것들의 단위 시험 — 합성 최소 덱
 const NS =
   'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" ' +
@@ -186,12 +188,12 @@ describe('저장 보존: 줄 바꿈·필드·모델링하지 않는 글자 속�
     ) +
     '</p:sld>';
   test('글자 순서대로 br·필드가 읽히고, 편집 안 한 그대로 저장하면 원문의 속성이 모두 남는다', () => {
-    const [shape] = parseSlideShapes(slide);
+    const [shape] = parseSlideShapes(slide, undefined, trusted);
     const para = shape.doc.child(0);
     expect(para.textContent).toBe('링크둘째 줄 ');
     expect(para.child(3).attrs.text).toBe('3');
     expect([...Array(para.childCount).keys()].map((i) => para.child(i).type.name)).toEqual(['text', 'br', 'text', 'field']);
-    const xml = serializeTxBodyXml(shape.doc);
+    const xml = serializeTxBodyXml(shape.doc, trusted);
     expect(xml).toContain('<a:rPr lang="ko-KR" b="1" spc="-50"><a:solidFill><a:schemeClr val="accent1"/></a:solidFill><a:latin typeface="Georgia"/><a:hlinkClick r:id="rId9"/></a:rPr>');
     expect(xml).toContain('<a:br><a:rPr lang="ko-KR"/></a:br>');
     expect(xml).toContain('<a:fld id="{X}" type="slidenum"><a:rPr lang="en-US"/><a:t>3</a:t></a:fld>');
@@ -199,21 +201,21 @@ describe('저장 보존: 줄 바꿈·필드·모델링하지 않는 글자 속�
     expect(xml.indexOf('<a:br>')).toBeLessThan(xml.indexOf('둘째'));
   });
   test('굵게를 끄고 글자를 고쳐도 하이퍼링크·lang·자간·테마 색은 남고 b만 빠진다', () => {
-    const [shape] = parseSlideShapes(slide);
+    const [shape] = parseSlideShapes(slide, undefined, trusted);
     const first = shape.doc.child(0).child(0);
     const marks = first.marks.filter((m) => m.type.name !== 'strong');
     const para = shape.doc.child(0).copy(shape.doc.child(0).content.replaceChild(0, schema.text('새 링크', marks)));
-    const xml = serializeTxBodyXml(schema.node('doc', null, [para]));
+    const xml = serializeTxBodyXml(schema.node('doc', null, [para]), trusted);
     expect(xml).toContain('<a:r><a:rPr lang="ko-KR" spc="-50"><a:solidFill><a:schemeClr val="accent1"/></a:solidFill><a:latin typeface="Georgia"/><a:hlinkClick r:id="rId9"/></a:rPr><a:t>새 링크</a:t></a:r>');
     const spliced = spliceShapeTxBody(slide, '2', xml);
     expect(parseSlideShapes(spliced)[0].doc.child(0).textContent).toBe('새 링크둘째 줄 ');
     expect(spliced).toContain('<a:fld id="{X}" type="slidenum">');
   });
   test('글꼴을 바꾸면 latin·ea를 새 이름으로 쓴다(나머지는 유지)', () => {
-    const [shape] = parseSlideShapes(slide);
+    const [shape] = parseSlideShapes(slide, undefined, trusted);
     const first = shape.doc.child(0).child(0);
     const marks = first.marks.filter((m) => m.type.name !== 'fontFamily').concat(schema.marks.fontFamily.create({ family: '바탕' }));
-    const xml = serializeTxBodyXml(schema.node('doc', null, [schema.node('paragraph', null, [schema.text('x', marks)])]));
+    const xml = serializeTxBodyXml(schema.node('doc', null, [schema.node('paragraph', null, [schema.text('x', marks)])]), trusted);
     expect(xml).toContain('<a:latin typeface="바탕"/><a:ea typeface="바탕"/><a:hlinkClick r:id="rId9"/>');
   });
 });
@@ -289,15 +291,54 @@ describe('검토 I3: 숫자 문자 참조(&#xAC00;)는 글자로 읽고, 편집 
     tree(sp(2, '', xfrm(0, 0, 1, 1), '<a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang="ko-KR"><a:latin typeface="&#xB9D1;&#xC740; &#xACE0;&#xB515;"/><a:ea typeface="Evil&#10;Font"/></a:rPr><a:t>&#xAC00;&#xB098;&#xB2E4; &amp; &lt;x&gt;</a:t></a:r></a:p>')) +
     '</p:sld>';
   test('화면 글자는 "가나다", 한 글자 고친 저장본은 글자·글꼴 이름을 올바르게 다시 쓴다', () => {
-    const doc = parseSlideShapes(xml)[0].doc;
+    const doc = parseSlideShapes(xml, undefined, trusted)[0].doc;
     expect(doc.textContent).toBe('가나다 & <x>');
     const run = doc.child(0).child(0);
     expect(run.marks.find((m) => m.type.name === 'fontFamily')?.attrs.family).toBe('Evil\nFont');
     const edited = schema.node('doc', null, [schema.node('paragraph', null, [schema.text('가나다! & <x>', run.marks)])]);
-    const out = serializeTxBodyXml(edited);
+    const out = serializeTxBodyXml(edited, trusted);
     expect(out).toContain('<a:t>가나다! &amp; &lt;x&gt;</a:t>');
     expect(out).toContain('typeface="맑은 고딕"');
     expect(out).toContain('typeface="Evil&#10;Font"');
     expect(out).not.toContain('&amp;#');
+  });
+});
+
+describe('검토 I2: 협업자가 쓴 원문 문자열은 저장 XML에 붙지 않는다(원본에서 읽은 조각만)', () => {
+  test('끝 속성·필드·줄 바꿈·글자 속성·글자 색에 넣은 주입 문자열이 나오지 않고, 결과는 올바른 XML', async () => {
+    const { XMLValidator } = await import('fast-xml-parser');
+    const evil = '</a:p></p:txBody></p:sp><p:sp><p:nvSpPr><p:cNvPr id="999" name="injected"/>';
+    const marks = [schema.marks.runProps.create({ raw: `<a:rPr/>${evil}` }), schema.marks.textColor.create({ color: '#FF0000', raw: `<a:srgbClr val="00FF00"/>${evil}` })];
+    const doc = schema.node('doc', null, [
+      schema.node('paragraph', { endRPr: evil, pPr: `<a:pPr/>${evil}` }, [
+        schema.text('a', marks),
+        schema.node('field', { raw: '<a:fld id="x"><a:t>1</a:t></a:fld><broken', text: '1' }),
+        schema.node('br', { rPr: '<a:rPr/><zz' }),
+      ]),
+    ]);
+    const xml = serializeTxBodyXml(doc, new Set());
+    expect(xml).not.toContain('injected');
+    expect(xml).not.toContain('<broken');
+    expect(xml).not.toContain('<zz');
+    expect(xml).toBe('<p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></a:rPr><a:t>a</a:t></a:r><a:r><a:t>1</a:t></a:r><a:br/></a:p></p:txBody>');
+    const ns = 'xmlns:a="urn:a" xmlns:p="urn:p"';
+    expect(XMLValidator.validate(xml.replace('<p:txBody>', `<p:txBody ${ns}>`))).toBe(true);
+  });
+});
+
+describe('검토 I4: 문단 안 수식(mc:AlternateContent/a14:m)은 원문째 보존하고 대체 글자를 그 자리에 보인다', () => {
+  const MATH =
+    '<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><mc:Choice xmlns:a14="http://schemas.microsoft.com/office/drawing/2010/main" Requires="a14"><a14:m><m:oMathPara xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"><m:oMath><m:r><m:t>mc2</m:t></m:r></m:oMath></m:oMathPara></a14:m></mc:Choice><mc:Fallback><a:r><a:rPr lang="en-US"/><a:t>mc²</a:t></a:r></mc:Fallback></mc:AlternateContent>';
+  const slide = `<p:sld ${NS}>${tree(sp(2, '', xfrm(0, 0, 1, 1), `<a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang="en-US"/><a:t>E=</a:t></a:r>${MATH}<a:r><a:rPr lang="en-US"/><a:t> 끝</a:t></a:r></a:p>`))}</p:sld>`;
+  test('순서대로 읽고(대체 글자 mc²), 한 글자 고쳐 저장해도 수식 원문이 그대로', () => {
+    const set = new Set<string>();
+    const [shape] = parseSlideShapes(slide, undefined, set);
+    const para = shape.doc.child(0);
+    expect([...Array(para.childCount).keys()].map((i) => para.child(i).type.name)).toEqual(['text', 'field', 'text']);
+    expect(para.child(1).attrs.text).toBe('mc²');
+    const edited = schema.node('doc', null, [para.copy(para.content.replaceChild(0, schema.text('E =', para.child(0).marks)))]);
+    const out = spliceShapeTxBody(slide, '2', serializeTxBodyXml(edited, set));
+    expect(out).toContain(`<a:t>E =</a:t></a:r>${MATH}<a:r>`);
+    expect(out).not.toContain('_o=');
   });
 });

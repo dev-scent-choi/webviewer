@@ -664,19 +664,22 @@ describe('문단 속성(pPr) 보존: 수준·글머리·간격이 저장에서 �
     XML_TAIL;
 
   test('lvl/buNone/간격을 읽어 표시용 속성으로 노출하고, 재직렬화 시 원문 그대로 + 정렬만 다시 얹는다', () => {
+    const trusted = new Set<string>(); // 서버가 원본에서 읽은 조각만 원문으로 저장된다(검토 I2)
     const [shape] = parseSlideShapes(
       shapeXml(
         '<a:p><a:pPr lvl="1" algn="ctr" marL="742950"><a:spcBef><a:spcPts val="600"/></a:spcBef><a:buNone/></a:pPr><a:r><a:t>하위 항목</a:t></a:r></a:p>' +
           '<a:p><a:pPr><a:buChar char="▶"/></a:pPr><a:r><a:t>화살표</a:t></a:r></a:p>' +
           '<a:p><a:r><a:t>속성 없음</a:t></a:r></a:p>',
       ),
+      undefined,
+      trusted,
     );
     const [p1, p2, p3] = [shape.doc.child(0), shape.doc.child(1), shape.doc.child(2)];
     expect(p1.attrs).toMatchObject({ align: 'ctr', lvl: 1, bu: 'none' });
     expect(p2.attrs).toMatchObject({ lvl: 0, bu: '▶' });
     expect(p3.attrs).toMatchObject({ pPr: null, lvl: 0, bu: null });
 
-    const xml = serializeTxBodyXml(shape.doc);
+    const xml = serializeTxBodyXml(shape.doc, trusted);
     expect(xml).toContain(
       '<a:p><a:pPr algn="ctr" lvl="1" marL="742950"><a:spcBef><a:spcPts val="600"/></a:spcBef><a:buNone/></a:pPr><a:r><a:t>하위 항목</a:t></a:r></a:p>',
     );
@@ -685,9 +688,13 @@ describe('문단 속성(pPr) 보존: 수준·글머리·간격이 저장에서 �
   });
 
   test('보관된 pPr이 있는 문단의 정렬을 바꾸면 algn만 바뀌고 나머지는 유지', () => {
-    const [shape] = parseSlideShapes(shapeXml('<a:p><a:pPr lvl="2" algn="l"><a:buNone/></a:pPr><a:r><a:t>x</a:t></a:r></a:p>'));
+    const trusted = new Set<string>();
+    const [shape] = parseSlideShapes(shapeXml('<a:p><a:pPr lvl="2" algn="l"><a:buNone/></a:pPr><a:r><a:t>x</a:t></a:r></a:p>'), undefined, trusted);
     const para = shape.doc.child(0);
     const changed = schema.node('doc', null, [schema.node('paragraph', { ...para.attrs, align: 'r' }, para.content)]);
-    expect(serializeTxBodyXml(changed)).toContain('<a:pPr algn="r" lvl="2"><a:buNone/></a:pPr>');
+    expect(serializeTxBodyXml(changed, trusted)).toContain('<a:pPr algn="r" lvl="2"><a:buNone/></a:pPr>');
+    // 원본에 없던(협업자가 지어낸) pPr 문자열은 쓰지 않고 수준·정렬만 남긴다
+    const forged = schema.node('doc', null, [schema.node('paragraph', { ...para.attrs, pPr: '<a:pPr><a:buNone/></a:pPr></a:p><a:p>', align: 'r' }, para.content)]);
+    expect(serializeTxBodyXml(forged, trusted)).toContain('<a:p><a:pPr lvl="2" algn="r"/><a:r>');
   });
 });

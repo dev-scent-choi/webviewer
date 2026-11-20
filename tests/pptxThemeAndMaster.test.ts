@@ -127,10 +127,11 @@ describe('글자의 테마 색: 화면엔 풀어서, 저장엔 원본 그대로'
           '</p:txBody></p:sp>',
       ) +
       '</p:sld>';
-    const [shape] = parseSlideShapes(slideXml, loadThemeColors(deck(), 'slide1.xml'));
+    const trusted = new Set<string>();
+    const [shape] = parseSlideShapes(slideXml, loadThemeColors(deck(), 'slide1.xml'), trusted);
     const mark = shape.doc.firstChild!.firstChild!.marks.find((m) => m.type.name === 'textColor')!;
     expect(mark.attrs.color).toBe('#2F5597'); // 4472C4의 75% 밝기
-    expect(serializeTxBodyXml(shape.doc)).toContain(
+    expect(serializeTxBodyXml(shape.doc, trusted)).toContain(
       '<a:solidFill><a:schemeClr val="accent1"><a:lumMod val="75000"/></a:schemeClr></a:solidFill>',
     );
   });

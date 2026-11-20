@@ -69,7 +69,7 @@ function asArray<T>(value: T | T[] | undefined): T[] {
 }
 
 /** <a:rPr>에서 마크(굵게/기울임/밑줄/색/크기)를 뽑아 그 런의 텍스트에 적용한다. */
-function marksFromRPr(rPr: XmlNode | undefined, theme?: ThemeColors, withRaw = true): ReturnType<typeof schema.marks.strong.create>[] {
+function marksFromRPr(rPr: XmlNode | undefined, theme?: ThemeColors, keep?: Keep): ReturnType<typeof schema.marks.strong.create>[] {
   if (!rPr || typeof rPr !== 'object') return [];
   const marks = [];
   if (rPr['@_b'] === '1') marks.push(schema.marks.strong.create());
@@ -83,7 +83,8 @@ function marksFromRPr(rPr: XmlNode | undefined, theme?: ThemeColors, withRaw = t
   } else if (solidFill && typeof solidFill === 'object' && Object.keys(solidFill).length > 0) {
     // 테마 색(schemeClr)·밝기 조정이 붙은 색 등 — 원본 XML을 그대로 보관하고(저장 때 되돌림) 화면엔
     // 테마로 풀어 낸 색을 쓴다. 테마를 모르면(저장 기준선 비교 등) 표시 색 없이 원본만 보관.
-    const raw = xmlBuilder.build(solidFill) as string;
+    const raw = xmlBuilder.build(stripOrder(solidFill)) as string;
+    keep?.(raw);
     marks.push(schema.marks.textColor.create({ color: theme?.resolve(solidFill) ?? '', raw }));
   }
   const sz = rPr['@_sz'] as string | undefined;
@@ -95,34 +96,68 @@ function marksFromRPr(rPr: XmlNode | undefined, theme?: ThemeColors, withRaw = t
     ((rPr['a:latin'] as XmlNode | undefined)?.['@_typeface'] as string | undefined);
   if (typeface && !typeface.startsWith('+')) marks.push(schema.marks.fontFamily.create({ family: typeface }));
   // 모델링하지 않는 글자 속성(lang·자간·하이퍼링크·테마 글꼴 참조 등)까지 저장에 남기도록 원본 rPr 전체를 보관한다
-  if (withRaw) marks.push(schema.marks.runProps.create({ raw: xmlBuilder.build({ 'a:rPr': rPr }) as string }));
+  if (keep) marks.push(schema.marks.runProps.create({ raw: keep(rawXml('a:rPr', rPr)) }));
   return marks;
 }
 
 const ALIGN_VALUES = new Set(['l', 'ctr', 'r', 'just']);
 
-/** 문단 자식(<a:r>·<a:br>·<a:fld>)을 원문 순서대로 — 파서는 이름별로 묶어 순서를 잃으므로 parseSlideShapes가
- * 미리 붙여 둔 순번 속성(ORDER_ATTR)으로 다시 줄 세운다. */
+/** 문단 자식을 원문 순서대로 — 파서는 이름별로 묶어 순서를 잃으므로 parseSlideShapes가 미리 붙여 둔 순번 속성
+ * (ORDER_ATTR)으로 다시 줄 세운다. 원본 조각을 문자열로 되돌릴 때는 이 속성을 깊이까지 지운다(stripOrder). */
 const ORDER_ATTR = '@__o';
-function withoutOrder(node: XmlNode): XmlNode {
-  const { [ORDER_ATTR]: _o, ...rest } = node;
-  return rest;
+function stripOrder(node: unknown): XmlNode {
+  if (Array.isArray(node)) return node.map(stripOrder) as unknown as XmlNode;
+  if (!node || typeof node !== 'object') return node as XmlNode;
+  const out: XmlNode = {};
+  for (const [k, v] of Object.entries(node as XmlNode)) if (k !== ORDER_ATTR) out[k] = typeof v === 'object' ? stripOrder(v) : v;
+  return out;
+}
+const rawXml = (tag: string, node: unknown) => xmlBuilder.build({ [tag]: typeof node === 'object' && node ? stripOrder(node) : {} }) as string;
+
+/**
+ * 원본에서 읽은 조각(XML 문자열)을 "믿을 수 있는 조각" 목록에 올리고 그대로 돌려준다. 저장할 때 이 목록에 있는 문자열만
+ * 원문으로 쓴다 — 문단 속성·글자 속성 등은 Yjs 노드 속성이라 협업자가 아무 문자열이나 넣을 수 있어서, 목록에 없는 값은
+ * XML에 붙이지 않는다(검토 I2: 끝 속성에 `</a:p></p:txBody></p:sp><p:sp>…`를 넣으면 다른 도형이 끼어들었다).
+ */
+export type TrustedFragments = Set<string>;
+type Keep = (xml: string) => string;
+
+/** 이 편집기가 모델링하는 문단 자식 — 그 밖의 자식(수식 mc:AlternateContent/a14:m 등)은 원문째 보존 조각(field 노드) */
+const MODELED_PARAGRAPH_CHILDREN = new Set(['a:pPr', 'a:r', 'a:br', 'a:fld', 'a:endParaRPr']);
+
+/** 보존 조각의 화면 글자 — 대체 표시(mc:Fallback)가 있으면 그 안 글자, 없으면 안의 모든 a:t·m:t 글자 */
+function fragmentText(node: unknown): string {
+  if (!node || typeof node !== 'object') return '';
+  const n = node as XmlNode;
+  if (n['mc:Fallback'] !== undefined) return fragmentText(n['mc:Fallback']);
+  let out = '';
+  for (const [k, v] of Object.entries(n)) {
+    if (k.startsWith('@_')) continue;
+    if (k === 'a:t' || k === 'm:t') out += asArray(v as unknown).map((t) => (typeof t === 'object' && t ? String((t as XmlNode)['#text'] ?? '') : String(t))).join('');
+    else for (const child of asArray(v as unknown)) out += fragmentText(child);
+  }
+  return out;
 }
 
-function paragraphFromXml(pNode: XmlNode, theme?: ThemeColors): PMNode {
-  const items = (['a:r', 'a:br', 'a:fld'] as const)
-    .flatMap((tag) => asArray<XmlNode>(pNode[tag] as XmlNode | XmlNode[] | undefined).map((node) => ({ tag, node: typeof node === 'object' ? node : {} })))
-    .sort((a, b) => Number(a.node[ORDER_ATTR] ?? 0) - Number(b.node[ORDER_ATTR] ?? 0));
+function paragraphFromXml(pNode: XmlNode, theme: ThemeColors | undefined, keep: Keep): PMNode {
+  const items = Object.keys(pNode)
+    .filter((tag) => !tag.startsWith('@_') && tag !== '#text' && tag !== 'a:pPr' && tag !== 'a:endParaRPr')
+    .flatMap((tag) => asArray<XmlNode>(pNode[tag] as XmlNode | XmlNode[] | undefined).map((node) => ({ tag, node: typeof node === 'object' && node ? node : {} })))
+    .sort((a, b) => Number(a.node[ORDER_ATTR] ?? Infinity) - Number(b.node[ORDER_ATTR] ?? Infinity));
   const inline = items
     .map(({ tag, node }) => {
       if (tag === 'a:br') {
         const rPr = node['a:rPr'];
-        return schema.nodes.br.create({ rPr: rPr && typeof rPr === 'object' ? (xmlBuilder.build({ 'a:rPr': rPr }) as string) : null });
+        return schema.nodes.br.create({ rPr: rPr && typeof rPr === 'object' ? keep(rawXml('a:rPr', rPr)) : null });
+      }
+      // 필드(쪽 번호 등)와 이 편집기가 모르는 문단 자식(수식 등)은 원문째 보존하고 저장된 값/대체 글자를 보인다(검토 I4)
+      if (tag === 'a:fld' || !MODELED_PARAGRAPH_CHILDREN.has(tag)) {
+        const text = tag === 'a:fld' ? String((node['a:t'] as string | number | undefined) ?? '') : fragmentText(node);
+        return schema.nodes.field.create({ raw: keep(rawXml(tag, node)), text });
       }
       const textStr = String((node['a:t'] as string | number | undefined) ?? '');
-      if (tag === 'a:fld') return schema.nodes.field.create({ raw: xmlBuilder.build({ 'a:fld': withoutOrder(node) }) as string, text: textStr });
       if (textStr === '') return null;
-      return schema.text(textStr, marksFromRPr(node['a:rPr'] as XmlNode | undefined, theme));
+      return schema.text(textStr, marksFromRPr(node['a:rPr'] as XmlNode | undefined, theme, keep));
     })
     .filter((n): n is NonNullable<typeof n> => n !== null);
   const endRPr = pNode['a:endParaRPr'];
@@ -135,10 +170,10 @@ function paragraphFromXml(pNode: XmlNode, theme?: ThemeColors): PMNode {
     'paragraph',
     {
       align: algn && ALIGN_VALUES.has(algn) ? algn : null,
-      pPr: pPr ? pPrXmlWithoutAlgn(pPr) : null,
+      pPr: pPr ? keep(pPrXmlWithoutAlgn(pPr)) : null,
       lvl: Number.isInteger(lvl) && lvl >= 0 && lvl <= 8 ? lvl : 0,
       bu: bullet === null ? 'none' : (bullet ?? null),
-      endRPr: endRPr !== undefined ? (xmlBuilder.build({ 'a:endParaRPr': typeof endRPr === 'object' ? endRPr : {} }) as string) : null,
+      endRPr: endRPr !== undefined ? keep(rawXml('a:endParaRPr', endRPr)) : null,
     },
     inline,
   );
@@ -148,16 +183,19 @@ function paragraphFromXml(pNode: XmlNode, theme?: ThemeColors): PMNode {
  * 순서는 파서가 문서 순서대로 담아 두므로 스키마 순서(lnSpc, spcBef, …, buChar, defRPr)가 유지된다. */
 function pPrXmlWithoutAlgn(pPr: XmlNode): string {
   const { '@_algn': _algn, ...rest } = pPr;
-  return xmlBuilder.build({ 'a:pPr': rest }) as string;
+  return rawXml('a:pPr', rest);
 }
 
-/** 저장할 <a:pPr>: 보관해 둔 원본(algn 제외)에 현재 정렬만 다시 얹는다. */
-function pPrXmlFor(paragraph: PMNode): string {
+/** 저장할 <a:pPr>: 보관해 둔 원본(algn 제외, 믿을 수 있는 조각일 때만)에 현재 정렬만 다시 얹는다. 원본을 못 쓰면
+ * 수준(lvl)과 정렬만. */
+function pPrXmlFor(paragraph: PMNode, trusted: TrustedFragments): string {
   const align = paragraph.attrs.align as string | null;
   const raw = paragraph.attrs.pPr as string | null;
-  const algnAttr = align ? ` algn="${align}"` : '';
-  if (raw && raw.startsWith('<a:pPr')) return raw.replace(/^<a:pPr/, `<a:pPr${algnAttr}`);
-  return align ? `<a:pPr${algnAttr}/>` : '';
+  const algnAttr = align && ALIGN_VALUES.has(align) ? ` algn="${align}"` : '';
+  if (raw && trusted.has(raw) && raw.startsWith('<a:pPr')) return raw.replace(/^<a:pPr/, `<a:pPr${algnAttr}`);
+  const lvl = Number(paragraph.attrs.lvl);
+  const lvlAttr = Number.isInteger(lvl) && lvl > 0 && lvl <= 8 ? ` lvl="${lvl}"` : '';
+  return algnAttr || lvlAttr ? `<a:pPr${lvlAttr}${algnAttr}/>` : '';
 }
 
 function emuAttr(xfrmChild: XmlNode | undefined, attr: '@_x' | '@_y' | '@_cx' | '@_cy'): number | null {
@@ -273,7 +311,8 @@ function collectShapesRecursive(
   node: XmlNode,
   transforms: readonly GroupTransform[],
   shapes: ParsedShape[],
-  theme?: ThemeColors,
+  theme: ThemeColors | undefined,
+  keep: Keep,
 ): void {
   for (const sp of asArray<XmlNode>(node['p:sp'] as XmlNode | XmlNode[] | undefined)) {
     const txBody = sp['p:txBody'] as XmlNode | undefined;
@@ -286,7 +325,7 @@ function collectShapesRecursive(
     const place = placeXfrm(transforms, spPr?.['a:xfrm'] as XmlNode | undefined);
     const geom = (spPr?.['a:prstGeom'] as XmlNode | undefined)?.['@_prst'];
 
-    const paragraphs = asArray<XmlNode>(txBody['a:p'] as XmlNode | XmlNode[] | undefined).map((p) => paragraphFromXml(p, theme));
+    const paragraphs = asArray<XmlNode>(txBody['a:p'] as XmlNode | XmlNode[] | undefined).map((p) => paragraphFromXml(p, theme, keep));
     const doc = schema.node(
       'doc',
       null,
@@ -308,8 +347,28 @@ function collectShapesRecursive(
   for (const grp of asArray<XmlNode>(node['p:grpSp'] as XmlNode | XmlNode[] | undefined)) {
     const groupTransform = groupTransformFromGrpSpPr(grp['p:grpSpPr'] as XmlNode | undefined);
     const nextTransforms = groupTransform ? [...transforms, groupTransform] : transforms;
-    collectShapesRecursive(grp, nextTransforms, shapes, theme);
+    collectShapesRecursive(grp, nextTransforms, shapes, theme, keep);
   }
+}
+
+/** 문단(<a:p>) 바로 아래 자식 여는 태그마다 원문 순번(_o)을 붙인 파싱용 사본 — paragraphFromXml이 이 순서로 줄 세운다
+ * (자식 종류를 미리 알 수 없다: 수식 mc:AlternateContent 등). 원문 조각으로 되돌릴 때 stripOrder가 지운다. */
+function tagParagraphChildOrder(xml: string): string {
+  let order = 0;
+  return xml.replace(/(<a:p(?:\s[^>]*)?>)([\s\S]*?)(<\/a:p>)/g, (_m, open: string, inner: string, close: string) => {
+    let depth = 0;
+    const tagged = inner.replace(/<(\/?)([A-Za-z][\w.:-]*)([^>]*?)(\/?)>/g, (tag, slash: string, name: string, rest: string, selfClose: string) => {
+      if (name.startsWith('?') || name.startsWith('!')) return tag;
+      if (slash) {
+        depth -= 1;
+        return tag;
+      }
+      const out = depth === 0 ? `<${name} _o="${order++}"${rest}${selfClose}>` : tag;
+      if (!selfClose) depth += 1;
+      return out;
+    });
+    return open + tagged + close;
+  });
 }
 
 /** pptx 슬라이드 XML(p:sld) 안의 각 텍스트 도형(p:sp)을 위치 정보 + ProseMirror 문서로 파싱한다.
@@ -318,14 +377,16 @@ function collectShapesRecursive(
  * 재질서(저장 시 position은 쓰지 않으므로, hasShape/spliceShapeTxBody/removeShape의 원본 XML
  * 텍스트 기반 매칭은 이 중첩 여부와 무관하게 이미 그대로 동작한다, 이 함수만 읽기 전용으로 몰랐을
  * 뿐이다). */
-export function parseSlideShapes(slideXml: string, theme?: ThemeColors): ParsedShape[] {
-  // 문단 안 <a:r>·<a:br>·<a:fld>의 원문 순서를 남긴다(paragraphFromXml 참고) — 파싱용 사본에만 붙는 속성
-  let order = 0;
-  const parsed = parser.parse(slideXml.replace(/<a:(r|br|fld)(?=[\s>/])/g, (_m, tag: string) => `<a:${tag} _o="${order++}"`)) as XmlNode;
+export function parseSlideShapes(slideXml: string, theme?: ThemeColors, trusted: TrustedFragments = new Set()): ParsedShape[] {
+  const parsed = parser.parse(tagParagraphChildOrder(slideXml)) as XmlNode;
+  const keep: Keep = (xml) => {
+    trusted.add(xml);
+    return xml;
+  };
   const sld = parsed['p:sld'] as XmlNode;
   const spTree = (sld['p:cSld'] as XmlNode)['p:spTree'] as XmlNode;
   const shapes: ParsedShape[] = [];
-  collectShapesRecursive(spTree, [], shapes, theme);
+  collectShapesRecursive(spTree, [], shapes, theme, keep);
   return shapes;
 }
 
@@ -340,11 +401,11 @@ function escapeXmlText(text: string): string {
 const RPR_CHILD_ORDER = ['a:ln', 'a:noFill', 'a:solidFill', 'a:gradFill', 'a:blipFill', 'a:pattFill', 'a:grpFill', 'a:effectLst', 'a:effectDag', 'a:highlight', 'a:uLnTx', 'a:uLn', 'a:uFillTx', 'a:uFill', 'a:latin', 'a:ea', 'a:cs', 'a:sym', 'a:hlinkClick', 'a:hlinkMouseOver', 'a:rtl', 'a:extLst'];
 const FILL_TAGS = ['a:noFill', 'a:solidFill', 'a:gradFill', 'a:blipFill', 'a:pattFill', 'a:grpFill'];
 
-function mergedRPrXml(raw: string, node: PMNode): string {
+function mergedRPrXml(raw: string, node: PMNode, trusted: TrustedFragments): string {
   const parsedRoot = parser.parse(raw) as XmlNode;
   const original = parsedRoot['a:rPr'];
   const rPr: XmlNode = original && typeof original === 'object' ? { ...(original as XmlNode) } : {};
-  const before = marksFromRPr(rPr, undefined, false);
+  const before = marksFromRPr(rPr, undefined);
   const now = (name: string) => node.marks.find((m) => m.type.name === name);
   const was = (name: string) => before.find((m) => m.type.name === name);
   const toggle = (name: string, attr: string, on: string) => {
@@ -365,7 +426,7 @@ function mergedRPrXml(raw: string, node: PMNode): string {
   const sameColor = color && oldColor ? (color.attrs.raw ? color.attrs.raw === oldColor.attrs.raw : !oldColor.attrs.raw && color.attrs.color === oldColor.attrs.color) : !color && !oldColor;
   if (!sameColor) {
     for (const tag of FILL_TAGS) delete rPr[tag];
-    if (color) Object.assign(rPr, (parser.parse(`<w>${solidFillXml(color)}</w>`) as XmlNode).w as XmlNode);
+    if (color) Object.assign(rPr, (parser.parse(`<w>${solidFillXml(color, trusted)}</w>`) as XmlNode).w as XmlNode);
   }
   const family = now('fontFamily')?.attrs.family as string | undefined;
   if (family !== (was('fontFamily')?.attrs.family as string | undefined)) {
@@ -381,15 +442,16 @@ function mergedRPrXml(raw: string, node: PMNode): string {
 }
 
 /** 글자 색 마크 → <a:solidFill>(원본 테마 색이면 그대로, 새로 고른 색이면 RGB). 쓸 수 없는 값이면 '' */
-function solidFillXml(colorMark: { attrs: Record<string, unknown> }): string {
-  if (colorMark.attrs.raw) return `<a:solidFill>${colorMark.attrs.raw as string}</a:solidFill>`;
+function solidFillXml(colorMark: { attrs: Record<string, unknown> }, trusted: TrustedFragments): string {
+  const raw = colorMark.attrs.raw as string | null;
+  if (raw && trusted.has(raw)) return `<a:solidFill>${raw}</a:solidFill>`;
   const hex = colorMark.attrs.color as string;
   return /^#[0-9A-Fa-f]{6}$/.test(hex) ? `<a:solidFill><a:srgbClr val="${hex.replace('#', '').toUpperCase()}"/></a:solidFill>` : '';
 }
 
-function rPrXmlFor(node: PMNode): string {
+function rPrXmlFor(node: PMNode, trusted: TrustedFragments): string {
   const runProps = node.marks.find((m) => m.type.name === 'runProps');
-  if (runProps) return mergedRPrXml(runProps.attrs.raw as string, node);
+  if (runProps && trusted.has(runProps.attrs.raw as string)) return mergedRPrXml(runProps.attrs.raw as string, node, trusted);
   const b = node.marks.some((m) => m.type.name === 'strong') ? ' b="1"' : '';
   const i = node.marks.some((m) => m.type.name === 'em') ? ' i="1"' : '';
   const u = node.marks.some((m) => m.type.name === 'underline') ? ' u="sng"' : '';
@@ -400,7 +462,7 @@ function rPrXmlFor(node: PMNode): string {
   const attrs = `${b}${i}${u}${sz}`;
   // CT_TextCharacterProperties의 자식 순서: ... solidFill ... latin, ea, cs ... (스키마상 고정)
   // 원본 테마 색(raw)이 있으면 그대로 되돌리고, 리본으로 새로 고른 색이면 RGB로 쓴다.
-  const fill = colorMark ? solidFillXml(colorMark) : '';
+  const fill = colorMark ? solidFillXml(colorMark, trusted) : '';
   const face = familyMark
     ? (() => {
         const name = escapeXmlAttr(familyMark.attrs.family as string);
@@ -416,26 +478,34 @@ function escapeXmlAttr(text: string): string {
   return escapeXmlText(text).replace(/"/g, '&quot;');
 }
 
-export function serializeTxBodyXml(doc: PMNode): string {
+/**
+ * 글상자 문서를 <p:txBody>로. trusted = 이 방(문서)에서 서버가 원본 파일로부터 읽은 조각 목록(parseSlideShapes가 채움) —
+ * 문단·글자 속성, 줄 바꿈 속성, 필드·수식 등 보존 조각, 문단 끝 속성은 목록에 있는 원문일 때만 그대로 쓰고, 아니면
+ * 모델링한 값만(필드·수식은 보이는 글자만) 쓴다(검토 I2).
+ */
+export function serializeTxBodyXml(doc: PMNode, trusted: TrustedFragments = new Set()): string {
+  const ok = (raw: unknown): raw is string => typeof raw === 'string' && trusted.has(raw);
   const paragraphsXml: string[] = [];
   doc.forEach((paragraph) => {
     const runsXml: string[] = [];
     paragraph.forEach((child) => {
       if (child.type.name === 'br') {
         const rPr = child.attrs.rPr as string | null;
-        runsXml.push(rPr ? `<a:br>${rPr}</a:br>` : '<a:br/>');
+        runsXml.push(ok(rPr) ? `<a:br>${rPr}</a:br>` : '<a:br/>');
         return;
       }
       if (child.type.name === 'field') {
-        runsXml.push(child.attrs.raw as string);
+        const raw = child.attrs.raw;
+        if (ok(raw)) runsXml.push(raw);
+        else if (child.attrs.text) runsXml.push(`<a:r><a:t>${escapeXmlText(String(child.attrs.text))}</a:t></a:r>`);
         return;
       }
       if (!child.isText || !child.text) return;
-      const rPr = rPrXmlFor(child);
+      const rPr = rPrXmlFor(child, trusted);
       runsXml.push(`<a:r>${rPr}<a:t>${escapeXmlText(child.text)}</a:t></a:r>`);
     });
-    const endRPr = (paragraph.attrs.endRPr as string | null) ?? '';
-    paragraphsXml.push(`<a:p>${pPrXmlFor(paragraph)}${runsXml.join('')}${endRPr}</a:p>`);
+    const endRPr = ok(paragraph.attrs.endRPr) ? paragraph.attrs.endRPr : '';
+    paragraphsXml.push(`<a:p>${pPrXmlFor(paragraph, trusted)}${runsXml.join('')}${endRPr}</a:p>`);
   });
   // CT_TextBody(OOXML 스키마)는 <a:p>가 최소 1개 있어야 한다(minOccurs="1") — 문단이 하나도 없는
   // <p:txBody>는 PowerPoint가 열 수 없는 손상된 파일이다(FINAL REVIEW C2). pptxTextSchema는

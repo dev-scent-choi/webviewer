@@ -83,7 +83,9 @@ const nodes: Record<string, NodeSpec> = {
     parseDOM: [{ tag: 'br' }],
     toDOM: () => ['br'],
   },
-  /** 필드(<a:fld> — 쪽 번호·날짜 등): 원본 XML(raw)을 통째로 보관해 저장 때 그대로 되돌리고, 화면엔 저장된 값(text)을 보인다. */
+  /** 보존 조각 — 필드(<a:fld> 쪽 번호·날짜)와 이 편집기가 모르는 문단 자식(수식 mc:AlternateContent 등): 원본 XML(raw)을
+   * 통째로 보관해 저장 때 그대로 되돌리고(서버가 원본에서 읽은 조각일 때만 — slideContent.ts TrustedFragments), 화면엔
+   * 저장된 값·대체 글자(text)를 보인다. 한 덩어리로 지우거나 옮길 수는 있어도 안을 고칠 수는 없다. */
   field: {
     inline: true,
     group: 'inline',

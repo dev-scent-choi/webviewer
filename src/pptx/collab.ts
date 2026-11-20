@@ -13,6 +13,7 @@ import {
   serializeTxBodyXml,
   spliceShapeTxBody,
   setShapeSolidFill,
+  type TrustedFragments,
 } from './slideContent.js';
 import type { ParsedShape } from './slideContent.js';
 import { pptxTextSchema } from './textSchema.js';
@@ -226,6 +227,24 @@ export type SlideContentsMap = Y.Map<PerSlideContentsMap>;
  * 여러 개여도 피어에게는 여전히 하나의 원자적 업데이트로만 보이게 하기 위함이다(각 .set()이
  * 개별 트랜잭션이 되어 도형별로 쪼개진 업데이트가 나가는 것을 막는다).
  */
+/**
+ * 방(Y.Doc)마다 "서버가 원본 파일에서 읽은 원문 조각" 목록 — 문단·글자 속성, 필드·수식 등(slideContent.ts TrustedFragments).
+ * 저장 때 Yjs 노드 속성의 원문 문자열은 이 목록에 있을 때만 XML에 붙는다(협업자가 쓴 임의 문자열 차단, 검토 I2).
+ * 방이 살아 있는 동안 쌓기만 하고 비우지 않는다 — 저장 직후 파일로 다시 만들면, 저장 전에 지웠다가 되돌리기로 살린 조각이
+ * 목록에서 빠져 사라진다(DOCX 갈래가 겪은 데이터 손실과 같은 함정). 방(Y.Doc)이 사라지면 함께 사라진다.
+ */
+const trustedByDoc = new WeakMap<object, TrustedFragments>();
+export function trustedFragmentsOf(slideContents: SlideContentsMap | undefined): TrustedFragments {
+  const key = slideContents?.doc;
+  if (!key) return new Set();
+  let set = trustedByDoc.get(key);
+  if (!set) {
+    set = new Set();
+    trustedByDoc.set(key, set);
+  }
+  return set;
+}
+
 export function seedSlideContentFromXml(
   slideContents: SlideContentsMap,
   slideEntryId: string,
@@ -242,7 +261,7 @@ export function seedSlideContentFromXml(
   } catch {
     theme = undefined;
   }
-  const shapes = parseSlideShapes(slideXml, theme);
+  const shapes = parseSlideShapes(slideXml, theme, trustedFragmentsOf(slideContents));
   // 레이아웃·마스터 상속(표시 전용) — 어떤 이유로든 실패해도 시딩 자체는 예전처럼 진행한다.
   let looks = new Map<string, InheritedShapeLook>();
   try {
@@ -545,6 +564,8 @@ export function exportPptxFromSlides(
     // sourceSlidePart를 가리키는 entry가 여러 개(원본 + 그 복제본들)일 수 있으므로 파트 이름
     // 기준으로 캐시해 중복 파싱을 피한다.
     const baselineShapesCache = new Map<string, Map<string, ParsedShape>>();
+    // 저장에 원문으로 쓸 수 있는 조각 = 이 방에서 서버가 파일로부터 읽은 조각(시딩 + 지금 baseline 파싱이 더한다)
+    const trusted = trustedFragmentsOf(slideContents);
     const getBaselineShapes = (sourceSlidePart: string): Map<string, ParsedShape> => {
       let cached = baselineShapesCache.get(sourceSlidePart);
       if (!cached) {
@@ -554,7 +575,7 @@ export function exportPptxFromSlides(
         // 있다(둘 다 같은 sourceSlidePart를 참조하니까). originalZipEntries는 저장 시작 시점의
         // 스냅샷이라 이런 순서 의존성이 없다.
         const xml = originalZipEntries[`ppt/slides/${sourceSlidePart}`];
-        const shapes = xml ? parseSlideShapes(strFromU8(xml)) : [];
+        const shapes = xml ? parseSlideShapes(strFromU8(xml), undefined, trusted) : [];
         cached = new Map(shapes.map((shape) => [shape.shapeId, shape]));
         baselineShapesCache.set(sourceSlidePart, cached);
       }
@@ -589,7 +610,7 @@ export function exportPptxFromSlides(
         if (!(fragment instanceof Y.XmlFragment)) continue; // 위와 같은 이유 — 진짜 콘텐츠가 아니었음
 
         const doc = yXmlFragmentToProseMirrorRootNode(fragment, pptxTextSchema);
-        const txBodyXml = serializeTxBodyXml(doc);
+        const txBodyXml = serializeTxBodyXml(doc, trusted);
 
         // 실제로 편집된 도형만 병합한다 — baseline(원본 XML을 다시 파싱해 같은 스키마로 직렬화한
         // 결과)과 지금 값이 완전히 같으면(=사용자가 이 도형은 한 번도 안 건드렸으면) 병합 자체를
@@ -602,7 +623,7 @@ export function exportPptxFromSlides(
         // 없던 id) 비교할 대상이 없으니 항상 편집된 것으로 보고 병합을 계속한다.
         if (baselineShapes) {
           const baselineShape = baselineShapes.get(shapeId);
-          if (baselineShape && serializeTxBodyXml(baselineShape.doc) === txBodyXml) {
+          if (baselineShape && serializeTxBodyXml(baselineShape.doc, trusted) === txBodyXml) {
             // 글자는 그대로 — 리본 "도형 채우기"로 색만 바꿨으면 그 채우기만 반영하고, 아니면 원본 그대로 둔다
             const fillOnly = (shapeMap.get('meta') as SlideShapeMeta | undefined)?.fill;
             if (typeof fillOnly === 'string' && /^#[0-9A-Fa-f]{6}$/.test(fillOnly) && hasShape(slideXml, shapeId)) {
