@@ -13,7 +13,7 @@
  * - 수식 엔진이 칸마다 큰 범위를 읽어야 하는 규칙은 미리 어림해 예산을 넘으면 건너뛴다.
  * TODAY()·NOW()가 든 규칙이 있으면 구운 날짜(cfDay)를 그리드에 적어, 날짜가 바뀌면 보기 화면이 그리드를 다시 만든다.
  */
-import { strFromU8, unzipSync } from 'fflate';
+import { strFromU8, unzip } from 'fflate';
 import {
   cfIsVolatile,
   cfRowSweeper,
@@ -69,20 +69,48 @@ function quantize(hex: string): string {
 }
 
 /** 시트 이름 → 그 시트의 조건부 서식(우선순위 순) */
-function condFormatsBySheet(xlsx: Uint8Array): Map<string, CondFormatEntry[]> {
-  const entries = unzipSync(xlsx, {
-    filter: (f) => f.name === 'xl/workbook.xml' || f.name === 'xl/_rels/workbook.xml.rels' || f.name === 'xl/styles.xml' || f.name === 'xl/theme/theme1.xml' || f.name.startsWith('xl/worksheets/sheet'),
-  });
+async function condFormatsBySheet(xlsx: Uint8Array): Promise<Map<string, CondFormatEntry[]>> {
+  // 시트 XML(큰 파일은 수십 MB)은 다른 스레드에서 푼다 — 그동안 이 서버의 다른 요청이 멈추지 않게
+  const entries = await new Promise<Record<string, Uint8Array>>((resolve, reject) =>
+    unzip(
+      xlsx,
+      {
+        filter: (f) => f.name === 'xl/workbook.xml' || f.name === 'xl/_rels/workbook.xml.rels' || f.name === 'xl/styles.xml' || f.name === 'xl/theme/theme1.xml' || f.name.startsWith('xl/worksheets/sheet'),
+      },
+      (err, data) => (err ? reject(err) : resolve(data)),
+    ),
+  );
   const themeColors = parseThemeColors(entries['xl/theme/theme1.xml'] ? strFromU8(entries['xl/theme/theme1.xml']) : undefined);
   const dxfs = parseDxfs(entries['xl/styles.xml'] ? strFromU8(entries['xl/styles.xml']) : undefined, themeColors);
   const out = new Map<string, CondFormatEntry[]>();
   for (const [name, path] of sheetPathsByName(entries)) {
-    const xml = entries[path] ? strFromU8(entries[path]) : '';
+    await yieldToEventLoop();
+    // 조건부 서식은 시트 데이터 뒤에 있다 — 큰 시트를 통째로 글자로 바꾸지 않고 뒤쪽만 본다
+    const bytes = entries[path];
+    if (!bytes) continue;
+    const tail = bytes.subarray(Math.max(0, lastSheetDataEnd(bytes)));
+    const xml = strFromU8(tail);
     if (!xml.includes('onditionalFormatting')) continue;
     const list = parseCondFormats(xml, dxfs, themeColors).filter((e) => e.rule.t !== 'other');
     if (list.length > 0) out.set(name, list);
   }
   return out;
+}
+
+/** 시트 XML 바이트에서 </sheetData>가 끝나는 곳(없으면 0) — 그 뒤(조건부 서식·확장)만 글자로 바꾼다 */
+function lastSheetDataEnd(bytes: Uint8Array): number {
+  const needle = [60, 47, 115, 104, 101, 101, 116, 68, 97, 116, 97, 62]; // "</sheetData>"
+  for (let i = bytes.length - needle.length; i >= 0; i -= 1) {
+    let ok = true;
+    for (let k = 0; k < needle.length; k += 1) {
+      if (bytes[i + k] !== needle[k]) {
+        ok = false;
+        break;
+      }
+    }
+    if (ok) return i + needle.length;
+  }
+  return 0;
 }
 
 /** 구운 결과를 칸 서식에 얹은 서식 */
@@ -234,7 +262,7 @@ export async function bakeSheetCondFormats(
 
 /** 그리드에 파일의 조건부 서식을 입힌 사본(규칙이 없으면 그대로) */
 export async function bakeCondFormats(grid: GridDocument, xlsx: Uint8Array): Promise<GridDocument> {
-  const bySheet = condFormatsBySheet(xlsx);
+  const bySheet = await condFormatsBySheet(xlsx);
   if (bySheet.size === 0) return grid;
   const styles = [...grid.styles];
   const registry = styleRegistry(styles);
