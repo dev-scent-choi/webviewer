@@ -33,7 +33,8 @@ for (const [id, entry] of Object.entries(excelBuiltinNumFmts as Record<string, {
 }
 for (const [id, f] of Object.entries(KO_BUILTIN_NUMFMTS)) (excelBuiltinNumFmts as Record<string, { f?: string }>)[id] ??= { f };
 import type { BorderSpec } from './collab/cellBoxCss.js';
-import { stripDrawings } from './xlsx/drawingPassthrough.js';
+import { sheetPathsByName, stripDrawings } from './xlsx/drawingPassthrough.js';
+import { sheetTablesOf, tableCellLook, withTableLook } from './xlsx/tableStyles.js';
 import { unzipSync, strFromU8 } from 'fflate';
 import {
   EXCEL_DEFAULT_FONT_PX,
@@ -865,7 +866,14 @@ export async function parseXlsxToGrid(xlsxBytes: Buffer): Promise<GridDocument> 
   // 사용자뿐 아니라 그 순간 서버에 접속한 다른 모든 사용자·다른 문서 요청까지 함께 멈추지 않도록
   // 주기적으로 양보한다.
   // 열 너비 단위의 기준 — 통합 문서 기본 글꼴(표준 스타일)의 숫자 폭
-  const stylesPart = unzipSync(new Uint8Array(xlsxBytes), { filter: (file) => file.name === 'xl/styles.xml' })['xl/styles.xml'];
+  // 스타일·시트 관계·표 파트(엑셀 표의 표 스타일)만 푼다
+  const parts = unzipSync(new Uint8Array(xlsxBytes), {
+    filter: (file) =>
+      file.name === 'xl/styles.xml' || file.name === 'xl/workbook.xml' || file.name === 'xl/_rels/workbook.xml.rels' ||
+      file.name.startsWith('xl/tables/') || /^xl\/worksheets\/(_rels\/)?sheet\d+\.xml(\.rels)?$/.test(file.name),
+  });
+  const stylesPart = parts['xl/styles.xml'];
+  const sheetPaths = sheetPathsByName(parts);
   const defaultFont = defaultFontOfStylesXml(stylesPart ? strFromU8(stylesPart) : undefined);
   const mdw = maxDigitWidthPx(defaultFont.name, defaultFont.size);
   for (const sheet of workbook.worksheets) {
@@ -965,6 +973,22 @@ export async function parseXlsxToGrid(xlsxBytes: Buffer): Promise<GridDocument> 
       lastWithValue -= 1;
     }
     rows.length = lastWithValue;
+
+    // 엑셀 표의 표 스타일(머리 줄 색·줄무늬·요약 행) — 칸에 직접 준 서식이 이긴다
+    const sheetPath = sheetPaths.get(sheet.name);
+    for (const table of sheetPath ? sheetTablesOf(parts, sheetPath) : []) {
+      for (let r = table.r0; r <= Math.min(table.r1, rows.length - 1); r += 1) {
+        const cells = rows[r];
+        for (let c = table.c0; c <= Math.min(table.c1, colCount - 1); c += 1) {
+          const look = tableCellLook(table, r, c, themeColors);
+          if (!look) continue;
+          const cell = cells[c];
+          const base: GridStyle = cell === 0 || cell.s === undefined ? {} : palette.toArray()[cell.s];
+          const s = palette.register(withTableLook(base, look));
+          cells[c] = cell === 0 ? (s === undefined ? 0 : { v: '', s }) : s === undefined ? { v: cell.v, ...(cell.n !== undefined ? { n: cell.n } : {}) } : { ...cell, s };
+        }
+      }
+    }
 
     const merges = (
       (sheet.model as { merges?: readonly string[] }).merges ?? []
