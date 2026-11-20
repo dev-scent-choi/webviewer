@@ -328,16 +328,16 @@ describe('3차 검토(m4·Minor 5)', () => {
 
   test('m4: 원본에 있던 변경 추적 삽입 감싸개만 저장 — 지어낸 작성자는 빼고 글자만', () => {
     const original = withBody(tracked);
-    const { doc, pageSetup, fragments } = importDocx(original);
+    const { doc, fragments } = importDocx(original);
     const text = nodesOf(doc, (n) => n.isText)[0];
     const wrap = text.marks.find((m) => m.type.name === 'wrap')!;
     // 그대로 저장하면 감싸개가 남는다
-    const kept = strFromU8(unzipSync(exportDocx(original, doc, pageSetup, [], fragments))['word/document.xml']);
+    const kept = strFromU8(unzipSync(exportDocx(original, doc, null, [], fragments))['word/document.xml']);
     expect(kept).toContain('w:author="원래 작성자"');
     // 다른 참여자가 작성자를 바꾼 감싸개(Yjs로 온 값)는 저장하지 않는다 — 글자는 남는다
     const forgedMark = wrap.type.create({ ...wrap.attrs, attrs: { ...(wrap.attrs.attrs as object), 'w:author': '가짜 작성자' } });
     const forged = doc.copy(doc.content.replaceChild(0, doc.firstChild!.copy(doc.firstChild!.content.replaceChild(0, text.mark([forgedMark])))));
-    const xml = strFromU8(unzipSync(exportDocx(original, forged, pageSetup, [], fragments))['word/document.xml']);
+    const xml = strFromU8(unzipSync(exportDocx(original, forged, null, [], fragments))['word/document.xml']);
     expect(xml).not.toContain('가짜 작성자');
     expect(xml).not.toContain('<w:ins');
     expect(xml).toContain('추적 삽입');

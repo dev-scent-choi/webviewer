@@ -284,6 +284,107 @@ try {
     rec('I1 글꼴 이름 CSS 주입 막힘', colors.length > 0 && colors.every((c) => c !== 'rgb(255, 0, 0)'), colors.slice(0, 3).join(' '));
     await page.close();
   }
+
+  // N1: 편집기가 켠 번호(문서에 없던 목록)를 쓴 채 다섯 번 저장 — numbering.xml의 번호 정의 수가 늘지 않는다
+  {
+    const tok = await upload('tests/fixtures/docx-review/I-num-cleanup.docx');
+    const page = await openEditor(context, tok);
+    await page.locator('.ProseMirror p').last().click();
+    await page.keyboard.press('End');
+    await page.keyboard.press('Enter');
+    await page.keyboard.type('새 번호 문단');
+    await page.locator('#btn-ordered-list').click();
+    await page.waitForTimeout(300);
+    const counts = [];
+    for (let i = 0; i < 5; i += 1) {
+      await page.keyboard.type(String(i));
+      await saveAndDownload(page, tok);
+      const numbering = strFromU8(unzipSync(new Uint8Array(await (await fetch(`${BASE}/api/view/download?token=${encodeURIComponent(tok.token)}`)).arrayBuffer()))['word/numbering.xml']);
+      counts.push(`${count(numbering, 'w:abstractNum')}/${count(numbering, 'w:num')}`);
+    }
+    rec('N1 다섯 번 저장: 번호 정의 수 그대로', new Set(counts).size === 1, counts.join(' → '));
+    await page.close();
+  }
+
+  // N3: 같은 문서 안에서 각주 참조가 든 문단을 복사해 붙임 — 화면 번호는 1부터 차례로(겹침 없음), 저장본 각주 참조 수 = 화면 수
+  {
+    const tok = await upload(path.join(CORPUS, 'd06-columns-footnotes.docx'));
+    const page = await openEditor(context, tok);
+    await page.locator('.ProseMirror p', { hasText: '단락 1:' }).first().click({ clickCount: 3 });
+    await page.keyboard.press('Control+c');
+    await page.keyboard.press('Control+End');
+    await page.keyboard.press('Enter');
+    await page.keyboard.press('Control+v');
+    await page.waitForTimeout(1500);
+    const labels = await page.evaluate(() => [...document.querySelectorAll('.ProseMirror .docx-note-ref')].filter((r) => !r.closest('.docx-footnotes')).map((r) => r.getAttribute('data-label') ?? r.textContent));
+    const saved = await saveAndDownload(page, tok);
+    const sequential = labels.every((l, i) => l === String(i + 1));
+    rec('N3 복사한 각주: 화면 번호 차례대로 + 저장본 참조 수', labels.length >= 2 && sequential && count(saved, 'w:footnoteReference') === labels.length, `화면 ${labels.join(',')}, 저장 ${count(saved, 'w:footnoteReference')}`);
+    await page.close();
+  }
+
+  // m4: 변경 추적 삽입(작성자 A) 안에서 친 글자는 A의 삽입이 되지 않는다
+  {
+    const tok = await upload('tests/fixtures/docx-review/B-tracked.docx');
+    const page = await openEditor(context, tok);
+    await page.locator('.ProseMirror .docx-ins').first().click();
+    await page.waitForTimeout(300);
+    await page.keyboard.type('XYZ');
+    await page.waitForTimeout(500);
+    const saved = await saveAndDownload(page, tok);
+    const insides = [...saved.matchAll(/<w:ins\b[^>]*>([\s\S]*?)<\/w:ins>/g)].map((m) => m[1]).join('');
+    rec('m4 추적 삽입 안 입력: 새 글자는 추적 없음', saved.includes('XYZ') && !insides.includes('XYZ') && count(saved, 'w:ins') >= 1, `저장본 w:ins ${count(saved, 'w:ins')}개, 삽입 안 XYZ ${insides.includes('XYZ')}`);
+    await page.close();
+  }
+
+  // m5: 같은 파일을 두 번 올린 다른 문서(조각 해시가 같다)에서 복사한 그림도 받지 않는다(그림 파트는 문서마다 다르다)
+  {
+    const src = await upload(path.join(CORPUS, 'd04-images.docx'));
+    const dst = await upload(path.join(CORPUS, 'd04-images.docx'));
+    const pa = await openEditor(context, src);
+    await pa.locator('.ProseMirror').click();
+    await pa.keyboard.press('Control+a');
+    await pa.keyboard.press('Control+c');
+    const pb = await openEditor(context, dst);
+    await pb.locator('.ProseMirror p').last().click();
+    await pb.keyboard.press('Control+End');
+    await pb.keyboard.press('Enter');
+    await pb.keyboard.press('Control+v');
+    await pb.waitForTimeout(800);
+    const notice = (await pb.locator('.office-dialog, [role="dialog"], [role="alertdialog"]').filter({ hasText: '다른 문서' }).count()) > 0;
+    const imgs = await pb.locator('.ProseMirror img.docx-img').count();
+    const saved = await saveAndDownload(pb, dst);
+    rec('m5 바이트까지 같은 다른 문서 그림: 빼고 알림', imgs === 3 && count(saved, 'w:drawing') === 3 && notice, `화면 그림 ${imgs}, 저장 ${count(saved, 'w:drawing')}, 알림 ${notice}`);
+    // 같은 문서 안 복사는 그대로 된다
+    await pb.keyboard.press('Escape');
+    await pb.locator('.ProseMirror img.docx-img').first().click();
+    await pb.keyboard.press('Control+c');
+    await pb.keyboard.press('Control+End');
+    await pb.keyboard.press('Enter');
+    await pb.keyboard.press('Control+v');
+    await pb.waitForTimeout(800);
+    const same = await saveAndDownload(pb, dst);
+    rec('m5 같은 문서 안 그림 복사는 저장됨', count(same, 'w:drawing') === 4, `저장 ${count(same, 'w:drawing')}`);
+    await pa.close();
+    await pb.close();
+  }
+
+  // Minor 5: 글꼴별 1줄 — 표에 있는 글꼴(바탕·굴림·돋움 등) 글자의 줄 높이 = 글자 크기 × 그 글꼴 1줄 × 문단 배수
+  {
+    const tok = await upload(path.join(CORPUS, 'd01-styles-fonts.docx'));
+    const page = await openEditor(context, tok);
+    const rows = await page.evaluate(() => [...document.querySelectorAll('.ProseMirror .docx-font-lh')].slice(0, 6).map((span) => {
+      const cs = getComputedStyle(span);
+      const p = span.closest('p, h1, h2, h3, h4, h5, h6');
+      const run = cs.getPropertyValue('--run-line-height').trim();
+      const mult = parseFloat(getComputedStyle(p).getPropertyValue('--line-mult')) || 1;
+      const ratio = parseFloat(cs.getPropertyValue('--doc-single-line'));
+      const want = run && run !== 'initial' ? parseFloat(run) : parseFloat(cs.fontSize) * ratio * mult;
+      return { font: span.getAttribute('data-font-east-asia') ?? span.getAttribute('data-font-ascii'), lh: parseFloat(cs.lineHeight), want };
+    }));
+    rec('Minor 5 글꼴별 줄 높이', rows.length > 0 && rows.every((r) => Math.abs(r.lh - r.want) < 0.6), rows.map((r) => `${r.font} ${r.lh.toFixed(1)}/${r.want.toFixed(1)}`).join(', '));
+    await page.close();
+  }
 } finally {
   await browser.close();
 }
