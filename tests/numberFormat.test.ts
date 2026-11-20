@@ -48,7 +48,7 @@ describe('numberFormat — 엑셀 표시 형식(보기·편집 공용)', () => {
 describe('cellTexts — 칸의 표시·값 글자', () => {
   test('오류값은 [object Object]가 아니라 #DIV/0!', () => {
     const cell = { value: { formula: '1/0', result: { error: '#DIV/0!' } }, numFmt: 'General', formula: '1/0' } as unknown as ExcelJS.Cell;
-    expect(cellTexts(cell)).toEqual({ text: '#DIV/0!', value: '#DIV/0!' });
+    expect(cellTexts(cell)).toEqual({ text: '#DIV/0!', value: '#DIV/0!', isError: true });
   });
 
   test('공유 수식 복제 칸({ sharedFormula, result })도 캐시 결과를 보인다', () => {

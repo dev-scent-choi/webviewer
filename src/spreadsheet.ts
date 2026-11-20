@@ -400,6 +400,8 @@ export interface CellTexts {
   readonly color?: string;
   /** 값이 글자(문자열)다 — 엑셀은 숫자처럼 보여도 왼쪽 정렬한다 */
   readonly isText?: true;
+  /** 오류값(#DIV/0! 등) — 엑셀은 가운데 정렬한다 */
+  readonly isError?: true;
 }
 
 /** 계산 결과·캐시 결과·리터럴 값 하나를 칸 서식대로(표시·값 글자). 서식은 numberFormat.ts 하나로만 한다. */
@@ -422,7 +424,7 @@ function valueTexts(value: unknown, numFmt: string | undefined): CellTexts {
   if (typeof value === 'object' && typeof (value as { error?: unknown }).error === 'string') {
     // 엑셀 오류값(#DIV/0! 등) — ExcelJS는 { error: '#DIV/0!' } 객체로 준다(예전엔 "[object Object]"로 보였다)
     const err = (value as { error: string }).error;
-    return { text: err, value: err };
+    return { text: err, value: err, isError: true };
   }
   const text = String(value);
   return { text, value: text, isText: true };
@@ -482,9 +484,9 @@ function gridCellOf(t: CellTexts, styleRef: number | undefined): GridCell {
 /** 값에 따라 달라지는 서식을 덧붙인다: 서식 코드의 글자 색(fc), 숫자처럼 보이는 글자 값의 왼쪽 정렬(엑셀 기본) */
 function valueStyleRef(palette: StylePalette, styleRef: number | undefined, t: CellTexts): number | undefined {
   const base: GridStyle = styleRef === undefined ? {} : palette.toArray()[styleRef];
-  const left = Boolean(t.isText) && !base.a && t.text !== '' && (Boolean(base.fmt || base.nf) || NUMERIC_LOOKING_TEXT.test(t.text));
-  if (!t.color && !left) return styleRef;
-  return palette.registerVariant(styleRef, t.color, left);
+  const align = base.a ? undefined : t.isError ? 'c' : t.isText && t.text !== '' && (Boolean(base.fmt || base.nf) || NUMERIC_LOOKING_TEXT.test(t.text)) ? 'l' : undefined;
+  if (!t.color && !align) return styleRef;
+  return palette.registerVariant(styleRef, t.color, align);
 }
 
 /** ExcelJS 칸 → 그리드 칸(표시·값·서식). 값도 서식도 없으면 null — parseXlsxToGrid와 스트리밍 읽기(lazyGridStore)가 함께 쓴다 */
@@ -630,13 +632,13 @@ export class StylePalette {
   }
 
   private readonly variants = new Map<string, number | undefined>();
-  /** base 서식에 서식 코드 색(fc)·왼쪽 정렬을 더한 서식 — 큰 시트에서 칸마다 JSON을 만들지 않게 조합별로 기억한다 */
-  registerVariant(base: number | undefined, fc: string | undefined, left: boolean): number | undefined {
-    const key = `${base}|${fc ?? ''}|${left ? 1 : 0}`;
+  /** base 서식에 서식 코드 색(fc)·값에 따른 정렬을 더한 서식 — 큰 시트에서 칸마다 JSON을 만들지 않게 조합별로 기억한다 */
+  registerVariant(base: number | undefined, fc: string | undefined, align: 'l' | 'c' | undefined): number | undefined {
+    const key = `${base}|${fc ?? ''}|${align ?? ''}`;
     if (this.variants.has(key)) return this.variants.get(key);
     const style: { -readonly [K in keyof GridStyle]?: GridStyle[K] } = { ...(base === undefined ? {} : this.styles[base]) };
     if (fc) style.fc = fc;
-    if (left) style.a = 'l';
+    if (align) style.a = align;
     const index = this.register(style);
     this.variants.set(key, index);
     return index;
