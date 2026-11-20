@@ -365,21 +365,64 @@ function collectShapesRecursive(
 /** 문단(<a:p>) 바로 아래 자식 여는 태그마다 원문 순번(_o)을 붙인 파싱용 사본 — paragraphFromXml이 이 순서로 줄 세운다
  * (자식 종류를 미리 알 수 없다: 수식 mc:AlternateContent 등). 원문 조각으로 되돌릴 때 stripOrder가 지운다. */
 function tagParagraphChildOrder(xml: string): string {
+  // 작은 XML 토큰 읽개 — 정규식으로 태그를 자르면 속성 값 안의 '>'(XML에서 이스케이프 없이 합법: tooltip="a>b")에서 태그가
+  // 잘려 순서가 뒤섞였다(2차 검토 R2-I1). 주석·CDATA·처리 지시·DOCTYPE은 통째로 건너뛰고, 여는 태그는 따옴표를 따라 끝을 찾는다.
+  let out = '';
   let order = 0;
-  return xml.replace(/(<a:p(?:\s[^>]*)?>)([\s\S]*?)(<\/a:p>)/g, (_m, open: string, inner: string, close: string) => {
-    let depth = 0;
-    const tagged = inner.replace(/<(\/?)([A-Za-z][\w.:-]*)([^>]*?)(\/?)>/g, (tag, slash: string, name: string, rest: string, selfClose: string) => {
-      if (name.startsWith('?') || name.startsWith('!')) return tag;
-      if (slash) {
-        depth -= 1;
-        return tag;
+  let inParagraph = false;
+  let depth = 0; // 문단 안 깊이(0 = 문단 바로 아래)
+  let i = 0;
+  const skipTo = (from: number, end: string) => {
+    const at = xml.indexOf(end, from);
+    return at < 0 ? xml.length : at + end.length;
+  };
+  while (i < xml.length) {
+    const lt = xml.indexOf('<', i);
+    if (lt < 0) {
+      out += xml.slice(i);
+      break;
+    }
+    out += xml.slice(i, lt);
+    let end: number;
+    if (xml.startsWith('<!--', lt)) end = skipTo(lt + 4, '-->');
+    else if (xml.startsWith('<![CDATA[', lt)) end = skipTo(lt + 9, ']]>');
+    else if (xml.startsWith('<?', lt)) end = skipTo(lt + 2, '?>');
+    else if (xml.startsWith('<!', lt)) end = skipTo(lt + 2, '>');
+    else {
+      let j = lt + 1;
+      let quote = '';
+      for (; j < xml.length; j += 1) {
+        const c = xml[j];
+        if (quote) {
+          if (c === quote) quote = '';
+        } else if (c === '"' || c === "'") quote = c;
+        else if (c === '>') break;
       }
-      const out = depth === 0 ? `<${name} _o="${order++}"${rest}${selfClose}>` : tag;
-      if (!selfClose) depth += 1;
-      return out;
-    });
-    return open + tagged + close;
-  });
+      const tag = xml.slice(lt, j + 1);
+      i = j + 1;
+      const closing = tag[1] === '/';
+      const selfClosing = tag.endsWith('/>');
+      const name = /^<\/?([^\s/>]+)/.exec(tag)?.[1] ?? '';
+      if (!inParagraph) {
+        if (!closing && !selfClosing && name === 'a:p') {
+          inParagraph = true;
+          depth = 0;
+        }
+        out += tag;
+      } else if (closing) {
+        if (depth === 0) inParagraph = false; // </a:p>
+        else depth -= 1;
+        out += tag;
+      } else {
+        out += depth === 0 ? `<${name} _o="${order++}"${tag.slice(1 + name.length)}` : tag;
+        if (!selfClosing) depth += 1;
+      }
+      continue;
+    }
+    out += xml.slice(lt, end);
+    i = end;
+  }
+  return out;
 }
 
 /** pptx 슬라이드 XML(p:sld) 안의 각 텍스트 도형(p:sp)을 위치 정보 + ProseMirror 문서로 파싱한다.

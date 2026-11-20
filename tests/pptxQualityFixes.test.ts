@@ -479,3 +479,32 @@ describe('스마트아트 그림 대체본(dsp:drawing) — 합성 표본(실제
     expect(v.parts).toEqual([expect.objectContaining({ kind: 'shape', x: 0, y: 0, w: 4000, h: 3000, fill: '#4F81BD', geom: 'roundRect', text: '계획\n1단계', textColor: '#FFFFFF' })]);
   });
 });
+
+describe('2차 검토 R2-I1: 문단 자식 순서는 속성 값 안의 > 나 주석·CDATA에 흔들리지 않는다', () => {
+  const order = (para: string) => {
+    const xml = `<p:sld ${NS}>${tree(sp(2, '', xfrm(0, 0, 1, 1), `<a:bodyPr/><a:lstStyle/>${para}`))}</p:sld>`;
+    const set = new Set<string>();
+    const doc = parseSlideShapes(xml, undefined, set)[0].doc;
+    const seq: string[] = [];
+    doc.firstChild!.forEach((c) => seq.push(c.isText ? c.text! : c.type.name));
+    return { seq, set, doc };
+  };
+  test('r10: tooltip="a>b" — ONE | br | TWO | field | FOUR 순서 그대로, 고쳐 저장해도 순서 유지', () => {
+    const P = '<a:p><a:r><a:rPr lang="en-US"><a:hlinkClick r:id="rId2" tooltip="a>b"/></a:rPr><a:t>ONE</a:t></a:r><a:br/><a:r><a:rPr lang="en-US"/><a:t>TWO</a:t></a:r><a:fld id="{B6F15528-21DE-4FAA-801E-634DDDAF4B2B}" type="slidenum"><a:t>3</a:t></a:fld><a:r><a:rPr lang="en-US"/><a:t>FOUR</a:t></a:r></a:p>';
+    const { seq, set, doc } = order(P);
+    expect(seq).toEqual(['ONE', 'br', 'TWO', 'field', 'FOUR']);
+    const xml = serializeTxBodyXml(doc, set);
+    expect(xml.indexOf('ONE')).toBeLessThan(xml.indexOf('<a:br'));
+    expect(xml.indexOf('<a:br')).toBeLessThan(xml.indexOf('TWO'));
+    expect(xml.indexOf('TWO')).toBeLessThan(xml.indexOf('<a:fld'));
+    expect(xml.indexOf('<a:fld')).toBeLessThan(xml.indexOf('FOUR'));
+  });
+  test('흔들기: 속성 값에 > · 따옴표 · </a:p>처럼 생긴 글자, 주석·CDATA가 섞여도 순서 유지', () => {
+    const values = ['a>b', "it's > that", '>>>', '/>', 'x" y', '&gt;&lt;', 'a>/b>c'];
+    for (const v of values) {
+      const attr = v.includes('"') ? `tooltip='${v}'` : `tooltip="${v}"`;
+      const P = `<a:p><!-- 주석 <a:r> > --><a:r><a:rPr lang="en-US"><a:hlinkClick r:id="rId2" ${attr}/></a:rPr><a:t>A</a:t></a:r><a:br/><a:r><a:rPr lang="en-US" altLang="${v.includes('"') ? 'x' : v}"/><a:t>B</a:t></a:r><a:r><a:t><![CDATA[C<>]]></a:t></a:r></a:p>`;
+      expect([v, order(P).seq]).toEqual([v, ['A', 'br', 'B', 'C<>']]);
+    }
+  });
+});
