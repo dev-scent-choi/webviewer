@@ -31,10 +31,8 @@
     { "id": "P5", "doc": "p07-shapes-effects-groups", "slide": 1, "item": "도형 글자 왼쪽 정렬(정렬 지정 없음 = 마스터 otherStyle l)", "target": { "text": "그룹 A" }, "expect": { "leftInBox": { "max": 0.25 } } },
     { "id": "P5", "doc": "p07-shapes-effects-groups", "slide": 1, "item": "그라데이션 도형 글자 왼쪽 정렬", "target": { "text": "선형 그라데이션" }, "expect": { "leftInBox": { "max": 0.15 } } },
     { "id": "P5", "doc": "p02-theme-fonts-colors", "slide": 1, "item": "테마 그라데이션 — 주황 둥근 사각형", "target": { "shape": "roundRect" }, "expect": { "gradient": true } },
-    { "id": "P6", "doc": "p03-autofit", "slide": 2, "item": "한글 어절 단위 줄 바꿈(주식회사는)", "target": { "text": "주식회사는" }, "expect": { "lines": 1 } },
-    { "id": "P6", "doc": "p03-autofit", "slide": 2, "item": "한글 어절 단위 줄 바꿈(주식회사는, 넘침 상자)", "target": { "text": "주식회사는", "nth": 1 }, "expect": { "lines": 1 } },
-    { "id": "P6", "doc": "p03-autofit", "slide": 2, "item": "한글 어절 단위 줄 바꿈(체계를)", "target": { "text": "체계를" }, "expect": { "lines": 1 } },
-    { "id": "P6", "doc": "p08-korean-business-slide", "slide": 1, "item": "한글 어절 단위 줄 바꿈(달라질)", "target": { "text": "달라질" }, "expect": { "lines": 1 } },
+    { "id": "P6", "doc": "p03-autofit", "slide": 2, "item": "한글 줄 바꿈 = 원본 eaLnBrk=1(Office도 '주|식회사는'처럼 글자 단위로 끊음)", "target": { "text": "주식회사는", "nth": 1 }, "expect": { "wordBreak": "normal" } },
+    { "id": "P6", "doc": "p08-korean-business-slide", "slide": 1, "item": "한글 줄 바꿈 = 원본 eaLnBrk=1(Office '달|라질')", "target": { "text": "달라질" }, "expect": { "wordBreak": "normal" } },
     { "id": "BG", "doc": "p08-korean-business-slide", "slide": 1, "item": "슬라이드 배경색 F2F2F2", "target": { "background": true }, "expect": { "color": "rgb(242, 242, 242)" } }
   ]
 }

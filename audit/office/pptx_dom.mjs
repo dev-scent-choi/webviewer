@@ -66,7 +66,8 @@ function measure(spec) {
       bottom: rects.length ? Math.round(((Math.max(...rects.map((r) => r.bottom)) - cr.top) / cr.height) * 100) / 100 : null,
       // 글자 시작 위치가 상자 왼쪽에서 얼마나(상자 폭 비율) — 가운데/왼쪽 정렬 구분용
       leftInBox: box && rects.length ? Math.round(((rects[0].left - box.getBoundingClientRect().left) / box.getBoundingClientRect().width) * 100) / 100 : null,
-      writingMode: getComputedStyle(box ?? p).writingMode,
+      writingMode: getComputedStyle(el.closest('.ProseMirror') ?? p).writingMode,
+      wordBreak: ps.wordBreak,
       ...turn(el),
     };
   }
