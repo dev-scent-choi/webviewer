@@ -217,3 +217,33 @@ describe('저장 보존: 줄 바꿈·필드·모델링하지 않는 글자 속�
     expect(xml).toContain('<a:latin typeface="바탕"/><a:ea typeface="바탕"/><a:hlinkClick r:id="rId9"/>');
   });
 });
+
+describe('P-v2 LibreOffice 전처리: 표 머리 줄 굵게', () => {
+  const tbl = (style: string, firstRow = '1') =>
+    `<a:tbl><a:tblPr firstRow="${firstRow}" bandRow="1"><a:tableStyleId>${style}</a:tableStyleId></a:tblPr>` +
+    '<a:tr h="1"><a:tc><a:txBody><a:p><a:r><a:rPr lang="ko-KR"/><a:t>구분</a:t></a:r><a:r><a:t>X</a:t></a:r><a:r><a:rPr b="0"/><a:t>Y</a:t></a:r></a:p></a:txBody></a:tc></a:tr>' +
+    '<a:tr h="1"><a:tc><a:txBody><a:p><a:r><a:rPr lang="ko-KR"/><a:t>1단계</a:t></a:r></a:p></a:txBody></a:tc></a:tr></a:tbl>';
+  test('내장 스타일 + 머리글 행: 첫 줄만 b="1"(직접 적힌 b는 그대로)', async () => {
+    const { boldTableHeaderXml } = await import('../src/pptx/loPreprocess.js');
+    const out = boldTableHeaderXml(tbl('{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}'), '');
+    expect(out).toContain('<a:rPr b="1" lang="ko-KR"/><a:t>구분');
+    expect(out).toContain('<a:r><a:rPr b="1"/><a:t>X');
+    expect(out).toContain('<a:rPr b="0"/><a:t>Y');
+    expect(out).toContain('<a:rPr lang="ko-KR"/><a:t>1단계');
+  });
+  test('머리글 행 꺼짐·서식 없는 내장 스타일·정의상 굵게 아님은 그대로', async () => {
+    const { boldTableHeaderXml } = await import('../src/pptx/loPreprocess.js');
+    expect(boldTableHeaderXml(tbl('{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}', '0'), '')).toBe(tbl('{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}', '0'));
+    expect(boldTableHeaderXml(tbl('{2D5ABB26-0587-4C30-8999-92F81FD0307C}'), '')).toBe(tbl('{2D5ABB26-0587-4C30-8999-92F81FD0307C}'));
+    const styles = '<a:tblStyleLst><a:tblStyle styleId="{AAA}" styleName="x"><a:firstRow><a:tcTxStyle b="off"/></a:firstRow></a:tblStyle></a:tblStyleLst>';
+    expect(boldTableHeaderXml(tbl('{AAA}'), styles)).toBe(tbl('{AAA}'));
+  });
+});
+
+describe('슬라이드 배경 bgRef → 테마 배경 채우기 목록(bgFillStyleLst)', () => {
+  test('idx 1001 = 첫 배경 채우기(phClr = bgRef 색)', () => {
+    const zip = deck('');
+    zip['ppt/slides/slide1.xml'] = enc(`<p:sld ${NS}><p:cSld><p:bg><p:bgRef idx="1001"><a:schemeClr val="accent2"/></p:bgRef></p:bg><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/></p:spTree></p:cSld></p:sld>`);
+    expect(parseSlideVisuals(zip, 'slide1.xml')[0]).toMatchObject({ kind: 'shape', background: true, fill: '#C0504D' });
+  });
+});

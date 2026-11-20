@@ -12,6 +12,7 @@ import { ConversionError, type Converter } from './types.js';
 import { guardedUnzipSync } from '../zipGuard.js';
 import { createLibreOfficeWorker } from './loWorker.js';
 import { ensureFontSubstitutions } from './loFontSubstitution.js';
+import { boldPptxTableHeaders } from '../pptx/loPreprocess.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -559,13 +560,13 @@ export const officeConverter: Converter = {
   name: 'libreoffice',
   extensions: ['doc', 'docx', 'ppt', 'pptx', 'odt', 'odp', 'rtf', 'txt', 'hwp', 'hwpx'],
   async convert(sourcePath, targetPdfPath, sourceName) {
-    const isDocx = path.extname(sourcePath).toLowerCase() === '.docx';
+    const ext = path.extname(sourcePath).toLowerCase();
     await convertWithSoffice(
       sourcePath,
       targetPdfPath,
       ['--convert-to', 'pdf'],
       sourceName,
-      isDocx ? literalizeDocxThemeFonts : undefined,
+      ext === '.docx' ? literalizeDocxThemeFonts : ext === '.pptx' ? boldPptxTableHeaders : undefined,
     );
   },
 };
