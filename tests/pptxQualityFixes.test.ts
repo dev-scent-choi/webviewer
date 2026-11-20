@@ -447,3 +447,15 @@ describe('검토 Minor 4·6·8: 빈 줄 높이, "링크도 글자 색", 테마 �
     expect(resolveSlideShapeLooks(zip, 'slide1.xml').get('2')?.levels[0]).toMatchObject({ bullet: '•', bulletImage: 'ppt/media/image1.png' });
   });
 });
+
+describe('검토 Minor 9: 뒤집힌 도형의 그라데이션은 뒤집지 않는다(보기 화면 LibreOffice와 같게)', () => {
+  test('가로·세로·둘 다 뒤집기 보정, 뒤집기 없거나 방사형이면 그대로', async () => {
+    const { unmirroredFill } = await import('../src/client/slideTextLook.js');
+    const g = 'linear-gradient(30deg, #000 0%, #fff 100%)';
+    expect(unmirroredFill(g, { flipH: true })).toBe('linear-gradient(330deg, #000 0%, #fff 100%)');
+    expect(unmirroredFill(g, { flipV: true })).toBe('linear-gradient(150deg, #000 0%, #fff 100%)');
+    expect(unmirroredFill(g, { flipH: true, flipV: true })).toBe('linear-gradient(210deg, #000 0%, #fff 100%)');
+    expect(unmirroredFill(g, {})).toBe(g);
+    expect(unmirroredFill('radial-gradient(#000 0%, #fff 100%)', { flipH: true })).toBe('radial-gradient(#000 0%, #fff 100%)');
+  });
+});

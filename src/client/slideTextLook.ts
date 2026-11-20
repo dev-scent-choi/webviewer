@@ -144,6 +144,21 @@ export function turnCss(turn: { rot?: number; flipH?: boolean; flipV?: boolean }
   return parts.join(' ');
 }
 
+/**
+ * 뒤집힌 도형(그룹 뒤집기 포함)의 선형 그라데이션 방향 — 도형 상자는 CSS로 거울처럼 뒤집지만(모양이 뒤집혀야 하므로),
+ * 그라데이션 방향은 뒤집지 않는다. 근거: ECMA-376(20.1.8.33 rotWithShape)은 회전만 정하고 뒤집기는 말이 없고, 보기 화면
+ * (LibreOffice)이 뒤집힌 도형의 그라데이션을 뒤집지 않고 그린다 — 보기·편집이 같게 그쪽을 따른다(MS Office 정답이 생기면 확인할 것).
+ * 미리 반대로 돌려 두면 상자의 거울 변환과 상쇄된다: 가로 뒤집기 a → −a, 세로 뒤집기 a → 180°−a.
+ */
+export function unmirroredFill(fill: string, turn: { flipH?: boolean; flipV?: boolean }): string {
+  const m = /^linear-gradient\((-?[\d.]+)deg,/.exec(fill);
+  if (!m || (!turn.flipH && !turn.flipV)) return fill;
+  let a = Number(m[1]);
+  if (turn.flipH) a = -a;
+  if (turn.flipV) a = 180 - a;
+  return fill.replace(m[0], `linear-gradient(${((a % 360) + 360) % 360}deg,`);
+}
+
 const VERT: Record<string, { mode: string; orient: string; flip?: boolean }> = {
   vert: { mode: 'vertical-rl', orient: 'sideways' },
   vert270: { mode: 'vertical-rl', orient: 'sideways', flip: true },

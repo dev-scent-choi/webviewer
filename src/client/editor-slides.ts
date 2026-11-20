@@ -27,7 +27,7 @@ import {
 import { DOC_META_MAP, DOC_META_SAVED_AT_KEY, DOC_META_SAVE_ERROR_AT_KEY } from '../collab/gridShared.js';
 import { pickPresenceColorForName, renderPresenceAvatars } from './presence.js';
 import { pptxTextSchema, setSlideMediaUrl, slideMediaUrl } from '../pptx/textSchema.js';
-import { applyAutofit, applyTextboxLook, autoNumberPlugin, refitAutofit, curvedShapePath, ensureLevelRules, turnCss } from './slideTextLook.js';
+import { applyAutofit, applyTextboxLook, autoNumberPlugin, refitAutofit, unmirroredFill, curvedShapePath, ensureLevelRules, turnCss } from './slideTextLook.js';
 
 /** src/pptx/collab.ts가 서버 쪽에서 선언한 것과 같은 모양이지만, 그 파일은 node:crypto/fflate 등
  * 서버 전용 의존성을 끌고 있어 클라이언트 번들에 그대로 import할 수 없다 — Yjs 공유 타입 자체는
@@ -444,7 +444,7 @@ function renderSlideVisual(visual: SlideVisual, pageImageUrl: string | null): HT
     if (shadow) el.style.boxShadow = shadow;
   } else if (visual.kind === 'shape') {
     if (visual.geom) el.dataset.geom = visual.geom;
-    if (visual.fill) el.style.background = visual.fill;
+    if (visual.fill) el.style.background = unmirroredFill(visual.fill, visual);
     applyVisualStroke(el, visual);
     const curved = curvedShapePath(visual.geom, emuToPx(visual.w ?? 0), emuToPx(visual.h ?? 0));
     const clip = curved ? `path('${curved}')` : visual.geom ? PRESET_CLIP[visual.geom] : undefined;
