@@ -21,7 +21,7 @@ import { pptxTextSchema } from './textSchema.js';
 import type { NewShapeGeom, SlideEntry, SlideShapeMeta } from '../collab/pptxShared.js';
 import { DEFAULT_INSETS_EMU, NEW_SHAPE_GEOMS } from '../collab/pptxShared.js';
 import { resolveSlideShapeLooks, type InheritedShapeLook } from './inheritance.js';
-import { loadThemeColors, mediaResolverFor, type ThemeColors } from './theme.js';
+import { loadThemeColors, mediaResolverFor, relTypesOf, type ThemeColors } from './theme.js';
 
 const SLIDE_TARGET = /Target="(?:[^"]*\/)?(slide\d+\.xml)"/;
 
@@ -396,6 +396,8 @@ export interface ExportedPptx {
    * 전체"로도 써서, slideContents 중 여기 없는 키(삭제되거나 filterValidEntries가 걸러낸
    * 슬라이드)를 쓰레기로 간주해 정리한다. finalParts와 항상 같은 길이, 같은 순서로 1:1 대응한다. */
   readonly survivingEntryIds: readonly string[];
+  /** 고친 글상자를 저장하며 원문 그대로 지키지 못한 일(한국어) — room.ts가 편집 화면에 알린다(조용히 버리지 않는다) */
+  readonly notices: readonly string[];
 }
 
 /**
@@ -419,6 +421,7 @@ export function exportPptxFromSlides(
   // 슬라이드 XML"을 그대로 유지한다.
   const originalZipEntries = guardedUnzipSync(pptxBytes, 'exportPptxFromSlides');
   const zipEntries = { ...originalZipEntries };
+  const notices = new Set<string>();
   const rawEntryList = slidesArray.toArray();
   const entryList = filterValidEntries(rawEntryList, zipEntries);
   if (entryList.length === 0) {
@@ -568,6 +571,12 @@ export function exportPptxFromSlides(
     // sourceSlidePart를 가리키는 entry가 여러 개(원본 + 그 복제본들)일 수 있으므로 파트 이름
     // 기준으로 캐시해 중복 파싱을 피한다.
     const baselineShapesCache = new Map<string, Map<string, ParsedShape>>();
+    // 슬라이드 파트마다 관계 id → 종류(지금 조립 중인 zip 기준 — 복제본은 자기 rels를 이미 받았다)
+    const relTypesFor = (partPath: string) => {
+      const slash = partPath.lastIndexOf('/');
+      const rels = zipEntries[`${partPath.slice(0, slash)}/_rels/${partPath.slice(slash + 1)}.rels`];
+      return relTypesOf(rels ? strFromU8(rels) : '');
+    };
     // 저장에 원문으로 쓸 수 있는 조각 = 이 방에서 서버가 파일로부터 읽은 조각(시딩 + 지금 baseline 파싱이 더한다)
     const trusted = trustedFragmentsOf(slideContents);
     const getBaselineShapes = (sourceSlidePart: string): Map<string, ParsedShape> => {
@@ -614,7 +623,10 @@ export function exportPptxFromSlides(
         if (!(fragment instanceof Y.XmlFragment)) continue; // 위와 같은 이유 — 진짜 콘텐츠가 아니었음
 
         const doc = yXmlFragmentToProseMirrorRootNode(fragment, pptxTextSchema);
-        const txBodyXml = serializeTxBodyXml(doc, trusted);
+        // 이 슬라이드 파트의 관계(r:id → 종류)로 조각 안 관계를 확인하고, 원문을 다 못 지킨 일은 실제로 고친 도형일 때만 알린다
+        const shapeNotices = new Set<string>();
+        const ctx = { relTypes: relTypesFor(partPath), notices: shapeNotices };
+        const txBodyXml = serializeTxBodyXml(doc, trusted, ctx);
 
         // 실제로 편집된 도형만 병합한다 — baseline(원본 XML을 다시 파싱해 같은 스키마로 직렬화한
         // 결과)과 지금 값이 완전히 같으면(=사용자가 이 도형은 한 번도 안 건드렸으면) 병합 자체를
@@ -627,7 +639,7 @@ export function exportPptxFromSlides(
         // 없던 id) 비교할 대상이 없으니 항상 편집된 것으로 보고 병합을 계속한다.
         if (baselineShapes) {
           const baselineShape = baselineShapes.get(shapeId);
-          if (baselineShape && serializeTxBodyXml(baselineShape.doc, trusted) === txBodyXml) {
+          if (baselineShape && serializeTxBodyXml(baselineShape.doc, trusted, { relTypes: ctx.relTypes }) === txBodyXml) {
             // 글자는 그대로 — 리본 "도형 채우기"로 색만 바꿨으면 그 채우기만 반영하고, 아니면 원본 그대로 둔다
             const fillOnly = (shapeMap.get('meta') as SlideShapeMeta | undefined)?.fill;
             if (typeof fillOnly === 'string' && /^#[0-9A-Fa-f]{6}$/.test(fillOnly) && hasShape(slideXml, shapeId)) {
@@ -648,6 +660,7 @@ export function exportPptxFromSlides(
           // meta와 무관한 이 분기까지 함께 건너뛰어 이미 슬라이드에 있던 실제 사용자 편집이(단지
           // 같은 도형의 meta가 손상됐다는 이유만으로) 조용히 영구 유실되는 회귀가 있었다.
           slideXml = spliceShapeTxBody(slideXml, shapeId, txBodyXml);
+          for (const n of shapeNotices) notices.add(n);
           // 글을 고치면서 편집기가 다시 맞춘 자동 맞춤 배율(normAutofit 도형만, setShapeAutofit이 범위 검사)
           const refit = (shapeMap.get('meta') as SlideShapeMeta | undefined)?.autofit;
           if (refit && typeof refit === 'object') slideXml = setShapeAutofit(slideXml, shapeId, refit);
@@ -783,5 +796,5 @@ export function exportPptxFromSlides(
   }
   // 엔트리 시각을 고정해 같은 내용이면 같은 바이트 — 넣지 않으면 fflate가 지금 시각(2초 단위)을 적어, 두 번 내보내는
   // 사이에 2초 경계를 넘으면 바이트가 달라졌다(검토 Minor 1: "시딩 후 바이트 동일" 시험이 가끔 실패)
-  return { bytes: zipSync(zippableEntries, { mtime: ZIP_ENTRY_TIME }), finalParts, survivingEntryIds };
+  return { bytes: zipSync(zippableEntries, { mtime: ZIP_ENTRY_TIME }), finalParts, survivingEntryIds, notices: [...notices] };
 }

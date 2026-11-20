@@ -10,6 +10,7 @@ import { ySyncPlugin, yCursorPlugin, yUndoPlugin, ySyncPluginKey, undo, redo } f
 import { initOfficeShell } from './officeShell.js';
 import { setupSlideDesign } from './slideDesignUi.js';
 import {
+  PPTX_SAVE_NOTICE_MAP,
   PPTX_SLIDES_ARRAY,
   PPTX_SLIDE_CONTENTS_MAP,
   PPTX_SLIDE_VISUALS_MAP,
@@ -732,6 +733,25 @@ function renderCanvasForSlideInner(entryId: string): void {
   }
 }
 
+/** 저장 알림 띠(닫기 단추 포함) — 같은 알림이 다시 오면 글만 바꾼다 */
+function showSaveNotice(text: string): void {
+  let bar = document.getElementById('slide-save-notice');
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'slide-save-notice';
+    bar.className = 'slide-save-notice';
+    bar.setAttribute('role', 'alert');
+    const message = document.createElement('span');
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.textContent = '닫기';
+    close.addEventListener('click', () => bar?.remove());
+    bar.append(message, close);
+    document.body.append(bar);
+  }
+  bar.querySelector('span')!.textContent = `저장 알림: ${text}`;
+}
+
 /** 글을 고친 글상자의 자동 맞춤(normAutofit)을 다음 그림 틀에서 다시 맞추고, 바뀌었으면 meta에 적어 저장·다른 참여자에게
  * 넘긴다(PowerPoint처럼 글이 늘면 작아지고 줄면 커진다 — 검토 Minor 3). 맞춤 도형이 아니면 아무것도 안 한다. */
 const refitPending = new Set<string>();
@@ -1416,6 +1436,15 @@ async function main(): Promise<void> {
         status === 'saving' ? '저장 중…' : status === 'saved' ? '모든 변경 내용이 저장됨' : '저장 실패 — 편집을 계속하면 다시 시도합니다';
     }
   }
+  // 저장하며 원문을 다 지키지 못한 일(서버 알림) — 조용히 버리지 않고 보여 준다
+  const saveNotices = ydoc.getMap<{ at: number; text: string }>(PPTX_SAVE_NOTICE_MAP);
+  let lastNoticeAt = saveNotices.get('last')?.at ?? 0;
+  saveNotices.observe(() => {
+    const notice = saveNotices.get('last');
+    if (!notice || notice.at <= lastNoticeAt) return;
+    lastNoticeAt = notice.at;
+    showSaveNotice(String(notice.text));
+  });
   if (canEdit) {
     ydoc.on('afterTransaction', (tx) => {
       if (!tx.local || tx.changed.size === 0) return;

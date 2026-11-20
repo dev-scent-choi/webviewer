@@ -130,6 +130,9 @@ export const NEW_SHAPE_GEOMS: readonly NewShapeGeom[] = ['rect', 'roundRect', 'e
  * 기존 export 경로가 이미 이 요소들을 바이트 그대로 보존한다. */
 export const PPTX_SLIDE_VISUALS_MAP = 'slideVisuals';
 
+/** 저장 알림 — 서버가 고친 글상자를 저장하며 원문을 다 지키지 못했을 때 { at, text }(한국어)를 'last'에 적는다(편집기가 띄운다) */
+export const PPTX_SAVE_NOTICE_MAP = 'pptxSaveNotice';
+
 export interface SlideVisual {
   readonly kind: 'image' | 'shape' | 'table' | 'placeholder' | 'snapshot';
   /** true면 편집 화면이 이 영역을 직접 흉내 내지 않고, LibreOffice가 원본 그대로 렌더링한 슬라이드

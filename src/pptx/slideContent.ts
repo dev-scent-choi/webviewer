@@ -198,11 +198,11 @@ function pPrXmlWithoutAlgn(pPr: XmlNode): string {
 
 /** 저장할 <a:pPr>: 보관해 둔 원본(algn 제외, 믿을 수 있는 조각일 때만)에 현재 정렬만 다시 얹는다. 원본을 못 쓰면
  * 수준(lvl)과 정렬만. */
-function pPrXmlFor(paragraph: PMNode, trusted: TrustedFragments): string {
+function pPrXmlFor(paragraph: PMNode, trusted: TrustedFragments, ctx: SerializeContext): string {
   const align = paragraph.attrs.align as string | null;
   const raw = paragraph.attrs.pPr as string | null;
   const algnAttr = align && ALIGN_VALUES.has(align) ? ` algn="${align}"` : '';
-  if (raw && trusted.has(raw) && raw.startsWith('<a:pPr')) return raw.replace(/^<a:pPr/, `<a:pPr${algnAttr}`);
+  if (raw && trusted.has(raw) && relRefsOk(raw, ctx.relTypes) && raw.startsWith('<a:pPr')) return raw.replace(/^<a:pPr/, `<a:pPr${algnAttr}`);
   const lvl = Number(paragraph.attrs.lvl);
   const lvlAttr = Number.isInteger(lvl) && lvl > 0 && lvl <= 8 ? ` lvl="${lvl}"` : '';
   return algnAttr || lvlAttr ? `<a:pPr${lvlAttr}${algnAttr}/>` : '';
@@ -455,10 +455,79 @@ function escapeXmlText(text: string): string {
 const RPR_CHILD_ORDER = ['a:ln', 'a:noFill', 'a:solidFill', 'a:gradFill', 'a:blipFill', 'a:pattFill', 'a:grpFill', 'a:effectLst', 'a:effectDag', 'a:highlight', 'a:uLnTx', 'a:uLn', 'a:uFillTx', 'a:uFill', 'a:latin', 'a:ea', 'a:cs', 'a:sym', 'a:hlinkClick', 'a:hlinkMouseOver', 'a:rtl', 'a:extLst'];
 const FILL_TAGS = ['a:noFill', 'a:solidFill', 'a:gradFill', 'a:blipFill', 'a:pattFill', 'a:grpFill'];
 
-function mergedRPrXml(raw: string, node: PMNode, trusted: TrustedFragments): string {
-  const parsedRoot = parser.parse(raw) as XmlNode;
-  const original = parsedRoot['a:rPr'];
-  const rPr: XmlNode = original && typeof original === 'object' ? { ...(original as XmlNode) } : {};
+/** 저장 때의 판단 재료 — 믿는 조각 목록, 이 슬라이드 파트의 관계(r:id → 종류), 원문을 다 못 지킨 일을 사용자에게 알릴 목록 */
+export interface SerializeContext {
+  /** 관계 id → 관계 종류(Type URI의 마지막 이름: hyperlink·slide·image·audio …). 있으면 조각 안 r:id가 이 슬라이드의 맞는 관계를
+   * 가리키는지 확인한다(다른 슬라이드에서 가져온 조각의 r:id가 그림 관계를 가리키는 무효 파일 방지 — 2차 검토 R2-m1). */
+  readonly relTypes?: ReadonlyMap<string, string>;
+  /** 원문을 그대로 쓰지 못한 일(한국어 문장) — 저장한 사람에게 보인다(조용히 버리지 않는다) */
+  readonly notices?: Set<string>;
+}
+
+/** 요소 이름(접두어 뺀) → 그 요소의 r:id/r:embed가 가리켜야 하는 관계 종류 */
+const REL_KIND_BY_ELEMENT: Record<string, readonly string[]> = {
+  hlinkClick: ['hyperlink', 'slide', 'slideLayout', 'presentation'],
+  hlinkMouseOver: ['hyperlink', 'slide', 'slideLayout', 'presentation'],
+  hlinkHover: ['hyperlink', 'slide', 'slideLayout', 'presentation'],
+  blip: ['image', 'hdphoto'],
+  snd: ['audio'],
+};
+
+/** 조각 안의 모든 r:id·r:embed·r:link가 이 슬라이드의 관계에 있고 요소에 맞는 종류인가(빈 r:id=""는 동작 링크라 허용).
+ * relTypes가 없으면(파일 맥락 없는 단위 시험 등) 확인하지 않는다. 조각은 우리 빌더 출력이라 속성 값 안 '>'는 이스케이프돼 있다. */
+function relRefsOk(xml: string, relTypes: ReadonlyMap<string, string> | undefined): boolean {
+  if (!relTypes) return true;
+  for (const m of xml.matchAll(/<([\w.-]+:)?([\w.-]+)\b[^>]*?\br:(?:id|embed|link)="([^"]*)"/g)) {
+    const [, , local, id] = m;
+    if (id === '') continue;
+    const kind = relTypes.get(id);
+    if (!kind) return false;
+    const want = REL_KIND_BY_ELEMENT[local];
+    if (want && !want.includes(kind)) return false;
+  }
+  return true;
+}
+
+/** CT_TextCharacterProperties 속성 — 값 모양까지 확인한다(어긋나면 그 속성만 뺀다) */
+const RPR_ATTRS: Record<string, RegExp> = {
+  '@_kumimoji': /^(0|1|true|false)$/, '@_b': /^(0|1|true|false)$/, '@_i': /^(0|1|true|false)$/, '@_normalizeH': /^(0|1|true|false)$/,
+  '@_noProof': /^(0|1|true|false)$/, '@_dirty': /^(0|1|true|false)$/, '@_err': /^(0|1|true|false)$/, '@_smtClean': /^(0|1|true|false)$/,
+  '@_lang': /^[A-Za-z]{1,8}(-[A-Za-z0-9]{1,8})*$/, '@_altLang': /^[A-Za-z]{1,8}(-[A-Za-z0-9]{1,8})*$/,
+  '@_sz': /^\d{1,6}$/, '@_kern': /^\d{1,6}$/, '@_spc': /^-?\d{1,7}$/, '@_baseline': /^-?\d{1,7}%?$/, '@_smtId': /^\d{1,10}$/,
+  '@_u': /^[A-Za-z]{1,20}$/, '@_strike': /^[A-Za-z]{1,20}$/, '@_cap': /^[A-Za-z]{1,10}$/, '@_bmk': /^[^\u0000-\u001f]{0,255}$/,
+};
+
+/**
+ * 원본 글자 속성(runProps 마크의 <a:rPr> 문자열 — 협업자가 쓸 수 있는 값)을 구조로 검증해 안전한 노드로: 허용된 속성(값 모양 확인)과
+ * 허용된 자식 요소만 남기고, 자식 안의 관계 id는 이 슬라이드의 맞는 관계여야 한다. 바이트 일치 신뢰 대신 이걸 쓰므로 방이 새로
+ * 만들어지거나(재연결·서버 재시작) 서식을 바꿔 저장한 뒤에도 하이퍼링크 등이 살아남는다(2차 검토 R2-I2). 빠진 것은 notices로 알린다.
+ */
+function sanitizeRunProps(raw: string, ctx: SerializeContext): XmlNode {
+  let parsed: unknown;
+  try {
+    parsed = (parser.parse(raw) as XmlNode)['a:rPr'];
+  } catch {
+    parsed = undefined;
+  }
+  const out: XmlNode = {};
+  if (!parsed || typeof parsed !== 'object') return out;
+  for (const [key, value] of Object.entries(parsed as XmlNode)) {
+    if (key.startsWith('@_')) {
+      if (RPR_ATTRS[key]?.test(String(value))) out[key] = value;
+      continue;
+    }
+    if (!RPR_CHILD_ORDER.includes(key)) continue;
+    if (!relRefsOk(rawXml(key, value), ctx.relTypes)) {
+      ctx.notices?.add(key.startsWith('a:hlink') ? '연결 대상이 없는 하이퍼링크를 링크 없이 저장했습니다.' : '연결 대상이 없는 글자 꾸밈(그림 채우기 등)을 빼고 저장했습니다.');
+      continue;
+    }
+    out[key] = value;
+  }
+  return out;
+}
+
+function mergedRPrXml(raw: string, node: PMNode, trusted: TrustedFragments, ctx: SerializeContext): string {
+  const rPr: XmlNode = sanitizeRunProps(raw, ctx);
   const before = marksFromRPr(rPr, undefined);
   const now = (name: string) => node.marks.find((m) => m.type.name === name);
   const was = (name: string) => before.find((m) => m.type.name === name);
@@ -480,7 +549,7 @@ function mergedRPrXml(raw: string, node: PMNode, trusted: TrustedFragments): str
   const sameColor = color && oldColor ? (color.attrs.raw ? color.attrs.raw === oldColor.attrs.raw : !oldColor.attrs.raw && color.attrs.color === oldColor.attrs.color) : !color && !oldColor;
   if (!sameColor) {
     for (const tag of FILL_TAGS) delete rPr[tag];
-    if (color) Object.assign(rPr, (parser.parse(`<w>${solidFillXml(color, trusted)}</w>`) as XmlNode).w as XmlNode);
+    if (color) Object.assign(rPr, (parser.parse(`<w>${solidFillXml(color, trusted, ctx)}</w>`) as XmlNode).w as XmlNode);
   }
   const family = now('fontFamily')?.attrs.family as string | undefined;
   if (family !== (was('fontFamily')?.attrs.family as string | undefined)) {
@@ -496,16 +565,16 @@ function mergedRPrXml(raw: string, node: PMNode, trusted: TrustedFragments): str
 }
 
 /** 글자 색 마크 → <a:solidFill>(원본 테마 색이면 그대로, 새로 고른 색이면 RGB). 쓸 수 없는 값이면 '' */
-function solidFillXml(colorMark: { attrs: Record<string, unknown> }, trusted: TrustedFragments): string {
+function solidFillXml(colorMark: { attrs: Record<string, unknown> }, trusted: TrustedFragments, ctx: SerializeContext): string {
   const raw = colorMark.attrs.raw as string | null;
-  if (raw && trusted.has(raw)) return `<a:solidFill>${raw}</a:solidFill>`;
+  if (raw && trusted.has(raw) && relRefsOk(raw, ctx.relTypes)) return `<a:solidFill>${raw}</a:solidFill>`;
   const hex = colorMark.attrs.color as string;
   return /^#[0-9A-Fa-f]{6}$/.test(hex) ? `<a:solidFill><a:srgbClr val="${hex.replace('#', '').toUpperCase()}"/></a:solidFill>` : '';
 }
 
-function rPrXmlFor(node: PMNode, trusted: TrustedFragments): string {
+function rPrXmlFor(node: PMNode, trusted: TrustedFragments, ctx: SerializeContext): string {
   const runProps = node.marks.find((m) => m.type.name === 'runProps');
-  if (runProps && trusted.has(runProps.attrs.raw as string)) return mergedRPrXml(runProps.attrs.raw as string, node, trusted);
+  if (runProps && typeof runProps.attrs.raw === 'string') return mergedRPrXml(runProps.attrs.raw, node, trusted, ctx);
   const b = node.marks.some((m) => m.type.name === 'strong') ? ' b="1"' : '';
   const i = node.marks.some((m) => m.type.name === 'em') ? ' i="1"' : '';
   const u = node.marks.some((m) => m.type.name === 'underline') ? ' u="sng"' : '';
@@ -516,7 +585,7 @@ function rPrXmlFor(node: PMNode, trusted: TrustedFragments): string {
   const attrs = `${b}${i}${u}${sz}`;
   // CT_TextCharacterProperties의 자식 순서: ... solidFill ... latin, ea, cs ... (스키마상 고정)
   // 원본 테마 색(raw)이 있으면 그대로 되돌리고, 리본으로 새로 고른 색이면 RGB로 쓴다.
-  const fill = colorMark ? solidFillXml(colorMark, trusted) : '';
+  const fill = colorMark ? solidFillXml(colorMark, trusted, ctx) : '';
   const face = familyMark
     ? (() => {
         const name = escapeXmlAttr(familyMark.attrs.family as string);
@@ -537,29 +606,39 @@ function escapeXmlAttr(text: string): string {
  * 문단·글자 속성, 줄 바꿈 속성, 필드·수식 등 보존 조각, 문단 끝 속성은 목록에 있는 원문일 때만 그대로 쓰고, 아니면
  * 모델링한 값만(필드·수식은 보이는 글자만) 쓴다(검토 I2).
  */
-export function serializeTxBodyXml(doc: PMNode, trusted: TrustedFragments = new Set()): string {
-  const ok = (raw: unknown): raw is string => typeof raw === 'string' && trusted.has(raw);
+export function serializeTxBodyXml(doc: PMNode, trusted: TrustedFragments = new Set(), ctx: SerializeContext = {}): string {
+  // 원문 조각은 서버가 원본에서 읽은 것(trusted)이고 그 안의 관계 id가 이 슬라이드에 맞을 때만 그대로 쓴다
+  const ok = (raw: unknown): raw is string => typeof raw === 'string' && trusted.has(raw) && relRefsOk(raw, ctx.relTypes);
+  const note = (raw: unknown, message: string) => {
+    if (typeof raw === 'string' && raw) ctx.notices?.add(message);
+  };
   const paragraphsXml: string[] = [];
   doc.forEach((paragraph) => {
     const runsXml: string[] = [];
     paragraph.forEach((child) => {
       if (child.type.name === 'br') {
         const rPr = child.attrs.rPr as string | null;
+        if (!ok(rPr)) note(rPr, '줄 바꿈 글자 서식 일부를 기본값으로 저장했습니다.');
         runsXml.push(ok(rPr) ? `<a:br>${rPr}</a:br>` : '<a:br/>');
         return;
       }
       if (child.type.name === 'field') {
         const raw = child.attrs.raw;
         if (ok(raw)) runsXml.push(raw);
-        else if (child.attrs.text) runsXml.push(`<a:r><a:t>${escapeXmlText(String(child.attrs.text))}</a:t></a:r>`);
+        else {
+          note(raw, '쪽 번호·날짜 같은 필드나 수식 일부를 원래 모양 대신 보이는 글자로 저장했습니다.');
+          if (child.attrs.text) runsXml.push(`<a:r><a:t>${escapeXmlText(String(child.attrs.text))}</a:t></a:r>`);
+        }
         return;
       }
       if (!child.isText || !child.text) return;
-      const rPr = rPrXmlFor(child, trusted);
+      const rPr = rPrXmlFor(child, trusted, ctx);
       runsXml.push(`<a:r>${rPr}<a:t>${escapeXmlText(child.text)}</a:t></a:r>`);
     });
     const endRPr = ok(paragraph.attrs.endRPr) ? paragraph.attrs.endRPr : '';
-    paragraphsXml.push(`<a:p>${pPrXmlFor(paragraph, trusted)}${runsXml.join('')}${endRPr}</a:p>`);
+    if (!endRPr) note(paragraph.attrs.endRPr, '문단 끝 글자 서식 일부를 기본값으로 저장했습니다.');
+    if (!ok(paragraph.attrs.pPr)) note(paragraph.attrs.pPr, '문단 서식 일부(글머리·간격 등)를 기본값으로 저장했습니다.');
+    paragraphsXml.push(`<a:p>${pPrXmlFor(paragraph, trusted, ctx)}${runsXml.join('')}${endRPr}</a:p>`);
   });
   // CT_TextBody(OOXML 스키마)는 <a:p>가 최소 1개 있어야 한다(minOccurs="1") — 문단이 하나도 없는
   // <p:txBody>는 PowerPoint가 열 수 없는 손상된 파일이다(FINAL REVIEW C2). pptxTextSchema는

@@ -522,3 +522,33 @@ describe('2차 검토 R2-m2: 표 머리 줄 전처리도 압축 폭탄 상한을
     await expect(boldPptxTableHeaders(zip)).rejects.toThrow(/너무 큽니다/);
   });
 });
+
+describe('2차 검토 R2-I2·R2-m1: 글자 속성은 바이트 신뢰 대신 구조 검증(관계는 이 슬라이드의 맞는 종류만)', () => {
+  const run = (raw: string, text = '링크') => schema.text(text, [schema.marks.strong.create(), schema.marks.runProps.create({ raw })]);
+  const docOf = (...nodes: ReturnType<typeof run>[]) => schema.node('doc', null, [schema.node('paragraph', null, nodes)]);
+  test('방이 새로 만들어져 원문이 믿는 목록에 없어도(빈 목록) 하이퍼링크·lang은 남고 굵게만 반영', () => {
+    const notices = new Set<string>();
+    const xml = serializeTxBodyXml(docOf(run('<a:rPr lang="ko-KR"><a:hlinkClick r:id="rId9"/></a:rPr>')), new Set(), { relTypes: new Map([['rId9', 'hyperlink']]), notices });
+    expect(xml).toContain('<a:rPr lang="ko-KR" b="1"><a:hlinkClick r:id="rId9"/></a:rPr>');
+    expect([...notices]).toEqual([]);
+  });
+  test('다른 슬라이드의 링크 rPr를 붙여도 이 슬라이드의 rId2가 그림 관계면 링크를 빼고 알린다', () => {
+    const notices = new Set<string>();
+    const xml = serializeTxBodyXml(docOf(run('<a:rPr lang="ko-KR"><a:hlinkClick r:id="rId2"/></a:rPr>')), new Set(), { relTypes: new Map([['rId2', 'image']]), notices });
+    expect(xml).not.toContain('hlinkClick');
+    expect([...notices]).toEqual(['연결 대상이 없는 하이퍼링크를 링크 없이 저장했습니다.']);
+    const missing = serializeTxBodyXml(docOf(run('<a:rPr><a:hlinkClick r:id="rId77"/></a:rPr>')), new Set(), { relTypes: new Map(), notices });
+    expect(missing).not.toContain('hlinkClick');
+  });
+  test('허용 안 된 속성 값·요소는 빠진다(구조가 깨지지 않음)', () => {
+    const xml = serializeTxBodyXml(docOf(run('<a:rPr lang="ko-KR" sz="12a" foo="1"><p:sp/><a:cs typeface="X"/></a:rPr>')), new Set(), { relTypes: new Map() });
+    expect(xml).toContain('<a:rPr lang="ko-KR" b="1"><a:cs typeface="X"/></a:rPr>');
+  });
+  test('믿는 필드라도 이 슬라이드에 없는 관계를 가리키면 글자로 저장하고 알린다', () => {
+    const notices = new Set<string>();
+    const raw = '<a:fld id="{X}" type="slidenum"><a:rPr><a:hlinkClick r:id="rId5"/></a:rPr><a:t>3</a:t></a:fld>';
+    const xml = serializeTxBodyXml(schema.node('doc', null, [schema.node('paragraph', null, [schema.node('field', { raw, text: '3' })])]), new Set([raw]), { relTypes: new Map(), notices });
+    expect(xml).toContain('<a:r><a:t>3</a:t></a:r>');
+    expect(notices.size).toBe(1);
+  });
+});

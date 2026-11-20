@@ -102,6 +102,17 @@ export function resolveRelativePath(basePart: string, target: string): string {
   return stack.join('/');
 }
 
+/** .rels의 관계 id → 관계 종류(Type URI의 마지막 이름: hyperlink·image·slide·audio …) */
+export function relTypesOf(relsXml: string): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const relTag of relsXml.match(/<Relationship\b[^>]*\/>/g) ?? []) {
+    const id = /\bId="([^"]+)"/.exec(relTag)?.[1];
+    const type = /\bType="([^"]+)"/.exec(relTag)?.[1];
+    if (id && type) map.set(id, type.slice(type.lastIndexOf('/') + 1));
+  }
+  return map;
+}
+
 /** 파트(슬라이드·레이아웃·마스터) 안 관계 id(r:embed)를 그 파트의 rels로 따라가 브라우저가 그릴 수 있는 그림의 zip 경로로.
  * 관계가 없거나, 미디어 파트가 없거나(손상), 브라우저가 못 그리는 형식(EMF 등)이면 undefined. rels를 이미 읽었으면 넘긴다. */
 export function mediaResolverFor(zip: Record<string, Uint8Array>, part: string, rels?: Map<string, string>): (rId: string) => string | undefined {

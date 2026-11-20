@@ -103,6 +103,7 @@ import {
 import { parseSlideVisuals } from '../pptx/slideContent.js';
 import { buildStoreSheetNameIndex, computeGridCellDisplayAsync, formatComputedValueForStorage } from '../xlsx/formulas.js';
 import {
+  PPTX_SAVE_NOTICE_MAP,
   PPTX_SLIDE_CONTENTS_MAP,
   PPTX_SLIDE_VISUALS_MAP,
   PPTX_SLIDES_ARRAY,
@@ -1764,13 +1765,15 @@ async function flushToStore(room: Room): Promise<void> {
     // 받아들인다)이 끝난 뒤 배열이 이 시점과 달라졌는지 비교하기 위한 스냅샷 — 진짜 위험 구간은
     // exportPptxFromSlides의 동기적 zip 조작(끼어들 틈 없음)이 아니라 바로 이 await다.
     const snapshotBeforeSave = JSON.stringify(slidesArray.toArray());
-    const { bytes: newPptxBytes, finalParts, survivingEntryIds } = exportPptxFromSlides(
+    const { bytes: newPptxBytes, finalParts, survivingEntryIds, notices } = exportPptxFromSlides(
       original,
       slidesArray,
       slideContents,
       slideDesignOf(ydoc),
     );
     await store.saveOriginal(docId, meta.ext, Buffer.from(newPptxBytes));
+    // [pptx 품질 갈래] 고친 글상자의 원문을 다 지키지 못했으면(위조·연결 대상 없음 등) 편집 화면에 알린다 — 조용히 버리지 않는다
+    if (notices.length > 0) ydoc.getMap(PPTX_SAVE_NOTICE_MAP).set('last', { at: Date.now(), text: notices.join(' ') });
 
     // 저장이 끝난 직후, Yjs 배열을 "방금 디스크에 쓴 내용"과 다시 일치시킨다: 모든 항목을
     // finalParts 순서의 'original' 항목으로 재구성한다. 이렇게 하지 않으면 (1) duplicate 항목이
