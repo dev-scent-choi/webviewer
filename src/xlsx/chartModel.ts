@@ -3,7 +3,7 @@
  * 이 파일은 브라우저 번들에도 들어가므로 Node 전용 모듈을 import하지 않는다(XML은 정규식으로 읽는다).
  */
 
-export type ChartKind = 'column' | 'bar' | 'line' | 'pie' | 'area' | 'doughnut' | 'scatter';
+export type ChartKind = 'column' | 'bar' | 'line' | 'pie' | 'area' | 'doughnut' | 'scatter' | 'radar' | 'bubble';
 
 /** 0부터 세는 칸 범위(양 끝 포함). sheetName이 없으면 차트가 놓인 시트. */
 export interface CellRangeRef {
@@ -28,6 +28,8 @@ export interface ChartSeries {
   readonly values: { readonly ref: CellRangeRef | null; readonly cache: readonly number[] };
   /** 파일 차트의 계열 모양(색·종류·보조 축·부드러운 선·표식·데이터 레이블) — 없으면 기본 */
   readonly look?: SeriesLook;
+  /** 거품형: 거품 크기(c:bubbleSize) */
+  readonly sizes?: readonly number[];
 }
 
 /** 데이터 레이블에 무엇을 보일지 */
@@ -35,6 +37,8 @@ export interface ChartLabels {
   readonly val?: 1;
   readonly pct?: 1;
   readonly cat?: 1;
+  /** 계열 이름 */
+  readonly ser?: 1;
   /** 레이블 숫자 서식 */
   readonly fmt?: string;
 }
@@ -65,6 +69,9 @@ export interface ChartLook {
   /** 값 축 눈금 숫자 서식 */
   readonly valFmt?: string;
   readonly val2Fmt?: string;
+  /** 값 축 최소·최대 고정값(c:scaling c:min·c:max) */
+  readonly valMin?: number;
+  readonly valMax?: number;
   /** 값 축 눈금선 */
   readonly gridlines?: 1;
   /** 기본 계열 색(문서 테마의 강조 1~6) */
@@ -282,9 +289,10 @@ function labelsOf(xml: string | undefined): ChartLabels | undefined {
     ...(on('showVal') ? { val: 1 as const } : {}),
     ...(on('showPercent') ? { pct: 1 as const } : {}),
     ...(on('showCatName') ? { cat: 1 as const } : {}),
+    ...(on('showSerName') ? { ser: 1 as const } : {}),
     ...(fmt && fmt !== 'General' ? { fmt: decodeXml(fmt) } : {}),
   };
-  return labels.val || labels.pct || labels.cat ? labels : undefined;
+  return labels.val || labels.pct || labels.cat || labels.ser ? labels : undefined;
 }
 
 const KIND_OF_GROUP = (type: string, body: string): ChartKind =>
@@ -294,11 +302,15 @@ const KIND_OF_GROUP = (type: string, body: string): ChartKind =>
       : 'column'
     : type === 'doughnutChart'
       ? 'doughnut'
+      : type === 'radarChart'
+        ? 'radar'
+        : type === 'bubbleChart'
+          ? 'bubble'
       : type.startsWith('pie') || type === 'ofPieChart'
         ? 'pie'
         : type.startsWith('area')
           ? 'area'
-          : type === 'scatterChart' || type === 'bubbleChart'
+          : type === 'scatterChart'
             ? 'scatter'
             : 'line';
 
@@ -344,7 +356,14 @@ export function parseChartXml(source: string, theme: Readonly<Record<string, str
         ...((labelsOf(ser) ?? groupLabels) ? { labels: labelsOf(ser) ?? groupLabels } : {}),
         ...(pointColors.length > 0 ? { pointColors } : {}),
       };
-      series.push({ name, nameRef: refOf(tx), values: { ref: refOf(val), cache: val ? cachePoints(val).map((v) => Number(v) || 0) : [] }, ...(Object.keys(look).length > 0 ? { look } : {}) });
+      const bubble = /<bubbleSize>([\s\S]*?)<\/bubbleSize>/.exec(ser)?.[1];
+      series.push({
+        name,
+        nameRef: refOf(tx),
+        values: { ref: refOf(val), cache: val ? cachePoints(val).map((v) => Number(v) || 0) : [] },
+        ...(Object.keys(look).length > 0 ? { look } : {}),
+        ...(bubble ? { sizes: cachePoints(bubble).map((v) => Number(v) || 0) } : {}),
+      });
     }
   }
   if (series.length === 0) return null;
@@ -363,6 +382,9 @@ export function parseChartXml(source: string, theme: Readonly<Record<string, str
   const valAx = /<valAx>([\s\S]*?)<\/valAx>/.exec(xml)?.[1] ?? '';
   const accents = [1, 2, 3, 4, 5, 6].map((i) => theme[`accent${i}`]).filter((c): c is string => Boolean(c));
   const hole = Number(/<holeSize val="(\d+)"\/>/.exec(xml)?.[1]);
+  const scaling = /<scaling>([\s\S]*?)<\/scaling>/.exec(valAx)?.[1] ?? '';
+  const valMin = Number(/<min val="([^"]+)"\/>/.exec(scaling)?.[1]);
+  const valMax = Number(/<max val="([^"]+)"\/>/.exec(scaling)?.[1]);
   const look: ChartLook = {
     ...(grouping ? { grouping } : {}),
     ...(legendPos ? { legend: legendPos as ChartLook['legend'] } : {}),
@@ -374,6 +396,8 @@ export function parseChartXml(source: string, theme: Readonly<Record<string, str
     ...(/<majorGridlines/.test(valAx) ? { gridlines: 1 as const } : {}),
     ...(accents.length === 6 ? { palette: accents } : {}),
     ...(Number.isFinite(hole) ? { hole } : {}),
+    ...(Number.isFinite(valMin) ? { valMin } : {}),
+    ...(Number.isFinite(valMax) ? { valMax } : {}),
   };
   return { kind, title, categories, series, look };
 }
@@ -426,6 +450,141 @@ export function chartAnchorsOf(source: string): Array<{ rid: string; from: Chart
   return out;
 }
 
+
+// ---------------------------------------------------------------------------
+// 차트 값 검사 — 차트는 편집자가 공유 맵(GRID_CHARTS_MAP)에 넣을 수 있고 파일에서도 온다. SVG로 그려지므로
+// 색은 #RRGGBB, 종류·위치·표식은 알려진 이름, 수는 유한하고 범위 안, 글자는 길이 제한으로 맞춘다(모르는 칸은 버린다).
+// ---------------------------------------------------------------------------
+
+const CHART_KINDS: readonly ChartKind[] = ['column', 'bar', 'line', 'pie', 'area', 'doughnut', 'scatter', 'radar', 'bubble'];
+const LEGEND_POS = ['r', 'l', 't', 'b', 'tr'] as const;
+const MARKERS = ['circle', 'square', 'diamond', 'triangle', 'x', 'star', 'plus', 'dash', 'dot', 'none', 'auto'] as const;
+const HEX_COLOR = /^#[0-9A-Fa-f]{6}$/;
+
+export function safeChartColor(value: unknown): string | undefined {
+  return typeof value === 'string' && HEX_COLOR.test(value) ? value.toUpperCase() : undefined;
+}
+const safeText = (value: unknown, max = 200): string => (typeof value === 'string' ? value.slice(0, max) : typeof value === 'number' && Number.isFinite(value) ? String(value) : '');
+const safeNum = (value: unknown, lo: number, hi: number, def = 0): number => {
+  const n = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : def;
+};
+const safeInt = (value: unknown, lo: number, hi: number) => Math.round(safeNum(value, lo, hi));
+const oneOf = <T extends string>(value: unknown, list: readonly T[]): T | undefined => (list.includes(value as T) ? (value as T) : undefined);
+const MAX_POINTS = 10_000;
+
+function safeRange(ref: unknown): CellRangeRef | null {
+  if (!ref || typeof ref !== 'object') return null;
+  const r = ref as Record<string, unknown>;
+  const out = { r1: safeInt(r.r1, 0, 1_048_575), c1: safeInt(r.c1, 0, 16_383), r2: safeInt(r.r2, 0, 1_048_575), c2: safeInt(r.c2, 0, 16_383) };
+  return typeof r.sheetName === 'string' ? { sheetName: safeText(r.sheetName, 255), ...out } : out;
+}
+
+function safeAnchor(p: unknown): ChartAnchorPoint {
+  const a = (p && typeof p === 'object' ? p : {}) as Record<string, unknown>;
+  return { row: safeInt(a.row, 0, 1_048_575), col: safeInt(a.col, 0, 16_383), dx: safeNum(a.dx, -10_000, 100_000), dy: safeNum(a.dy, -10_000, 100_000) };
+}
+
+function safeLabels(v: unknown): ChartLabels | undefined {
+  if (!v || typeof v !== 'object') return undefined;
+  const l = v as Record<string, unknown>;
+  const out: ChartLabels = {
+    ...(l.val === 1 ? { val: 1 as const } : {}),
+    ...(l.pct === 1 ? { pct: 1 as const } : {}),
+    ...(l.cat === 1 ? { cat: 1 as const } : {}),
+    ...(l.ser === 1 ? { ser: 1 as const } : {}),
+    ...(typeof l.fmt === 'string' && l.fmt.length <= 255 ? { fmt: l.fmt } : {}),
+  };
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+function safeSeriesLook(v: unknown): SeriesLook | undefined {
+  if (!v || typeof v !== 'object') return undefined;
+  const s = v as Record<string, unknown>;
+  const color = safeChartColor(s.color);
+  const kind = oneOf(s.kind, CHART_KINDS);
+  const marker = oneOf(s.marker, MARKERS);
+  const labels = safeLabels(s.labels);
+  const pointColors = Array.isArray(s.pointColors) ? s.pointColors.slice(0, MAX_POINTS).map(safeChartColor) : undefined;
+  const out: SeriesLook = {
+    ...(color ? { color } : {}),
+    ...(kind ? { kind } : {}),
+    ...(s.secondary === 1 ? { secondary: 1 as const } : {}),
+    ...(s.smooth === 1 ? { smooth: 1 as const } : {}),
+    ...(marker ? { marker } : {}),
+    ...(labels ? { labels } : {}),
+    ...(pointColors ? { pointColors } : {}),
+  };
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+function safeChartLook(v: unknown): ChartLook | undefined {
+  if (!v || typeof v !== 'object') return undefined;
+  const l = v as Record<string, unknown>;
+  const grouping = oneOf(l.grouping, ['stacked', 'percentStacked'] as const);
+  const legend = oneOf(l.legend, LEGEND_POS);
+  const palette = Array.isArray(l.palette) ? l.palette.slice(0, 12).map(safeChartColor).filter((c): c is string => Boolean(c)) : undefined;
+  const labels = safeLabels(l.labels);
+  const text = (key: string) => (typeof l[key] === 'string' ? { [key]: safeText(l[key]) } : {});
+  const fmt = (key: string) => (typeof l[key] === 'string' && (l[key] as string).length <= 255 ? { [key]: l[key] } : {});
+  const num = (key: string) => (typeof l[key] === 'number' && Number.isFinite(l[key]) ? { [key]: safeNum(l[key], -1e15, 1e15) } : {});
+  const out = {
+    ...(grouping ? { grouping } : {}),
+    ...(legend ? { legend } : {}),
+    ...text('catTitle'),
+    ...text('valTitle'),
+    ...text('val2Title'),
+    ...fmt('valFmt'),
+    ...fmt('val2Fmt'),
+    ...num('valMin'),
+    ...num('valMax'),
+    ...(l.gridlines === 1 ? { gridlines: 1 as const } : {}),
+    ...(palette && palette.length > 0 ? { palette } : {}),
+    ...(labels ? { labels } : {}),
+    ...(typeof l.hole === 'number' ? { hole: safeNum(l.hole, 10, 90, 50) } : {}),
+  } as ChartLook;
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/**
+ * 차트 하나를 검사해 안전한 모양으로 — 알 수 없거나 망가진 차트면 null. fromClient면 모양(look)은 버린다
+ * (편집기로 넣은 차트는 모양을 쓰지 않는다 — 공유 맵을 거쳐 남의 화면에 그려지는 값을 줄인다).
+ */
+export function sanitizeGridChart(input: unknown, fromClient = false): GridChart | null {
+  if (!input || typeof input !== 'object') return null;
+  const c = input as Record<string, unknown>;
+  const kind = oneOf(c.kind, CHART_KINDS);
+  if (!kind || typeof c.id !== 'string' || typeof c.sheetName !== 'string') return null;
+  const cats = (c.categories && typeof c.categories === 'object' ? c.categories : {}) as Record<string, unknown>;
+  const series = (Array.isArray(c.series) ? c.series : []).slice(0, 255).map((s): ChartSeries => {
+    const ser = (s && typeof s === 'object' ? s : {}) as Record<string, unknown>;
+    const vals = (ser.values && typeof ser.values === 'object' ? ser.values : {}) as Record<string, unknown>;
+    const look = fromClient ? undefined : safeSeriesLook(ser.look);
+    const sizes = Array.isArray(ser.sizes) ? ser.sizes.slice(0, MAX_POINTS).map((n) => safeNum(n, -1e15, 1e15)) : undefined;
+    return {
+      name: safeText(ser.name),
+      nameRef: safeRange(ser.nameRef),
+      values: { ref: safeRange(vals.ref), cache: (Array.isArray(vals.cache) ? vals.cache : []).slice(0, MAX_POINTS).map((n) => safeNum(n, -1e15, 1e15)) },
+      ...(look ? { look } : {}),
+      ...(sizes && !fromClient ? { sizes } : {}),
+    };
+  });
+  const size = c.size && typeof c.size === 'object' ? (c.size as Record<string, unknown>) : null;
+  const look = fromClient ? undefined : safeChartLook(c.look);
+  return {
+    id: safeText(c.id, 300),
+    sheetName: safeText(c.sheetName, 255),
+    kind,
+    title: safeText(c.title),
+    from: safeAnchor(c.from),
+    size: size ? { width: safeNum(size.width, 1, 10_000, 480), height: safeNum(size.height, 1, 10_000, 288) } : null,
+    to: c.to ? safeAnchor(c.to) : null,
+    categories: { ref: safeRange(cats.ref), cache: (Array.isArray(cats.cache) ? cats.cache : []).slice(0, MAX_POINTS).map((v) => safeText(v)) },
+    series,
+    source: c.source === 'file' ? 'file' : 'new',
+    ...(look ? { look } : {}),
+  };
+}
 
 // ---------------------------------------------------------------------------
 // 새 차트 XML 만들기(저장)

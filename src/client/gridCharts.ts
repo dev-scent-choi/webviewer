@@ -31,7 +31,7 @@ export interface GridChartHost {
   setChartTabVisible(visible: boolean): void;
 }
 
-const KIND_LABELS: Readonly<Record<ChartKind, string>> = { column: '세로 막대형', bar: '가로 막대형', line: '꺾은선형', pie: '원형', area: '영역형', doughnut: '도넛형', scatter: '분산형' };
+const KIND_LABELS: Readonly<Record<ChartKind, string>> = { column: '세로 막대형', bar: '가로 막대형', line: '꺾은선형', pie: '원형', area: '영역형', doughnut: '도넛형', scatter: '분산형', radar: '방사형', bubble: '거품형' };
 
 /** 칸 하나만 선택했으면 그 칸을 둘러싼 비어 있지 않은 영역(Excel의 "현재 영역") */
 export function currentRegion(start: { row: number; col: number }, isFilled: (r: number, c: number) => boolean, extent: { rows: number; cols: number }): CellRangeRef | null {
@@ -157,10 +157,20 @@ export function setupGridCharts(host: GridChartHost): { render(): void; insert(k
       el.classList.toggle('is-selected', chart.id === selectedId);
       el.title = chart.source === 'file' ? `${KIND_LABELS[chart.kind]} 차트(원본 파일 — 저장할 때 그대로 보존됩니다)` : `${KIND_LABELS[chart.kind]} 차트`;
       const svg = renderChartSvg(chart.kind, { ...dataOf(chart), title: chart.title }, Math.round(box.width), Math.round(box.height));
-      const content = `${svg}${chart.source === 'new' && host.canEdit ? '<span class="grid-chart-resize" aria-hidden="true"></span>' : ''}`;
-      if (el.dataset.rendered !== content) {
-        el.innerHTML = content;
-        el.dataset.rendered = content;
+      // SVG를 <img>(data: 주소)로 얹는다 — 공유 맵에서 온 차트 값이 어떤 글자든 문서 안에서 스크립트가 될 수 없다(보기 화면과 같은 방식)
+      const resizable = chart.source === 'new' && host.canEdit;
+      const key = `${svg}|${resizable ? 1 : 0}`;
+      if (el.dataset.rendered !== key) {
+        const img = document.createElement('img');
+        img.className = 'grid-chart-img';
+        img.alt = chart.title || KIND_LABELS[chart.kind] || '';
+        img.draggable = false;
+        img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+        const handle = document.createElement('span');
+        handle.className = 'grid-chart-resize';
+        handle.setAttribute('aria-hidden', 'true');
+        el.replaceChildren(...(resizable ? [img, handle] : [img]));
+        el.dataset.rendered = key;
       }
     }
     for (const el of [...layer.querySelectorAll<HTMLElement>('.grid-chart')]) if (!keep.has(el.dataset.chartId ?? '')) el.remove();

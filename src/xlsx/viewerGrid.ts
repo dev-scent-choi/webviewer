@@ -23,6 +23,8 @@ import {
 import { numFmtCodeOf, formatValueText } from '../collab/numberFormat.js';
 import { bakeCondFormats, bakeRow, CF_BAKE_WORK_CAP, localDayKey, styleRegistry } from './viewerCondFormat.js';
 import { createCfFormulaFallback } from './cfFormulaEngine.js';
+import { workbookTablesOf } from './sheetExtras.js';
+import { tableCellLook, withTableLook } from './tableStyles.js';
 import { cfIsVolatile, cfRowIndex, computeStats, needsStats, type CfStats } from '../collab/condFormatShared.js';
 import { declaredEntrySizes } from '../zipGuard.js';
 import { closeLazyGridStore, getRowCells, ingestXlsxLazily, type LazyGridStore } from './lazyGridStore.js';
@@ -59,7 +61,9 @@ function displayCellOf(cell: GridCell | 0, registry: ReturnType<typeof styleRegi
  * 붙일 때 행마다 그 행의 규칙만 본다(viewerCondFormat.ts와 같은 판정·상한). 이 경로에서 수식 규칙이 다른 행을 가리키면
  * 지금 읽은 행 묶음(500행) 안의 값만 보인다 — 같은 행을 보는 흔한 규칙($C2>=1)은 정확하다.
  */
-export async function serializeGridFromLazyStore(store: LazyGridStore): Promise<{ buffer: Buffer; sheetCount: number }> {
+export async function serializeGridFromLazyStore(store: LazyGridStore, originalXlsx?: Uint8Array): Promise<{ buffer: Buffer; sheetCount: number }> {
+  // 엑셀 표의 표 스타일 — 보기 그리드에만 굽는다(편집 경로의 칸 서식에는 넣지 않는다, tableStyles.ts)
+  const tables = originalXlsx ? workbookTablesOf(originalXlsx) : null;
   const styles = [...store.styles];
   const registry = styleRegistry(styles);
   const work = { left: CF_BAKE_WORK_CAP };
@@ -113,8 +117,21 @@ export async function serializeGridFromLazyStore(store: LazyGridStore): Promise<
         return cell ? gridCellValue(cell) : '';
       };
       const fallback = entries.length > 0 ? createCfFormulaFallback(valueAt, () => ({ rows: rowCount, cols: colCount })) : undefined;
+      const sheetTables = tables?.bySheet.get(store.sheetMeta[s].name) ?? [];
       rows.forEach((row, i) => {
         let cells = row.map((cell) => displayCellOf(cell, registry));
+        for (const table of sheetTables) {
+          const r = start + i;
+          if (r < table.r0 || r > table.r1) continue;
+          for (let c = table.c0; c <= Math.min(table.c1, colCount - 1); c += 1) {
+            const look = tableCellLook(table, r, c, tables?.themeColors ?? []);
+            if (!look) continue;
+            while (cells.length <= c) cells.push(0);
+            const cell = cells[c];
+            const sIdx = registry.register(withTableLook(registry.styleOf(cell === 0 ? undefined : cell.s), look));
+            cells[c] = cell === 0 ? { v: '', s: sIdx } : { ...cell, s: sIdx };
+          }
+        }
         if (entries.length > 0) cells = [...bakeRow(start + i, cells, byRow[start + i], stats, valueAt, fallback, registry, work)];
         while (cells.length > 0 && cells[cells.length - 1] === 0) cells.pop();
         parts.push(newline, Buffer.from(JSON.stringify(cells), 'utf8'));
@@ -158,7 +175,7 @@ export async function buildViewerGridFile(xlsxBytes: Buffer): Promise<{ buffer: 
   }
   const store = await ingestXlsxLazily(`viewer-${randomUUID()}`, xlsxBytes);
   try {
-    return await serializeGridFromLazyStore(store);
+    return await serializeGridFromLazyStore(store, xlsxBytes);
   } finally {
     await closeLazyGridStore(store);
   }

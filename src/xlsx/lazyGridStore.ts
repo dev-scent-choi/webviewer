@@ -34,8 +34,6 @@ import {
 } from './sheetGeometry.js';
 import { gridCellKey, parseGridCellKey } from '../collab/gridShared.js';
 import type { CondFormatEntry } from '../collab/condFormatShared.js';
-import { sheetTablesOf, tableCellLook, withTableLook, type SheetTable } from './tableStyles.js';
-import { relsPathOf } from './drawingPassthrough.js';
 import { parseCondFormats, parseDxfs } from './condFormatParse.js';
 
 export interface LazyGridSheetMeta {
@@ -147,20 +145,6 @@ function chunkedReadable(buf: Buffer, size = 64 * 1024): Readable {
     })(),
     { objectMode: false },
   );
-}
-
-/** 시트에 연결된 엑셀 표(표 스타일용) — 관계 파일과 표 파트만 꺼낸다 */
-async function sheetTablesFromZip(zip: JSZip, sheetPath: string, sheetXml: string): Promise<SheetTable[]> {
-  if (!sheetXml.includes('<tablePart')) return [];
-  const entries: Record<string, Uint8Array> = {};
-  const relsPath = relsPathOf(sheetPath);
-  const rels = await zip.file(relsPath)?.async('uint8array');
-  if (!rels) return [];
-  entries[relsPath] = rels;
-  for (const name of Object.keys(zip.files)) {
-    if (name.startsWith('xl/tables/')) entries[name] = await zip.files[name].async('uint8array');
-  }
-  return sheetTablesOf(entries, sheetPath, sheetXml);
 }
 
 async function loadWorksheetXmlsByPath(zip: JSZip): Promise<Map<string, string>> {
@@ -435,8 +419,6 @@ export async function ingestXlsxLazily(docId: string, xlsxBytes: Buffer): Promis
           ? rawReader.workbookRels?.find((r) => r.Id === sheetModelEntry.rId)
           : undefined;
         const sheetXml = rel ? worksheetXmlsByPath.get(`xl/${rel.Target}`) : undefined;
-        // 엑셀 표의 표 스타일 — 보기용 통째 읽기(parseXlsxToGrid)와 같은 함수로 칸 서식에 얹는다
-        const tables = rel && sheetXml ? await sheetTablesFromZip(zip, `xl/${rel.Target}`, sheetXml) : [];
 
         // 행 높이(파일 값·숨김·자동 맞춤)를 행을 읽으면서 바로 계산하려면 열 폭과 병합을 미리 알아야 한다
         const sheetFormat = sheetXml
@@ -488,17 +470,6 @@ export async function ingestXlsxLazily(docId: string, xlsxBytes: Buffer): Promis
             cells[colNumber - 1] = gridCell;
             if (gridCell.v !== '') rowHasValue = true;
           });
-          for (const table of tables) {
-            if (originalRow < table.r0 || originalRow > table.r1) continue;
-            for (let c = table.c0; c <= Math.min(table.c1, MAX_COLS - 1); c += 1) {
-              const look = tableCellLook(table, originalRow, c, themeColors);
-              if (!look) continue;
-              while (cells.length <= c) cells.push(0);
-              const cell = cells[c];
-              const s = palette.register(withTableLook(cell === 0 || cell.s === undefined ? {} : palette.toArray()[cell.s], look));
-              if (s !== undefined) cells[c] = cell === 0 ? { v: '', s } : { ...cell, s };
-            }
-          }
           if (rowHasValue) maxRowWithValue = row.number;
           if (hiddenRows.has(originalRow)) {
             // 위에서 이미 0으로 넣었다

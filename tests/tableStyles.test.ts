@@ -23,7 +23,7 @@ describe('엑셀 표 스타일(검토 12)', () => {
   test('칸에 직접 준 서식이 이긴다', () => {
     expect(withTableLook({ bg: '#FF0000' }, { bg: '#4F81BD', col: '#FFFFFF', b: 1 })).toEqual({ bg: '#FF0000', col: '#FFFFFF', b: 1 });
   });
-  test('a3 둘째 시트의 표(Medium2): 보기(통째 읽기)·편집(스트리밍 읽기) 둘 다 머리 줄이 칠해진다', async () => {
+  test('a3 둘째 시트의 표(Medium2): 보기 그리드는 머리 줄을 칠하고, 편집 경로(지연 그리드) 칸 서식에는 넣지 않는다(검토 N3)', async () => {
     const bytes = fs.readFileSync('audit/office/corpus/xlsx/a3-fidelity-grid.xlsx');
     const grid = await parseXlsxToGrid(bytes);
     const sheet = grid.sheets.findIndex((s) => s.name === '둘째');
@@ -33,7 +33,7 @@ describe('엑셀 표 스타일(검토 12)', () => {
     try {
       const row = await getRowCells(store, sheet, 2, 2);
       const cell = row[0];
-      expect(cell !== 0 && cell.s !== undefined && store.styles[cell.s].bg).toBe('#4F81BD');
+      expect(cell !== 0 && cell.s !== undefined ? store.styles[cell.s].bg : undefined).toBeUndefined();
     } finally {
       await closeLazyGridStore(store);
     }

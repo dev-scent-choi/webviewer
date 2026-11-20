@@ -14,6 +14,7 @@ import {
   chartAnchorsOf,
   chartThemeOf,
   parseChartXml,
+  sanitizeGridChart,
   pictureAnchorsOf,
   type ChartAnchorPoint,
   type GridChart,
@@ -313,7 +314,9 @@ export function readSheetChartsFromEntries(entries: Readonly<Record<string, Uint
       const chartBytes = chartRel ? entries[resolvePartPath(drawingPath, chartRel.target)] : undefined;
       const parsed = chartBytes ? parseChartXml(strFromU8(chartBytes), theme) : null;
       if (!parsed) continue;
-      charts.push({ id: `file:${drawingPath}:${anchor.rid}`, sheetName, from: anchor.from, to: anchor.to, size: anchor.size, source: 'file', ...parsed });
+      // 파일에서 온 값도 같은 검사를 지난다(색은 #RRGGBB, 이름·종류는 알려진 것만)
+      const chart = sanitizeGridChart({ id: `file:${drawingPath}:${anchor.rid}`, sheetName, from: anchor.from, to: anchor.to, size: anchor.size, source: 'file', ...parsed });
+      if (chart) charts.push(chart);
     }
   }
   return charts;

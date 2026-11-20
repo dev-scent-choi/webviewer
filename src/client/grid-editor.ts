@@ -45,6 +45,7 @@ import {
 import type { CellRangeRef, ChartKind } from '../xlsx/chartModel.js';
 import { EXCEL_DEFAULT_FONT_PX, RowLayout } from '../xlsx/sheetGeometry.js';
 import { borderSideCss, bordersWithout, cellBoxCss } from '../collab/cellBoxCss.js';
+import { tableCellLook, withTableLook, type SheetTable } from '../xlsx/tableStyles.js';
 import { compareCells, filteredRows, GRID_FILTERS_MAP, shiftFormulaRows, sortOrder, type SheetFilter } from './gridSort.js';
 import { officeAlert, officeConfirm } from './officeDialog.js';
 
@@ -210,7 +211,11 @@ const VALIGN_TO_CSS: Record<'t' | 'm' | 'b', string> = { t: 'top', m: 'middle', 
 /** 조건부 서식 색 덧입히기 — main()이 연결한다. 칸 서식을 다시 칠하는 곳(applyStyleToTd)이 여러 군데라 그 끝에서 부른다. */
 let condFormatOverlay: ((td: HTMLTableCellElement) => void) | null = null;
 
-function applyStyleToTd(td: HTMLTableCellElement, style: CellStyleAttrs | undefined): void {
+/** 엑셀 표의 표 스타일 덧칠 — main()이 연결한다. 칸 서식(저장되는 값)에는 넣지 않고 그릴 때만 얹는다(tableStyles.ts) */
+let tableLookOverlay: ((td: HTMLTableCellElement, style: CellStyleAttrs | undefined) => CellStyleAttrs | undefined) | null = null;
+
+function applyStyleToTd(td: HTMLTableCellElement, cellStyle: CellStyleAttrs | undefined): void {
+  const style = tableLookOverlay ? tableLookOverlay(td, cellStyle) : cellStyle;
   td.style.fontWeight = style?.b ? '700' : '400';
   td.style.fontStyle = style?.i ? 'italic' : 'normal';
   td.style.textDecoration = [style?.u ? 'underline' : '', style?.st ? 'line-through' : ''].filter(Boolean).join(' ');
@@ -570,7 +575,7 @@ async function main(): Promise<void> {
     // 서식 코드의 글자 색([Red] 등)은 값마다 다르다 — 없으면 칸 서식 색으로 되돌린다(조건부 서식이 그 위에 덧입힌다)
     if (shown.color) td.dataset.fc = shown.color;
     else delete td.dataset.fc;
-    td.style.color = shown.color ?? style?.col ?? '';
+    td.style.color = shown.color ?? (tableLookOverlay ? tableLookOverlay(td, style) : style)?.col ?? '';
     applySpillDisplay(td, key, text);
     condFormatOverlay?.(td); // 값이 바뀌면 강조도 바뀐다(이 경로는 applyStyleToTd를 안 거칠 때가 있다)
     if (gridLinks) {
@@ -3271,7 +3276,8 @@ async function main(): Promise<void> {
     const paint = rowEntries.length > 0 ? paintCell(rowEntries, row, col, cfValueAt(row, col), cfStatsNow(), cfValueAt, cfFallback ?? undefined) : null;
     if (!paint && td.dataset.cf === undefined) return;
     // 기본 서식(applyStyleToTd와 같은 값)으로 되돌린 뒤 규칙 색을 얹는다 — 규칙이 더는 안 맞으면 원래 모습이 된다
-    const base = styles.get(gridCellKey(activeSheet, row, col));
+    const own = styles.get(gridCellKey(activeSheet, row, col));
+    const base = tableLookOverlay ? tableLookOverlay(td, own) : own;
     td.style.background = paint?.style?.bg ?? paint?.scale ?? base?.bg ?? '';
     td.style.color = paint?.style?.col ?? td.dataset.fc ?? base?.col ?? '';
     td.style.fontWeight = paint?.style?.b || base?.b ? '700' : '400';
@@ -3291,6 +3297,33 @@ async function main(): Promise<void> {
     else delete td.dataset.cf;
   }
   condFormatOverlay = applyCondFormatOverlay;
+  // 엑셀 표(표 스타일) — 파일의 표 범위·스타일을 받아 그릴 때 덧칠한다. 위치(행 번호)로 정하므로 정렬해도 줄무늬가 제자리다
+  let fileTables: Array<SheetTable & { sheetName: string }> = [];
+  let fileThemeColors: readonly string[] = [];
+  tableLookOverlay = (td, style) => {
+    if (fileTables.length === 0 || td.dataset.row === undefined) return style;
+    const row = Number(td.dataset.row);
+    const col = Number(td.dataset.col);
+    const sheetName = structure.get(String(activeSheet))?.name;
+    for (const table of fileTables) {
+      if (table.sheetName !== sheetName) continue;
+      const look = tableCellLook(table, row, col, fileThemeColors);
+      if (look) return withTableLook(style ?? {}, look);
+    }
+    return style;
+  };
+  void fetch(`/api/view/xlsx-extras?token=${encodeURIComponent(token)}`)
+    .then((res) => res.json() as Promise<{ data?: { tables?: Array<SheetTable & { sheetName: string }>; themeColors?: string[] } }>)
+    .then((json) => {
+      fileTables = json.data?.tables ?? [];
+      fileThemeColors = json.data?.themeColors ?? [];
+      if (fileTables.length > 0) tableEl.querySelectorAll<HTMLTableCellElement>('td[data-row]').forEach((td) => {
+        const at = Number(td.dataset.row);
+        const c = Number(td.dataset.col);
+        applyStyleToTd(td, styles.get(gridCellKey(activeSheet, at, c)));
+      });
+    })
+    .catch(() => undefined);
   let cfIndex: { sheet: number; entries: readonly CondFormatEntry[]; byRow: Array<CondFormatEntry[] | undefined> } | null = null;
   function cfRowEntries(row: number): readonly CondFormatEntry[] {
     const entries = cfEntries();

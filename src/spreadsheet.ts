@@ -34,7 +34,8 @@ for (const [id, entry] of Object.entries(excelBuiltinNumFmts as Record<string, {
 for (const [id, f] of Object.entries(KO_BUILTIN_NUMFMTS)) (excelBuiltinNumFmts as Record<string, { f?: string }>)[id] ??= { f };
 import type { BorderSpec } from './collab/cellBoxCss.js';
 import { sheetPathsByName, stripDrawings } from './xlsx/drawingPassthrough.js';
-import { sheetTablesOf, tableCellLook, withTableLook } from './xlsx/tableStyles.js';
+import { tableCellLook, withTableLook } from './xlsx/tableStyles.js';
+import { sheetTablesOf } from './xlsx/sheetExtras.js';
 import { unzipSync, strFromU8 } from 'fflate';
 import {
   EXCEL_DEFAULT_FONT_PX,
@@ -866,11 +867,11 @@ export async function parseXlsxToGrid(xlsxBytes: Buffer): Promise<GridDocument> 
   // 사용자뿐 아니라 그 순간 서버에 접속한 다른 모든 사용자·다른 문서 요청까지 함께 멈추지 않도록
   // 주기적으로 양보한다.
   // 열 너비 단위의 기준 — 통합 문서 기본 글꼴(표준 스타일)의 숫자 폭
-  // 스타일·시트 관계·표 파트(엑셀 표의 표 스타일)만 푼다
+  // 스타일·시트 관계·표 파트(엑셀 표의 표 스타일)만 푼다 — 시트 XML(데이터)은 풀지 않는다
   const parts = unzipSync(new Uint8Array(xlsxBytes), {
     filter: (file) =>
       file.name === 'xl/styles.xml' || file.name === 'xl/workbook.xml' || file.name === 'xl/_rels/workbook.xml.rels' ||
-      file.name.startsWith('xl/tables/') || /^xl\/worksheets\/(_rels\/)?sheet\d+\.xml(\.rels)?$/.test(file.name),
+      file.name.startsWith('xl/tables/') || file.name.startsWith('xl/worksheets/_rels/'),
   });
   const stylesPart = parts['xl/styles.xml'];
   const sheetPaths = sheetPathsByName(parts);

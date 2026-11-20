@@ -5,7 +5,7 @@
  * 축 제목, 범례 위치, 축 숫자 서식, 보조 축, 콤보, 영역·도넛·분산형)을 따른다. 새로 넣은 차트는 오피스 기본 모양.
  */
 import { formatNumberCode, FILL_MARK } from '../collab/numberFormat.js';
-import { cellsOf, type CellRangeRef, type ChartKind, type ChartLabels, type ChartLook, type GridChart, type SeriesLook } from './chartModel.js';
+import { cellsOf, safeChartColor, type CellRangeRef, type ChartKind, type ChartLabels, type ChartLook, type GridChart, type SeriesLook } from './chartModel.js';
 
 const PALETTE = ['#4472C4', '#ED7D31', '#A5A5A5', '#FFC000', '#5B9BD5', '#70AD47', '#264478', '#9E480E'];
 const FONT = 'font-family="맑은 고딕, Malgun Gothic, sans-serif"';
@@ -33,7 +33,7 @@ function formatTick(value: number, fmt?: string): string {
 export interface ChartData {
   readonly title: string;
   readonly categories: readonly string[];
-  readonly series: ReadonlyArray<{ name: string; values: readonly number[]; look?: SeriesLook }>;
+  readonly series: ReadonlyArray<{ name: string; values: readonly number[]; look?: SeriesLook; sizes?: readonly number[] }>;
   readonly look?: ChartLook;
 }
 
@@ -64,8 +64,9 @@ function linePath(points: ReadonlyArray<readonly [number, number]>, smooth: bool
   return d;
 }
 
-function labelText(labels: ChartLabels, value: number, category: string, pct?: number): string {
+function labelText(labels: ChartLabels, value: number, category: string, pct?: number, seriesName = ''): string {
   const parts: string[] = [];
+  if (labels.ser && seriesName) parts.push(seriesName);
   if (labels.cat) parts.push(category);
   if (labels.val) parts.push(formatTick(value, labels.fmt));
   if (labels.pct && pct !== undefined) parts.push(`${Math.round(pct * 100)}%`);
@@ -75,8 +76,15 @@ function labelText(labels: ChartLabels, value: number, category: string, pct?: n
 /** 차트 SVG(오피스 차트 모양 근사 — 눈금선, 축 글자, 범례) */
 export function renderChartSvg(kind: ChartKind, data: ChartData, width: number, height: number): string {
   const look = data.look;
-  const palette = look?.palette ?? PALETTE;
-  const colorOf = (i: number) => data.series[i]?.look?.color ?? palette[i % palette.length];
+  // 색은 모두 이 두 함수를 지난다 — #RRGGBB가 아니면(공유 맵으로 들어온 망가진·악의적 값) 기본 팔레트 색
+  const palette = (look?.palette ?? []).map(safeChartColor).filter((c): c is string => Boolean(c));
+  const paletteAt = (i: number) => (palette.length > 0 ? palette : PALETTE)[i % (palette.length > 0 ? palette.length : PALETTE.length)];
+  const colorOf = (i: number) => safeChartColor(data.series[i]?.look?.color) ?? paletteAt(i);
+  const pointColor = (i: number) => safeChartColor(data.series[0]?.look?.pointColors?.[i]) ?? paletteAt(i);
+  const lineLike = (i: number) => {
+    const k = data.series[i]?.look?.kind ?? kind;
+    return k === 'line' || k === 'radar' || (k === 'scatter' && Boolean(data.series[i]?.look?.smooth));
+  };
   const parts: string[] = [`<rect width="${width}" height="${height}" fill="#fff"/>`];
   let top = 10;
   let bottom = height - 8;
@@ -90,15 +98,18 @@ export function renderChartSvg(kind: ChartKind, data: ChartData, width: number, 
   // 범례 — 파일 차트는 파일의 위치(없으면 범례 없음), 새 차트는 계열이 둘 이상이거나 원형이면 아래
   const legendPos = look ? look.legend : data.series.length > 1 || round ? 'b' : undefined;
   const legendItems = round
-    ? data.categories.map((label, i) => ({ label, color: data.series[0]?.look?.pointColors?.[i] ?? palette[i % palette.length] }))
-    : data.series.map((s, i) => ({ label: s.name, color: colorOf(i) }));
+    ? data.categories.map((label, i) => ({ label, color: pointColor(i), line: false }))
+    : data.series.map((s, i) => ({ label: s.name, color: colorOf(i), line: lineLike(i) }));
+  // 범례 기호 — 꺾은선 계열은 선(엑셀과 같다), 나머지는 네모
+  const legendMark = (x: number, y: number, item: { color: string; line: boolean }) =>
+    item.line ? `<line x1="${x - 2}" y1="${y + 4.5}" x2="${x + 11}" y2="${y + 4.5}" stroke="${item.color}" stroke-width="2.25"/>` : `<rect x="${x}" y="${y}" width="9" height="9" fill="${item.color}"/>`;
   if (legendPos && legendItems.length > 0) {
     if (legendPos === 'r' || legendPos === 'tr' || legendPos === 'l') {
       const w = Math.min(110, width * 0.3);
       const x0 = legendPos === 'l' ? 8 : width - w;
       const y0 = Math.max(top, (height - legendItems.length * 16) / 2);
       legendItems.forEach((item, i) => {
-        parts.push(`<rect x="${x0}" y="${y0 + i * 16}" width="9" height="9" fill="${item.color}"/>`);
+        parts.push(legendMark(x0, y0 + i * 16, item));
         parts.push(text(x0 + 13, y0 + i * 16 + 8, String(item.label).slice(0, 14)));
       });
       if (legendPos === 'l') left = w + 12;
@@ -109,7 +120,7 @@ export function renderChartSvg(kind: ChartKind, data: ChartData, width: number, 
       const y = legendPos === 't' ? top + 4 : height - 17;
       legendItems.forEach((item, i) => {
         const x = startX + i * itemW;
-        parts.push(`<rect x="${x}" y="${y}" width="9" height="9" fill="${item.color}"/>`);
+        parts.push(legendMark(x, y, item));
         parts.push(text(x + 13, y + 8, String(item.label).slice(0, 12)));
       });
       if (legendPos === 't') top += 22;
@@ -131,7 +142,7 @@ export function renderChartSvg(kind: ChartKind, data: ChartData, width: number, 
       const sweep = (value / total) * Math.PI * 2;
       const end = angle + sweep;
       const large = sweep > Math.PI ? 1 : 0;
-      const color = data.series[0]?.look?.pointColors?.[i] ?? palette[i % palette.length];
+      const color = pointColor(i);
       const pt = (rad: number, a: number) => `${cx + rad * Math.cos(a)} ${cy + rad * Math.sin(a)}`;
       const path =
         sweep >= Math.PI * 2 - 1e-6
@@ -143,11 +154,46 @@ export function renderChartSvg(kind: ChartKind, data: ChartData, width: number, 
       if (labels) {
         const mid = angle + sweep / 2;
         const lr = hole > 0 ? (r + hole) / 2 : r * 0.65;
-        parts.push(text(cx + lr * Math.cos(mid), cy + lr * Math.sin(mid) + 3, labelText(labels, value, String(data.categories[i] ?? ''), value / total), 'text-anchor="middle"'));
+        parts.push(text(cx + lr * Math.cos(mid), cy + lr * Math.sin(mid) + 3, labelText(labels, value, String(data.categories[i] ?? ''), value / total, data.series[0]?.name), 'text-anchor="middle"'));
       }
       angle = end;
     });
     if (hole > 0) parts.push(`<circle cx="${cx}" cy="${cy}" r="${hole}" fill="#fff"/>`);
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">${parts.join('')}</svg>`;
+  }
+
+  if (kind === 'radar') {
+    // 방사형 — 항목마다 바큇살, 값 눈금은 동심 다각형, 계열은 닫힌 선
+    const n = Math.max(1, data.categories.length, ...data.series.map((s) => s.values.length));
+    const all = data.series.flatMap((s) => s.values);
+    const step = niceStep(Math.max(0, ...all) - Math.min(0, ...all) || 1);
+    const lo = look?.valMin ?? Math.min(0, Math.floor(Math.min(...all, 0) / step) * step);
+    const hi = look?.valMax ?? (Math.ceil(Math.max(...all, 0) / step) * step || step);
+    const cx = (left + right) / 2;
+    const cy = (top + bottom) / 2 + 4;
+    const R = Math.max(10, Math.min((right - left) / 2 - 30, (bottom - top) / 2 - 16));
+    const at = (c: number, v: number) => {
+      const a = -Math.PI / 2 + (2 * Math.PI * c) / n;
+      const r = (Math.max(lo, Math.min(hi, v)) - lo) / (hi - lo || 1) * R;
+      return [cx + r * Math.cos(a), cy + r * Math.sin(a)] as const;
+    };
+    for (let v = lo + step; v <= hi + step / 2; v += step) {
+      parts.push(`<path d="M${Array.from({ length: n }, (_, c) => at(c, v).join(' ')).join('L')}Z" fill="none" stroke="#d9d9d9"/>`);
+      parts.push(text(cx + 3, at(0, v)[1] + 3, formatTick(v, look?.valFmt)));
+    }
+    for (let c = 0; c < n; c += 1) {
+      const [x, y] = at(c, hi);
+      parts.push(`<line x1="${cx}" y1="${cy}" x2="${x}" y2="${y}" stroke="#d9d9d9"/>`);
+      const [lx, ly] = at(c, hi + (hi - lo) * 0.12);
+      parts.push(text(lx, ly + 3, String(data.categories[c] ?? '').slice(0, 10), 'text-anchor="middle"'));
+    }
+    data.series.forEach((ser, i) => {
+      const color = colorOf(i);
+      const pts = Array.from({ length: n }, (_, c) => at(c, ser.values[c] ?? 0));
+      parts.push(`<path d="M${pts.map((p) => p.join(' ')).join('L')}Z" fill="none" stroke="${color}" stroke-width="2"/>`);
+      const symbol = ser.look?.marker;
+      if (symbol && symbol !== 'none') for (const [x, y] of pts) parts.push(marker(symbol, x, y, color));
+    });
     return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">${parts.join('')}</svg>`;
   }
 
@@ -181,8 +227,13 @@ export function renderChartSvg(kind: ChartKind, data: ChartData, width: number, 
     const maxV = Math.max(...vals);
     const minV = Math.min(...vals);
     if (stacked === 'percentStacked' && !axis2) return { min: Math.min(0, minV), max: 1, step: 0.2 };
-    const step = niceStep(maxV - minV || 1);
-    return { min: Math.floor(minV / step) * step, max: Math.ceil(maxV / step) * step || step, step };
+    // 파일이 정한 값 축 최소·최대(c:min·c:max)가 있으면 그대로 — 0이 아닌 축 시작
+    const fixedMin = axis2 ? undefined : look?.valMin;
+    const fixedMax = axis2 ? undefined : look?.valMax;
+    const lo = fixedMin ?? minV;
+    const hi = fixedMax ?? maxV;
+    const step = niceStep(hi - lo || 1);
+    return { min: fixedMin ?? Math.floor(lo / step) * step, max: fixedMax ?? (Math.ceil(hi / step) * step || step), step };
   };
   const ax1 = range(false);
   const hasAx2 = data.series.some((_s, i) => secondary(i));
@@ -190,8 +241,13 @@ export function renderChartSvg(kind: ChartKind, data: ChartData, width: number, 
   const fmt1 = stacked === 'percentStacked' ? '0%' : look?.valFmt;
   const tickW = (ax: { min: number; max: number; step: number }, fmt?: string) => {
     let w = 0;
-    for (let v = ax.min; v <= ax.max + ax.step / 2; v += ax.step) w = Math.max(w, formatTick(v, fmt).length * 6);
-    return w + 10;
+    // 눈금 글자 폭 어림(숫자·기호 0.62em, 한글 1em, 글자 크기 10px) + 축 여백 — 글자가 차트 왼쪽 끝에서 잘리지 않게
+    for (let v = ax.min; v <= ax.max + ax.step / 2; v += ax.step) {
+      let tw = 0;
+      for (const ch of formatTick(v, fmt)) tw += (ch.codePointAt(0) ?? 0) >= 0x2e80 ? 10 : 6.2;
+      w = Math.max(w, tw);
+    }
+    return w + 16;
   };
   if (look?.valTitle) {
     if (horizontal) bottom -= 16;
@@ -201,7 +257,7 @@ export function renderChartSvg(kind: ChartKind, data: ChartData, width: number, 
     if (horizontal) left += 18;
     else bottom -= 16;
   }
-  left += horizontal ? 64 : tickW(ax1, fmt1);
+  left += horizontal ? 64 : tickW(ax1, fmt1) + 4;
   if (ax2) right -= tickW(ax2, look?.val2Fmt) + (look?.val2Title ? 18 : 0);
   bottom -= horizontal ? 18 : 20;
   const plotW = Math.max(10, right - left);
@@ -241,7 +297,7 @@ export function renderChartSvg(kind: ChartKind, data: ChartData, width: number, 
     );
   }
   const band = (horizontal ? plotH : plotW) / n;
-  const scatter = kind === 'scatter';
+  const scatter = kind === 'scatter' || kind === 'bubble';
   const xs = data.categories.map((c) => Number(c));
   const xNumeric = scatter && xs.length > 0 && xs.every((x) => Number.isFinite(x));
   const xMin = xNumeric ? Math.min(...xs) : 0;
@@ -286,6 +342,18 @@ export function renderChartSvg(kind: ChartKind, data: ChartData, width: number, 
   // 영역·꺾은선·분산형
   data.series.forEach((ser, i) => {
     const k = kindOf(i);
+    if (k === 'bubble') {
+      // 거품형 — 거품 크기(c:bubbleSize)를 넓이에 비례하게, 가장 큰 거품이 그림 높이의 1/8
+      const sizes = ser.sizes ?? [];
+      const maxSize = Math.max(1e-9, ...data.series.flatMap((s) => s.sizes ?? []).map(Math.abs));
+      const ax = ax1;
+      const color = colorOf(i);
+      for (let c = 0; c < n; c += 1) {
+        const r = Math.max(2, Math.sqrt(Math.abs(sizes[c] ?? 0) / maxSize) * (plotH / 8));
+        parts.push(`<circle cx="${xAt(c)}" cy="${bottom - scale(ax, ser.values[c] ?? 0) * plotH}" r="${r}" fill="${color}" fill-opacity="0.75" stroke="#fff"/>`);
+      }
+      return;
+    }
     if (k !== 'line' && k !== 'area' && k !== 'scatter') return;
     const ax = secondary(i) && ax2 ? ax2 : ax1;
     const color = colorOf(i);
@@ -327,7 +395,7 @@ export function chartDataOf(chart: GridChart, valueText: (sheetName: string, row
         })
       : [...ser.values.cache];
     const name = ser.nameRef ? value(ser.nameRef, ser.nameRef.r1, ser.nameRef.c1) || ser.name : ser.name;
-    return { name, values, ...(ser.look ? { look: ser.look } : {}) };
+    return { name, values: values.map((v) => (Number.isFinite(Number(v)) ? Number(v) : 0)), ...(ser.look ? { look: ser.look } : {}), ...(ser.sizes ? { sizes: ser.sizes } : {}) };
   });
   const count = Math.max(categories.length, ...series.map((s) => s.values.length));
   const cats = categories.length > 0 ? categories : Array.from({ length: count }, (_, i) => String(i + 1));

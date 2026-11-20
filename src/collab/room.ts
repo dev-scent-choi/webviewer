@@ -50,7 +50,10 @@ import {
   type GridCell,
 } from '../spreadsheet.js';
 import { exportXlsxFromGridStreaming } from '../xlsx/exportStreaming.js';
-import { GRID_CHARTS_MAP, type GridChart } from '../xlsx/chartModel.js';
+import { GRID_CHARTS_MAP, sanitizeGridChart, type GridChart } from '../xlsx/chartModel.js';
+
+/** 서버가 차트 맵을 고칠 때의 트랜잭션 출처 — 자기 수정에는 다시 반응하지 않는다 */
+const CHART_SANITIZE_ORIGIN = Symbol('chart-sanitize');
 import { readSheetChartsFromEntries, readSheetImagesFromEntries, type GridImage } from '../xlsx/drawingPassthrough.js';
 import { readXlsxSkeleton } from '../xlsx/zipSkeleton.js';
 import { readAutoFilters } from '../xlsx/autoFilter.js';
@@ -941,7 +944,10 @@ function exportOptionsFor(room: Room) {
   return {
     removedSheetIndices: room.removedSheetIndices,
     sheetDisplayOrder: room.sheetDisplayOrder,
-    newCharts: [...room.ydoc.getMap<GridChart>(GRID_CHARTS_MAP).values()].filter((chart) => chart.source === 'new'),
+    newCharts: [...room.ydoc.getMap<GridChart>(GRID_CHARTS_MAP).values()]
+      .filter((chart) => chart.source === 'new')
+      .map((chart) => sanitizeGridChart(chart, true))
+      .filter((chart): chart is GridChart => chart !== null),
     filters: new Map([...room.ydoc.getMap<SheetFilter>(GRID_FILTERS_MAP).entries()].map(([key, filter]) => [Number(key), filter])),
   };
 }
@@ -1635,6 +1641,28 @@ async function seedRoom(room: Room): Promise<void> {
       });
       // 조건부 서식 — 병합과 같은 이유로 편집기가 고친 규칙 목록을 메타데이터에 반영한다
       const condFormatsMap = ydoc.getMap<readonly CondFormatEntry[]>(GRID_COND_FORMATS_MAP);
+      // 편집자가 공유 맵에 넣은 차트를 검사한다 — 남의 화면에 SVG로 그려지므로(색·종류·수·글자) 안전한 모양으로 바꿔 두고,
+      // 알 수 없는 것은 지운다. 바꾼 결과는 다시 검사해도 같아서 되풀이되지 않는다.
+      const chartsMap = ydoc.getMap<GridChart>(GRID_CHARTS_MAP);
+      chartsMap.observe((event) => {
+        if (event.transaction.origin === CHART_SANITIZE_ORIGIN) return;
+        const fixes: Array<[string, GridChart | null]> = [];
+        for (const key of event.keysChanged) {
+          const chart = chartsMap.get(key);
+          if (chart === undefined) continue;
+          const safe = sanitizeGridChart(chart, true);
+          if (!safe || safe.id !== key) fixes.push([key, null]);
+          else if (JSON.stringify(safe) !== JSON.stringify(chart)) fixes.push([key, safe]);
+        }
+        if (fixes.length > 0) {
+          ydoc.transact(() => {
+            for (const [key, safe] of fixes) {
+              if (safe) chartsMap.set(key, safe);
+              else chartsMap.delete(key);
+            }
+          }, CHART_SANITIZE_ORIGIN);
+        }
+      });
       condFormatsMap.observe((event) => {
         const origin = event.transaction.origin;
         if (origin === GRID_WINDOW_SEED_ORIGIN || origin === GRID_STRUCTURE_SHIFT_ORIGIN) return;
@@ -1732,7 +1760,7 @@ async function flushToStore(room: Room): Promise<void> {
         // 저장마다 통째로 다시 읽으면 수 GB를 써서 서버가 메모리 부족으로 죽을 수 있었다
         let sheetCount: number;
         if (isLargeXlsx(newXlsxBytes)) {
-          const built = await serializeGridFromLazyStore(room.lazyGrid);
+          const built = await serializeGridFromLazyStore(room.lazyGrid, original);
           await saveGridFile(store, docId, built.buffer);
           sheetCount = built.sheetCount;
         } else {

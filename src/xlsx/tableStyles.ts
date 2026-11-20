@@ -1,15 +1,15 @@
 /**
  * 엑셀 표(Excel 표, xl/tables/tableN.xml)의 표 스타일 — 머리 줄 색·줄무늬·요약 행·첫/끝 열 굵게를 칸 서식으로 입힌다.
- * 보기·편집 화면 모두 그리드를 만들 때(spreadsheet.ts parseXlsxToGrid, lazyGridStore.ts 스트리밍 읽기) 같은 함수로 입힌다.
- * 칸에 직접 준 서식(채우기·글자 색·굵게)이 있으면 그것이 이긴다(엑셀과 같다).
+ * 보기 화면은 그리드 파일을 만들 때(spreadsheet.ts parseXlsxToGrid — 보기 전용 그리드) 칸 서식에 굽고, 편집 화면은 그릴 때만
+ * 덧칠한다(grid-editor.ts — 저장되는 칸 서식에는 절대 넣지 않는다. 값 하나를 고쳐 저장해도 줄무늬 색이 그 칸의 직접 서식이 되지 않게,
+ * 정렬해도 줄무늬가 행 위치를 따르게). 칸에 직접 준 서식(채우기·글자 색·굵게)이 있으면 그것이 이긴다(엑셀과 같다).
+ * DOM·Node를 쓰지 않는다(브라우저 번들에도 들어간다).
  *
  * 기본 표 스타일 60가지(Light1~21, Medium1~28, Dark1~11)는 "어느 색(진한 글꼴색 dk1 또는 강조 1~6)으로, 머리 줄을 채우는지,
  * 줄무늬를 얼마나 옅게 칠하는지, 선을 어디에 긋는지"의 조합이다 — 그 규칙을 계열별로 옮겼다(색은 문서 테마에서).
  * 사용자 정의 표 스타일(styles.xml의 tableStyles)은 읽지 않고 같은 번호의 기본 스타일 모양 대신 Medium2로 본다.
  */
-import { strFromU8 } from 'fflate';
 import { parseRangeFormula } from './chartModel.js';
-import { relationshipsOf, relsPathOf, resolvePartPath } from './drawingPassthrough.js';
 
 export interface SheetTable {
   /** 0부터 센 범위(양 끝 포함) */
@@ -63,23 +63,6 @@ export function parseTableXml(xml: string): SheetTable | null {
     firstCol: on('showFirstColumn', false),
     lastCol: on('showLastColumn', false),
   };
-}
-
-/** 시트 파트에 연결된 표들(<tableParts>) */
-export function sheetTablesOf(entries: Readonly<Record<string, Uint8Array>>, sheetPath: string, sheetXml?: string): SheetTable[] {
-  const xml = sheetXml ?? (entries[sheetPath] ? strFromU8(entries[sheetPath]) : '');
-  if (!xml.includes('<tablePart')) return [];
-  const relsBytes = entries[relsPathOf(sheetPath)];
-  if (!relsBytes) return [];
-  const rels = new Map(relationshipsOf(strFromU8(relsBytes)).map((r) => [r.id, r]));
-  const out: SheetTable[] = [];
-  for (const m of xml.matchAll(/<tablePart\b[^>]*\br:id="([^"]+)"/g)) {
-    const rel = rels.get(m[1]);
-    const bytes = rel ? entries[resolvePartPath(sheetPath, rel.target)] : undefined;
-    const table = bytes ? parseTableXml(strFromU8(bytes)) : null;
-    if (table) out.push(table);
-  }
-  return out;
 }
 
 /** '#RRGGBB'을 HSL 명도로 옅게(t>0, 흰색 쪽)·짙게(t<0) — 엑셀 tint와 같은 계산 */

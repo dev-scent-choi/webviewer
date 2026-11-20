@@ -150,7 +150,8 @@ export function setupGridLinks(host: GridLinksHost): GridLinks {
 
   function follow(link: SheetLink, row: number, col: number): void {
     const { url, location } = targetOf(link, row, col);
-    if (url) {
+    // 파일에 적힌 바로가기 주소도 웹·메일·전화만 연다(javascript: 등 스크립트 주소는 열지 않는다)
+    if (url && /^(https?:|mailto:|tel:)/i.test(url.trim())) {
       window.open(url, '_blank', 'noopener,noreferrer');
       return;
     }

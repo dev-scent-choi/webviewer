@@ -10,6 +10,8 @@ import { strFromU8, unzipSync } from 'fflate';
 import { parseRangeFormula } from './chartModel.js';
 import { decodeXmlAttr, relationshipsOf, relsPathOf, resolvePartPath, sheetPathsByName } from './drawingPassthrough.js';
 import type { SheetFilter } from './filterModel.js';
+import { parseTableXml, type SheetTable } from './tableStyles.js';
+import { parseThemeColors } from '../spreadsheet.js';
 
 export interface SheetLink {
   readonly sheetName: string;
@@ -43,6 +45,10 @@ export interface SheetListValidation {
 export interface SheetExtras {
   readonly links: SheetLink[];
   readonly lists: SheetListValidation[];
+  /** 엑셀 표(표 스타일) — 편집 화면이 그릴 때 덧칠한다(tableStyles.ts) */
+  readonly tables: Array<SheetTable & { readonly sheetName: string }>;
+  /** 문서 테마 색(0 lt1, 1 dk1, 4~9 강조 1~6) — 표 스타일 색을 푼다 */
+  readonly themeColors: readonly string[];
 }
 
 /** 바깥 주소로 열어도 되는 것만(스크립트 주소 등은 버린다) */
@@ -84,7 +90,7 @@ function linkOf(sheetName: string, ref: { r1: number; c1: number; r2: number; c2
   return url ? { sheetName, ...ref, url, ...(tooltip ? { tooltip } : {}) } : null;
 }
 
-export function parseSheetExtras(sheetName: string, sheetXml: string, sheetRelsXml: string | undefined): SheetExtras {
+export function parseSheetExtras(sheetName: string, sheetXml: string, sheetRelsXml: string | undefined): Pick<SheetExtras, 'links' | 'lists'> {
   const rels = new Map(relationshipsOf(sheetRelsXml ?? '').map((r) => [r.id, r]));
   const links: SheetLink[] = [];
   const linked = new Set<string>();
@@ -153,7 +159,8 @@ export function readSheetExtras(xlsx: Uint8Array): SheetExtras {
 
 /** 이미 푼 파트 모음에서 — 큰 파일은 데이터를 뺀 뼈대(zipSkeleton.ts readXlsxSkeleton)를 넘긴다 */
 export function readSheetExtrasFromEntries(entries: Readonly<Record<string, Uint8Array>>): SheetExtras {
-  const out: SheetExtras = { links: [], lists: [] };
+  const theme = entries['xl/theme/theme1.xml'];
+  const out: SheetExtras = { links: [], lists: [], tables: [], themeColors: parseThemeColors(theme ? strFromU8(theme) : undefined) };
   for (const [sheetName, sheetPath] of sheetPathsByName(entries)) {
     const sheet = entries[sheetPath];
     if (!sheet) continue;
@@ -161,6 +168,7 @@ export function readSheetExtrasFromEntries(entries: Readonly<Record<string, Uint
     const extras = parseSheetExtras(sheetName, strFromU8(sheet), rels ? strFromU8(rels) : undefined);
     out.links.push(...extras.links);
     out.lists.push(...extras.lists);
+    for (const table of sheetTablesOf(entries, sheetPath)) out.tables.push({ ...table, sheetName });
   }
   return out;
 }
@@ -187,4 +195,32 @@ export function tableFilterOf(entries: Record<string, Uint8Array>, sheetPath: st
     if (range) return { r1: range.r1, c1: range.c1, r2: range.r2, c2: range.c2, criteria: {}, table: tablePath };
   }
   return null;
+}
+
+/** 시트 파트에 연결된 표들 — 시트 관계 파일의 표 관계로 찾는다(큰 시트 XML을 풀지 않아도 된다) */
+export function sheetTablesOf(entries: Readonly<Record<string, Uint8Array>>, sheetPath: string): SheetTable[] {
+  const relsBytes = entries[relsPathOf(sheetPath)];
+  if (!relsBytes) return [];
+  const out: SheetTable[] = [];
+  for (const rel of relationshipsOf(strFromU8(relsBytes))) {
+    if (!/\/table$/.test(rel.type) || rel.external) continue;
+    const bytes = entries[resolvePartPath(sheetPath, rel.target)];
+    const table = bytes ? parseTableXml(strFromU8(bytes)) : null;
+    if (table) out.push(table);
+  }
+  return out;
+}
+
+/** 원본 xlsx의 표들 — 시트 XML·데이터는 풀지 않는다(큰 파일 보기 그리드용). 시트 이름 → 표, 테마 색 */
+export function workbookTablesOf(xlsx: Uint8Array): { bySheet: Map<string, SheetTable[]>; themeColors: readonly string[] } {
+  const entries = unzipSync(xlsx, {
+    filter: (f) => f.name === 'xl/workbook.xml' || f.name === 'xl/_rels/workbook.xml.rels' || f.name === 'xl/theme/theme1.xml' || f.name.startsWith('xl/tables/') || /^xl\/worksheets\/_rels\//.test(f.name),
+  });
+  const bySheet = new Map<string, SheetTable[]>();
+  for (const [name, path] of sheetPathsByName(entries)) {
+    const tables = sheetTablesOf(entries, path);
+    if (tables.length > 0) bySheet.set(name, tables);
+  }
+  const theme = entries['xl/theme/theme1.xml'];
+  return { bySheet, themeColors: parseThemeColors(theme ? strFromU8(theme) : undefined) };
 }
