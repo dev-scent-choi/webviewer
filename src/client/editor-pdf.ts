@@ -57,6 +57,7 @@ function connect(info: ViewInfo): { ydoc: Y.Doc; provider: WebsocketProvider } {
   provider.awareness.setLocalStateField('user', { name: info.viewer, color: pickPresenceColorForName(info.viewer) });
   const conn = $('conn-status');
   provider.on('status', ({ status }: { status: string }) => {
+    if (!provider.shouldConnect && status !== 'connected') return; // 거부당해 멈췄으면 '보기 전용' 표시를 덮지 않는다
     conn.dataset.state = status;
     conn.textContent = status === 'connected' ? (info.permissions.canEdit ? '연결됨' : '읽기 전용') : '연결 중…';
   });
