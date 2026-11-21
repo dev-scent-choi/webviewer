@@ -108,3 +108,31 @@ vitest 전체 110파일 879개 통과, tsc, build:editor·build:server, verify:p
 ### 그 밖
 - vitest 전체: 896개 중 2개가 전체 실행 때 30초 시간 초과(room.ts pptx 자동 저장 id 유지, xlsx 창 단위 시딩) — 다른 갈래 작업으로 기기가 바쁠 때였고, 그 파일만 다시 돌리면 모두 통과(67/67). 이번 변경과 무관한 시간 초과로 본다.
 - 건드린 공유 파일 추가: `src/converters/libreOffice.ts`(전처리 결과 await — 타입이 Promise 허용), `audit/office/run.mjs`(로그 파일 기술자), `audit/office/compare.py`(officePos 비교 덧붙임).
+
+## 7. 2차 검토(REVIEW-PPTX-r2.md) 항목별 답
+
+커밋 28d58db…b064914. 새 재현(r10, e2e-room-recreate 등)은 시험으로 옮겼다(`tests/pptxQualityFixes.test.ts`, `npm run verify:pptx` 24항목, 새 `npm run verify:reconnect` 12항목).
+
+| 항목 | 결과 | 무엇을·근거 |
+|---|---|---|
+| RX-C1 재연결 시 옛 상태가 새 방에 합쳐짐(운영에도 있던 결함) | **고침(공유 동시편집 층)** | 방마다 세대(epoch). 서버가 접속마다 세대를 알리고(메시지 7), 클라이언트는 다음 접속 주소에 `epoch`로 싣는다. 세대가 다르거나 방이 없으면 서버는 동기화 메시지를 하나도 받지 않고 거절(메시지 8, 닫기 4409) — 방을 새로 만들지도 않는다. 클라이언트는 다시 접속하지 않고 한국어 안내 후 새로 불러온다. 끊긴 동안 입력한 내용이 있었으면 "반영되지 않았다"고 알리고 사용자가 누를 때 다시 불러온다 — 옛 세대의 Yjs 변경을 새 세대 문서에 다시 적용하는 것이 바로 이 중복이라 안전하게 되살릴 방법이 없어 다시 보내지 않는다. PPT 저장 직전 안전망: 같은 원본 슬라이드·같은 항목 id가 둘이면 첫 것만 저장하고 알림(sldId 중복 손상 방지). 실제 브라우저(`verify:reconnect`): PPT·워드·엑셀 모두 끊기→방 재생성→재접속에서 거절·안내·새로 불러오기, 화면·저장 파일 한 벌. 같은 시험을 거절을 끈 서버에서 돌리면 **워드 문단 25 → 50, 저장 파일도 두 벌**로 실패(시험이 결함을 잡는다). 검토의 `e2e-room-recreate`도 카드 3·sldId 3·링크 유지. PDF 편집기에도 같은 한 줄을 넣었다(브라우저 시험은 세 형식만) |
+| R2-I1 속성 값 안 `>`로 문단 자식 순서 뒤섞임(회귀) | **고침** | 정규식 대신 작은 XML 토큰 읽개(따옴표·주석·CDATA·처리 지시·DOCTYPE). r10과 속성 값 흔들기(`a>b`, `/>`, 따옴표 섞임, CDATA `C<>`) 시험 |
+| R2-I2 방 재생성 뒤 편집했던 런의 하이퍼링크가 조용히 사라짐 | **고침** | 글자 속성(runProps)은 바이트 일치 신뢰 대신 구조 검증: 허용 속성(값 모양 확인)·허용 자식만, 관계 id는 이 슬라이드 rels에 있고 요소에 맞는 종류(하이퍼링크→hyperlink/slide, 그림→image, 소리→audio). 방이 새로 만들어져도 유지(시험: 빈 신뢰 목록에서도 링크·lang 남음). 그래도 원문을 못 지키면 저장 알림 띠로 보인다(조용히 버리지 않음) |
+| R2-I3 자동 맞춤이 창 크기에 따라 다름 | **고침** | 측정을 슬라이드 좌표(1pt=4px) 화면 밖 사본(문서 직렬화)에서, 안쪽 크기는 meta(EMU)로. 지금 단계에서 시작해 "고친 뒤 높이 > 상자 높이와 고치기 전 높이 중 큰 쪽"일 때만 작게, 한 단계 키워도 상자에 들어갈 때만 크게. verify:pptx: p03 한 글자 편집이 창 1400·900·1920에서 모두 47.5% 유지(검토 재현: 40%로 떨어졌었다) |
+| R2-m1 다른 슬라이드의 믿는 조각 재사용 | **고침** | 모든 원문 조각의 관계 id를 이 슬라이드 rels·종류로 확인(시험: rId2가 그림 관계면 링크 빼고 알림) |
+| R2-m2 전처리의 압축 폭탄 상한 빠짐 | **고침** | `assertZipNotTooLarge`(서버 공통 상한)를 풀기 전에. 시험: 적힌 풀린 크기 4GB → 거절 |
+| R2-m3 레이아웃에서만 맞춤을 물려받은 도형 | **고침** | 슬라이드 bodyPr에 맞춤 요소가 없으면 저장 때 `normAutofit` 삽입(prstTxWarp 뒤, 100%면 안 넣음, 다른 맞춤 종류면 그대로) |
+| R2-m4 감싼 도형 위치 | **고침** | Choice·Fallback 같은 개체 id의 두 자리를 합친 영역을 잘라 온다(LibreOffice가 어느 쪽을 그려도 조각 안) |
+| Minor 10 위치 허용 오차 | **조임** | ±1.5% → ±1%(지금 최대 차이 0.96%, 720pt 높이 기준 약 5pt) |
+| Minor 9 뒤집힌 그라데이션·Minor 12 스마트아트 | **그대로(검토도 연기 수용)** | MS Office 정답·실제 스마트아트 표본이 생기면 확인 |
+
+### 공유 파일 변경(다른 갈래와 합칠 때)
+- `src/collab/room.ts`: ① `/* ===== [RX-C1] … ===== */` 블록 하나(joinEditSession 바로 위: `roomEpochs` WeakMap, `epochOf`, `rejectStaleReconnect`, `sendRoomEpoch` — Room 타입은 안 바꿈), ② `joinEditSession` 첫머리 2줄(거절 확인, 세대 알림), ③ import 2줄(`node:crypto` randomUUID, `./roomEpoch.js`), ④ pptx 저장 블록 2줄(저장 알림 `pptxSaveNotice`) + import 1줄.
+- 새 공유 파일: `src/collab/roomEpoch.ts`(메시지 번호 7·8, 매개변수 `epoch`, 닫기 코드 4409), `src/client/roomEpoch.ts`(`guardRoomEpoch`, 안내 화면).
+- 편집기 한 줄씩: `src/client/editor.ts`(워드), `src/client/grid-editor.ts`(엑셀), `src/client/editor-pdf.ts`(PDF), `src/client/editor-slides.ts` — `guardRoomEpoch(provider, ydoc)` + import.
+- `package.json`: `verify:reconnect` 스크립트 한 줄. `scripts/verify-reconnect-e2e.mjs` 새 파일.
+- 그 밖: `src/converters/libreOffice.ts`(앞 라운드), `src/zipGuard.ts`는 가져다 쓰기만.
+
+### 숫자
+- 공식 `audit:office -- --only pptx --no-office`: PPT 편집 점검표 **52/52**(위치 허용 ±1%), 편집 모양 **0.975**, 보기 0.95·0.945(회귀 없음).
+- verify:pptx **24/24**, verify:reconnect **12/12**, tsc·build 통과, vitest 전체 **906/906**(110파일, 한 번에 통과 — 앞 실행에서 기기 부하로 room 시험이 시간 초과했을 때는 그 파일만 다시 돌려 통과).
