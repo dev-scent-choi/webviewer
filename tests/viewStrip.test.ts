@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { CAPACITY_NOTICE, blockedViewKey, capacityFallback, isViewUi, pickBoundary, stepIndex, stripActions } from '../src/client/viewStrip.js';
+import { CAPACITY_NOTICE, blockedViewKey, capacityFallback, isViewUi, viewControlAllowed } from '../src/client/viewStrip.js';
 
 describe('isViewUi — 두 겹(토큰 읽기 전용 + ui=view)', () => {
   test.each([
@@ -14,15 +14,23 @@ describe('isViewUi — 두 겹(토큰 읽기 전용 + ui=view)', () => {
   });
 });
 
-describe('stripActions — 얇은 줄 단추', () => {
-  test('권한 다 있고 확대 있고 편집 열기 가능 → 정해진 순서로 전부', () => {
-    expect(stripActions({ canPrint: true, canDownload: true, hasZoom: true, canOpenEdit: true })).toEqual(['zoom-out', 'zoom-in', 'print', 'download', 'edit']);
-  });
-  test('PPT(확대 없음)·인쇄 권한 없음·공유 링크(편집 열기 없음) → 내려받기만', () => {
-    expect(stripActions({ canPrint: false, canDownload: true, hasZoom: false, canOpenEdit: false })).toEqual(['download']);
-  });
-  test('인쇄만', () => {
-    expect(stripActions({ canPrint: true, canDownload: false, hasZoom: false, canOpenEdit: false })).toEqual(['print']);
+describe('viewControlAllowed — 보기 꾸밈에서 눌리는 리본 단추(나머지는 흐리게)', () => {
+  test.each([
+    ['btn-zoom-in-ribbon', true, true],
+    ['btn-ribbon-find', true, true],
+    ['btn-show-comments', true, true],
+    ['btn-transition-preview', true, true],
+    ['btn-copy', true, true],
+    ['btn-copy', false, false],
+    ['btn-bold', true, false],
+    ['btn-ribbon-replace', true, false],
+    ['btn-new-comment', true, false],
+    ['btn-freeze-panes', true, false],
+    ['btn-find-replace', true, false],
+    ['qa-save', true, false],
+    ['', true, false],
+  ])('%s · 복사 %s → %s', (id, canCopy, expected) => {
+    expect(viewControlAllowed(id, canCopy)).toBe(expected);
   });
 });
 
@@ -81,32 +89,6 @@ describe('blockedViewKey — Ctrl+글자는 허용 목록(F·A·C(복사)·P(인
   });
   test('입력칸 안은 Ctrl+글자도 막지 않는다', () => {
     expect(blockedViewKey({ key: 'b', ctrl: true, inField: true, canCopy: false, canPrint: false })).toBe(false);
-  });
-});
-
-describe('stepIndex — 시트·슬라이드 한 칸 앞/뒤(끝에서 멈춤)', () => {
-  test.each([
-    [3, 0, 1, 1],
-    [3, 2, 1, 2],
-    [3, 0, -1, 0],
-    [3, 2, -1, 1],
-    [3, -1, 1, 0],
-    [0, -1, 1, -1],
-  ] as const)('길이 %s · 지금 %s · 방향 %s → %s', (length, current, dir, expected) => {
-    expect(stepIndex(length, current, dir)).toBe(expected);
-  });
-});
-
-describe('pickBoundary — 워드 쪽 경계(도구 줄 아래 기준 px)', () => {
-  test('다음: 기준보다 아래인 첫 경계, 이전: 기준보다 위인 마지막 경계', () => {
-    const tops = [-500, -2, 0.5, 300];
-    expect(pickBoundary(tops, 1)).toBe(3);
-    expect(pickBoundary(tops, -1)).toBe(1);
-  });
-  test('없으면 -1', () => {
-    expect(pickBoundary([], 1)).toBe(-1);
-    expect(pickBoundary([100], -1)).toBe(-1);
-    expect(pickBoundary([-100], 1)).toBe(-1);
   });
 });
 

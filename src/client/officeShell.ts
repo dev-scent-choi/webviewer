@@ -9,7 +9,7 @@
 
 import { mountBackToView } from './backToView.js';
 import { officeAlert } from './officeDialog.js';
-import { EDIT_DOC_KEY, installViewGuards, isViewUi, stripActions, type StripAction } from './viewStrip.js';
+import { EDIT_DOC_KEY, installViewGuards, isViewUi, markReadOnly, viewControlAllowed } from './viewStrip.js';
 
 export interface OfficeShellOptions {
   readonly token: string;
@@ -29,20 +29,10 @@ export interface OfficeShellOptions {
   readonly onRedo?: () => void;
 }
 
-/** 보기 꾸밈 얇은 줄의 이전/다음 — 워드는 쪽, 엑셀은 시트, PPT는 슬라이드 */
-export interface ViewNav {
-  readonly prevLabel: string;
-  readonly nextLabel: string;
-  prev(): void;
-  next(): void;
-}
-
 export interface OfficeShell {
   selectTab(tab: string): void;
   /** 상황별 탭(예: 표 안에 커서가 있을 때만 보이는 "표 레이아웃")을 보이거나 숨긴다. */
   setContextualTab(tab: string, visible: boolean): void;
-  /** 보기 꾸밈일 때만 얇은 줄에 이전/다음 단추를 단다. 아니면 아무것도 하지 않는다 */
-  setViewNav(nav: ViewNav): void;
 }
 
 const COLLAPSE_STORAGE_KEY = 'docview-ribbon-collapsed';
@@ -77,21 +67,8 @@ const EXT_LABELS: Readonly<Record<string, string>> = {
   ppt: 'PowerPoint 97-2003 프레젠테이션',
 };
 
-const svgIcon = (inner: string): string =>
-  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${inner}</svg>`;
-
-const STRIP_BUTTONS: Readonly<Record<StripAction | 'prev' | 'next', { readonly label: string; readonly icon: string }>> = {
-  'zoom-out': { label: '축소', icon: '<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/><path d="M8 11h6"/>' },
-  'zoom-in': { label: '확대', icon: '<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/><path d="M11 8v6"/><path d="M8 11h6"/>' },
-  prev: { label: '이전', icon: '<path d="m15 18-6-6 6-6"/>' },
-  next: { label: '다음', icon: '<path d="m9 18 6-6-6-6"/>' },
-  print: {
-    label: '인쇄',
-    icon: '<path d="M6 9V4h12v5"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8" rx="1"/>',
-  },
-  download: { label: '내려받기', icon: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>' },
-  edit: { label: '편집 열기', icon: '' },
-};
+/** 보기 꾸밈에서 흐리게 할 후보 — 리본 판·빠른 실행 안의 조작, 바꾸기 줄, 시트 추가. viewControlAllowed면 그대로 둔다 */
+const VIEW_EDIT_CONTROLS = '.ribbon-panel :is(button, select, input, textarea), .quick-access button, #search-replace-input, #search-replace-one, #search-replace-all, #sheet-add';
 
 function readEditDoc(): string | null {
   try {
@@ -138,7 +115,9 @@ export function initOfficeShell(options: OfficeShellOptions): OfficeShell {
   let collapsed = readCollapsed();
   let peeking = false;
 
-  if (!options.canEdit) {
+  // 보기 꾸밈(ui=view)은 편집 탭도 보이게 두고 안의 단추만 흐리게 한다(아래) — 그 밖의 읽기 전용은 지금처럼 편집 탭을 숨긴다
+  const viewUi = isViewUi(location.search, options.canEdit);
+  if (!options.canEdit && !viewUi) {
     for (const tab of tabs) if (tab.dataset.editOnly !== undefined) tab.hidden = true;
   }
 
@@ -220,7 +199,7 @@ export function initOfficeShell(options: OfficeShellOptions): OfficeShell {
   document.getElementById('qa-save')?.addEventListener('click', triggerSave);
   document.getElementById('qa-undo')?.addEventListener('click', () => options.onUndo?.());
   document.getElementById('qa-redo')?.addEventListener('click', () => options.onRedo?.());
-  if (!options.canEdit) {
+  if (!options.canEdit && !viewUi) {
     for (const id of ['qa-save', 'qa-undo', 'qa-redo']) {
       const button = document.getElementById(id) as HTMLButtonElement | null;
       if (button) button.hidden = true;
@@ -280,7 +259,6 @@ export function initOfficeShell(options: OfficeShellOptions): OfficeShell {
   const downloadLink = backstage.querySelector<HTMLAnchorElement>('[data-action="download"]');
   if (downloadLink) downloadLink.href = `/api/view/download?token=${encodeURIComponent(options.token)}`;
 
-  /** 인쇄 — 백스테이지와 보기 꾸밈 얇은 줄이 같이 쓴다 */
   async function printDoc(): Promise<void> {
     // 새 창은 클릭과 같은 틱에 열어야 팝업 차단에 걸리지 않는다 — 저장이 끝나면 주소를 채운다.
     const printWindow = window.open('about:blank', '_blank');
@@ -330,25 +308,34 @@ export function initOfficeShell(options: OfficeShellOptions): OfficeShell {
   });
 
   // ---------- 보기 꾸밈(ui=view, 설계 2026-11-21-readonly-editor-look §3.1) ----------
-  // 숨기기는 CSS(body.ui-view) 한 묶음, 여기서는 제목 줄에 얇은 도구 줄 단추를 단다(문서 이름·찾기·참석자는 제목 줄에 이미 있다).
-  let stripTools: HTMLElement | null = null;
-  if (isViewUi(location.search, options.canEdit)) {
+  // 리본·빠른 실행·파일 화면은 그대로 보이고, 문서를 쓰는 조작만 흐리게(markReadOnly). 탭은 눌러 둘러볼 수 있다.
+  if (viewUi) {
     document.body.classList.add('ui-view');
     document.body.classList.toggle('no-copy', !options.canCopy);
     installViewGuards(options.canCopy, options.canPrint);
-    toolbar.querySelector('.office-titlebar')?.classList.add('view-strip');
-    stripTools = document.createElement('div');
-    stripTools.className = 'view-strip-tools';
-    stripTools.setAttribute('role', 'toolbar');
-    stripTools.setAttribute('aria-label', '보기 도구');
-    const actions = stripActions({
-      canPrint: options.canPrint,
-      canDownload: options.canDownload,
-      hasZoom: document.getElementById('zoom-in') !== null,
-      canOpenEdit: readEditDoc() === options.docId,
-    });
-    for (const act of actions) stripTools.append(stripButton(act));
-    titleRight?.insertBefore(stripTools, titleRight.querySelector('#presence-list'));
+    const greyOut = (): void => {
+      for (const el of document.querySelectorAll<HTMLElement>(VIEW_EDIT_CONTROLS)) {
+        if (!viewControlAllowed(el.id, options.canCopy)) markReadOnly(el);
+      }
+      // 편집기가 선택에 따라 disabled를 다시 풀어도 흐린 단추는 꺼진 채로
+      for (const el of document.querySelectorAll<HTMLButtonElement>('.ro-disabled')) if ('disabled' in el && !el.disabled) el.disabled = true;
+    };
+    greyOut();
+    // 나중에 다는 단추(PPT 디자인·전환 갤러리 등)까지 — 리본 안만 본다(격자·본문 변화는 보지 않는다)
+    new MutationObserver(greyOut).observe(toolbar, { childList: true, subtree: true, attributes: true, attributeFilter: ['disabled'] });
+    // 마지막 겹 — 흐린 조작에 닿은 클릭·바꿈은 편집기 처리기에 가기 전에 끊는다
+    for (const type of ['click', 'mousedown', 'change', 'input'] as const) {
+      document.addEventListener(
+        type,
+        (event) => {
+          if (!(event.target instanceof Element) || !event.target.closest('.ro-disabled')) return;
+          event.preventDefault();
+          event.stopImmediatePropagation();
+        },
+        true,
+      );
+    }
+    if (readEditDoc() === options.docId) titleRight?.insertBefore(editButton(), titleRight.querySelector('#presence-list'));
     const readOnlyItem = document.createElement('span');
     readOnlyItem.className = 'statusbar-item view-readonly';
     readOnlyItem.textContent = '읽기 전용';
@@ -356,43 +343,20 @@ export function initOfficeShell(options: OfficeShellOptions): OfficeShell {
     document.querySelector('#statusbar, .grid-status-row')?.prepend(readOnlyItem);
   }
 
-  function stripButton(act: StripAction | 'prev' | 'next', label: string = STRIP_BUTTONS[act].label): HTMLElement {
-    if (act === 'edit') {
-      const edit = document.createElement('button');
-      edit.type = 'button';
-      edit.className = 'btn-pill back-to-view';
-      edit.dataset.act = act;
-      edit.textContent = label;
-      edit.title = '편집할 수 있는 화면으로 다시 엽니다';
-      edit.addEventListener('click', () => {
-        edit.disabled = true;
-        void openEditFromView(options.docId).finally(() => {
-          edit.disabled = false;
-        });
+  /** "편집 열기" — 메인 화면에서 연 경우만(공유 링크엔 없다) */
+  function editButton(): HTMLElement {
+    const edit = document.createElement('button');
+    edit.type = 'button';
+    edit.className = 'btn-pill back-to-view view-open-edit';
+    edit.textContent = '편집 열기';
+    edit.title = '편집할 수 있는 화면으로 다시 엽니다';
+    edit.addEventListener('click', () => {
+      edit.disabled = true;
+      void openEditFromView(options.docId).finally(() => {
+        edit.disabled = false;
       });
-      return edit;
-    }
-    if (act === 'download') {
-      const link = document.createElement('a');
-      link.className = 'icon-btn';
-      link.dataset.act = act;
-      link.title = label;
-      link.setAttribute('aria-label', label);
-      link.innerHTML = svgIcon(STRIP_BUTTONS[act].icon);
-      link.href = `/api/view/download?token=${encodeURIComponent(options.token)}`;
-      return link;
-    }
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'icon-btn';
-    button.dataset.act = act;
-    button.title = label;
-    button.setAttribute('aria-label', label);
-    button.innerHTML = svgIcon(STRIP_BUTTONS[act].icon);
-    // 확대·축소는 상태 줄의 같은 id 단추(#zoom-in·#zoom-out)를 대신 누른다 — 확대 로직은 편집기 것 그대로
-    if (act === 'zoom-out' || act === 'zoom-in') button.addEventListener('click', () => document.getElementById(act)?.click());
-    if (act === 'print') button.addEventListener('click', () => void printDoc());
-    return button;
+    });
+    return edit;
   }
 
   if (!tabs.some((tab) => tab.dataset.tab === activeTab && !tab.hidden)) activeTab = firstVisibleTab();
@@ -406,22 +370,6 @@ export function initOfficeShell(options: OfficeShellOptions): OfficeShell {
       button.hidden = !visible;
       if (!visible && activeTab === tab) activeTab = 'home';
       render();
-    },
-    setViewNav(nav) {
-      const tools = stripTools;
-      if (!tools) return;
-      // 두 번 불러도 단추가 겹치지 않게 — 이전 것을 바꾼다
-      for (const old of tools.querySelectorAll('[data-act="prev"], [data-act="next"]')) old.remove();
-      const before = tools.querySelector('[data-act="print"], [data-act="download"], [data-act="edit"]');
-      const pairs: Array<['prev' | 'next', string, () => void]> = [
-        ['prev', nav.prevLabel, () => nav.prev()],
-        ['next', nav.nextLabel, () => nav.next()],
-      ];
-      for (const [act, label, run] of pairs) {
-        const button = stripButton(act, label);
-        button.addEventListener('click', run);
-        tools.insertBefore(button, before);
-      }
     },
   };
 }

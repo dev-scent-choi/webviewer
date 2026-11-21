@@ -1,28 +1,30 @@
 /**
  * 읽기 전용 편집기의 "보기 꾸밈"(ui=view, 설계 2026-11-21-readonly-editor-look §3.1). 판정·규칙은 순수 함수(tests/viewStrip.test.ts),
- * 막기(installViewGuards)와 정원 초과 이동(fallBackToViewer)은 DOM. 얇은 줄 단추를 다는 일은 officeShell.ts가 한다.
+ * 막기(installViewGuards)·흐리게(markReadOnly)·정원 초과 이동(fallBackToViewer)은 DOM. 리본을 흐리게 하는 일은 officeShell.ts가 한다.
  * 실제 쓰기 차단은 서버(토큰 canEdit=false → room.ts가 Update를 버림) — 여기 막기는 화면이 어긋나지 않게 하는 겹이다.
  */
 
-/** 메인 화면이 "열기" 때 문서 id를 넣어 두는 sessionStorage 키 — 같은 문서면 얇은 줄에 "편집 열기"(public/js/main.js) */
+/** 메인 화면이 "열기" 때 문서 id를 넣어 두는 sessionStorage 키 — 같은 문서면 제목 줄에 "편집 열기"(public/js/main.js) */
 export const EDIT_DOC_KEY = 'docview-edit-doc';
 export const CAPACITY_NOTICE = '지금은 보는 사람이 많습니다. 서버 변환으로 보여 줍니다';
-
-export type StripAction = 'zoom-out' | 'zoom-in' | 'print' | 'download' | 'edit';
 
 /** 두 겹 — 토큰이 읽기 전용이고 주소에 ui=view가 있을 때만(하나라도 아니면 지금 편집기 그대로) */
 export function isViewUi(search: string, canEdit: boolean): boolean {
   return !canEdit && new URLSearchParams(search).get('ui') === 'view';
 }
 
-/** 이전/다음 단추는 편집기가 setViewNav로 따로 단다(쪽·시트·슬라이드) */
-export function stripActions(p: { readonly canPrint: boolean; readonly canDownload: boolean; readonly hasZoom: boolean; readonly canOpenEdit: boolean }): StripAction[] {
-  const actions: StripAction[] = [];
-  if (p.hasZoom) actions.push('zoom-out', 'zoom-in');
-  if (p.canPrint) actions.push('print');
-  if (p.canDownload) actions.push('download');
-  if (p.canOpenEdit) actions.push('edit');
-  return actions;
+/**
+ * 보기 꾸밈에서도 눌리는 리본·빠른 실행 단추(문서를 쓰지 않는 것) — 나머지는 보이되 흐리게(markReadOnly).
+ * 확대·찾기·전체 선택·맞춤법 표시·단어 수·메모/변경 내용 창(읽기만)·이전/다음 메모·전환/애니메이션 미리 보기, 복사는 복사 권한이 있을 때만.
+ */
+const VIEW_CONTROLS = new Set([
+  'btn-zoom-100', 'btn-zoom-page-width', 'btn-zoom-in-ribbon', 'btn-zoom-out-ribbon',
+  'btn-ribbon-find', 'btn-ribbon-select', 'btn-spellcheck', 'btn-word-count',
+  'btn-show-comments', 'btn-prev-comment', 'btn-next-comment', 'btn-show-changes',
+  'btn-transition-preview', 'btn-animation-preview',
+]);
+export function viewControlAllowed(id: string, canCopy: boolean): boolean {
+  return VIEW_CONTROLS.has(id) || (id === 'btn-copy' && canCopy);
 }
 
 const ZOOM_KEYS = new Set(['+', '=', '-', '_', '0']);
@@ -44,23 +46,18 @@ export function blockedViewKey(e: { readonly key: string; readonly code?: string
   return key === 'delete' || key === 'backspace' || key === 'f2';
 }
 
-/** 목록 안에서 한 칸 앞/뒤(끝에서 멈춤). 지금 위치를 모르면(-1) 첫 칸, 빈 목록이면 -1 */
-export function stepIndex(length: number, current: number, dir: 1 | -1): number {
-  if (length === 0) return -1;
-  if (current < 0) return 0;
-  return Math.min(length - 1, Math.max(0, current + dir));
-}
-
-/** 워드 쪽 이동 — 쪽 경계들의 위치(도구 줄 아래 기준 px)에서 다음(아래 첫)/이전(위 마지막) 경계 번호, 없으면 -1. ±1px은 "지금 여기" */
-export function pickBoundary(tops: readonly number[], dir: 1 | -1): number {
-  if (dir === 1) return tops.findIndex((top) => top > 1);
-  for (let i = tops.length - 1; i >= 0; i -= 1) if (tops[i] < -1) return i;
-  return -1;
-}
-
 /** 큰 엑셀 정원 초과(edit.ts 4429)면 보기 꾸밈만 같은 토큰의 보기 화면으로 — 편집 화면은 지금처럼 오류 화면 */
 export function capacityFallback(code: number, viewUi: boolean, viewerUrl: string | undefined): string | null {
   return code === 4429 && viewUi && viewerUrl ? viewerUrl : null;
+}
+
+/** 보이되 못 누르게 — 회색(.ro-disabled, 마우스 안 받음)·disabled·aria-disabled·"읽기 전용" 말풍선. 두 번 불러도 같다 */
+export function markReadOnly(el: HTMLElement): void {
+  if (el.classList.contains('ro-disabled')) return;
+  el.classList.add('ro-disabled');
+  el.setAttribute('aria-disabled', 'true');
+  if ('disabled' in el) (el as HTMLButtonElement).disabled = true;
+  el.title = el.title ? `${el.title} — 읽기 전용` : '읽기 전용';
 }
 
 function isField(target: EventTarget | null): boolean {

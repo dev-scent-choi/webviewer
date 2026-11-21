@@ -25,7 +25,7 @@ import { applyWatermark } from './watermark.js';
 import { parseTypedNumber } from '../collab/cellValueShared.js';
 import { FILL_MARK, formatValueText, hashIfTooWide, isNumberOrDateValue, isTextNumFmt, type FormattedValue } from '../collab/numberFormat.js';
 import { initOfficeShell } from './officeShell.js';
-import { handleSessionRejected, stepIndex } from './viewStrip.js';
+import { handleSessionRejected } from './viewStrip.js';
 import { bindDropdown } from './ribbonMenus.js';
 import { currentRegion, setupGridCharts } from './gridCharts.js';
 import { setupGridLinks, type GridLinks } from './gridLinks.js';
@@ -473,19 +473,6 @@ async function main(): Promise<void> {
     onUndo: () => undoManager.undo(),
     onRedo: () => undoManager.redo(),
   });
-  // 보기 꾸밈의 이전/다음 시트 — 시트 탭을 누른 것과 같다(switchToSheet). 끝에서 멈춘다.
-  shell.setViewNav({
-    prevLabel: '이전 시트',
-    nextLabel: '다음 시트',
-    prev: () => stepSheet(-1),
-    next: () => stepSheet(1),
-  });
-  function stepSheet(dir: 1 | -1): void {
-    const indices = sortedSheetIndices();
-    const index = stepIndex(indices.length, indices.indexOf(activeSheet), dir);
-    if (index >= 0 && indices[index] !== activeSheet) switchToSheet(indices[index]);
-  }
-
   /**
    * 시트 자리 번호 → 마지막으로 관찰한 행/열 수. structure.observe가 "행/열 삽입·삭제가 실제로
    * 일어났다"를 시트 이름 변경·탭 순서 변경 같은 다른 구조 갱신과 구별하는 유일한 기준이다
@@ -818,7 +805,7 @@ async function main(): Promise<void> {
   sheetNavNext?.addEventListener('click', () => scrollSheetTabs(1));
   const sheetAddBtn = document.getElementById('sheet-add');
   // 읽기 전용이면 시트 추가 단추를 보이지 않는다 — 서버가 버리는 구조 변경이라 눌러도 화면만 어긋났다
-  if (sheetAddBtn && !canEdit) sheetAddBtn.style.display = 'none';
+  if (sheetAddBtn && !canEdit && !document.body.classList.contains('ui-view')) sheetAddBtn.style.display = 'none'; // 보기 꾸밈은 흐리게(officeShell)
   sheetAddBtn?.addEventListener('click', () => addSheet());
   // 엑셀처럼 탭 줄 왼쪽/오른쪽에 가려진 시트가 있으면 그쪽 끝에 "…" — 누르면 가려진 바로 옆 시트로 간다
   const sheetMoreLeft = document.getElementById('sheet-more-left') as HTMLButtonElement | null;

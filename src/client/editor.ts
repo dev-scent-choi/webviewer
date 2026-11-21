@@ -43,7 +43,7 @@ import { pickPresenceColorForName, renderPresenceAvatars } from './presence.js';
 import { applyWatermark } from './watermark.js';
 import { DOC_META_MAP, DOC_META_SAVED_AT_KEY, DOC_META_SAVE_ERROR_AT_KEY } from '../collab/gridShared.js';
 import { initOfficeShell } from './officeShell.js';
-import { handleSessionRejected, pickBoundary } from './viewStrip.js';
+import { handleSessionRejected } from './viewStrip.js';
 import { bindDropdown, fillColorPalette, type PaletteColor } from './ribbonMenus.js';
 import {
   applyMark,
@@ -726,47 +726,6 @@ async function main(): Promise<void> {
       view.focus();
     },
   });
-
-  // 보기 꾸밈의 이전/다음 쪽 — 쪽 사이 간격(docxLayout.ts .docx-page-gap)으로 몸체를 스크롤한다. 본문은 body가 스크롤되고
-  // 도구 줄(#toolbar)은 sticky라 그 아래를 기준으로 잰다. 쪽 나눔이 없는 문서(경계 0개)면 이전만 맨 위로 간다.
-  shell.setViewNav({
-    prevLabel: '이전 쪽',
-    nextLabel: '다음 쪽',
-    prev: () => jumpPage(-1),
-    next: () => jumpPage(1),
-  });
-  function jumpPage(dir: 1 | -1): void {
-    const offset = toolbar.getBoundingClientRect().bottom;
-    const tops = [...editorHost.querySelectorAll('.docx-page-gap')].map((gap) => gap.getBoundingClientRect().top - offset);
-    const index = pickBoundary(tops, dir);
-    if (index >= 0) window.scrollBy(0, tops[index]);
-    else if (dir === -1) window.scrollTo(0, 0);
-  }
-
-  // 보기 꾸밈 얇은 줄의 "메모" — 메모가 하나라도 있을 때만 보이고, 검토 탭의 "메모 표시"(숨은 리본 단추)를 대신 눌러 읽기 전용 메모 창을 연다
-  const stripTools = document.querySelector('.view-strip-tools');
-  if (stripTools) {
-    const commentsMap = ydoc.getMap<DocxComment>(DOCX_COMMENTS_MAP);
-    const memoBtn = document.createElement('button');
-    memoBtn.type = 'button';
-    memoBtn.className = 'icon-btn view-strip-text';
-    memoBtn.dataset.act = 'memo';
-    memoBtn.textContent = '메모';
-    memoBtn.title = '메모 창 열기/닫기';
-    memoBtn.setAttribute('aria-pressed', 'false');
-    const ribbonBtn = document.getElementById('btn-show-comments');
-    memoBtn.addEventListener('click', () => ribbonBtn?.click());
-    // 눌림 상태는 리본 단추를 따른다(메모 창을 다른 길로 닫아도 맞게)
-    if (ribbonBtn) {
-      const syncPressed = () => memoBtn.setAttribute('aria-pressed', ribbonBtn.getAttribute('aria-pressed') ?? 'false');
-      syncPressed();
-      new MutationObserver(syncPressed).observe(ribbonBtn, { attributes: true, attributeFilter: ['aria-pressed'] });
-    }
-    const syncMemo = () => (memoBtn.hidden = commentsMap.size === 0);
-    syncMemo();
-    commentsMap.observe(syncMemo);
-    stripTools.insertBefore(memoBtn, stripTools.querySelector('[data-act="print"], [data-act="download"], [data-act="edit"]'));
-  }
 
   // 서식 복사: 한 번 누르면 다음 선택 한 번에, 두 번 누르면 Esc를 누를 때까지 계속 칠한다(Word와 같다).
   let painter: { format: CopiedFormat; sticky: boolean } | null = null;
