@@ -25,6 +25,7 @@ import { applyWatermark } from './watermark.js';
 import { parseTypedNumber } from '../collab/cellValueShared.js';
 import { FILL_MARK, formatValueText, hashIfTooWide, isNumberOrDateValue, isTextNumFmt, type FormattedValue } from '../collab/numberFormat.js';
 import { initOfficeShell } from './officeShell.js';
+import { capacityFallback, fallBackToViewer, isViewUi, stepIndex } from './viewStrip.js';
 import { bindDropdown } from './ribbonMenus.js';
 import { currentRegion, setupGridCharts } from './gridCharts.js';
 import { setupGridLinks, type GridLinks } from './gridLinks.js';
@@ -339,7 +340,10 @@ async function main(): Promise<void> {
   provider.on('connection-close', (event: CloseEvent | null) => {
     if (event && event.code >= 4400) {
       provider.shouldConnect = false;
-      showFatalError(event.reason || '서버가 연결을 거부했습니다.');
+      // 보기 꾸밈이 큰 엑셀 정원 초과(4429)에 걸리면 같은 토큰의 보기 화면으로(설계 §3.4) — 편집 화면은 지금처럼 이유를 보여 준다
+      const fallback = capacityFallback(event.code, isViewUi(location.search, canEdit), info.viewerUrl);
+      if (fallback) fallBackToViewer(fallback);
+      else showFatalError(event.reason || '서버가 연결을 거부했습니다.');
     }
   });
   provider.on('sync', (isSynced: boolean) => {
@@ -469,6 +473,18 @@ async function main(): Promise<void> {
     onUndo: () => undoManager.undo(),
     onRedo: () => undoManager.redo(),
   });
+  // 보기 꾸밈의 이전/다음 시트 — 시트 탭을 누른 것과 같다(switchToSheet). 끝에서 멈춘다.
+  shell.setViewNav({
+    prevLabel: '이전 시트',
+    nextLabel: '다음 시트',
+    prev: () => stepSheet(-1),
+    next: () => stepSheet(1),
+  });
+  function stepSheet(dir: 1 | -1): void {
+    const indices = sortedSheetIndices();
+    const index = stepIndex(indices.length, indices.indexOf(activeSheet), dir);
+    if (index >= 0 && indices[index] !== activeSheet) switchToSheet(indices[index]);
+  }
 
   /**
    * 시트 자리 번호 → 마지막으로 관찰한 행/열 수. structure.observe가 "행/열 삽입·삭제가 실제로
@@ -798,7 +814,10 @@ async function main(): Promise<void> {
   }
   sheetNavPrev?.addEventListener('click', () => scrollSheetTabs(-1));
   sheetNavNext?.addEventListener('click', () => scrollSheetTabs(1));
-  document.getElementById('sheet-add')?.addEventListener('click', () => addSheet());
+  const sheetAddBtn = document.getElementById('sheet-add');
+  // 읽기 전용이면 시트 추가 단추를 보이지 않는다 — 서버가 버리는 구조 변경이라 눌러도 화면만 어긋났다
+  if (sheetAddBtn && !canEdit) sheetAddBtn.style.display = 'none';
+  sheetAddBtn?.addEventListener('click', () => addSheet());
   // 엑셀처럼 탭 줄 왼쪽/오른쪽에 가려진 시트가 있으면 그쪽 끝에 "…" — 누르면 가려진 바로 옆 시트로 간다
   const sheetMoreLeft = document.getElementById('sheet-more-left') as HTMLButtonElement | null;
   const sheetMoreRight = document.getElementById('sheet-more-right') as HTMLButtonElement | null;
@@ -871,6 +890,7 @@ async function main(): Promise<void> {
 
   /** order 필드만 다시 매긴다 — 셀 데이터는 전혀 건드리지 않으므로 시트가 몇 개든 가벼운 연산이다. */
   function applySheetOrder(orderedKeys: readonly number[]): void {
+    if (!canEdit) return; // 읽기 전용 — 서버가 버리는 구조 변경을 화면에만 적용하지 않는다(시트 순서·이름이 어긋났다)
     ydoc.transact(() => {
       orderedKeys.forEach((key, i) => {
         const sheet = structure.get(String(key));
@@ -882,6 +902,7 @@ async function main(): Promise<void> {
   /** 엑셀의 "새 시트"/시트 탭 우클릭 "삽입"과 동일 — 기존 이름과 안 겹치는 "SheetN" 이름으로 빈
    * 시트를 만들어 바로 전환한다. afterIdx를 주면 그 시트 바로 뒤에, 안 주면 맨 뒤에 넣는다. */
   function addSheet(afterIdx?: number): void {
+    if (!canEdit) return;
     const indices = sortedSheetIndices();
     const newKey = indices.length ? Math.max(...indices) + 1 : 0;
     const existingNames = new Set(indices.map((idx) => structure.get(String(idx))?.name));
@@ -905,6 +926,7 @@ async function main(): Promise<void> {
   /** 엑셀 시트 탭 우클릭 "삭제" — 마지막 남은 시트는 지울 수 없고, 지금 보고 있던 시트를 지우면
    * 그 자리에 있던(원래 바로 뒤였던) 시트로 자동 전환한다. */
   async function deleteSheet(idx: number): Promise<void> {
+    if (!canEdit) return;
     const indices = sortedSheetIndices();
     if (indices.length <= 1) {
       await officeAlert('마지막 남은 시트는 삭제할 수 없습니다.');
@@ -930,6 +952,7 @@ async function main(): Promise<void> {
 
   /** 엑셀 시트 탭 우클릭/더블클릭 "이름 바꾸기" — 탭 자리에 바로 입력창을 띄운다. */
   function startSheetRename(idx: number): void {
+    if (!canEdit) return;
     const tab = tabElFor(idx);
     const sheet = structure.get(String(idx));
     if (!tab || !sheet) return;
@@ -1015,6 +1038,7 @@ async function main(): Promise<void> {
 
   /** 엑셀 시트 탭 우클릭 메뉴와 동일한 4가지: 삽입/삭제/이름 바꾸기/이동. */
   function openSheetContextMenu(idx: number, x: number, y: number): void {
+    if (!canEdit) return;
     closeSheetPopup();
     const menu = document.createElement('div');
     menu.className = 'sheet-context-menu';
@@ -3042,7 +3066,7 @@ async function main(): Promise<void> {
 
   // ---------- 틀 고정 — 선택한 칸의 위쪽 행 전체 + 왼쪽 열 전체를 고정한다(다시 누르면 해제) ----------
   document.getElementById('btn-freeze-panes')?.addEventListener('click', () => {
-    if (!activeCellKey) return;
+    if (!canEdit || !activeCellKey) return; // 틀 고정도 structure를 쓴다 — 읽기 전용이면 화면만 어긋났다
     const parsed = parseGridCellKey(activeCellKey);
     if (!parsed) return;
     const s = currentStructure();
