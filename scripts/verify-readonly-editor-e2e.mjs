@@ -1,8 +1,9 @@
 // 기본 열기 = 읽기 전용 편집기 화면(ui=view) — 설계 2026-11-21-readonly-editor-look §4의 브라우저 검사 (1)~(8). (9) 기존 e2e는 따로 돌린다.
-//  (1) 리본·탭·빠른 실행·파일 화면·수식 입력줄 숨김, 얇은 줄 단추  (2) 편집 시도(타자·Delete·F2·붙여넣기·Ctrl+S/H/B/D/M/I/U·시트 탭·슬라이드 끌기)가
-//      화면·서버(새로 연 화면)를 바꾸지 않음  (3) 찾기·확대·이동·섬네일·인쇄·내려받기  (4) canCopy=false면 복사·우클릭·선택 막힘
+//  (1) 리본(모든 탭)·빠른 실행·수식 입력줄이 보이고, 문서를 쓰는 조작은 흐림(disabled·aria-disabled·.ro-disabled), 보기 조작(확대·찾기·메모 표시…)은 그대로
+//  (2) 편집 시도(흐린 단추 강제 클릭·타자·Delete·F2·붙여넣기·Ctrl+S/H/B/D/M/I/U·시트 탭·슬라이드 끌기)가 화면·서버(새로 연 화면)를 바꾸지 않음
+//  (3) 찾기·확대(보기 탭)·메모 창·시트 탭·섬네일·파일 화면(정보·인쇄·내려받기)  (4) canCopy=false면 복사·우클릭·선택 막힘
 //  (5) 다른 탭의 편집이 실시간 반영  (5b) 큰 엑셀(지연 불러오기) 뒤쪽 행의 조건부 서식이 서버 답으로 칠해짐
-//  (6) 메인 화면 기본 "열기"(docx·xlsx·pptx → ui=view, pdf는 그대로)·"▾ 다른 방식" 세 항목·공유 폼 기본값·편집 열기  (7) 600px 폭
+//  (6) 메인 화면 기본 "열기"(docx·xlsx·pptx → ui=view, pdf는 그대로)·한 줄 단추(리브레오피스·아트크래프트·동시편집·삭제)·공유 폼 기본값·편집 열기  (7) 600px 폭
 //  (8) 정원 초과(4429) → 안내 + 자동 이동 — 큰 엑셀로 정원을 실제로 채우는 대신 Playwright routeWebSocket으로 서버가 4429로 닫은 것과 같은 상황을 만든다.
 // 이 스크립트가 시험 서버를 직접 띄운다(npm run build:editor 뒤, LibreOffice 필요):
 //   [ARTCRAFT_E2E_PRIVATE_DIR=<고객형 원본 폴더>] node scripts/verify-readonly-editor-e2e.mjs [포트=8162, 8160~8169]
@@ -158,11 +159,24 @@ const ED = {
 };
 const snapshot = (page, ext) =>
   page.evaluate(([snapSrc, fmtSrc, root]) => `${(0, eval)(`(${snapSrc})`)()}\n${(0, eval)(`(${fmtSrc})`)(document.querySelector(root))}`, [String(ED[ext].snap), String(fmtOf), ED[ext].root]);
-const WANT_ACTS = {
-  docx: ['zoom-out', 'zoom-in', 'prev', 'next', 'print', 'download'],
-  xlsx: ['zoom-out', 'zoom-in', 'prev', 'next', 'print', 'download'],
-  pptx: ['prev', 'next', 'print', 'download'],
+/** 보기 꾸밈에서 보이되 흐려야 하는 조작(문서를 쓴다)과 그대로 눌려야 하는 조작(보기만) */
+const WRITE_IDS = {
+  docx: ['qa-save', 'qa-undo', 'btn-paste', 'font-family', 'btn-bold', 'btn-ribbon-replace', 'btn-table', 'btn-page-break', 'indent-left', 'btn-new-comment', 'btn-delete-comment'],
+  xlsx: ['qa-save', 'qa-undo', 'btn-paste', 'cell-font-family', 'btn-cell-bold', 'btn-merge-center', 'btn-add-row', 'btn-find-replace', 'btn-sort-asc', 'btn-freeze-panes', 'sheet-add'],
+  pptx: ['qa-save', 'qa-undo', 'btn-add-blank', 'btn-dup-slide', 'btn-del-slide', 'font-family', 'btn-bold', 'btn-add-textbox', 'btn-shape-rect', 'btn-bg-apply-all', 'btn-transition-apply-all'],
 };
+const VIEW_IDS = {
+  docx: ['btn-copy', 'btn-ribbon-find', 'btn-show-comments', 'btn-zoom-in-ribbon', 'btn-zoom-out-ribbon'],
+  xlsx: ['btn-copy', 'btn-zoom-in-ribbon', 'btn-zoom-out-ribbon'],
+  pptx: ['btn-transition-preview', 'btn-animation-preview'],
+};
+/** 흐린 단추를 강제로 눌러 본다 — 문서가 바뀌면 안 된다(엑셀은 칸을, 워드는 전체를 고른 채로) */
+const FORCE_CLICK = {
+  docx: ['btn-bold', 'btn-italic', 'btn-align-center', 'btn-bullet-list', 'btn-clear-format', 'btn-indent', 'qa-undo'],
+  xlsx: ['btn-cell-bold', 'btn-merge-center', 'btn-add-row', 'btn-del-col', 'btn-wrap-text', 'sheet-add', 'qa-undo'],
+  pptx: ['btn-add-blank', 'btn-dup-slide', 'btn-del-slide', 'btn-add-textbox', 'btn-shape-rect', 'qa-undo'],
+};
+const MIN_TABS = { docx: 6, xlsx: 6, pptx: 6 };
 
 async function openView(context, url, ext) {
   const page = await context.newPage();
@@ -180,20 +194,39 @@ const contextMenuPrevented = (page, sel) =>
     document.querySelector(s).dispatchEvent(ev);
     return ev.defaultPrevented;
   }, sel);
-const hiddenState = (page) =>
-  page.evaluate(() => {
-    const none = (sel) => [...document.querySelectorAll(sel)].every((el) => getComputedStyle(el).display === 'none');
-    return {
-      body: document.body.classList.contains('ui-view'),
-      tabs: none('.ribbon-tabs'),
-      panels: none('.ribbon-panel'),
-      qa: none('.quick-access'),
-      backstage: none('.backstage'),
-      formula: none('#formula-input'),
-      acts: [...document.querySelectorAll('.view-strip-tools [data-act]')].map((b) => b.dataset.act),
-    };
-  });
-const hiddenOk = (s) => s.body && s.tabs && s.panels && s.qa && s.backstage && s.formula;
+const chromeState = (page, ext) =>
+  page.evaluate(
+    ([write, view]) => {
+      const shown = (sel) => [...document.querySelectorAll(sel)].some((el) => el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden');
+      const greyed = (id) => {
+        const el = document.getElementById(id);
+        return !!el && el.classList.contains('ro-disabled') && el.getAttribute('aria-disabled') === 'true' && (!('disabled' in el) || el.disabled);
+      };
+      const active = (id) => {
+        const el = document.getElementById(id);
+        return !!el && !el.classList.contains('ro-disabled') && !el.disabled;
+      };
+      return {
+        body: document.body.classList.contains('ui-view'),
+        tabs: [...document.querySelectorAll('.ribbon-tab')].filter((t) => t.getClientRects().length > 0).length,
+        panel: shown('.ribbon-panel'),
+        qa: shown('.quick-access'),
+        formula: document.getElementById('formula-input') ? shown('#formula-input') : true,
+        strip: document.querySelectorAll('.view-strip, .view-strip-tools').length,
+        notGreyed: write.filter((id) => !greyed(id)),
+        notActive: view.filter((id) => !active(id)),
+        edit: document.querySelectorAll('.view-open-edit').length,
+      };
+    },
+    [WRITE_IDS[ext], VIEW_IDS[ext]],
+  );
+// 흐림은 숨은 탭의 판에 있는 조작까지 본다(보이는지는 탭을 눌러 보는 검사가 맡는다)
+const chromeOk = (s, ext) => s.body && s.tabs >= MIN_TABS[ext] && s.panel && s.qa && s.formula && s.strip === 0 && s.notGreyed.length === 0;
+/** 파일 화면(백스테이지)을 열고 한 칸을 고른다 */
+async function backstagePane(page, pane) {
+  if (await page.locator('.backstage').isHidden()) await page.click('.ribbon-tab[data-tab="file"]');
+  await page.click(`.backstage-item[data-pane="${pane}"]`);
+}
 
 await startServer();
 let browser;
@@ -217,10 +250,23 @@ try {
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, permissions: ['clipboard-read', 'clipboard-write'] });
     const { page, errors } = await openView(context, tok.viewerUrl, ext);
 
-    // (1) 숨김·얇은 줄
-    const shown = await hiddenState(page);
-    rec(`(1) ${ext} 리본·탭·빠른 실행·파일 화면·수식 입력줄 숨김`, hiddenOk(shown), JSON.stringify(shown));
-    rec(`(1) ${ext} 얇은 줄 단추(API로 연 화면엔 편집 열기 없음)`, WANT_ACTS[ext].every((a) => shown.acts.includes(a)) && !shown.acts.includes('edit'), shown.acts.join(','));
+    // (1) 리본은 보이고 쓰는 조작만 흐림
+    const shown = await chromeState(page, ext);
+    rec(`(1) ${ext} 리본(탭 ${MIN_TABS[ext]}개 이상)·빠른 실행·수식 입력줄 보임, 얇은 줄 없음, 쓰는 조작 흐림(${WRITE_IDS[ext].length}개)`, chromeOk(shown, ext), JSON.stringify(shown));
+    rec(`(1) ${ext} 보기 조작은 그대로(${VIEW_IDS[ext].join('·')}) · API로 연 화면엔 편집 열기 없음`, shown.notActive.length === 0 && shown.edit === 0, JSON.stringify({ notActive: shown.notActive, edit: shown.edit }));
+    {
+      // 편집 탭도 눌러 둘러볼 수 있다 — 눌러 보면 판이 바뀌고 그 안 단추는 흐림
+      const tab = ext === 'pptx' ? 'transitions' : 'insert';
+      await page.click(`.ribbon-tab[data-tab="${tab}"]`);
+      const panel = await page.evaluate((t) => {
+        const el = document.querySelector(`.ribbon-panel[data-panel="${t}"]`);
+        const controls = [...el.querySelectorAll('button, select, input')].filter((c) => c.getClientRects().length > 0);
+        return { visible: !el.hidden && el.getClientRects().length > 0, controls: controls.length, greyed: controls.filter((c) => c.classList.contains('ro-disabled')).length };
+      }, tab);
+      const wantActive = ext === 'pptx' ? 1 : 0; // 전환 미리 보기
+      rec(`(1) ${ext} "${tab}" 탭 눌러 보기 — 판이 열리고 쓰는 단추는 모두 흐림`, panel.visible && panel.controls > 0 && panel.greyed === panel.controls - wantActive, JSON.stringify(panel));
+      await page.click('.ribbon-tab[data-tab="home"]');
+    }
 
     // (2) 편집 시도
     const before = await snapshot(page, ext);
@@ -233,6 +279,17 @@ try {
     if (ext === 'xlsx') await page.locator('#grid-edit-table td[data-row="1"][data-col="0"]').click();
     else await page.click(ED[ext].surface);
     if (ext === 'docx') await page.keyboard.press('Control+a');
+    // 흐린 단추를 강제로(마우스가 닿지 않게 막혀 있어도 Playwright force로) 눌러 본다
+    let pressed = 0;
+    for (const id of FORCE_CLICK[ext]) {
+      const tab = await page.evaluate((i) => document.getElementById(i)?.closest('.ribbon-panel')?.dataset.panel ?? null, id);
+      if (tab) await page.click(`.ribbon-tab[data-tab="${tab}"]`);
+      if (await page.locator(`#${id}`).click({ force: true, timeout: 3000 }).then(() => true, () => false)) pressed += 1;
+    }
+    await page.click('.ribbon-tab[data-tab="home"]');
+    await sleep(800);
+    const afterForce = await snapshot(page, ext);
+    rec(`(2) ${ext} 흐린 단추 강제 클릭(${FORCE_CLICK[ext].join('·')}) — 화면 그대로`, afterForce === before && pressed > 0, `눌린 ${pressed}/${FORCE_CLICK[ext].length} · ${afterForce === before ? '' : '달라짐'}`);
     for (const key of ['Control+b', 'Control+d', 'Control+m', 'Control+i', 'Control+u']) {
       await page.keyboard.press(key);
       await page.keyboard.press('Escape');
@@ -246,7 +303,7 @@ try {
       rec('(2) xlsx 시트 탭 우클릭 메뉴 없음', (await page.locator('.sheet-context-menu').count()) === 0);
       await tab.dblclick();
       rec('(2) xlsx 시트 탭 두 번 클릭 — 이름 바꾸기 입력창 없음', (await page.locator('.grid-sheet-tab-rename').count()) === 0);
-      rec('(2) xlsx 시트 추가 단추 안 보임', !(await page.locator('#sheet-add').isVisible()));
+      rec('(2) xlsx 시트 추가(+) 단추는 보이되 흐림', (await page.locator('#sheet-add').isVisible()) && (await page.locator('#sheet-add').isDisabled()));
       await page.locator(ED.xlsx.surface).first().click({ button: 'right' });
       rec('(2) xlsx 칸 우클릭 메뉴 없음', (await page.locator('.grid-context-menu').count()) === 0);
     }
@@ -274,53 +331,59 @@ try {
       await sleep(800);
       const count = await page.textContent('#search-count');
       rec(`(3) ${ext} 찾기`, (await page.isVisible('#search-bar')) && /[1-9]/.test(count ?? ''), `${term} → ${count}`);
+      rec(`(3) ${ext} 찾기 상자의 바꾸기는 흐리거나 숨김`, !(await page.locator('#search-replace-row').isVisible()) || (await page.locator('#search-replace-all').isDisabled()));
       await page.keyboard.press('Escape');
       const z0 = await page.textContent('#zoom-level');
-      await page.click('.view-strip-tools [data-act=zoom-in]');
+      await page.click('.ribbon-tab[data-tab="view"]');
+      await page.click('#btn-zoom-in-ribbon');
       await sleep(300);
       const z1 = await page.textContent('#zoom-level');
-      rec(`(3) ${ext} 얇은 줄 확대`, z0 !== z1, `${z0} → ${z1}`);
-      await page.click('.view-strip-tools [data-act=zoom-out]');
+      rec(`(3) ${ext} 보기 탭 확대`, z0 !== z1, `${z0} → ${z1}`);
+      await page.click('#btn-zoom-out-ribbon');
+      await page.click('.ribbon-tab[data-tab="home"]');
     }
     if (ext === 'docx') {
-      await page.evaluate(() => window.scrollTo(0, 0));
-      await page.click('.view-strip-tools [data-act=next]');
-      await sleep(500);
-      const gap = await page.evaluate(() => {
-        const g = document.querySelector('.docx-page-gap');
-        const bar = document.getElementById('toolbar').getBoundingClientRect().bottom;
-        return g ? Math.round(g.getBoundingClientRect().top - bar) : null;
-      });
-      rec('(3) docx 다음 쪽 — 첫 쪽 간격이 도구 줄 바로 아래로', gap !== null && Math.abs(gap) <= 4, String(gap));
+      // 메모 창은 검토 탭 "메모 표시"로(읽기 전용 — 새 메모는 흐림)
+      await page.click('.ribbon-tab[data-tab="review"]');
+      await page.click('#btn-show-comments');
+      await sleep(300);
+      rec('(3) docx 검토 → 메모 표시 — 읽기 전용 메모 창 열림(새 메모 흐림)', (await page.isVisible('#review-pane')) && (await page.locator('#btn-new-comment').isDisabled()));
+      await page.click('#btn-show-comments');
+      await page.click('.ribbon-tab[data-tab="home"]');
     }
     if (ext === 'xlsx') {
       const t0 = await page.textContent('.grid-sheet-tab.active');
-      await page.click('.view-strip-tools [data-act=next]');
+      await page.locator('.grid-sheet-tab').nth(1).click();
       await sleep(800);
       const t1 = await page.textContent('.grid-sheet-tab.active');
-      rec('(3) xlsx 다음 시트', t0 !== t1, `${t0} → ${t1}`);
+      rec('(3) xlsx 시트 탭 눌러 시트 바꾸기', t0 !== t1, `${t0} → ${t1}`);
       await page.locator('.grid-sheet-tab').first().click();
       await sleep(800);
     }
     if (ext === 'pptx') {
       const num = () => page.textContent('#slides-rail .slide-card.active .slide-card-number');
       const n0 = await num();
-      await page.click('.view-strip-tools [data-act=next]');
+      await page.locator('#slides-rail .slide-card').nth(1).click();
       await sleep(500);
       const n1 = await num();
-      rec('(3) pptx 다음 슬라이드', n0 !== n1, `${n0} → ${n1}`);
+      rec('(3) pptx 둘째 섬네일 → 슬라이드 바뀜', n0 !== n1, `${n0} → ${n1}`);
       await page.locator('#slides-rail .slide-card').first().click();
       await sleep(500);
       rec('(3) pptx 섬네일로 이동', (await num())?.trim() === '1', await num());
     }
     // 새 창은 about:blank로 먼저 열고 인쇄 주소로 옮긴다 — 헤드리스는 PDF를 화면에 띄우지 않아 창 주소 대신 그 창의 인쇄 요청 응답을 본다
+    await backstagePane(page, 'info');
+    rec(`(3) ${ext} 파일 화면 — 보이고 정보에 "읽기 전용"`, (await page.isVisible('.backstage')) && (await page.locator('.backstage-pane[data-pane="info"]').innerText()).includes('읽기 전용'));
+    await backstagePane(page, 'print');
     const printResp = context.waitForEvent('response', { predicate: (r) => /\/api\/view\/print\?token=/.test(r.url()), timeout: 60000 }).catch(() => null);
-    const [popup] = await Promise.all([context.waitForEvent('page', { timeout: 15000 }), page.click('.view-strip-tools [data-act=print]')]);
+    const [popup] = await Promise.all([context.waitForEvent('page', { timeout: 15000 }), page.click('.backstage-action[data-action="print"]')]);
     const pr = await printResp;
     rec(`(3) ${ext} 인쇄 — 새 창이 인쇄 주소를 받음(200)`, pr !== null && pr.status() === 200 && pr.frame()?.page() === popup, pr ? `${pr.status()} ${pr.headers()['content-type'] ?? ''}` : '요청 없음');
     await popup.close();
-    const [download] = await Promise.all([page.waitForEvent('download', { timeout: 60000 }), page.click('.view-strip-tools [data-act=download]')]);
-    rec(`(3) ${ext} 내려받기`, download.suggestedFilename().length > 0, download.suggestedFilename());
+    await backstagePane(page, 'download');
+    const [download] = await Promise.all([page.waitForEvent('download', { timeout: 60000 }), page.click('.backstage-action[data-action="download"]')]);
+    rec(`(3) ${ext} 파일 화면 내려받기`, download.suggestedFilename().length > 0, download.suggestedFilename());
+    await page.click('.backstage-back');
 
     // (4) 복사 권한
     rec(`(4) ${ext} canCopy=true — 브라우저 우클릭 메뉴는 그대로`, !(await contextMenuPrevented(page, ED[ext].surface)));
@@ -347,7 +410,8 @@ try {
       if (ext === 'docx') {
         await edit.page.click('.ProseMirror');
         await edit.page.keyboard.press('Control+End');
-        await edit.page.keyboard.type(mark);
+        // 한 번에 넣는다 — 글자마다 치면 첫 글자 뒤 커서가 한 칸 앞으로 돌아가 표지가 갈라지는 일이 있었다(2026-11-21 재작업 중 관찰, 편집 화면 쪽)
+        await edit.page.keyboard.insertText(mark);
       } else if (ext === 'xlsx') {
         await edit.page.locator(ED.xlsx.surface).first().click();
         await edit.page.keyboard.type(mark);
@@ -357,8 +421,10 @@ try {
         await edit.page.keyboard.press('End');
         await edit.page.keyboard.type(mark);
       }
-      const seen = await page.waitForFunction((m) => document.body.innerText.includes(m), mark, { timeout: 20000 }).then(() => true, () => false);
-      rec(`(5) ${ext} 다른 탭의 편집이 보기 꾸밈 화면에 실시간`, seen, mark);
+      // textContent — 워드는 화면에서 먼 본문 블록의 그리기를 건너뛰어(content-visibility: hidden, docxLayout.ts data-far) 맨 아래 글이 innerText에 없을 수 있다
+      const seen = await page.waitForFunction((m) => document.body.textContent.includes(m), mark, { timeout: 20000 }).then(() => true, () => false);
+      const inEdit = await edit.page.evaluate((m) => document.body.textContent.includes(m), mark);
+      rec(`(5) ${ext} 다른 탭의 편집이 보기 꾸밈 화면에 실시간`, seen, `${mark} · 편집 탭에 ${inEdit} · 보기 ${await page.getAttribute('#conn-status', 'data-status')}`);
       await edit.page.close();
     }
 
@@ -437,27 +503,29 @@ try {
     await home();
     await row().getByRole('button', { name: '열기', exact: true }).click();
     await page.waitForURL(/\/editor\.html\?token=[^&]+&ui=view$/, { timeout: 30000 });
-    const editBtn = await page.waitForSelector('.view-strip-tools [data-act=edit]', { timeout: 60000 }).then(() => true, () => false);
+    const editBtn = await page.waitForSelector('.office-titlebar .view-open-edit', { timeout: 60000 }).then(() => true, () => false);
     rec('(6) 메인 기본 "열기" docx → 읽기 전용 편집기 화면 + 편집 열기 단추', editBtn && (await page.evaluate(() => document.body.classList.contains('ui-view'))), page.url());
-    await page.click('.view-strip-tools [data-act=edit]');
+    await page.click('.view-open-edit');
     await page.waitForURL((u) => u.pathname === '/editor.html' && !u.search.includes('ui=view'), { timeout: 30000 });
     await page.waitForSelector('.ProseMirror', { timeout: 60000 });
     rec('(6) 편집 열기 → 편집 권한 편집기(리본 보임)', !(await page.evaluate(() => document.body.classList.contains('ui-view'))) && (await page.isVisible('.ribbon-tabs')));
     await home();
-    await row().locator('details.open-more > summary').click();
-    const items = await row().locator('details.open-more .open-more-menu button').allTextContents();
-    rec('(6) "▾ 다른 방식" 세 항목', ['리브레오피스로 열기', '아트크래프트로 열기', '동시편집 열기'].every((t) => items.includes(t)) && items.length === 3, items.join(','));
+    const labels = (await row().locator('.doc-info > button, .doc-info > span > button').allTextContents()).map((t) => t.trim());
+    const want = ['열기', '리브레오피스로 열기', '아트크래프트로 열기', '동시편집 열기', '삭제'];
+    rec('(6) 메인 한 줄 단추(펼침 메뉴 없음): 열기·리브레오피스·아트크래프트·동시편집·삭제', JSON.stringify(labels) === JSON.stringify(want) && (await row().locator('details').count()) === 0, labels.join(','));
     for (const [label, re] of [
       ['리브레오피스로 열기', /\/view\.html\?token=/],
       ['아트크래프트로 열기', /\/view\.html\?token=/],
       ['동시편집 열기', /\/editor\.html\?token=[^&]+$/],
     ]) {
       await home();
-      await row().locator('details.open-more > summary').click();
       await row().getByRole('button', { name: label }).click();
       await page.waitForURL(re, { timeout: 30000 }).catch(() => {});
-      rec(`(6) "▾ 다른 방식" → ${label}`, re.test(page.url()), page.url());
+      rec(`(6) 한 줄 단추 → ${label}`, re.test(page.url()), page.url());
     }
+    await home(pdfName);
+    const pdfLabels = (await rowOf(pdfName).locator('.doc-info > button, .doc-info > span > button').allTextContents()).map((t) => t.trim());
+    rec('(6) pdf 줄: 열기·…·PDF 편집·삭제(동시편집 없음)', pdfLabels[0] === '열기' && pdfLabels.includes('PDF 편집') && pdfLabels.at(-1) === '삭제' && !pdfLabels.includes('동시편집 열기'), pdfLabels.join(','));
     await home();
     const form = row().locator('form.token-form');
     rec('(6) 공유 폼 — "읽기 전용 편집기 화면(기본)"이 기본 선택', await form.locator('input[name=engine][value=editor]').isChecked());
@@ -473,27 +541,32 @@ try {
     rec('(6) 공유 링크 = 보기 꾸밈 주소', /&ui=view$/.test(href), href);
     const other = await browser.newContext({ viewport: { width: 1280, height: 900 } });
     const shared = await openView(other, href, 'docx');
-    rec('(6) 공유 링크로 연 사람에게는 편집 열기 단추 없음', (await shared.page.locator('[data-act=edit]').count()) === 0);
+    rec('(6) 공유 링크로 연 사람에게는 편집 열기 단추 없음(리본은 보임)', (await shared.page.locator('.view-open-edit').count()) === 0 && (await shared.page.isVisible('.ribbon-tabs')));
     await other.close();
     await context.close();
   }
 
-  // (7) 600px 폭 — 얇은 줄이 줄바꿈되어 가로 넘침 없음
+  // (7) 600px 폭 — 메인 화면에서 연 경우(편집 열기 단추까지 있는 가장 붐비는 제목 줄)도 가로 넘침·겹침 없음
   for (const ext of ['docx', 'xlsx', 'pptx']) {
     const context = await browser.newContext({ viewport: { width: 600, height: 900 } });
+    await context.addInitScript((id) => sessionStorage.setItem('docview-edit-doc', id), ids[ext]);
     const { page } = await openView(context, (await token(ids[ext], { engine: 'editor' })).viewerUrl, ext);
-    const m = await page.evaluate(() => ({
-      scroll: document.documentElement.scrollWidth,
-      body: document.body.scrollWidth,
-      // 숨긴 단추(메모 없는 문서의 "메모")는 빼고 본다
-      inside: [...document.querySelectorAll('.view-strip-tools [data-act]')]
-        .filter((b) => b.getClientRects().length > 0)
-        .map((b) => {
+    const m = await page.evaluate(() => {
+      const right = document.querySelector('.titlebar-right').getBoundingClientRect();
+      const title = document.getElementById('doc-title').getBoundingClientRect();
+      const items = [...document.querySelectorAll('.office-titlebar :is(button, a, .conn-status, .readonly-badge)')].filter((b) => b.getClientRects().length > 0);
+      return {
+        scroll: document.documentElement.scrollWidth,
+        body: document.body.scrollWidth,
+        edit: document.querySelectorAll('.view-open-edit').length,
+        inside: items.every((b) => {
           const r = b.getBoundingClientRect();
-          return r.left >= -0.5 && r.right <= window.innerWidth + 0.5;
+          return r.left >= -0.5 && r.right <= window.innerWidth + 0.5 && r.height < 40;
         }),
-    }));
-    rec(`(7) ${ext} 600px — 가로 넘침 없음, 얇은 줄 단추 모두 화면 안`, m.scroll <= 600 && m.body <= 600 && m.inside.length > 0 && m.inside.every(Boolean), JSON.stringify(m));
+        overlap: title.right > right.left + 0.5,
+      };
+    });
+    rec(`(7) ${ext} 600px — 가로 넘침 없음, 제목 줄 단추 모두 화면 안·한 줄, 문서 이름과 겹치지 않음`, m.scroll <= 600 && m.body <= 600 && m.edit === 1 && m.inside && !m.overlap, JSON.stringify(m));
     await context.close();
   }
 
@@ -516,7 +589,7 @@ try {
     await context.close();
   }
 
-  // 고객형 문서 — (1) 숨김·얇은 줄·화면 오류만(원본은 저장소 밖, 사본은 시험 폴더에)
+  // 고객형 문서 — (1) 리본 보임·쓰는 조작 흐림·화면 오류만(원본은 저장소 밖, 사본은 시험 폴더에)
   for (const c of CUSTOMER) {
     const src = ORIGINALS && path.join(ORIGINALS, c.src);
     if (!src || !fs.existsSync(src)) {
@@ -528,8 +601,8 @@ try {
     const id = (await upload(fs.readFileSync(copy), c.name)).id;
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
     const { page, errors } = await openView(context, (await token(id, { engine: 'editor' })).viewerUrl, c.ext);
-    const s = await hiddenState(page);
-    rec(`고객형 ${c.name} — 보기 꾸밈(숨김·얇은 줄)·화면 오류 없음`, hiddenOk(s) && WANT_ACTS[c.ext].every((a) => s.acts.includes(a)) && errors.length === 0, `${s.acts.join(',')} ${errors.slice(0, 1).join('')}`);
+    const s = await chromeState(page, c.ext);
+    rec(`고객형 ${c.name} — 보기 꾸밈(리본 보임·쓰는 조작 흐림)·화면 오류 없음`, chromeOk(s, c.ext) && s.notActive.length === 0 && errors.length === 0, `${JSON.stringify(s)} ${errors.slice(0, 1).join('')}`);
     await context.close();
   }
 } catch (error) {
