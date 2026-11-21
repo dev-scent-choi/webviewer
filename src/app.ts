@@ -5,6 +5,8 @@ import rateLimit from '@fastify/rate-limit';
 import fastifyStatic from '@fastify/static';
 import fastifyWebsocket from '@fastify/websocket';
 import Fastify, { type FastifyInstance } from 'fastify';
+import { artcraftDir } from './artcraftManifest.js';
+import { registerArtcraftStatic } from './artcraftStatic.js';
 import { versionAssetUrls } from './assetVersion.js';
 import { config } from './config.js';
 import { adminRoutes } from './routes/admin.js';
@@ -119,6 +121,8 @@ export async function buildApp(): Promise<FastifyInstance> {
     reply.removeHeader('etag');
     return next;
   });
+  // 아트크래프트 브라우저 엔진 자산(.br·immutable) — 아래 public 전체 서빙보다 구체적인 /artcraft/* 경로가 먼저 걸린다
+  await registerArtcraftStatic(app, artcraftDir());
   await app.register(fastifyStatic, {
     root: publicDir,
     // 뷰어/관리 화면 JS가 브라우저에 캐시되어 구버전이 돌지 않도록 항상 재검증시킨다.

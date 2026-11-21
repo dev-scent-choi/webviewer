@@ -4,8 +4,10 @@ node_modules/
 # 업로드된 문서·변환본·감사 로그 (사용자 데이터 — 절대 커밋 금지)
 data/
 
-# 외부 변환 도구 바이너리 (README의 설치 안내 참조)
-tools/
+# 외부 변환 도구 바이너리 (README의 설치 안내 참조) — 단 아트크래프트 껍데기 크레이트(소스)는 저장소에 둔다
+tools/*
+!tools/artcraft-shell/
+tools/artcraft-shell/.build/
 
 # 로그·임시 파일
 *.log
@@ -58,6 +60,9 @@ start.local.bat
 # npm 배포용 서버 컴파일 산출물(scripts/build-server.mjs → package.json의 prepack이 생성) — 소스 아님.
 dist/
 public/js/.build.lock
+
+# 아트크래프트 브라우저 엔진 산출물(npm run build:artcraft) — 이름에 내용 해시가 붙어 소스가 아니다
+public/artcraft/
 
 # 품질 점검(audit:office) 실행 산출물 — 서버 데이터·임시 폴더·그림
 .audit-run/
