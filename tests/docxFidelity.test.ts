@@ -347,12 +347,40 @@ describe('3차 검토(m4·Minor 5)', () => {
     const span = docxSchema.marks.fontFamily.create({ eastAsia: '바탕', ascii: null });
     const spec = docxSchema.marks.fontFamily.spec.toDOM!(span, true) as [string, Record<string, string>];
     expect(spec[1].class).toBe('docx-font-lh');
-    expect(spec[1].style).toContain('--doc-single-line: 1.148');
+    expect(spec[1].style).toContain('--doc-single-line: 1.3');
     const unknown = docxSchema.marks.fontFamily.spec.toDOM!(docxSchema.marks.fontFamily.create({ eastAsia: '나눔고딕', ascii: null }), true) as [string, Record<string, string>];
     expect(unknown[1].class).toBeUndefined();
     const para = (spacing: object) => docxSchema.nodes.paragraph.spec.toDOM!(docxSchema.nodes.paragraph.create({ spacing: { before: null, after: null, ...spacing } }, docxSchema.text('가', [span]))) as [string, Record<string, string>];
     expect(para({ line: 360, lineRule: 'auto' })[1].style).toContain('--line-mult: 1.5');
-    expect(para({ line: 360, lineRule: 'auto' })[1].style).toContain('--doc-single-line: 1.148');
+    expect(para({ line: 360, lineRule: 'auto' })[1].style).toContain('--doc-single-line: 1.3');
     expect(para({ line: 300, lineRule: 'exact' })[1].style).toContain('--run-line-height: 20px');
+  });
+});
+
+describe('Word 1줄 = 1.3 × win 높이(REVIEW-r3 I-r3-1)', () => {
+  test('깔린 글꼴에서 잰 값: 맑은 고딕 1.729, 바탕·굴림·돋움·궁서 1.3, 라틴 글꼴(Arial)은 표에 없음', async () => {
+    const { lineRatiosOfFont } = await import('../src/docx/fontMetrics.js');
+    const read = (name: string) => (fs.existsSync(`C:/Windows/Fonts/${name}`) ? lineRatiosOfFont(fs.readFileSync(`C:/Windows/Fonts/${name}`)) : null);
+    const malgun = read('malgun.ttf');
+    if (malgun) expect(malgun['맑은 고딕']).toBe(1.729);
+    const batang = read('batang.ttc');
+    if (batang) for (const name of ['바탕', '바탕체', '궁서', '궁서체']) expect(batang[name]).toBe(1.3);
+    const gulim = read('gulim.ttc');
+    if (gulim) for (const name of ['굴림', '굴림체', '돋움', '돋움체']) expect(gulim[name]).toBe(1.3);
+    const arial = read('arial.ttf');
+    if (arial) expect(arial.Arial).toBeUndefined();
+  });
+
+  test('d01 Office 정답 재현: 바탕 11pt·1.15줄·뒤 10pt 문단의 줄 간격 26.5pt', () => {
+    const d01 = corpus('d01-styles-fonts.docx');
+    const styles = strFromU8(unzipSync(d01)['word/styles.xml']);
+    // 문서 기본 문단: 1.15줄(276)·뒤 간격 200(10pt), 11pt(22 half-points)
+    expect(styles).toContain('<w:spacing w:after="200" w:line="276" w:lineRule="auto"/>');
+    expect(styles).toContain('w:sz w:val="22"');
+    const ratio = 1.3; // 기본 표 = fontMetrics 식(batang.ttc (879+145)/1024 × 1.3)
+    const pitchPt = 11 * ratio * 1.15 + 10;
+    expect(Math.abs(pitchPt - 26.5)).toBeLessThan(0.2);
+    const span = docxSchema.marks.fontFamily.spec.toDOM!(docxSchema.marks.fontFamily.create({ eastAsia: '바탕', ascii: null }), true) as [string, Record<string, string>];
+    expect(span[1].style).toContain(`--doc-single-line: ${ratio}`);
   });
 });

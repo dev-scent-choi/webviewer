@@ -35,7 +35,8 @@ import {
   type DocxPageSetup,
   type PageSetup,
   lineSpacingCss,
-  WORD_SINGLE_LINE_RATIO,
+  setWordLineRatios,
+  wordLineRatioOf,
 } from '../docx/schema.js';
 import { setupWordReview } from './wordReview.js';
 import { pickPresenceColorForName, renderPresenceAvatars } from './presence.js';
@@ -245,7 +246,7 @@ function applyDefaultParagraphSpacing(spacing: ViewInfo['defaultParagraphSpacing
  * 1.2배를 써서 맑은 고딕 문서가 워드보다 촘촘하게 보였다.
  */
 function measureSingleLineRatio(defaultFontName: string): void {
-  const known = WORD_SINGLE_LINE_RATIO[defaultFontName];
+  const known = wordLineRatioOf(defaultFontName);
   if (known) {
     editorHost.style.setProperty('--doc-single-line', String(known));
     return;
@@ -613,6 +614,7 @@ async function main(): Promise<void> {
     (mediaPath) => `/api/view/slide-media?token=${encodeURIComponent(token)}&path=${encodeURIComponent(mediaPath)}`,
     (ref) => `/api/view/docx-drawing?token=${encodeURIComponent(token)}&ref=${encodeURIComponent(ref)}`,
   );
+  setWordLineRatios(info.docxRender?.lineRatios); // 서버가 깔린 글꼴에서 잰 Word 1줄 비율(없으면 기본 표)
   numberingDefs = info.docxRender?.numbering ?? null;
   if (info.docxRender) {
     // 규칙 하나씩 넣는다 — 문서에서 온 값이 규칙을 깨면 그 규칙만 버려진다(값 자체도 docxLayout.ts에서 걸러 쓴다)

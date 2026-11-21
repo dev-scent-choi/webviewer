@@ -71,19 +71,24 @@ const TWIPS_PER_PX = 15;
 const WORD_SINGLE_LINE_HEIGHT = 1.2;
 
 /**
- * Word의 "1줄" 높이(글자 크기 대비)가 브라우저 기본 줄 높이와 다른 글꼴 — 글자(런)마다 이 값으로 줄 높이를 정한다(줄 간격 '배수'는 곱한다).
- * 출처:
- *  - 맑은 고딕: Word가 만든 PDF에서 잰 값 — 10.5pt 글자, 1.15줄 문단의 줄 간격 20.9pt → 1줄 18.17pt = 1.73배
- *    (글꼴 파일 malgun.ttf 의 win/hhea 값은 (2229+495)/2048 = 1.33 — Word는 이보다 넓게 둔다).
- *  - 바탕·바탕체·궁서·궁서체(batang.ttc), 굴림·굴림체·돋움·돋움체(gulim.ttc): Windows 11 글꼴 파일의 OS/2·hhea 표
- *    (winAscent 879 + winDescent 145 + hhea lineGap 152) / unitsPerEm 1024 = 1.148. Word 출력과 맞춰 보지는 못했다(미검증).
- *  - 나눔고딕·함초롬바탕·함초롬돋움: 이 PC에 글꼴이 없어 값을 재지 못했다 — 표에 넣지 않는다(그 글자는 문단 줄 높이를 따른다).
+ * Word의 "1줄" 높이(글자 크기 대비, 동아시아 글꼴) — 글자(런)마다 이 값으로 줄 높이를 정한다(줄 간격 '배수'는 곱한다).
+ * 값 = 1.3 × (OS/2 usWinAscent + usWinDescent) / unitsPerEm(src/docx/fontMetrics.ts — Office 정답 PDF의 맑은 고딕 1.73·d01 바탕 1.30에 맞는 식).
+ * 서버가 깔린 글꼴에서 잰 표를 편집기에 넘기면(setWordLineRatios) 그것을 쓰고, 아래는 서버가 아직 못 잰 때의 기본 표(같은 식으로
+ * Windows 11 글꼴 파일에서 계산: malgun.ttf (2229+495)/2048, batang.ttc·gulim.ttc (879+145)/1024). 나눔고딕·함초롬은 이 PC에 없어 기본 표엔 없다.
  */
-export const WORD_SINGLE_LINE_RATIO: Readonly<Record<string, number>> = {
-  '맑은 고딕': 1.73,
-  'Malgun Gothic': 1.73,
-  ...Object.fromEntries(['바탕', 'Batang', '바탕체', 'BatangChe', '궁서', 'Gungsuh', '궁서체', 'GungsuhChe', '굴림', 'Gulim', '굴림체', 'GulimChe', '돋움', 'Dotum', '돋움체', 'DotumChe'].map((name) => [name, 1.148])),
+const DEFAULT_LINE_RATIOS: Readonly<Record<string, number>> = {
+  '맑은 고딕': 1.729,
+  'Malgun Gothic': 1.729,
+  ...Object.fromEntries(['바탕', 'Batang', '바탕체', 'BatangChe', '궁서', 'Gungsuh', '궁서체', 'GungsuhChe', '굴림', 'Gulim', '굴림체', 'GulimChe', '돋움', 'Dotum', '돋움체', 'DotumChe'].map((name) => [name, 1.3])),
 };
+let lineRatios: Readonly<Record<string, number>> = DEFAULT_LINE_RATIOS;
+/** 서버가 잰 글꼴별 1줄 비율로 바꾼다(기본 표 위에 덮어쓴다) */
+export function setWordLineRatios(ratios: Readonly<Record<string, number>> | null | undefined): void {
+  const valid = Object.entries(ratios ?? {}).filter(([name, r]) => name.length <= 64 && r >= 1 && r <= 3);
+  lineRatios = { ...DEFAULT_LINE_RATIOS, ...Object.fromEntries(valid) };
+}
+/** 그 글꼴의 Word 1줄 비율(모르면 undefined) */
+export const wordLineRatioOf = (font: string): number | undefined => lineRatios[font];
 
 /**
  * 문단(또는 문단 스타일·문서 기본) 줄 간격 CSS — 배수(auto)면 --line-mult에 배수를 두고 줄 높이 = 1줄 × 배수, 고정(exact)·최소(atLeast)면 그 px.
@@ -106,7 +111,7 @@ function paragraphFontRatio(node: PMNode): number | null {
   node.forEach((child) => {
     if (!child.isText || mixed) return;
     const font = child.marks.find((m) => m.type.name === 'fontFamily');
-    const r = font ? WORD_SINGLE_LINE_RATIO[String(font.attrs.eastAsia ?? font.attrs.ascii ?? '')] ?? null : null;
+    const r = font ? wordLineRatioOf(String(font.attrs.eastAsia ?? font.attrs.ascii ?? '')) ?? null : null;
     if (r === null || (ratio !== null && r !== ratio)) mixed = true;
     else ratio = r;
   });
@@ -494,8 +499,8 @@ const marks: Record<string, MarkSpec> = {
       const ascii = mark.attrs.ascii ? safeFontName(mark.attrs.ascii) : '';
       const eastAsia = mark.attrs.eastAsia ? safeFontName(mark.attrs.eastAsia) : '';
       const attrs: Record<string, string> = { style: `font-family: ${fontStack([eastAsia, ascii])}` };
-      // 글꼴마다 Word "1줄"이 다르다(WORD_SINGLE_LINE_RATIO) — 이 글자의 줄 높이를 그 글꼴 값으로(style.css .docx-font-lh)
-      const ratio = WORD_SINGLE_LINE_RATIO[eastAsia || ascii];
+      // 글꼴마다 Word "1줄"이 다르다(wordLineRatioOf) — 이 글자의 줄 높이를 그 글꼴 값으로(style.css .docx-font-lh)
+      const ratio = wordLineRatioOf(eastAsia || ascii);
       if (ratio) {
         attrs.style += `; --doc-single-line: ${ratio}`;
         attrs.class = 'docx-font-lh';

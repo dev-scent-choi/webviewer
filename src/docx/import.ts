@@ -1597,6 +1597,8 @@ export interface DocxRenderExtras {
   readonly defaultTabStopDxa: number;
   /** 짝수 쪽에 짝수 쪽 머리글·바닥글(word/settings.xml w:evenAndOddHeaders) */
   readonly evenAndOddHeaders: boolean;
+  /** 서버에 깔린 동아시아 글꼴의 Word 1줄 비율(fontMetrics.ts) — 정보 경로가 붙인다 */
+  readonly lineRatios?: Readonly<Record<string, number>>;
 }
 
 /** 구역 나눔(w:sectPr) 목록 — 본문 직속 문단의 것(문서 순서) + 본문 끝 것. importDocx(blocksOf)가 매기는 구역 번호와 같은 규칙이다. */

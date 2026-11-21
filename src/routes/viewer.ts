@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import { installedLineRatios } from '../docx/fontMetrics.js';
 import { basePdfForEditor, sha1Of } from '../pdf/pdfModel.js';
 import { addPdfPart, compressRoomPdf, currentPlainBytes, editorSourceOf, signRoomPdf, extractPdfGroups, PdfRoomError, pdfInfoOf, protectPdf, readPdfPart, tokenKey, unlockPdf, type ProtectRequest } from '../pdf/pdfRoomOps.js';
 import { isCompressLevel } from '../pdf/pdfCompress.js';
@@ -646,7 +647,7 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
           ? Promise.resolve().then(() => getDocxDefaultParagraphSpacing(docxBytes)).catch(() => null)
           : Promise.resolve(null),
         // 번호 매기기 정의·머리글/바닥글·각주·스타일 — 편집기가 Word 모양으로 덧그린다(src/client/docxLayout.ts)
-        docxBytes ? Promise.resolve().then(() => getDocxRenderExtras(docxBytes)).catch(() => null) : Promise.resolve(null),
+        docxBytes ? Promise.resolve().then(() => ({ ...getDocxRenderExtras(docxBytes), lineRatios: installedLineRatios() })).catch(() => null) : Promise.resolve(null),
       ]);
       // pptx 편집기가 슬라이드를 실제 크기(4:3 등) 좌표계로 그리기 위한 값. presentation.xml 하나만
       // 압축 해제한다(filter) — 큰 덱이라도 미디어 파트는 풀지 않는다.

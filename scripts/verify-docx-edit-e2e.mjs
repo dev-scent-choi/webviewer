@@ -385,6 +385,36 @@ try {
     rec('Minor 5 글꼴별 줄 높이', rows.length > 0 && rows.every((r) => Math.abs(r.lh - r.want) < 0.6), rows.map((r) => `${r.font} ${r.lh.toFixed(1)}/${r.want.toFixed(1)}`).join(', '));
     await page.close();
   }
+
+  // C-r3-1: 같은 문서 안 복사(각주·그림) → 저장 → 모두 나가 방이 닫힘 → 다시 열어 다른 곳을 고쳐 저장 — 복제 각주·그림이 그대로, 끊긴 참조 없음
+  for (const [file, text, tag] of [['d06-columns-footnotes.docx', '단락 1:', 'w:footnoteReference'], ['d04-images.docx', null, 'w:drawing']]) {
+    const tok = await upload(path.join(CORPUS, file));
+    let page = await openEditor(context, tok);
+    if (text) await page.locator('.ProseMirror p', { hasText: text }).first().click({ clickCount: 3 });
+    else await page.locator('.ProseMirror img.docx-img').first().click();
+    await page.keyboard.press('Control+c');
+    await page.keyboard.press('Control+End');
+    await page.keyboard.press('Enter');
+    await page.keyboard.press('Control+v');
+    await page.waitForTimeout(1000);
+    const firstSave = await saveAndDownload(page, tok);
+    await page.close();
+    await new Promise((r) => setTimeout(r, 2000)); // 마지막 참여자가 나가면 방이 닫힌다
+    page = await openEditor(context, tok);
+    await page.locator('.ProseMirror p').first().click();
+    await page.keyboard.press('End');
+    await page.keyboard.type('.');
+    const reopened = await saveAndDownload(page, tok);
+    const bytes = await (await fetch(`${BASE}/api/view/download?token=${encodeURIComponent(tok.token)}`)).arrayBuffer();
+    const z = unzipSync(new Uint8Array(bytes));
+    let dangling = 0;
+    if (z['word/footnotes.xml']) {
+      const notes = new Set([...strFromU8(z['word/footnotes.xml']).matchAll(/<w:footnote\b[^>]*\bw:id="(-?\d+)"/g)].map((m) => m[1]));
+      dangling = [...reopened.matchAll(/<w:footnoteReference\b[^>]*\bw:id="(-?\d+)"/g)].filter((m) => !notes.has(m[1])).length;
+    }
+    rec(`C-r3-1 다시 열어 저장: ${file}`, count(reopened, tag) === count(firstSave, tag) && dangling === 0, `첫 저장 ${count(firstSave, tag)}, 다시 연 뒤 ${count(reopened, tag)}, 끊긴 각주 참조 ${dangling}`);
+    await page.close();
+  }
 } finally {
   await browser.close();
 }
