@@ -2517,7 +2517,14 @@ function teardownRoom(room: Room): void {
     // 편집이 없었으면 다시 저장하지 않는다(모든 형식) — 읽기만 해도 파일이 바뀌지 않게
     .then(() => (!room.editedSinceSave ? undefined : queueFlush(room)))
     .catch((error) => console.error(`동시편집 종료 저장 실패 (문서 ${room.docId}):`, error))
-    .finally(() => room.ydoc.destroy());
+    .finally(() => {
+      room.ydoc.destroy();
+      // [통합] 워드 보존 조각의 문서별 기록(최대 4MB JSON)을 놓는다 — 새 방은 loadSavedDocxFragments가 파일에서 다시 채운다
+      if (!rooms.has(room.docId)) {
+        inheritedFragments.delete(room.docId);
+        writtenFragments.delete(room.docId);
+      }
+    });
 }
 
 function closeConn(room: Room, conn: WebSocket): void {
@@ -3436,6 +3443,11 @@ export function getSeededPagesForTest(docId: string, sheet: number): Set<number>
 /** 테스트 전용 — 룸의 지연(lazy) 그리드 저장소를 직접 들여다본다. 프로덕션 코드에서는 쓰지 않는다. */
 export function getRoomLazyGridForTest(docId: string): LazyGridStore | null {
   return rooms.get(docId)?.lazyGrid ?? null;
+}
+
+/** 테스트 전용 — 워드 보존 조각의 문서별 기록이 남아 있는지(방이 닫히면 놓아야 한다) */
+export function hasDocxFragmentRecordsForTest(docId: string): boolean {
+  return inheritedFragments.has(docId) || writtenFragments.has(docId);
 }
 
 /** 테스트 전용 — 조건부 서식 서버 답의 범위 개수 표 */
