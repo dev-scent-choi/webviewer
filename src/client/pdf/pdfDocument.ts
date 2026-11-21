@@ -6,7 +6,9 @@
 import * as pdfjs from 'pdfjs-dist';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 
-pdfjs.GlobalWorkerOptions.workerSrc = '/js/pdf.worker.mjs';
+/** build-editor.mjs가 넣는 pdf.worker 내용 해시(시험처럼 번들 밖에서 읽으면 없다) */
+declare const __PDF_WORKER_V__: string | undefined;
+pdfjs.GlobalWorkerOptions.workerSrc = typeof __PDF_WORKER_V__ === 'string' ? `/js/pdf.worker.mjs?v=${__PDF_WORKER_V__}` : '/js/pdf.worker.mjs';
 
 export { pdfjs };
 export type { PDFDocumentProxy };

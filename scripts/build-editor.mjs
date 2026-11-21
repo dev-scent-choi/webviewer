@@ -1,4 +1,5 @@
-import { closeSync, cpSync, mkdirSync, openSync, rmSync, statSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { closeSync, cpSync, mkdirSync, openSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { build } from 'esbuild';
 
 /**
@@ -84,6 +85,8 @@ await retry(() => build({
   outdir: 'public/js',
   entryNames: '[name].bundle',
   chunkNames: 'chunks/[name]-[hash]',
+  // pdf.worker 주소에 내용 해시(?v=) — 번들은 ?v=로 새로 받는데 worker만 앞단 캐시의 옛 것이면 pdf.js 판이 어긋난다
+  define: { __PDF_WORKER_V__: JSON.stringify(createHash('sha256').update(readFileSync('node_modules/pdfjs-dist/build/pdf.worker.min.mjs')).digest('hex').slice(0, 10)) },
 }));
 
 // PDF 편집기(editor-pdf.ts)가 쓰는 pdf.js 부속 — worker(별도 스레드에서 PDF 해석), cMap(글꼴이 안 들어 있는 한글·중국어·
