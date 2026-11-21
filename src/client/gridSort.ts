@@ -1,3 +1,4 @@
+import { shiftFormulaRefs } from '../collab/condFormatShared.js';
 /**
  * 엑셀 "정렬"·"필터"의 순수 계산부 — 화면·Yjs와 무관해 단위 테스트로 검증한다(tests/gridSort.test.ts).
  */
@@ -34,39 +35,7 @@ export function sortOrder(keys: readonly SortValue[], descending: boolean): numb
  */
 export function shiftFormulaRows(formula: string, delta: number): string {
   if (!formula.startsWith('=') || delta === 0) return formula;
-  let out = '';
-  let i = 0;
-  const pattern = /(?<![A-Za-z0-9_.$])(\$?)([A-Za-z]{1,3})(\$?)(\d+)(?![A-Za-z0-9_(])/y;
-  while (i < formula.length) {
-    const ch = formula[i];
-    if (ch === '"') {
-      const end = formula.indexOf('"', i + 1);
-      const stop = end < 0 ? formula.length : end + 1;
-      out += formula.slice(i, stop);
-      i = stop;
-      continue;
-    }
-    if (ch === "'") {
-      // 따옴표로 감싼 시트 이름('실적 2026'!A1) — 이름 안은 그대로 둔다
-      const end = formula.indexOf("'", i + 1);
-      const stop = end < 0 ? formula.length : end + 1;
-      out += formula.slice(i, stop);
-      i = stop;
-      continue;
-    }
-    pattern.lastIndex = i;
-    const m = pattern.exec(formula);
-    if (m && (i === 0 || !/[A-Za-z0-9_.$]/.test(formula[i - 1]))) {
-      const [, colAbs, col, rowAbs, row] = m;
-      const nextRow = rowAbs ? Number(row) : Math.max(1, Number(row) + delta);
-      out += `${colAbs}${col}${rowAbs}${nextRow}`;
-      i += m[0].length;
-      continue;
-    }
-    out += ch;
-    i += 1;
-  }
-  return out;
+  return shiftFormulaRefs(formula, delta, 0);
 }
 
 export { filteredRows, GRID_FILTERS_MAP, type FilterCriteria, type SheetFilter } from '../xlsx/filterModel.js';

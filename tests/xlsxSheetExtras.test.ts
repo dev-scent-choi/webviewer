@@ -126,3 +126,18 @@ describe('자동 필터 범위가 머리글 한 줄뿐일 때', () => {
     expect(parseAutoFilter(sheet.replace('ref="A1:B1"', 'ref="A1:B5"'))).toMatchObject({ r2: 4 });
   });
 });
+
+describe('열 수 없는 바로가기(검토 r3 경미)', () => {
+  test('파일·네트워크 경로는 열지 않고 안내용으로 남기고, 스크립트 주소는 버린다', () => {
+    const sheet = '<worksheet><sheetData/><hyperlinks><hyperlink ref="A1" r:id="rId1"/><hyperlink ref="A2" r:id="rId2"/><hyperlink ref="A3" r:id="rId3"/></hyperlinks></worksheet>';
+    const rels =
+      '<Relationships><Relationship Id="rId1" Type="…/hyperlink" Target="file:///C:/자료/계약.pdf" TargetMode="External"/>' +
+      '<Relationship Id="rId2" Type="…/hyperlink" Target="\\server\share\a.xlsx" TargetMode="External"/>' +
+      '<Relationship Id="rId3" Type="…/hyperlink" Target="vbscript:msgbox(1)" TargetMode="External"/></Relationships>';
+    const { links } = parseSheetExtras('s', sheet, rels);
+    expect(links).toContainEqual({ sheetName: 's', r1: 0, c1: 0, r2: 0, c2: 0, blocked: 'file:///C:/자료/계약.pdf' });
+    expect(links.find((l) => l.r1 === 1)?.blocked).toContain('server');
+    expect(links.some((l) => l.r1 === 2)).toBe(false);
+    expect(links.every((l) => l.url === undefined)).toBe(true);
+  });
+});

@@ -41,6 +41,7 @@ import { invalidateViewCaches } from '../routes/viewer.js';
 import { store } from '../storage.js';
 import { waitForInitialConversion } from '../conversionGate.js';
 import {
+  gridCellValue,
   saveGridDerived,
   yieldToEventLoop,
   MAX_COLS,
@@ -49,7 +50,10 @@ import {
   type GridCell,
 } from '../spreadsheet.js';
 import { exportXlsxFromGridStreaming } from '../xlsx/exportStreaming.js';
-import { GRID_CHARTS_MAP, type GridChart } from '../xlsx/chartModel.js';
+import { GRID_CHARTS_MAP, sanitizeGridChart, type GridChart } from '../xlsx/chartModel.js';
+
+/** 서버가 차트 맵을 고칠 때의 트랜잭션 출처 — 자기 수정에는 다시 반응하지 않는다 */
+const CHART_SANITIZE_ORIGIN = Symbol('chart-sanitize');
 import { readSheetChartsFromEntries, readSheetImagesFromEntries, type GridImage } from '../xlsx/drawingPassthrough.js';
 import { readXlsxSkeleton } from '../xlsx/zipSkeleton.js';
 import { readAutoFilters } from '../xlsx/autoFilter.js';
@@ -91,6 +95,8 @@ import {
   type LazyGridSheetMeta,
   type LazyGridStore,
 } from '../xlsx/lazyGridStore.js';
+import { answerCfRemote, cfTallyApplyBatch, cfTallyDropSheet, cfTallyRelease, newCfRoomTally, type CfCellChange, type CfRemoteAnswer, type CfRemoteRequest, type CfRoomTally } from '../xlsx/cfRangeValues.js';
+import { rewriteStructuredRefs, shiftTables, type TableColumnChanges } from '../xlsx/tableStyles.js';
 import {
   duplicateSlideContent,
   exportPptxFromSlides,
@@ -353,6 +359,8 @@ interface Room {
    * 각 호출이 자기 첫 await까지 동기로 실행돼 양보 없는 블록이 연달아 붙는다.
    */
   canonicalGrowth: Promise<void>;
+  /** xlsx 룸 — 편집 화면 조건부 서식용 범위 값 개수 표(cfRangeValues.ts). 칸 편집마다 −1/+1, 행열 구조가 바뀌면 다시 센다 */
+  cfRanges: CfRoomTally;
   /**
    * 지금 진행 중인 "흘려보낸(fire-and-forget) 백그라운드 작업"들 — 페이지 창 반영
    * (reconcilePageSubscriptions), 수식 재계산 체인(recomputeSubscribedPagesInBackground), 셀/서식
@@ -581,6 +589,12 @@ async function applyCellsChangeToCanonical(
     changes.map((c) => getCell(store, c.sheetIdx, c.row, c.col)),
   );
 
+  const tallyChanges = new Map<number, CfCellChange[]>();
+  const tallyChange = (sheet: number, change: CfCellChange) => {
+    const list = tallyChanges.get(sheet) ?? [];
+    list.push(change);
+    tallyChanges.set(sheet, list);
+  };
   for (let i = 0; i < changes.length; i += 1) {
     const c = changes[i];
     const before = currentCells[i];
@@ -589,6 +603,7 @@ async function applyCellsChangeToCanonical(
       if (c.row >= meta.rowCount || c.col >= meta.colCount) continue; // 원래 있던 칸이 아니면 할 일 없음
       setDirtyCell(store, c.sheetIdx, c.row, c.col, 0);
       recordCellChange(room, c.sheetIdx, c.row, c.col, before, 0, viewer);
+      tallyChange(c.sheetIdx, { row: c.row, col: c.col, before: before ? gridCellValue(before) : '', after: '' });
       continue;
     }
     const value = cells.get(c.key) ?? '';
@@ -602,7 +617,31 @@ async function applyCellsChangeToCanonical(
     const after: GridCell | 0 = value === '' ? 0 : { v: value, ...(keptStyle !== undefined ? { s: keptStyle } : {}) };
     setDirtyCell(store, c.sheetIdx, c.row, c.col, after);
     recordCellChange(room, c.sheetIdx, c.row, c.col, before, after, viewer);
+    tallyChange(c.sheetIdx, { row: c.row, col: c.col, before: before ? gridCellValue(before) : '', after: after ? gridCellValue(after) : '' });
   }
+  // 조건부 서식 서버 답의 값 개수 표 — 묶음 하나로 반영한다(큰 붙여넣기는 표를 하나씩 고치지 않고 다시 만든다)
+  for (const [sheet, list] of tallyChanges) cfTallyApplyBatch(room.cfRanges, sheet, list);
+  // 엑셀 표 머리 칸을 고쳤으면 그 열 이름이 바뀐다 — 이 방 수식의 구조적 참조도 새 이름으로
+  await renameTableColumnsFromHeaderEdits(room, tallyChanges);
+}
+
+/**
+ * 편집 화면 조건부 서식용 서버 답(/api/view/xlsx-cf-ranges, src/xlsx/cfRangeValues.ts). 범위는 이 방의 규칙에서만 뽑는다.
+ * 열린 xlsx 편집 방이 없으면 null.
+ */
+export async function getCfRemoteAnswer(docId: string, req: CfRemoteRequest): Promise<CfRemoteAnswer | null> {
+  const room = rooms.get(docId);
+  if (!room?.lazyGrid) return null;
+  await room.ready;
+  const store = room.lazyGrid;
+  if (!store.sheetMeta[req.sheet]) return null;
+  // 방금 들어온 편집(웹소켓)이 lazyGrid에 다 반영된 뒤에 답한다 — 길어도 2초까지만 기다린다
+  let timer: NodeJS.Timeout | undefined;
+  await Promise.race([Promise.all([room.cfRanges.applying, room.canonicalGrowth]), new Promise((resolve) => (timer = setTimeout(resolve, 2_000)))]);
+  clearTimeout(timer);
+  const entries = room.ydoc.getMap<readonly CondFormatEntry[]>(GRID_COND_FORMATS_MAP).get(String(req.sheet)) ?? [];
+  const computed = room.ydoc.getMap<string>(GRID_COMPUTED_MAP);
+  return answerCfRemote(room.cfRanges, store, req, entries, (r, c) => computed.get(gridCellKey(req.sheet, r, c)));
 }
 
 /**
@@ -779,7 +818,8 @@ async function applyStylesChangeToCanonical(
       // 낡은 사본으로 쓰면 방금 들어온 새 값을 지운다(아래 서식 적용 경로와 같은 이유).
       const latest = latestCell(store, c.sheetIdx, c.row, c.col, current);
       if (latest === 0 || latest === undefined) continue;
-      setDirtyCell(store, c.sheetIdx, c.row, c.col, latest.v === '' ? 0 : { v: latest.v });
+      // 값 글자(n)도 함께 남긴다 — 표시 글자만 남기면 "(4,321)" 같은 서식 모양이 저장 때 글자 값으로 들어간다
+      setDirtyCell(store, c.sheetIdx, c.row, c.col, latest.v === '' ? 0 : { v: latest.v, ...(latest.n !== undefined ? { n: latest.n } : {}) });
       continue;
     }
     // 들어온 서식을 canonical의 현재 서식 **위에 얹는다**(통째로 갈아치우지 않는다) — 아래
@@ -796,6 +836,7 @@ async function applyStylesChangeToCanonical(
     const latest = latestCell(store, c.sheetIdx, c.row, c.col, current);
     setDirtyCell(store, c.sheetIdx, c.row, c.col, {
       v: latest === 0 || latest === undefined ? '' : latest.v,
+      ...(latest !== 0 && latest !== undefined && latest.n !== undefined ? { n: latest.n } : {}),
       s: styleIndex,
     });
   }
@@ -938,7 +979,10 @@ function exportOptionsFor(room: Room) {
   return {
     removedSheetIndices: room.removedSheetIndices,
     sheetDisplayOrder: room.sheetDisplayOrder,
-    newCharts: [...room.ydoc.getMap<GridChart>(GRID_CHARTS_MAP).values()].filter((chart) => chart.source === 'new'),
+    newCharts: [...room.ydoc.getMap<GridChart>(GRID_CHARTS_MAP).values()]
+      .filter((chart) => chart.source === 'new')
+      .map((chart) => sanitizeGridChart(chart, true))
+      .filter((chart): chart is GridChart => chart !== null),
     filters: new Map([...room.ydoc.getMap<SheetFilter>(GRID_FILTERS_MAP).entries()].map(([key, filter]) => [Number(key), filter])),
   };
 }
@@ -1023,7 +1067,12 @@ export function discardPrewarmedXlsx(docId: string): void {
 
 /** 파일의 하이퍼링크(바로가기)·목록 상자 — 편집 화면이 링크 이동·목록 고르기에 쓴다. 열린 룸이 있으면 그 원본 기준. */
 export async function getFileExtras(docId: string): Promise<SheetExtras> {
-  return readSheetExtrasFromEntries(await fileSkeletonOf(docId));
+  const extras = readSheetExtrasFromEntries(await fileSkeletonOf(docId));
+  // 편집 방은 원본 바이트 + 지금까지의 행/열 삽입·삭제(structuralOps)다 — 표 범위도 그만큼 옮겨 준다(저장할 때와 같다)
+  const room = rooms.get(docId);
+  if (!room?.originalXlsxBytes || !room.lazyGrid || room.structuralOps.length === 0) return extras;
+  const meta = room.lazyGrid.sheetMeta;
+  return { ...extras, tables: shiftTables(extras.tables, room.structuralOps, (i) => meta[i]?.name) };
 }
 
 /**
@@ -1401,7 +1450,131 @@ async function refreshSeededPagesAfterShift(
  * isAutosaveExemptOrigin에 들어 있지 않으므로, 위 쓰기들이 그대로 ydoc 'update'를 타고
  * scheduleAutosave를 건다.
  */
+/** 편집 방의 지금 엑셀 표(파일 표 + 구조 연산) — 칸 편집마다 다시 읽지 않게 구조 연산 수로 기억한다 */
+const roomTablesCache = new WeakMap<Room, { ops: number; tables: SheetExtras['tables'] }>();
+async function roomTables(room: Room): Promise<SheetExtras['tables']> {
+  const hit = roomTablesCache.get(room);
+  if (hit && hit.ops === room.structuralOps.length) return hit.tables;
+  const tables = (await getFileExtras(room.docId).catch(() => ({ tables: [] as SheetExtras['tables'] }))).tables;
+  roomTablesCache.set(room, { ops: room.structuralOps.length, tables });
+  return tables;
+}
+
+/** 표의 지금 열 이름 — 머리 칸 글자(편집으로 바뀌었을 수 있다), 비었으면 파일의 열 이름 */
+async function tableColumnNames(store: LazyGridStore, sheet: number, t: SheetExtras['tables'][number]): Promise<string[]> {
+  const fileNames = t.columns ?? [];
+  if (t.headerRows === 0) return [...fileNames];
+  const line = await getRowCells(store, sheet, t.r0, t.c1 + 1);
+  return Array.from({ length: t.c1 - t.c0 + 1 }, (_, i) => {
+    const cell = line[t.c0 + i];
+    const text = cell ? gridCellValue(cell).trim() : '';
+    return text || fileNames[i] || '';
+  });
+}
+
+/**
+ * 표 열 이름 바뀜·지운 열·없어진 표를 이 방 수식(이 세션에서 넣은 수식 — 파일의 수식 칸은 계산값으로 들어온다)에 반영한다:
+ * 구조적 참조를 새 이름·#REF!·칸 주소로(엑셀과 같다). 받은 페이지의 칸은 편집 화면에도 바로 보인다. 저장할 때 collab.ts가 파일의
+ * 수식에도 같은 규칙(rewriteStructuredRefs)을 쓴다.
+ */
+async function rewriteRoomTableRefs(room: Room, changes: ReadonlyMap<string, TableColumnChanges>): Promise<void> {
+  const store = room.lazyGrid;
+  if (!store || changes.size === 0) return;
+  const tables = await roomTables(room);
+  const cells = room.ydoc.getMap<string>(GRID_CELLS_MAP);
+  const updates: Array<[string, string]> = [];
+  for (const [key, cell] of store.dirtyOverlay) {
+    if (!cell || !cell.v.startsWith('=') || !cell.v.includes('[')) continue;
+    const at = parseGridCellKey(key);
+    if (!at) continue;
+    const sheetName = store.sheetMeta[at.sheetIdx]?.name;
+    const own = tables.find((t) => t.sheetName === sheetName && at.row >= t.r0 && at.row <= t.r1 && at.col >= t.c0 && at.col <= t.c1)?.name;
+    const next = rewriteStructuredRefs(cell.v, changes, own, at.row);
+    if (next === cell.v) continue;
+    setDirtyCell(store, at.sheetIdx, at.row, at.col, { ...cell, v: next });
+    if (cells.has(key)) updates.push([key, next]);
+  }
+  if (updates.length > 0) room.ydoc.transact(() => updates.forEach(([k, v]) => cells.set(k, v)), GRID_WINDOW_SEED_ORIGIN);
+  room.editedSinceSave = true;
+}
+
+/** 칸 편집 묶음에서 표 머리 칸이 바뀐 것 — 엑셀처럼 그 열의 이름이 바뀐다(구조적 참조도 따라간다) */
+async function renameTableColumnsFromHeaderEdits(room: Room, edits: ReadonlyMap<number, readonly CfCellChange[]>): Promise<void> {
+  const store = room.lazyGrid;
+  if (!store) return;
+  const tables = await roomTables(room);
+  if (tables.length === 0) return;
+  const changes = new Map<string, TableColumnChanges>();
+  for (const [sheet, list] of edits) {
+    const sheetName = store.sheetMeta[sheet]?.name;
+    for (const t of tables) {
+      if (t.sheetName !== sheetName || t.headerRows === 0 || !t.name) continue;
+      for (const e of list) {
+        if (e.row !== t.r0 || e.col < t.c0 || e.col > t.c1 || !e.before.trim() || !e.after.trim() || e.before === e.after) continue;
+        const entry = changes.get(t.name.toLowerCase()) ?? { renames: new Map<string, string>(), deleted: new Set<string>() };
+        (entry.renames as Map<string, string>).set(e.before.trim().toLowerCase(), e.after.trim());
+        changes.set(t.name.toLowerCase(), entry);
+      }
+    }
+  }
+  await rewriteRoomTableRefs(room, changes);
+}
+
+/**
+ * 행/열 삭제 전에 엑셀 표 규칙을 본다(모든 편집 화면·옛 화면에 같은 규칙 — 저장과 화면이 같은 결과).
+ * - 표의 머리 줄만 지우는 행 삭제는 받지 않는다(엑셀도 막는다).
+ * - 표의 데이터 행을 모두 지우면 첫 데이터 행은 비우고 나머지만 지운다(엑셀처럼 빈 데이터 행 하나가 남는다).
+ * - 표를 통째로 지우거나 표 열을 지우면, 지운 뒤 구조적 참조를 #REF!로 고친다.
+ */
 async function applyGridStructureOp(room: Room, op: GridStructureOp): Promise<void> {
+  const store = room.lazyGrid;
+  const meta = store?.sheetMeta[op.sheet];
+  if (!store || !meta || op.kind === 'insertRows' || op.kind === 'insertCols') return applyGridStructureOpCore(room, op);
+  const onRows = op.kind === 'deleteRows';
+  const extent = onRows ? meta.rowCount : meta.colCount;
+  // 범위를 벗어난 연산은 손대지 않고 그대로 넘긴다(아래 함수가 거부한다)
+  if (rooms.get(room.docId) !== room || room.removedSheetIndices.has(op.sheet) || op.at + op.count > extent || extent - op.count < 1) return applyGridStructureOpCore(room, op);
+  const end = op.at + op.count - 1;
+  const tables = (await roomTables(room)).filter((t) => t.sheetName === meta.name);
+  const refChanges = new Map<string, TableColumnChanges>();
+  for (const t of tables) {
+    const [lo, hi] = onRows ? [t.r0, t.r1] : [t.c0, t.c1];
+    if (op.at > hi || end < lo) continue;
+    if (op.at <= lo && end >= hi) {
+      if (t.name) refChanges.set(t.name.toLowerCase(), { renames: new Map(), deleted: new Set(), range: null });
+      continue;
+    }
+    if (onRows) {
+      if (t.headerRows > 0 && op.at <= t.r0) {
+        console.error(`표 머리 줄만 지우는 행 삭제를 받지 않음(문서 ${room.docId})`);
+        return;
+      }
+      const d0 = t.r0 + t.headerRows;
+      const d1 = t.r1 - t.totalsRows;
+      if (d1 >= d0 && op.at <= d0 && end >= d1) {
+        // 첫 데이터 행은 비우고 나머지만 지운다
+        const cells = room.ydoc.getMap<string>(GRID_CELLS_MAP);
+        const keys: string[] = [];
+        for (let c = t.c0; c <= t.c1; c += 1) {
+          setDirtyCell(store, op.sheet, d0, c, 0);
+          keys.push(gridCellKey(op.sheet, d0, c));
+        }
+        room.ydoc.transact(() => keys.forEach((k) => cells.delete(k)), GRID_WINDOW_SEED_ORIGIN);
+        room.editedSinceSave = true;
+        if (end > d0) await applyGridStructureOp(room, { ...op, at: d0 + 1, count: end - d0 });
+        return;
+      }
+    } else if (t.name) {
+      const names = await tableColumnNames(store, op.sheet, t);
+      const gone = names.slice(Math.max(op.at, t.c0) - t.c0, Math.min(end, t.c1) - t.c0 + 1).filter(Boolean).map((n) => n.toLowerCase());
+      if (gone.length > 0) refChanges.set(t.name.toLowerCase(), { renames: new Map(), deleted: new Set(gone) });
+    }
+  }
+  await applyGridStructureOpCore(room, op);
+  await rewriteRoomTableRefs(room, refChanges);
+}
+
+async function applyGridStructureOpCore(room: Room, op: GridStructureOp): Promise<void> {
   if (rooms.get(room.docId) !== room) return; // 룸이 이미 닫혔다(체인에 줄 서 있는 동안)
   const store = room.lazyGrid;
   if (!store) return;
@@ -1475,6 +1648,7 @@ async function applyGridStructureOp(room: Room, op: GridStructureOp): Promise<vo
   // 이 연산을 기록한다 — 내보내기(exportXlsxFromGrid)가 원본을 다시 로드한 워크북에 같은 순서로
   // 재생하기 위한 로그다.
   room.structuralOps.push({ sheet: op.sheet, kind: op.kind, at: op.at, count: op.count });
+  cfTallyDropSheet(room.cfRanges, op.sheet);
   // 행/열 삽입·삭제는 Yjs 쓰기가 없을 수도 있다(병합·채워진 페이지가 없으면) — 직접 편집으로 표시한다
   room.editedSinceSave = true;
   scheduleAutosave(room);
@@ -1570,7 +1744,9 @@ async function seedRoom(room: Room): Promise<void> {
         // applyCellsChangeToCanonical은 이제 async다(LazyGridStore.getCell이 디스크를 읽어야 할
         // 수도 있어서) — Yjs observe 콜백 자체는 동기여야 하므로 흘려보내고, 재계산은 그 완료를
         // 기다린 뒤 잇는다(재계산이 더티 오버레이가 아직 안 채워진 값을 볼 수 없도록).
-        trackBackgroundWork(room, applyCellsChangeToCanonical(room, lazyStore, cells, event)
+        const applying = applyCellsChangeToCanonical(room, lazyStore, cells, event);
+        room.cfRanges.applying = Promise.all([room.cfRanges.applying, applying.catch(() => undefined)]).then(() => undefined);
+        trackBackgroundWork(room, applying
           .then(() => {
             // 이번 배치에서 실제로 바뀐 셀이 속한 시트만 재계산한다 — event.changes.keys가
             // "시트:행:열" 키별로 add/update/delete를 알려주므로 거기서 시트 인덱스를 뽑아낸다.
@@ -1632,6 +1808,28 @@ async function seedRoom(room: Room): Promise<void> {
       });
       // 조건부 서식 — 병합과 같은 이유로 편집기가 고친 규칙 목록을 메타데이터에 반영한다
       const condFormatsMap = ydoc.getMap<readonly CondFormatEntry[]>(GRID_COND_FORMATS_MAP);
+      // 편집자가 공유 맵에 넣은 차트를 검사한다 — 남의 화면에 SVG로 그려지므로(색·종류·수·글자) 안전한 모양으로 바꿔 두고,
+      // 알 수 없는 것은 지운다. 바꾼 결과는 다시 검사해도 같아서 되풀이되지 않는다.
+      const chartsMap = ydoc.getMap<GridChart>(GRID_CHARTS_MAP);
+      chartsMap.observe((event) => {
+        if (event.transaction.origin === CHART_SANITIZE_ORIGIN) return;
+        const fixes: Array<[string, GridChart | null]> = [];
+        for (const key of event.keysChanged) {
+          const chart = chartsMap.get(key);
+          if (chart === undefined) continue;
+          const safe = sanitizeGridChart(chart, true);
+          if (!safe || safe.id !== key) fixes.push([key, null]);
+          else if (JSON.stringify(safe) !== JSON.stringify(chart)) fixes.push([key, safe]);
+        }
+        if (fixes.length > 0) {
+          ydoc.transact(() => {
+            for (const [key, safe] of fixes) {
+              if (safe) chartsMap.set(key, safe);
+              else chartsMap.delete(key);
+            }
+          }, CHART_SANITIZE_ORIGIN);
+        }
+      });
       condFormatsMap.observe((event) => {
         const origin = event.transaction.origin;
         if (origin === GRID_WINDOW_SEED_ORIGIN || origin === GRID_STRUCTURE_SHIFT_ORIGIN) return;
@@ -1729,7 +1927,7 @@ async function flushToStore(room: Room): Promise<void> {
         // 저장마다 통째로 다시 읽으면 수 GB를 써서 서버가 메모리 부족으로 죽을 수 있었다
         let sheetCount: number;
         if (isLargeXlsx(newXlsxBytes)) {
-          const built = await serializeGridFromLazyStore(room.lazyGrid);
+          const built = await serializeGridFromLazyStore(room.lazyGrid, original);
           await saveGridFile(store, docId, built.buffer);
           sheetCount = built.sheetCount;
         } else {
@@ -2147,6 +2345,7 @@ function getOrCreateRoom(docId: string, ext: string): Room {
     pageSubscriptions: new Map(),
     loadedPages: new Map(),
     canonicalGrowth: Promise.resolve(),
+    cfRanges: newCfRoomTally(),
     backgroundWork: new Set<Promise<void>>(),
     pendingSlideSeeds: new Map(),
     connSlideSeedsInFlight: new Map(),
@@ -2240,6 +2439,7 @@ function closeConn(room: Room, conn: WebSocket): void {
       cancelPendingUnseeds(room.docId);
       rooms.delete(room.docId);
       largeRoomDocIds.delete(room.docId);
+      cfTallyRelease(room.cfRanges);
       // 이 룸의 메모리 전용 변경 이력(cellChangeLog/docxChangeTracker/pptxChangeTracker)이 사라지기
       // 전 마지막 기회 — ydoc.destroy() 전에 지금 상태를 그대로 캡처해 디스크에 남긴다
       // (changeLogPersistence.ts 문서 주석의 "왜"). rooms.delete 이후에도 room 참조는 그대로
@@ -2756,7 +2956,7 @@ export function getChangeLog(docId: string): readonly object[] {
 }
 
 function cellTextOf(cell: GridCell | 0): string {
-  return cell === 0 ? '' : cell.v;
+  return cell === 0 ? '' : gridCellValue(cell);
 }
 
 /** getCellChangeLog의 실제 계산부 — room 객체를 직접 받는다(rooms.get 조회 없이). closeConn이
@@ -2988,6 +3188,11 @@ export function getSeededPagesForTest(docId: string, sheet: number): Set<number>
 /** 테스트 전용 — 룸의 지연(lazy) 그리드 저장소를 직접 들여다본다. 프로덕션 코드에서는 쓰지 않는다. */
 export function getRoomLazyGridForTest(docId: string): LazyGridStore | null {
   return rooms.get(docId)?.lazyGrid ?? null;
+}
+
+/** 테스트 전용 — 조건부 서식 서버 답의 범위 개수 표 */
+export function getRoomCfTallyForTest(docId: string): CfRoomTally | null {
+  return rooms.get(docId)?.cfRanges ?? null;
 }
 
 /** 테스트 전용 — 룸의 Y.Doc을 직접 들여다본다. 프로덕션 코드에서는 쓰지 않는다. */

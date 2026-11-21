@@ -161,6 +161,20 @@ export const formulaFunctionsNeedContext: Record<string, ContextFormulaFunction>
     return sumIfsLike(target, groups).sum;
   },
 
+  // COUNTIFS — 라이브러리에 없다(이름 오류). 조건 범위들을 같은 자리끼리 나란히 보고 모든 조건이 맞는 칸을 센다(SUMIFS와 같은 조건 해석)
+  COUNTIFS: (context: FormulaContext, ...criteriaPairs: unknown[]) => {
+    if (criteriaPairs.length < 2 || criteriaPairs.length % 2 !== 0) throw FormulaError.VALUE;
+    const groups: Array<{ range: unknown[][]; criteria: ParsedCriteria }> = [];
+    for (let i = 0; i + 1 < criteriaPairs.length; i += 2) {
+      groups.push({ range: resolveRangeArg(context, criteriaPairs[i]), criteria: parseCriteriaArg(context, criteriaPairs[i + 1]) });
+    }
+    let count = 0;
+    groups[0].range.forEach((row, r) => row.forEach((_v, c) => {
+      if (groups.every((group) => matchesCriteria(group.range[r]?.[c], group.criteria))) count += 1;
+    }));
+    return count;
+  },
+
   AVERAGEIFS: (context: FormulaContext, avgRange: unknown, ...criteriaPairs: unknown[]) => {
     const target = resolveRangeArg(context, avgRange);
     const groups = [];

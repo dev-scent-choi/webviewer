@@ -12,7 +12,9 @@ import {
   buildChartAnchorXml,
   buildChartXml,
   chartAnchorsOf,
+  chartThemeOf,
   parseChartXml,
+  sanitizeGridChart,
   pictureAnchorsOf,
   type ChartAnchorPoint,
   type GridChart,
@@ -294,6 +296,7 @@ export function readSheetCharts(xlsx: Uint8Array): GridChart[] {
 /** 이미 푼 파트 모음에서 — 큰 파일은 데이터를 뺀 뼈대(zipSkeleton.ts readXlsxSkeleton)를 넘긴다 */
 export function readSheetChartsFromEntries(entries: Readonly<Record<string, Uint8Array>>): GridChart[] {
   const charts: GridChart[] = [];
+  const theme = chartThemeOf(entries['xl/theme/theme1.xml'] ? strFromU8(entries['xl/theme/theme1.xml']) : undefined);
   for (const [sheetName, sheetPath] of sheetPathsByName(entries)) {
     const sheetBytes = entries[sheetPath];
     const sheetRels = entries[relsPathOf(sheetPath)];
@@ -309,9 +312,11 @@ export function readSheetChartsFromEntries(entries: Readonly<Record<string, Uint
     for (const anchor of chartAnchorsOf(strFromU8(drawing))) {
       const chartRel = relById.get(anchor.rid);
       const chartBytes = chartRel ? entries[resolvePartPath(drawingPath, chartRel.target)] : undefined;
-      const parsed = chartBytes ? parseChartXml(strFromU8(chartBytes)) : null;
+      const parsed = chartBytes ? parseChartXml(strFromU8(chartBytes), theme) : null;
       if (!parsed) continue;
-      charts.push({ id: `file:${drawingPath}:${anchor.rid}`, sheetName, from: anchor.from, to: anchor.to, size: anchor.size, source: 'file', ...parsed });
+      // 파일에서 온 값도 같은 검사를 지난다(색은 #RRGGBB, 이름·종류는 알려진 것만)
+      const chart = sanitizeGridChart({ id: `file:${drawingPath}:${anchor.rid}`, sheetName, from: anchor.from, to: anchor.to, size: anchor.size, source: 'file', ...parsed });
+      if (chart) charts.push(chart);
     }
   }
   return charts;

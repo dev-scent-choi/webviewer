@@ -1329,6 +1329,19 @@ h2 {
   z-index: 2;
 }
 
+/* 틀 고정 칸 — 뒤로 스크롤된 칸이 비치지 않게 불투명(칸 서식 배경 .gsN은 나중에 붙어 이긴다) */
+.g-frozen { background-color: #fff; }
+.grid-cf-notice { color: #9c5700; margin-left: 12px; }
+/* 서식 코드의 채움(*) — 회계 서식의 ₩는 칸 왼쪽 끝, 숫자는 오른쪽 끝(보기·편집 공용) */
+.g-fill { display: flex; justify-content: space-between; white-space: pre; }
+/* 사용자가 기본보다 낮게 정한 행(엑셀 8pt 등) — 칸 여백·행 번호 글자 높이 때문에 행이 커지지 않게 */
+.grid-table tr.g-row-short > td,
+.grid-edit-table tr.g-row-short > td,
+.grid-edit-table tr.g-row-short > th { padding-top: 0; padding-bottom: 0; line-height: 1; }
+.grid-table tr.g-row-short > .g-rownum,
+.grid-edit-table tr.g-row-short > .g-edit-rownum { font-size: 9px; overflow: hidden; }
+.g-head-cell.g-head-frozen { position: relative; z-index: 1; background: #f3f4f7; }
+
 /* 읽기 전용 뷰어의 셀 선택 표시 — 수정은 못 해도 "지금 이 칸을 보고 있다"는 참조용
    하이라이트다. 검색 히트(.g-hit-current, 주황/노랑)와 색이 겹치지 않게 문서 종류별
    --v-accent(엑셀은 초록)를 쓴다. */
@@ -2005,6 +2018,17 @@ body.home-hidden .doclist-link { display: none !important; }
 /* 칸 서식의 위·왼쪽 테두리 — 이웃 칸의 경계선(아래·오른쪽) 위에 겹쳐 그려, 맞닿은 두 칸의 테두리가
    두 배로 굵어지지 않게 한다(grid-editor.ts applyStyleToTd). */
 .grid-edit-table td.g-bord-tl { position: relative; }
+/* 조건부 서식 아이콘 집합 — 칸 왼쪽 아래에 기호(엑셀처럼 값은 그대로 오른쪽에) */
+.grid-edit-table td[data-cf-icon] { position: relative; }
+.grid-edit-table td[data-cf-icon]::after {
+  content: attr(data-cf-icon);
+  color: var(--cf-icon-color);
+  position: absolute;
+  left: 3px;
+  bottom: 1px;
+  pointer-events: none;
+}
+.grid-edit-table td.g-cf-hide-value > .g-cell-spill { visibility: hidden; }
 .grid-edit-table td.g-bord-tl::before {
   content: '';
   position: absolute;
@@ -3649,7 +3673,8 @@ body.review-pane-open #editor-zoom-host { margin-right: 320px; }
   cursor: move;
   user-select: none;
 }
-.grid-chart svg { display: block; width: 100%; height: 100%; pointer-events: none; }
+.grid-chart svg,
+.grid-chart-img { display: block; width: 100%; height: 100%; pointer-events: none; user-select: none; }
 .grid-chart.is-file { cursor: default; }
 .grid-chart:focus { outline: none; }
 .grid-chart.is-selected { border-color: var(--app-accent, var(--v-accent)); box-shadow: 0 0 0 1px var(--app-accent, var(--v-accent)); }

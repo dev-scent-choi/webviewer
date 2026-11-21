@@ -8,6 +8,8 @@
  * 시트 구조(행/열 개수, 이름)는 별도 Y.Map에 시트 인덱스별로 통짜 JSON을 둔다 — 행/열
  * 추가·삭제 같은 구조 변경은 셀 편집보다 훨씬 드물어 세밀한 CRDT가 필요 없다.
  */
+import type { BorderSpec } from './cellBoxCss.js';
+
 export const GRID_CELLS_MAP = 'cells';
 /** 수식 셀의 계산된 표시값만 담는 Y.Map — "시트:행:열" 키(gridCellKey와 동일 형식). 수식이
  * 아닌 셀은 이 맵에 항목이 없다. cells는 항상 원본 텍스트(수식이면 수식 자체)만 담고, 여기에
@@ -123,6 +125,9 @@ export interface CellStyleAttrs {
    * 날짜로 보여주기 위한 표시. nf와 별개 필드다: nf에 'date'를 섞으면 서식 드롭다운·내보내기 쪽
    * switch가 전부 영향을 받는다(spreadsheet.ts classifyNumFmt 주석 참고). */
   readonly df?: 1;
+  /** 파일의 엑셀 표시 형식 코드 그대로(일반이 아닐 때) — 있으면 nf/nd/df보다 이것으로 그린다(numberFormat.ts).
+   * 툴바로 표시 형식을 바꾸면 지운다. */
+  readonly fmt?: string;
   /** 시트 보호가 걸려 있고 이 셀이 잠겨 있음(=편집 불가) — 엑셀의 "시트 보호 + 셀 잠금" 그대로. */
   readonly lk?: 1;
   /** 엑셀 데이터 유효성 검사(정수/소수)가 걸려 있음 — 숫자가 아닌 값 입력을 막고 안내를 띄운다. */
@@ -131,6 +136,16 @@ export interface CellStyleAttrs {
   readonly br?: BorderWeight;
   readonly bb?: BorderWeight;
   readonly bl?: BorderWeight;
+  /** 굵기(bt…)만으로 못 나타내는 테두리 변 — [엑셀 선 종류, 색] (collab/cellBoxCss.ts) */
+  readonly bd?: { readonly t?: BorderSpec; readonly r?: BorderSpec; readonly b?: BorderSpec; readonly l?: BorderSpec };
+  /** 무늬 채우기 [무늬, 무늬 색, 바탕색](solid 아닌 것) */
+  readonly pat?: readonly [string, string?, string?];
+  /** 글자 회전(엑셀 textRotation, 255 = 세로쓰기) */
+  readonly rot?: number;
+  /** 들여쓰기 단계 */
+  readonly ind?: number;
+  /** 셀에 맞춤(글자 크기를 줄여 칸에 맞춘다) */
+  readonly shr?: 1;
 }
 
 /**

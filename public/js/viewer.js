@@ -1103,7 +1103,7 @@ const gridState = {
   active: 0,
   /** 지금 시트의 행 높이 계산(GridRowLayout) — activateSheet가 만든다 */
   layout: new GridRowLayout(GRID_DEFAULT_ROW_H, []),
-  /** 파일에 있는 그림(로고 등) — /api/view/xlsx-images */
+  /** 파일에 있는 그림(로고 등)·차트 — /api/view/xlsx-images, /api/view/xlsx-chart-images */
   images: [],
   chunks: new Map(), // `${sheet}:${chunkIdx}` -> rows | 'loading'
   mergeStarts: new Map(),
@@ -1140,6 +1140,8 @@ function injectGridStyles(styles) {
     // 칸 글꼴(돋움·굴림 등) — 없는 PC에서는 엑셀 기본 글꼴로
     if (style.ff) parts.push(`font-family:"${String(style.ff).replace(/["\<>;{}]/g, '')}",${GRID_FONT_STACK}`);
     if (style.col) parts.push(`color:${style.col}`);
+    // 서식 코드가 값에 따라 정한 색([Red] 등) — 칸 글자 색보다 이긴다
+    if (style.fc) parts.push(`color:${style.fc}`);
     if (style.bg) parts.push(`background:${style.bg}`);
     if (style.a === 'c') parts.push('text-align:center');
     if (style.a === 'r') parts.push('text-align:right');
@@ -1171,7 +1173,21 @@ function injectGridStyles(styles) {
     // 화면에 전혀 반영되지 않았다). `.grid-table td.gs{N}`(클래스 2개+태그 1개 = 특이도 (0,2,1))로
     // 올려야 기본 격자 shorthand의 해당 변을 확실히 덮어쓴다. 폰트/색/정렬 등 다른 선언은 애초에
     // `.grid-table td`와 겹치는 규칙이 없어 특이도 경합이 없으므로 그대로 `.gs{N}`만으로 둔다.
+    // 조건부 서식(서버가 구운 결과 — xlsx/viewerCondFormat.ts): 데이터 막대, 아이콘 집합(편집 화면 grid-editor.ts와 같은 모양)
+    if (style.cb) {
+      const [barColor, pct] = style.cb;
+      cellParts.push(`background-image:linear-gradient(90deg,${barColor} 0%,${barColor}33 100%);background-size:${Number(pct)}% 76%;background-repeat:no-repeat;background-position:left center`);
+    }
+    // 테두리 선 종류·색, 무늬 채우기, 들여쓰기(x)와 글자 회전·세로쓰기(xi) — 서버가 편집 화면과 같은 함수(collab/cellBoxCss.ts)로 만든다
+    if (style.x) cellParts.push(style.x);
     const cssForStyle = [`.gs${i}{${parts.join(';')}}`];
+    if (style.xi) cssForStyle.push(`.grid-table td.gs${i}>.g-cell-spill{${style.xi}}`);
+    if (style.ci) {
+      const [ch, iconColor, hideValue] = style.ci;
+      cellParts.push('position:relative');
+      cssForStyle.push(`.grid-table td.gs${i}::after{content:${JSON.stringify(String(ch))};color:${iconColor};position:absolute;left:3px;bottom:1px;pointer-events:none}`);
+      if (hideValue) cssForStyle.push(`.grid-table td.gs${i}>.g-cell-spill{visibility:hidden}`);
+    }
     if (borderParts.length > 0 || cellParts.length > 0) cssForStyle.push(`.grid-table td.gs${i}{${[...borderParts, ...cellParts].join(';')}}`);
     return cssForStyle.join('\n');
   });
@@ -1301,24 +1317,6 @@ function markMatches(rawText, query) {
 // 이 정규식과 일치하는 텍스트는 항상 날짜다(리터럴 날짜 칸은 displayValue가, 수식 결과 날짜는
 // formatFormulaResult가 둘 다 이 formatDate를 그대로 호출한다).
 const DATE_LIKE_TEXT = /^\d{4}-\d{2}-\d{2}( \d{2}:\d{2})?$/;
-/**
- * 칸의 숫자 표시 형식(style.nf: 백분율/통화/쉼표 + nd 소수 자릿수)을 화면에서만 입힌다 — 동시편집기
- * (src/client/grid-editor.ts formatNumberForDisplay)와 같은 규칙. 저장된 텍스트는 수식 계산에도
- * 쓰이는 "값"이라(백분율 칸은 0.4) 서버에서 미리 꾸밀 수 없고, 예전엔 뷰어가 이 단계를 빠뜨려
- * 40%가 0.4로, ₩2,500이 2,500으로 보였다(편집기에서는 정상 — 실측).
- */
-function formatGridNumber(text, style) {
-  if (!style || !style.nf || text.trim() === '') return text;
-  const num = Number(text.replace(/[,₩\s]/g, ''));
-  if (!Number.isFinite(num)) return text;
-  const decimals = style.nd || 0;
-  const opts = { minimumFractionDigits: decimals, maximumFractionDigits: decimals };
-  if (style.nf === 'percent') return `${(num * 100).toLocaleString('ko-KR', opts)}%`;
-  if (style.nf === 'currency') return `₩${num.toLocaleString('ko-KR', opts)}`;
-  if (style.nf === 'number') return num.toLocaleString('ko-KR', opts);
-  return text;
-}
-
 /** 숫자처럼 보이는 글자(쉼표·통화·% 포함) — 엑셀은 숫자를 옆 칸으로 넘기지 않는다 */
 function isGridNumericText(rawText) {
   const stripped = String(rawText).trim().replace(/[₩$€£¥,%s()]/g, '');
@@ -1329,7 +1327,7 @@ function isSpillEligible(style, rawText) {
   if (style) {
     if (style.a === 'c' || style.a === 'r') return false; // 명시적 가운데/오른쪽 정렬 — 절대 안 넘친다
     if (style.a === 'l') return true; // 명시적 왼쪽 정렬 — 항상 넘친다
-    if (style.nf) return false; // 숫자 서식이 걸려 있으면 기본 오른쪽 정렬
+    if (style.nf || (style.fmt && style.fmt !== '@')) return false; // 숫자·날짜 서식이 걸려 있으면 기본 오른쪽 정렬(글자 값이면 서버가 a:'l'을 박아 둔다)
   }
   if (rawText === 'TRUE' || rawText === 'FALSE') return false; // 논리값도 엑셀 기본은 가운데 정렬
   if (DATE_LIKE_TEXT.test(rawText.trim())) return false; // 날짜도 엑셀 기본은 오른쪽 정렬(위 주석 참고)
@@ -1416,9 +1414,24 @@ function renderGridViewport() {
   for (let i = 1; i <= colCount; i += 1) totalColWidthPx += colWidthAt(sheet, i);
 
   const rowsHtml = [];
-  for (let r = renderFirst; r <= lastVisible; r += 1) {
+  // 엑셀 "틀 고정" — 위 freezeRows행·왼쪽 freezeCols열은 스크롤해도 붙어 있다(position:sticky). 고정 행은 아래로 스크롤해도
+  // 늘 그리고, 그 높이만큼 표를 덜 내려 그 아래 행들이 제자리에 오게 한다(고정 행이 그 위를 덮는다).
+  const freezeRows = Math.min(sheet.freezeRows || 0, sheet.rowCount);
+  const freezeCols = sheet.freezeCols || 0;
+  const bodyFirst = Math.max(renderFirst, freezeRows + 1);
+  const rowNumbers = [];
+  for (let r = 1; r <= Math.min(freezeRows, renderFirst - 1); r += 1) rowNumbers.push(r);
+  for (let r = renderFirst; r <= lastVisible; r += 1) rowNumbers.push(r);
+  const frozenColLeft = [];
+  for (let c = 1, x = GRID_ROWNUM_W; c <= freezeCols; c += 1) {
+    frozenColLeft[c] = x;
+    x += colWidthAt(sheet, c);
+  }
+  for (const r of rowNumbers) {
     const rowH = layout.height(r - 1);
-    const cells = [`<td class="g-rownum">${rowH > 0 ? r : ''}</td>`];
+    const frozenRow = r <= freezeRows;
+    const rowStick = frozenRow ? `position:sticky;top:${layout.top(r - 1)}px;z-index:4` : '';
+    const cells = [`<td class="g-rownum"${frozenRow ? ` style="${rowStick};z-index:5"` : ''}>${rowH > 0 ? r : ''}</td>`];
     for (let c = 1; c <= colCount; c += 1) {
       // 이 칸을 덮는 병합이 있어도, 그 병합이 degradedMerges에 있으면(위 상한 때문에 앵커를 당겨오지
       // 못한 병합) 이 칸을 "덮인 칸"으로 건너뛰지 않고 아래에서 보통 셀처럼 그린다 — mergeStarts에
@@ -1437,20 +1450,30 @@ function renderGridViewport() {
       if (hitKey === gridCurrentHit) classes.push('g-hit-current');
       if (gridState.selected && gridState.selected.row === r && gridState.selected.col === c) classes.push('g-selected');
       const cellStyleObj = isEmpty || cell.s === undefined ? undefined : gridState.styles[cell.s];
-      const shown = isEmpty ? '' : formatGridNumber(cell.v, cellStyleObj);
+      // 표시 글자는 서버가 칸 서식(numberFormat.ts — 편집 화면과 같은 서식기)대로 이미 만들어 둔다
+      const shown = isEmpty ? '' : cell.v;
       // 엑셀 기본 정렬 — 정렬을 따로 지정하지 않은 칸에서 숫자·날짜는 오른쪽, 논리값은 가운데.
       // (판정은 넘침 여부와 같은 규칙: isSpillEligible이 "기본 왼쪽 정렬인 텍스트"만 true를 준다.)
       if (shown && !(cellStyleObj && cellStyleObj.a) && !isSpillEligible(cellStyleObj, shown)) {
         classes.push(shown === 'TRUE' || shown === 'FALSE' ? 'g-bool' : 'g-num');
       }
-      const value = isEmpty ? '' : isHit ? markMatches(shown, searchState.lastQuery) : escapeHtml(shown);
+      const fillAt = isEmpty ? -1 : shown.indexOf(GRID_FILL_MARK);
+      // 채움(회계 서식의 ₩ … 25,000) — 앞뒤를 칸 양 끝에 붙인다
+      const value = isEmpty
+        ? ''
+        : fillAt >= 0
+          ? `<span class="g-fill"><span>${escapeHtml(shown.slice(0, fillAt))}</span><span>${escapeHtml(shown.slice(fillAt + 1))}</span></span>`
+          : isHit
+            ? markMatches(shown, searchState.lastQuery)
+            : escapeHtml(shown);
       const span = merge ? ` colspan="${merge.cs}"${merge.rs > 1 ? ` rowspan="${merge.rs}"` : ''}` : '';
       // 실제 엑셀처럼 빈 이웃 칸 위로 내용이 넘쳐 보이게 한다(병합 칸이나 값 있는 칸에서 멈춘다).
       // 줄 바꿈 칸은 넘치지 않고 자기 칸 안에서 줄을 바꾼다.
       let spillStyle = '';
       // 가운데 정렬 글자는 양옆 빈 칸으로 고르게, 오른쪽 정렬 글자(숫자 아님)는 왼쪽 빈 칸으로 넘친다(엑셀과 같다)
       const align = cellStyleObj && cellStyleObj.a;
-      const spillMode = isEmpty || merge || (cellStyleObj && cellStyleObj.w)
+      if (cellStyleObj && cellStyleObj.shr) classes.push('g-shrink');
+      const spillMode = isEmpty || merge || (cellStyleObj && (cellStyleObj.w || cellStyleObj.shr))
         ? null
         : align === 'c'
           ? 'center'
@@ -1484,16 +1507,33 @@ function renderGridViewport() {
       const content = value && !hiddenCol && cellH > 0
         ? `<span class="g-cell-spill" style="${boxStyle}${spillStyle ? ';' + spillStyle.slice(8, -1) : ''}">${value}</span>`
         : '';
-      const clsFinal = classes.length > 0 ? ` class="${classes.join(' ')}"` : '';
-      cells.push(`<td data-r="${r}" data-c="${c}"${clsFinal}${span}>${content}</td>`);
+      const colStick = c <= freezeCols ? `position:sticky;left:${frozenColLeft[c]}px;z-index:${frozenRow ? 4 : 3}` : '';
+      // 고정 행·열이 겹치는 왼쪽 위 칸이 맨 위(고정 행의 나머지 칸이 가로로 밀려 와도 그 위에 그려진다)
+      const stick = frozenRow ? (colStick ? `${rowStick};left:${frozenColLeft[c]}px;z-index:6` : rowStick) : colStick;
+      if (stick) classes.push('g-frozen');
+      const clsSticky = classes.length > 0 ? ` class="${classes.join(' ')}"` : '';
+      cells.push(`<td data-r="${r}" data-c="${c}"${clsSticky}${span}${stick ? ` style="${stick}"` : ''}>${content}</td>`);
     }
-    rowsHtml.push(`<tr${rowH === 0 ? ' class="g-hidden-row"' : ''} style="height:${rowH}px">${cells.join('')}</tr>`);
+    // 기본보다 낮은 행(g-row-short) — 행 번호 글자 높이 때문에 행이 커지지 않게(CSS)
+    rowsHtml.push(`<tr${rowH === 0 ? ' class="g-hidden-row"' : rowH < 20 ? ' class="g-row-short"' : ''} style="height:${rowH}px">${cells.join('')}</tr>`);
   }
 
   const table = document.getElementById('grid-table');
   table.innerHTML = cols + rowsHtml.join('');
+  // 셀에 맞춤 — 칸보다 넓은 글자는 글자 크기를 줄인다(편집 화면 shrinkToFit과 같은 규칙, 이런 칸은 드물다)
+  for (const td of table.querySelectorAll('td.g-shrink')) {
+    const span = td.querySelector('.g-cell-spill');
+    const room = td.clientWidth - 6;
+    if (span && room > 0 && span.scrollWidth > room) span.style.fontSize = `${(parseFloat(getComputedStyle(span).fontSize) * room) / span.scrollWidth}px`;
+  }
   table.style.width = `${totalColWidthPx}px`;
-  table.style.transform = `translateY(${layout.top(renderFirst - 1)}px)`;
+  // 고정 행을 앞에 덧붙였으면 그만큼 덜 내린다 — 그래야 bodyFirst행이 제 위치(layout.top)에 온다
+  const prepended = rowNumbers.length > 0 && rowNumbers[0] < renderFirst ? layout.top(Math.min(freezeRows, renderFirst - 1)) : 0;
+  const tableY = layout.top((prepended ? bodyFirst : renderFirst) - 1) - prepended;
+  // 고정 행·열(sticky)은 transform을 모른다(위치 계산이 transform 전 자리 기준) — 틀 고정 시트는 top으로 옮긴다
+  const sticky = freezeRows > 0 || freezeCols > 0;
+  table.style.transform = sticky ? 'none' : `translateY(${tableY}px)`;
+  table.style.top = sticky ? `${tableY}px` : '';
 }
 
 function renderGridHead() {
@@ -1502,10 +1542,20 @@ function renderGridHead() {
   const scroll = document.getElementById('grid-scroll');
   const cells = [`<div class="g-head-cell g-head-corner" style="width:${GRID_ROWNUM_W}px"></div>`];
   for (let c = 1; c <= displayColCount(sheet); c += 1) {
-    cells.push(`<div class="g-head-cell" style="width:${colWidthAt(sheet, c)}px">${colLetter(c)}</div>`);
+    const frozen = c <= (sheet.freezeCols || 0) ? ' g-head-frozen' : '';
+    cells.push(`<div class="g-head-cell${frozen}" style="width:${colWidthAt(sheet, c)}px">${colLetter(c)}</div>`);
   }
   head.innerHTML = `<div class="g-head-track">${cells.join('')}</div>`;
-  head.firstChild.style.transform = `translateX(${-scroll.scrollLeft}px)`;
+  syncGridHead();
+}
+
+/** 열 머리글을 가로 스크롤에 맞춘다 — 틀 고정 열의 머리글은 칸처럼 제자리에 남는다 */
+function syncGridHead() {
+  const track = document.querySelector('.g-head-track');
+  const scroll = document.getElementById('grid-scroll');
+  if (!track || !scroll) return;
+  track.style.transform = `translateX(${-scroll.scrollLeft}px)`;
+  for (const cell of track.querySelectorAll('.g-head-frozen')) cell.style.transform = `translateX(${scroll.scrollLeft}px)`;
 }
 
 /* ==================== 그리드 확대/축소 ====================
@@ -1526,9 +1576,7 @@ function scheduleGridZoomRefit() {
     gridZoomRefitScheduled = false;
     if (gridState.sheets.length === 0) return;
     renderGridViewport();
-    const headTrack = document.querySelector('.g-head-track');
-    const scroll = document.getElementById('grid-scroll');
-    if (headTrack && scroll) headTrack.style.transform = `translateX(${-scroll.scrollLeft}px)`;
+    syncGridHead();
   });
 }
 
@@ -1667,8 +1715,12 @@ function selectedCellText() {
   if (!sel) return '';
   const cell = cellAt(gridState.active, sel.row, sel.col - 1);
   if (!cell || cell === 0) return '';
-  return cell.v ?? '';
+  // 수식 입력줄은 엑셀처럼 값(서식 전 — (4,321)이 아니라 -4321, ####로 가린 칸도 값)
+  return cell.n ?? cell.v ?? '';
 }
+
+/** 서식 코드의 채움(*) 표시 — 이 글자 앞은 칸 왼쪽 끝, 뒤는 오른쪽 끝(src/collab/numberFormat.ts FILL_MARK와 같은 글자) */
+const GRID_FILL_MARK = '\u0001';
 
 /** 선택된 칸이 바뀔 때마다 툴바 바로 밑의 수식 입력줄 자리(읽기 전용 #grid-formula-ref/
  * #grid-formula-value)를 갱신한다. */
@@ -1807,14 +1859,20 @@ async function initGridView() {
   const meta = await fetchJsonView(`/api/view/grid/meta?${tokenQuery}`);
   gridState.sheets = meta.sheets;
   // 그림은 늦게 와도 된다 — 도착하면 지금 시트에 얹는다
-  void fetchJsonView(`/api/view/xlsx-images?${tokenQuery}`)
-    .then((data) => {
-      gridState.images = (data && data.images) || [];
-      renderGridImages();
-    })
-    .catch(() => undefined);
+  // 차트는 서버가 편집 화면과 같은 그리기(xlsx/chartSvg.ts)로 만든 SVG 그림이라 그림과 같이 얹는다
+  for (const kind of ['xlsx-images', 'xlsx-chart-images']) {
+    void fetchJsonView(`/api/view/${kind}?${tokenQuery}`)
+      .then((data) => {
+        gridState.images = gridState.images.concat((data && data.images) || []);
+        renderGridImages();
+      })
+      .catch(() => undefined);
+  }
   gridState.styles = meta.styles;
   injectGridStyles(meta.styles);
+  // 서버가 시간 예산·비용 상한 때문에 조건부 서식 일부를 굽지 않았으면 알린다
+  const cfNotice = document.getElementById('grid-cf-notice');
+  if (cfNotice) cfNotice.hidden = !meta.cfSkipped;
 
   const tabs = document.getElementById('sheet-tabs');
   tabs.replaceChildren(
@@ -1841,7 +1899,7 @@ async function initGridView() {
     requestAnimationFrame(() => {
       ticking = false;
       renderGridViewport();
-      document.querySelector('.g-head-track').style.transform = `translateX(${-scroll.scrollLeft}px)`;
+      syncGridHead();
     });
   });
 

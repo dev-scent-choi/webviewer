@@ -22,25 +22,38 @@ import {
 } from '../collab/gridShared.js';
 import { dedupeByName, pickPresenceColorForName, renderPresenceAvatars, type AwarenessUserState } from './presence.js';
 import { applyWatermark } from './watermark.js';
-import { parseTypedNumber, serialToDateText } from '../collab/cellValueShared.js';
+import { parseTypedNumber } from '../collab/cellValueShared.js';
+import { FILL_MARK, formatValueText, hashIfTooWide, isNumberOrDateValue, isTextNumFmt, type FormattedValue } from '../collab/numberFormat.js';
 import { initOfficeShell } from './officeShell.js';
 import { bindDropdown } from './ribbonMenus.js';
 import { currentRegion, setupGridCharts } from './gridCharts.js';
 import { setupGridLinks, type GridLinks } from './gridLinks.js';
 import {
   CF_PRESETS,
+  cfCritKey,
+  cfEngineRanges,
+  cfExactKey,
+  cfRuleTooCostly,
   computeStats,
   GRID_COND_FORMATS_MAP,
   needsStats,
   paintCell,
   rectContains,
   subtractRect,
+  type CfEnv,
+  type CfFormulaFallback,
+  type CfRangeAgg,
+  type CfRangeTable,
+  type CfRect,
+  type CfVal,
   type CfRule,
   type CfStats,
   type CondFormatEntry,
 } from '../collab/condFormatShared.js';
 import type { CellRangeRef, ChartKind } from '../xlsx/chartModel.js';
-import { RowLayout } from '../xlsx/sheetGeometry.js';
+import { EXCEL_DEFAULT_FONT_PX, RowLayout } from '../xlsx/sheetGeometry.js';
+import { borderSideCss, bordersWithout, cellBoxCss } from '../collab/cellBoxCss.js';
+import { tableCellLook, withTableLook, type SheetTable } from '../xlsx/tableStyles.js';
 import { compareCells, filteredRows, GRID_FILTERS_MAP, shiftFormulaRows, sortOrder, type SheetFilter } from './gridSort.js';
 import { officeAlert, officeConfirm } from './officeDialog.js';
 
@@ -200,22 +213,21 @@ function cellRefLabel(row: number, col: number): string {
 /** 엑셀처럼 숫자로 보이는 값은 서식이 따로 없으면 기본적으로 오른쪽 정렬로 보여준다. */
 const NUMERIC_VALUE = /^-?\d+(\.\d+)?$/;
 
-/** 엑셀 테두리 굵기(1=가는 선, 2=굵은 선)를 CSS로. 지정이 없으면 빈 문자열 —
- * 그러면 스타일시트의 기본 점선 격자(.grid-edit-table td)가 그대로 보인다. */
-function borderCss(weight: 1 | 2 | undefined): string {
-  return weight ? `${weight}px solid var(--v-text)` : '';
-}
 
 const VALIGN_TO_CSS: Record<'t' | 'm' | 'b', string> = { t: 'top', m: 'middle', b: 'bottom' };
 
 /** 조건부 서식 색 덧입히기 — main()이 연결한다. 칸 서식을 다시 칠하는 곳(applyStyleToTd)이 여러 군데라 그 끝에서 부른다. */
 let condFormatOverlay: ((td: HTMLTableCellElement) => void) | null = null;
 
-function applyStyleToTd(td: HTMLTableCellElement, style: CellStyleAttrs | undefined): void {
+/** 엑셀 표의 표 스타일 덧칠 — main()이 연결한다. 칸 서식(저장되는 값)에는 넣지 않고 그릴 때만 얹는다(tableStyles.ts) */
+let tableLookOverlay: ((td: HTMLTableCellElement, style: CellStyleAttrs | undefined) => CellStyleAttrs | undefined) | null = null;
+
+function applyStyleToTd(td: HTMLTableCellElement, cellStyle: CellStyleAttrs | undefined): void {
+  const style = tableLookOverlay ? tableLookOverlay(td, cellStyle) : cellStyle;
   td.style.fontWeight = style?.b ? '700' : '400';
   td.style.fontStyle = style?.i ? 'italic' : 'normal';
   td.style.textDecoration = [style?.u ? 'underline' : '', style?.st ? 'line-through' : ''].filter(Boolean).join(' ');
-  td.style.color = style?.col ?? '';
+  td.style.color = td.dataset.fc ?? style?.col ?? ''; // dataset.fc: 서식 코드의 글자 색(renderCellDisplay가 값마다 정한다)
   td.style.background = style?.bg ?? '';
   td.style.fontFamily = style?.ff ? `"${style.ff}", ${DEFAULT_CELL_FONT_STACK}` : '';
   td.style.fontSize = style?.fs ? `${style.fs}px` : '';
@@ -226,8 +238,8 @@ function applyStyleToTd(td: HTMLTableCellElement, style: CellStyleAttrs | undefi
   td.style.whiteSpace = style?.wrap ? 'normal' : '';
   if (style?.a) {
     td.style.textAlign = ALIGN_TO_CSS[style.a];
-  } else if (style?.nf) {
-    td.style.textAlign = 'right'; // 숫자 서식이 있으면 서식이 적용된 텍스트(₩1,000 등)라 정규식 판정이 안 먹는다
+  } else if (style?.nf || (style?.fmt && !isTextNumFmt(style.fmt))) {
+    td.style.textAlign = 'right'; // 숫자 서식이 있으면 서식이 적용된 텍스트(₩1,000·(4,321)·날짜 등)라 정규식 판정이 안 먹는다
   } else {
     td.style.textAlign = NUMERIC_VALUE.test((td.textContent ?? '').trim()) ? 'right' : '';
   }
@@ -236,10 +248,16 @@ function applyStyleToTd(td: HTMLTableCellElement, style: CellStyleAttrs | undefi
   // 이웃 칸의 경계선 위에 겹쳐 그린다(CSS .g-bord-tl::before).
   td.style.borderTop = '';
   td.style.borderLeft = '';
-  td.style.borderRight = borderCss(style?.br);
-  td.style.borderBottom = borderCss(style?.bb);
-  td.style.setProperty('--g-bt', borderCss(style?.bt) || 'none');
-  td.style.setProperty('--g-bl', borderCss(style?.bl) || 'none');
+  // 선 종류·색은 보기 화면과 같은 규칙(collab/cellBoxCss.ts) — 지정 없는 변은 기본 점선 격자가 그대로 보인다
+  td.style.borderRight = borderSideCss(style, 'r');
+  td.style.borderBottom = borderSideCss(style, 'b');
+  td.style.setProperty('--g-bt', borderSideCss(style, 't') || 'none');
+  td.style.setProperty('--g-bl', borderSideCss(style, 'l') || 'none');
+  // 무늬 채우기·들여쓰기(무늬는 위 background 대입이 이미 지웠다 — 들여쓰기만 지난 값을 지운다)
+  td.style.removeProperty('padding-left');
+  td.style.removeProperty('padding-right');
+  for (const [prop, value] of Object.entries(cellBoxCss(style).td)) td.style.setProperty(prop, value);
+  td.classList.toggle('g-shrink', style?.shr === 1);
   td.classList.toggle('g-bord-tl', Boolean(style?.bt || style?.bl));
   td.classList.toggle('g-locked', style?.lk === 1);
   condFormatOverlay?.(td);
@@ -511,38 +529,24 @@ async function main(): Promise<void> {
     return String(Math.round(value * 1e10) / 1e10);
   }
 
-  /** 소수 자릿수별 숫자 서식기 — toLocaleString은 칸마다 서식기를 새로 만들어 스크롤이 느려진다 */
-  const numberFormatters = new Map<number, Intl.NumberFormat>();
-  function numberFormatter(decimals: number): Intl.NumberFormat {
-    let fmt = numberFormatters.get(decimals);
-    if (!fmt) {
-      fmt = new Intl.NumberFormat('ko-KR', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
-      numberFormatters.set(decimals, fmt);
-    }
-    return fmt;
+  /** 원본 값(또는 수식 계산 결과)에 칸의 표시 형식을 입힌다 — 보기 화면(서버)과 같은 서식기(numberFormat.ts) 하나만 쓴다.
+   * 저장된 값 자체는 절대 안 바꾸고 "화면에 어떻게 보일지"만 바꾼다. */
+  function formatNumberForDisplay(text: string, style: CellStyleAttrs | undefined): FormattedValue {
+    return formatValueText(text, style);
   }
 
-  /** 원본 값(또는 수식 계산 결과)에 셀의 숫자 표시 형식(쉼표/통화/백분율)을 입힌다 — 저장된 값
-   * 자체는 절대 안 바꾸고 "화면에 어떻게 보일지"만 바꾼다(수식 계산 결과 표시와 같은 원리). */
-  function formatNumberForDisplay(text: string, style: CellStyleAttrs | undefined): string {
-    // 날짜 형식 칸에 숫자(날짜 일련번호 — 예: =A4+7의 계산 결과)가 오면 엑셀처럼 날짜로 보여준다.
-    // 날짜 텍스트 자체("2026-07-05")는 숫자가 아니라 그대로 통과한다.
-    if (style?.df && text.trim() !== '' && Number.isFinite(Number(text))) return serialToDateText(Number(text));
-    if (!style?.nf || text.trim() === '') return text;
-    const num = Number(text);
-    if (!Number.isFinite(num)) return text;
-    if (num === 0) return ''; // 값 없음(0)은 화면을 어지럽히지 않게 빈 칸으로 보여준다
-    const fmt = numberFormatter(style.nd ?? 0);
-    switch (style.nf) {
-      case 'percent':
-        return `${fmt.format(num * 100)}%`;
-      case 'currency':
-        return `₩${fmt.format(num)}`;
-      case 'number':
-        return fmt.format(num);
-      default:
-        return text;
-    }
+  /** 셀에 맞춤 — 글자가 칸보다 넓으면 글자 크기를 줄인다(엑셀처럼). 이런 칸은 드물어 칸마다 한 번 재도 된다 */
+  function shrinkToFit(td: HTMLTableCellElement, span: HTMLSpanElement): void {
+    span.style.fontSize = '';
+    requestAnimationFrame(() => {
+      const room = td.clientWidth - 6;
+      if (span.scrollWidth > room && room > 0) span.style.fontSize = `${(parseFloat(getComputedStyle(span).fontSize) * room) / span.scrollWidth}px`;
+    });
+  }
+
+  function colWidthOfSheet(sheetIdx: number, col: number): number {
+    const sheet = structure.get(String(sheetIdx));
+    return sheet?.colWidths?.[col] ?? sheet?.defaultColWidth ?? DEFAULT_COL_WIDTH_PX;
   }
 
   /** 하이퍼링크(바로가기)·목록 상자 — 아래 setupGridLinks로 채운다(그 전에 그려진 칸은 받은 뒤 다시 표시) */
@@ -559,7 +563,7 @@ async function main(): Promise<void> {
       return;
     }
     const style = styles.get(key);
-    const text = !raw.startsWith('=')
+    const shown = !raw.startsWith('=')
       ? formatNumberForDisplay(raw, style)
       : formatNumberForDisplay(
           formatComputedValue(
@@ -570,6 +574,16 @@ async function main(): Promise<void> {
           ),
           style,
         );
+    const parsedKey = parseGridCellKey(key);
+    // 서식 숫자·날짜가 칸 폭보다 길면 엑셀처럼 '####'(보기 화면과 같은 어림 — numberFormat.ts)
+    const text =
+      style?.fmt && !isTextNumFmt(style.fmt) && !style.wrap && parsedKey && td.colSpan <= 1 && isNumberOrDateValue(raw.startsWith('=') ? String(computeCellDisplay(parsedKey.sheetIdx, parsedKey.row, parsedKey.col)) : raw)
+        ? hashIfTooWide(shown.text, colWidthOfSheet(parsedKey.sheetIdx, parsedKey.col), style.fs ?? EXCEL_DEFAULT_FONT_PX)
+        : shown.text;
+    // 서식 코드의 글자 색([Red] 등)은 값마다 다르다 — 없으면 칸 서식 색으로 되돌린다(조건부 서식이 그 위에 덧입힌다)
+    if (shown.color) td.dataset.fc = shown.color;
+    else delete td.dataset.fc;
+    td.style.color = shown.color ?? (tableLookOverlay ? tableLookOverlay(td, style) : style)?.col ?? '';
     applySpillDisplay(td, key, text);
     condFormatOverlay?.(td); // 값이 바뀌면 강조도 바뀐다(이 경로는 applyStyleToTd를 안 거칠 때가 있다)
     if (gridLinks) {
@@ -598,12 +612,12 @@ async function main(): Promise<void> {
    * 경로는 formatDate(src/spreadsheet.ts) 단 하나뿐이고, 원본 서식 코드가 무엇이든 항상 이
    * 모양(YYYY-MM-DD, 시:분이 있으면 그 뒤에 공백+HH:MM)으로만 렌더링되므로 이 정규식과 일치하는
    * 텍스트는 항상 날짜다. */
-  const DATE_LIKE_TEXT = /^\d{4}-\d{2}-\d{2}( \d{2}:\d{2})?$/;
+  const DATE_LIKE_TEXT = /^\d{4}-\d{2}-\d{2}( \d{2}:\d{2}(:\d{2})?)?$/;
   function isSpillEligible(style: CellStyleAttrs | undefined, text: string): boolean {
     if (style) {
       if (style.a === 'c' || style.a === 'r') return false; // 명시적 가운데/오른쪽 정렬 — 절대 안 넘친다
       if (style.a === 'l') return true; // 명시적 왼쪽 정렬 — 항상 넘친다
-      if (style.nf) return false; // 숫자 서식이 걸려 있으면 기본 오른쪽 정렬
+      if (style.nf || (style.fmt && !isTextNumFmt(style.fmt))) return false; // 숫자·날짜 서식이 걸려 있으면 기본 오른쪽 정렬
     }
     if (text === 'TRUE' || text === 'FALSE') return false; // 논리값도 엑셀 기본은 가운데 정렬
     if (DATE_LIKE_TEXT.test(text.trim())) return false; // 날짜도 엑셀 기본은 오른쪽 정렬(위 주석 참고)
@@ -629,14 +643,33 @@ async function main(): Promise<void> {
       span.className = 'g-cell-spill';
       td.replaceChildren(span);
     }
-    span.textContent = text;
+    const fillAt = text.indexOf(FILL_MARK);
+    if (fillAt >= 0) {
+      // 채움(회계 서식의 ₩ … 25,000) — 앞뒤를 칸 양 끝에 붙인다(보기 화면과 같은 .g-fill)
+      const fill = document.createElement('span');
+      fill.className = 'g-fill';
+      const left = document.createElement('span');
+      left.textContent = text.slice(0, fillAt);
+      const right = document.createElement('span');
+      right.textContent = text.slice(fillAt + 1);
+      fill.append(left, right);
+      span.replaceChildren(fill);
+    } else span.textContent = text;
     span.style.width = '';
     span.style.marginLeft = '';
+    // 글자 회전·세로쓰기(보기 화면과 같은 규칙 — collab/cellBoxCss.ts)
+    const inner = cellBoxCss(styles.get(key)).inner;
+    for (const prop of ['writing-mode', 'text-orientation', 'letter-spacing', 'display', 'transform', 'transform-origin']) span.style.removeProperty(prop);
+    for (const [prop, value] of Object.entries(inner)) span.style.setProperty(prop, value);
+    if (styles.get(key)?.shr) shrinkToFit(td, span);
+    // 내용이 행 높이를 넘어도 행이 늘어나지 않게(엑셀·보기 화면처럼 잘린다 — 사용자가 정한 8pt 행이 커지던 문제)
+    const at = parseGridCellKey(key);
+    span.style.maxHeight = at && at.sheetIdx === activeSheet ? `${Math.max(0, rowLayout.top(at.row + td.rowSpan) - rowLayout.top(at.row) - 1)}px` : '';
     if (!text.trim() || td.colSpan > 1) return; // 병합 칸은 이미 colspan으로 넓어져 있어 스필이 필요 없다
     // 줄 바꿈 칸은 넘치지 않고 자기 칸 안에서 줄을 바꾼다(엑셀과 같다). 가운데 정렬 글자는 양옆 빈 칸으로
     // 고르게, 오른쪽 정렬 글자(숫자 아님)는 왼쪽 빈 칸으로 넘친다.
     const cellStyle = styles.get(key);
-    if (cellStyle?.wrap) return;
+    if (cellStyle?.wrap || cellStyle?.shr) return; // 셀에 맞춤 칸도 넘치지 않는다(글자를 줄인다)
     const spillMode: 'right' | 'left' | 'center' | null =
       cellStyle?.a === 'c' ? 'center' : cellStyle?.a === 'r' ? (NUMERIC_VALUE.test(text.trim()) ? null : 'left') : isSpillEligible(cellStyle, text) ? 'right' : null;
     if (!spillMode) return;
@@ -1053,7 +1086,41 @@ async function main(): Promise<void> {
     // 마지막 남은 행은 지우지 않는다 — 서버도 같은 검사를 하지만(applyGridStructureOp) 여기서
     // 먼저 막아 왕복 없이 곧바로 아무 일도 일어나지 않게 한다.
     if (!sheet || sheet.rowCount <= 1) return;
-    sendGridStructureOp('deleteRows', row);
+    planRowDelete(row, 1)?.();
+  }
+  /**
+   * 행 삭제 — 엑셀 표가 있으면 엑셀과 같게: 표의 머리 줄만 지우는 삭제는 막고(알림), 표의 데이터 행을 모두 지우면 첫 데이터 행은
+   * 지우지 않고 비운다(표에는 데이터 행이 하나 남아야 한다). 행 삭제는 되돌릴 수 없다(구조가 바뀌면 실행 취소 기록을 버린다 — 위 I-4).
+   * 표 전체를 지우면 표도 없어진다. 요약 행을 지우면 요약 행이 꺼진다(저장·화면 규칙은 tableStyles.ts shiftTableRows).
+   */
+  function planRowDelete(at: number, count: number): (() => void) | null {
+    const sheetName = structure.get(String(activeSheet))?.name;
+    const end = at + count - 1;
+    let keep = -1;
+    let keepCols: [number, number] = [0, -1];
+    for (const t of fileTables) {
+      if (t.sheetName !== sheetName || at > t.r1 || end < t.r0) continue;
+      if (at <= t.r0 && end >= t.r1) continue; // 표 전체
+      if (t.headerRows > 0 && at <= t.r0 && end >= t.r0) {
+        void officeAlert('표의 머리글 행은 삭제할 수 없습니다. 표 전체를 선택해 삭제하거나, 머리글 아래 행만 선택하세요.');
+        return null;
+      }
+      const d0 = t.r0 + t.headerRows;
+      const d1 = t.r1 - t.totalsRows;
+      if (d1 >= d0 && at <= d0 && end >= d1) {
+        keep = d0;
+        keepCols = [t.c0, t.c1];
+      }
+    }
+    if (keep < 0) return () => sendGridStructureOp('deleteRows', at, count);
+    return () => {
+      ydoc.transact(() => {
+        for (let c = keepCols[0]; c <= keepCols[1]; c += 1) cells.delete(gridCellKey(activeSheet, keep, c));
+      });
+      // 아래쪽부터 지운다(위쪽 삭제가 아래 위치를 바꾸지 않게)
+      if (end > keep) sendGridStructureOp('deleteRows', keep + 1, end - keep);
+      if (keep > at) sendGridStructureOp('deleteRows', at, keep - at);
+    };
   }
   function insertColumnAt(col: number): void {
     if (!structure.get(String(activeSheet))) return;
@@ -1154,7 +1221,7 @@ async function main(): Promise<void> {
       if (typed) {
         cells.set(key, String(typed.value));
         const currentStyle = styles.get(key) ?? {};
-        if (!currentStyle.nf && !currentStyle.df) {
+        if (!currentStyle.nf && !currentStyle.df && !currentStyle.fmt) {
           styles.set(key, { ...currentStyle, nf: typed.kind, ...(typed.decimals ? { nd: typed.decimals } : {}) });
         }
       } else {
@@ -1369,6 +1436,7 @@ async function main(): Promise<void> {
     const rowHeight = rowLayout.height(r);
     tr.style.height = `${rowHeight}px`;
     if (rowHeight === 0) tr.classList.add('g-hidden-row');
+    else if (rowHeight < 20) tr.classList.add('g-row-short'); // 기본보다 낮은 행 — 칸 여백·행 번호 글자 때문에 커지지 않게(CSS)
     const rowHead = document.createElement('th');
     rowHead.className = 'g-edit-rownum';
     rowHead.textContent = String(r + 1);
@@ -2870,8 +2938,11 @@ async function main(): Promise<void> {
     const span = selectedSpan('row');
     if (!span || span.at >= s.rowCount) return;
     const count = Math.min(span.count, s.rowCount - span.at);
-    if (s.rowCount - count < 1 || !(await confirmSpanDelete('row', span.at, count))) return;
-    sendGridStructureOp('deleteRows', span.at, count);
+    if (s.rowCount - count < 1) return;
+    // 표 규칙(머리 줄 삭제 막기 등)을 먼저 보고, 그다음 "삭제할까요?"
+    const run = planRowDelete(span.at, count);
+    if (!run || !(await confirmSpanDelete('row', span.at, count))) return;
+    run();
   });
   document.getElementById('btn-add-col')?.addEventListener('click', () => {
     const span = selectedSpan('col');
@@ -3223,60 +3294,395 @@ async function main(): Promise<void> {
   function cfStatsNow(): ReadonlyMap<string, CfStats> {
     if (cfStats && cfStatsSheet === activeSheet) return cfStats;
     const next = new Map<string, CfStats>();
-    const withStats = cfEntries().filter((e) => needsStats(e.rule));
-    if (withStats.length > 0) {
-      const values = new Map<string, string[]>(withStats.map((e) => [e.id, []]));
+    const { rows } = cfExtent();
+    const local: CondFormatEntry[] = [];
+    for (const e of cfEntries()) {
+      if (!needsStats(e.rule)) continue;
+      // 범위가 불러온 행 안이면 직접 세고, 불러오지 않은 행까지 걸치면 서버가 보낸 작은 통계로(아직 없으면 칠하지 않고 기다린다)
+      if (e.ranges.every((r) => rowsArrived(r.r0, Math.min(r.r1, rows - 1)))) {
+        local.push(e);
+        continue;
+      }
+      next.set(e.id, cfRemoteStats(e.id));
+    }
+    if (local.length > 0) {
+      const values = new Map<string, string[]>(local.map((e) => [e.id, []]));
       const prefix = `${activeSheet}:`;
       for (const key of cells.keys()) {
         if (!key.startsWith(prefix)) continue;
         const at = parseGridCellKey(key);
         if (!at) continue;
-        for (const e of withStats) if (e.ranges.some((r) => rectContains(r, at.row, at.col))) values.get(e.id)?.push(cfValueAt(at.row, at.col));
+        for (const e of local) if (e.ranges.some((r) => rectContains(r, at.row, at.col))) values.get(e.id)?.push(cfValueAt(at.row, at.col));
       }
-      for (const e of withStats) next.set(e.id, computeStats(e.rule, values.get(e.id) ?? []));
+      for (const e of local) next.set(e.id, computeStats(e.rule, values.get(e.id) ?? []));
     }
     cfStats = next;
     cfStatsSheet = activeSheet;
     return next;
   }
+  const cfExtent = (): { rows: number; cols: number } => {
+    const sheet = structure.get(String(activeSheet));
+    return { rows: sheet?.rowCount ?? 0, cols: sheet?.colCount ?? 0 };
+  };
   function applyCondFormatOverlay(td: HTMLTableCellElement): void {
+    if (td.dataset.row === undefined) return;
+    if (cfEntries().length === 0 && td.dataset.cf === undefined) return;
+    // 그리는 중(같은 작업 안)에는 CF_SYNC_MS까지만 바로 칠하고 나머지는 나눠 칠한다 — 무거운 규칙이 화면 그리기를 막지 않게
+    const now = performance.now();
+    if (now - cfSync.start > 50) {
+      cfSync.start = now;
+      cfSync.spent = 0;
+    }
+    if (cfSync.spent < CF_SYNC_MS && cfQueue.size === 0) {
+      paintCondFormat(td);
+      cfSync.spent += performance.now() - now;
+      return;
+    }
+    cfQueue.add(td);
+    if (!cfPumpTimer) cfPumpTimer = window.setTimeout(pumpCondFormats, 0);
+  }
+  // 조건부 서식 칠하기 줄 — 한 번에 CF_SLICE_MS만 칠하고 양보한다. 한 줄(화면 한 번 칠하기)에 CF_PASS_BUDGET_MS(보기 화면
+  // 굽기와 같은 예산)를 넘게 쓰면 나머지는 칠하지 않고 "일부 생략"을 알린다.
+  const CF_SYNC_MS = 8;
+  const CF_SLICE_MS = 30;
+  const CF_PASS_BUDGET_MS = 2_000;
+  const cfSync = { start: 0, spent: 0 };
+  const cfQueue = new Set<HTMLTableCellElement>();
+  let cfPumpTimer = 0;
+  let cfPassSpent = 0;
+  function pumpCondFormats(): void {
+    cfPumpTimer = 0;
+    const t0 = performance.now();
+    for (const td of cfQueue) {
+      cfQueue.delete(td);
+      if (td.isConnected) paintCondFormat(td);
+      if (performance.now() - t0 > CF_SLICE_MS) break;
+    }
+    cfPassSpent += performance.now() - t0;
+    if (cfQueue.size === 0) {
+      cfPassSpent = 0;
+      return;
+    }
+    if (cfPassSpent > CF_PASS_BUDGET_MS) {
+      cfQueue.clear();
+      cfPassSpent = 0;
+      showCfSkipNotice();
+      return;
+    }
+    cfPumpTimer = window.setTimeout(pumpCondFormats, 0);
+  }
+  function paintCondFormat(td: HTMLTableCellElement): void {
     const row = Number(td.dataset.row);
     const col = Number(td.dataset.col);
-    if (!Number.isInteger(row) || !Number.isInteger(col) || td.dataset.row === undefined) return;
-    const entries = cfEntries();
-    if (entries.length === 0 && td.dataset.cf === undefined) return;
-    const paint = entries.length > 0 ? paintCell(entries, row, col, cfValueAt(row, col), cfStatsNow(), cfValueAt) : null;
+    if (!Number.isInteger(row) || !Number.isInteger(col)) return;
+    // 이 행에 걸린 규칙만 본다(조각난 규칙 수천 개에서 칸마다 전부 훑지 않게 — 보기 화면 굽기와 같은 색인)
+    const rowEntries = cfEntries().length > 0 ? cfRowEntries(row) : [];
+    const paint = rowEntries.length > 0 ? paintCell(rowEntries, row, col, cfValueAt(row, col), cfStatsNow(), cfValueAt, cfEnvNow()) : null;
     if (!paint && td.dataset.cf === undefined) return;
     // 기본 서식(applyStyleToTd와 같은 값)으로 되돌린 뒤 규칙 색을 얹는다 — 규칙이 더는 안 맞으면 원래 모습이 된다
-    const base = styles.get(gridCellKey(activeSheet, row, col));
+    const own = styles.get(gridCellKey(activeSheet, row, col));
+    const base = tableLookOverlay ? tableLookOverlay(td, own) : own;
     td.style.background = paint?.style?.bg ?? paint?.scale ?? base?.bg ?? '';
-    td.style.color = paint?.style?.col ?? base?.col ?? '';
+    td.style.color = paint?.style?.col ?? td.dataset.fc ?? base?.col ?? '';
     td.style.fontWeight = paint?.style?.b || base?.b ? '700' : '400';
     if (paint?.bar) {
       td.style.backgroundImage = `linear-gradient(90deg, ${paint.bar.color} 0%, ${paint.bar.color}33 100%)`;
       td.style.backgroundSize = `${Math.round(paint.bar.ratio * 100)}% 76%`;
       td.style.backgroundRepeat = 'no-repeat';
       td.style.backgroundPosition = 'left center';
-    }
+    } else td.style.backgroundImage = '';
+    // 아이콘 집합 — 칸 왼쪽에 기호(CSS .grid-edit-table td[data-cf-icon]::after)
+    if (paint?.icon) {
+      td.dataset.cfIcon = paint.icon.ch;
+      td.style.setProperty('--cf-icon-color', paint.icon.color);
+    } else delete td.dataset.cfIcon;
+    td.classList.toggle('g-cf-hide-value', Boolean(paint?.icon?.hide));
     if (paint) td.dataset.cf = '1';
     else delete td.dataset.cf;
   }
   condFormatOverlay = applyCondFormatOverlay;
-  // 값·계산 결과·규칙이 바뀌면 통계를 버리고 화면 칸을 한 번에 다시 칠한다(한 칸이 바뀌어도 상위 10개·중복 판정은 다른 칸이 바뀐다)
+  // 엑셀 표(표 스타일) — 파일의 표 범위·스타일을 받아 그릴 때 덧칠한다. 위치(행 번호)로 정하므로 정렬해도 줄무늬가 제자리다
+  let fileTables: Array<SheetTable & { sheetName: string }> = [];
+  let fileThemeColors: readonly string[] = [];
+  tableLookOverlay = (td, style) => {
+    if (fileTables.length === 0 || td.dataset.row === undefined) return style;
+    const row = Number(td.dataset.row);
+    const col = Number(td.dataset.col);
+    const sheetName = structure.get(String(activeSheet))?.name;
+    for (const table of fileTables) {
+      if (table.sheetName !== sheetName) continue;
+      const look = tableCellLook(table, row, col, fileThemeColors);
+      if (look) return withTableLook(style ?? {}, look);
+    }
+    return style;
+  };
+  const loadFileTables = (): void => {
+    const had = fileTables.length > 0;
+    void fetch(`/api/view/xlsx-extras?token=${encodeURIComponent(token)}`)
+      .then((res) => res.json() as Promise<{ data?: { tables?: Array<SheetTable & { sheetName: string }>; themeColors?: string[] } }>)
+      .then((json) => {
+        fileTables = json.data?.tables ?? [];
+        fileThemeColors = json.data?.themeColors ?? [];
+        if (fileTables.length > 0 || had) tableEl.querySelectorAll<HTMLTableCellElement>('td[data-row]').forEach((td) => {
+          const at = Number(td.dataset.row);
+          const c = Number(td.dataset.col);
+          applyStyleToTd(td, styles.get(gridCellKey(activeSheet, at, c)));
+        });
+      })
+      .catch(() => undefined);
+  };
+  loadFileTables();
+  // 행/열을 넣거나 지우면(행 수·열 수가 바뀐다) 서버가 옮긴 표 범위를 다시 받는다 — 표가 있는 문서만
+  let tablesRefetch = 0;
+  structure.observe(() => {
+    if (fileTables.length === 0) return;
+    clearTimeout(tablesRefetch);
+    tablesRefetch = window.setTimeout(loadFileTables, 200);
+  });
+  // 행마다 걸리는 규칙 — 화면에 그리는 행만 그때그때 골라 기억한다(시트 전체 행 배열을 미리 만들지 않는다)
+  let cfIndex: { sheet: number; entries: readonly CondFormatEntry[]; usable: readonly CondFormatEntry[]; byRow: Map<number, readonly CondFormatEntry[]> } | null = null;
+  function cfRowEntries(row: number): readonly CondFormatEntry[] {
+    const entries = cfEntries();
+    if (!cfIndex || cfIndex.sheet !== activeSheet || cfIndex.entries !== entries) {
+      const { rows, cols } = cfExtent();
+      const usable = entries.filter((e) => {
+        const skip = cfRuleTooCostly(e, rows, cols) || cfEngineRanges(e, rows, cols).some((r) => !rowsArrived(r.r0, r.r1));
+        if (skip) showCfSkipNotice();
+        return !skip;
+      });
+      cfIndex = { sheet: activeSheet, entries, usable, byRow: new Map() };
+    }
+    let list = cfIndex.byRow.get(row);
+    if (!list) {
+      list = cfIndex.usable.filter((e) => e.ranges.some((r) => row >= r.r0 && row <= r.r1));
+      if (cfIndex.byRow.size > 2000) cfIndex.byRow.clear();
+      cfIndex.byRow.set(row, list);
+    }
+    return list;
+  }
+  // 범위 함수(COUNTIF 등)의 범위 값 표 — 칸 값이 바뀌면(onCfDataChanged) 새로. 불러오지 않은 페이지까지 걸친 범위는 서버 표로
+  let cfEnv: CfEnv | null = null;
+  function cfEnvNow(): CfEnv {
+    cfEnv ??= {
+      ...(cfFallback ? { fallback: cfFallback } : {}),
+      tables: new Map(),
+      extent: cfExtent,
+      remote: cfRemoteTable,
+      unsupported: showCfSkipNotice,
+    };
+    return cfEnv;
+  }
+  // ---------- 서버 답(/api/view/xlsx-cf-ranges, src/xlsx/cfRangeValues.ts) ----------
+  // 편집 화면은 보고 있는 페이지(500행 단위)만 받는다. 범위 전체를 보아야 하는 규칙(COUNTIF($A:$A,$A1)>1·중복·상위·색조 …)이
+  // 불러오지 않은 행까지 걸치면 서버가 답한다 — 범위 값 표를 받지 않고 집계와 화면 칸이 물은 COUNTIF 조건의 개수, 통계 규칙의
+  // 문턱값만 받는다. 서버는 방의 규칙에서 뽑은 범위만 답한다(아니면 skipped → "일부 생략"). 칸 값이 바뀌면 아는 것을 다시 묻는다.
+  type CfRemoteAnswerJson = {
+    rev: number;
+    stale?: true;
+    ranges: Array<CfRect & ({ cells: number; agg: CfRangeAgg; crit: Array<[string, number]> } | { skipped: true })>;
+    stats: Record<string, (Omit<CfStats, 'counts'> & { counts?: Array<[string, number]> }) | 'skipped'>;
+  };
+  interface CfRemoteState {
+    agg?: CfRangeAgg;
+    cells: number;
+    crit: Map<string, number>;
+    asked: Map<string, CfVal>;
+    askedEq: Map<string, CfVal>;
+    skipped?: boolean;
+  }
+  const cfRemote = {
+    sheet: -1,
+    rev: -1,
+    ranges: new Map<string, { rect: CfRect; st: CfRemoteState }>(),
+    stats: new Map<string, CfStats | 'skipped'>(),
+    wantStats: new Set<string>(),
+    timer: 0,
+    busy: false,
+  };
+  const cfRectKey = (r: CfRect) => `${r.r0}:${r.c0}:${r.r1}:${r.c1}`;
+  function rowsArrived(r0: number, r1: number): boolean {
+    const arrived = arrivedPages.get(activeSheet);
+    if (!arrived) return false;
+    for (let page = Math.floor(r0 / PAGE_SIZE_ROWS); page <= Math.floor(Math.max(r0, r1) / PAGE_SIZE_ROWS); page += 1) if (!arrived.has(page)) return false;
+    return true;
+  }
+  function cfRemoteForSheet(): typeof cfRemote {
+    if (cfRemote.sheet !== activeSheet) {
+      cfRemote.sheet = activeSheet;
+      cfRemote.rev = -1;
+      cfRemote.ranges.clear();
+      cfRemote.stats.clear();
+      cfRemote.wantStats.clear();
+    }
+    return cfRemote;
+  }
+  /** 범위 함수의 범위 — 불러온 행 안이면 undefined(직접 센다), 아니면 서버 답으로 계산하는 표 */
+  function cfRemoteTable(r0: number, c0: number, r1: number, c1: number): CfRangeTable | undefined {
+    if (r1 < r0 || c1 < c0 || rowsArrived(r0, r1)) return undefined;
+    const rect = { r0, c0, r1, c1 };
+    const remote = cfRemoteForSheet();
+    let hit = remote.ranges.get(cfRectKey(rect));
+    if (!hit) {
+      hit = { rect, st: { cells: 0, crit: new Map(), asked: new Map(), askedEq: new Map() } };
+      remote.ranges.set(cfRectKey(rect), hit);
+    }
+    const st = hit.st;
+    if (st.skipped) showCfSkipNotice(); // 서버가 답하지 않는 범위 — 칠하지 않는다(ask가 아무것도 하지 않아 계속 기다림)
+    return {
+      cells: st.cells,
+      remote: {
+        agg: st.agg,
+        crit: st.crit,
+        ask: (crit, exact) => {
+          if (st.skipped || st.asked.size + st.askedEq.size >= 2_000) return;
+          if (exact) st.askedEq.set(cfExactKey(crit), crit);
+          else st.asked.set(cfCritKey(crit), crit);
+          scheduleCfRemoteFetch(0);
+        },
+      },
+    };
+  }
+  /** 통계 규칙 — 서버가 보낸 작은 통계(아직 없으면 물어 두고 빈 통계 = 칠하지 않음) */
+  function cfRemoteStats(id: string): CfStats {
+    const remote = cfRemoteForSheet();
+    const st = remote.stats.get(id);
+    if (st === 'skipped') showCfSkipNotice();
+    if (st) return st === 'skipped' ? {} : st;
+    remote.wantStats.add(id);
+    scheduleCfRemoteFetch(0);
+    return {};
+  }
+  function scheduleCfRemoteFetch(delay: number): void {
+    if (cfRemote.timer) return;
+    cfRemote.timer = window.setTimeout(() => {
+      cfRemote.timer = 0;
+      void fetchCfRemote();
+    }, delay);
+  }
+  async function fetchCfRemote(): Promise<void> {
+    if (cfRemote.busy) {
+      scheduleCfRemoteFetch(200);
+      return;
+    }
+    const sheet = cfRemote.sheet;
+    // 물을 것: 새로 물은 조건 + 이미 아는 조건(값이 바뀌었을 수 있다), 범위마다 집계
+    const ranges = [...cfRemote.ranges.values()].filter(({ st }) => !st.skipped).slice(0, 64);
+    const stats = [...new Set([...cfRemote.wantStats, ...[...cfRemote.stats.keys()]])].slice(0, 64);
+    if (ranges.length === 0 && stats.length === 0) return;
+    let budget = 2_000;
+    let chars = 0;
+    const body = {
+      sheet,
+      ranges: ranges.map(({ rect, st }) => {
+        const crit: CfVal[] = [];
+        const eq: CfVal[] = [];
+        // 새로 물은 것 + 이미 아는 것(값이 바뀌었을 수 있다). 정확 개수 키는 "="로 시작한다(cfExactKey)
+        const known = [...st.crit.keys()].filter((k) => !st.asked.has(k) && !st.askedEq.has(k));
+        const all: Array<[string, CfVal]> = [...st.asked, ...st.askedEq, ...known.map((k): [string, CfVal] => [k, JSON.parse(k.startsWith('=') ? k.slice(1) : k) as CfVal])];
+        for (const [k, c] of all) {
+          if (budget <= 0 || chars + k.length > 100_000) break;
+          (k.startsWith('=') ? eq : crit).push(c);
+          budget -= 1;
+          chars += k.length;
+        }
+        return { ...rect, crit, eq };
+      }),
+      stats,
+    };
+    for (const { st } of ranges) {
+      st.asked.clear();
+      st.askedEq.clear();
+    }
+    cfRemote.wantStats.clear();
+    cfRemote.busy = true;
+    try {
+      const res = await fetch(`/api/view/xlsx-cf-ranges?token=${encodeURIComponent(token)}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const json = (await res.json()) as { data?: CfRemoteAnswerJson };
+      if (sheet !== cfRemote.sheet) return;
+      if (!json.data) {
+        // 물을 수 없으면(편집 방이 없음·요청 제한 등) 그 범위는 칠하지 않고 "일부 생략"을 알린다
+        for (const { st } of ranges) st.skipped = true;
+        for (const id of stats) cfRemote.stats.set(id, 'skipped');
+      } else {
+        // 범위에 수식 칸이 있고 편집이 있었다 — 보지 않는 페이지의 수식은 다시 계산되지 않아 결과가 낡았을 수 있다
+        if (json.data.stale) showCfSkipNotice();
+        const sameRev = json.data.rev === cfRemote.rev;
+        cfRemote.rev = json.data.rev;
+        let learned = false;
+        for (const a of json.data.ranges) {
+          const hit = cfRemote.ranges.get(cfRectKey(a));
+          if (!hit) continue;
+          if ('skipped' in a) hit.st.skipped = true;
+          else {
+            hit.st.cells = a.cells;
+            hit.st.agg = a.agg;
+            if (!sameRev) hit.st.crit = new Map(a.crit);
+            else for (const [k, n] of a.crit) if (!hit.st.crit.has(k)) hit.st.crit.set(k, n);
+          }
+          learned = true;
+        }
+        for (const [id, st] of Object.entries(json.data.stats)) {
+          cfRemote.stats.set(id, st === 'skipped' ? 'skipped' : { ...st, counts: st.counts ? new Map(st.counts) : undefined });
+          learned = true;
+        }
+        if (!learned) return;
+      }
+      cfStats = null;
+      cfEnv = null;
+      scheduleCfRepaint();
+    } catch {
+      scheduleCfRemoteFetch(5_000);
+    } finally {
+      cfRemote.busy = false;
+    }
+  }
+  function showCfSkipNotice(): void {
+    const el = document.getElementById('cf-skip-notice');
+    if (el) el.hidden = false;
+  }
+  // 범위·함수가 든 규칙 수식(COUNTIF($A:$A,$A2)>1 등)은 수식 엔진으로 계산한다 — 그런 규칙이 있을 때만 따로 불러온다(번들 분리)
+  let cfFallback: CfFormulaFallback | null = null;
+  let cfEngineLoading = false;
+  function ensureCfEngine(): void {
+    if (cfFallback || cfEngineLoading) return;
+    const needs = cfEntries().some((e) => e.rule.t === 'expr' || e.rule.t === 'cell' || ((e.rule.t === 'scale' || e.rule.t === 'bar' || e.rule.t === 'icon') && (e.rule.th ?? []).some((th) => th.f)));
+    if (!needs) return;
+    cfEngineLoading = true;
+    void import('../xlsx/cfFormulaEngine.js')
+      .then(({ createCfFormulaFallback }) => {
+        cfEnv = null;
+        cfFallback = createCfFormulaFallback(cfValueAt, cfExtent);
+        scheduleCfRepaint();
+      })
+      .catch(() => undefined);
+  }
+  // 값·계산 결과·규칙이 바뀌면 통계·범위 표·규칙 색인을 버리고 화면 칸을 다시 칠한다(한 칸이 바뀌어도 상위 10개·중복 판정은 다른 칸이 바뀐다)
+  function onCfDataChanged(): void {
+    cfStats = null;
+    cfEnv = null;
+    cfIndex = null; // 페이지가 도착하면 불러온 행이 늘어 건너뛰던 규칙을 칠할 수 있다
+    ensureCfEngine();
+    if ((cfRemote.ranges.size > 0 || cfRemote.stats.size > 0) && cfRemote.sheet === activeSheet) scheduleCfRemoteFetch(300);
+    scheduleCfRepaint();
+  }
   let cfRepaintQueued = false;
   function scheduleCfRepaint(): void {
-    cfStats = null;
     if (cfRepaintQueued) return;
     if (cfEntries().length === 0 && !tableEl.querySelector('td[data-cf]')) return;
     cfRepaintQueued = true;
     requestAnimationFrame(() => {
       cfRepaintQueued = false;
-      tableEl.querySelectorAll<HTMLTableCellElement>('td[data-row]').forEach(applyCondFormatOverlay);
+      tableEl.querySelectorAll<HTMLTableCellElement>('td[data-row]').forEach((td) => cfQueue.add(td));
+      if (!cfPumpTimer) cfPumpTimer = window.setTimeout(pumpCondFormats, 0);
     });
   }
-  cells.observe(scheduleCfRepaint);
-  computed.observe(scheduleCfRepaint);
-  condFormats.observe(scheduleCfRepaint);
+  cells.observe(onCfDataChanged);
+  computed.observe(onCfDataChanged);
+  condFormats.observe(onCfDataChanged);
 
   function addCondFormat(rule: CfRule): void {
     if (!canEdit || !activeCellKey) return;
@@ -3432,7 +3838,8 @@ async function main(): Promise<void> {
   const numfmtSelect = document.getElementById('cell-numfmt-select') as HTMLSelectElement | null;
   numfmtSelect?.addEventListener('change', () => {
     updateStyle((current) => {
-      const next = { ...current };
+      // 툴바로 고르면 파일의 원래 서식 코드(fmt)는 버린다 — 남아 있으면 그것이 이겨 화면이 안 바뀐다
+      const { fmt: _fmt, ...next } = current;
       if (numfmtSelect.value === 'general') {
         delete next.nf;
         delete next.nd;
@@ -3444,13 +3851,13 @@ async function main(): Promise<void> {
     });
   });
   function applyQuickNumFmt(nf: NonNullable<CellStyleAttrs['nf']>, nd: number): void {
-    updateStyle((current) => ({ ...current, nf, nd }));
+    updateStyle(({ fmt: _fmt, ...current }) => ({ ...current, nf, nd }));
   }
   document.getElementById('btn-numfmt-currency')?.addEventListener('click', () => applyQuickNumFmt('currency', 2));
   document.getElementById('btn-numfmt-percent')?.addEventListener('click', () => applyQuickNumFmt('percent', 0));
   document.getElementById('btn-numfmt-comma')?.addEventListener('click', () => applyQuickNumFmt('number', 0));
   function stepDecimals(delta: number): void {
-    updateStyle((current) => {
+    updateStyle(({ fmt: _fmt, ...current }) => {
       const nextDecimals = Math.max(0, (current.nd ?? 0) + delta);
       return { ...current, nf: current.nf ?? 'number', nd: nextDecimals };
     });
@@ -3500,6 +3907,13 @@ async function main(): Promise<void> {
               if (isRight) next.br = 1;
               break;
           }
+          // 바꾼 변만 파일의 선 종류·색(bd)을 버린다 — 남아 있으면 그 변이 새로 고른 실선 대신 예전 점선·색으로 그려진다.
+          // 'all'·'outside'처럼 다시 그린 변도 새 실선이다. 손대지 않은 변의 점선·색은 그대로 둔다.
+          const redrawn = preset === 'none' || preset === 'all' || preset.startsWith('outside');
+          const touched = { t: redrawn || (preset === 'top' && isTop), b: redrawn || (preset === 'bottom' && isBottom), l: redrawn || (preset === 'left' && isLeft), r: redrawn || (preset === 'right' && isRight) };
+          const bd = bordersWithout(next.bd, touched);
+          if (bd) next.bd = bd;
+          else delete next.bd;
           // 테두리 'none'으로 서식이 통째로 비어도 delete가 아니라 빈 객체를 쓴다 — updateStyle의 주석 참고.
           styles.set(key, next as CellStyleAttrs);
           const td = tdFor(r, c);

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import fs from 'node:fs';
 import ExcelJS from 'exceljs';
 import { describe, expect, test } from 'vitest';
 import { parseXlsxToGrid } from '../src/spreadsheet.js';
@@ -48,6 +49,23 @@ describe('보기용 그리드 — 큰 파일용 스트리밍 경로(viewerGrid.t
       setDirtyCell(store, 0, 1, 0, { v: '고친 값' });
       const { buffer } = await serializeGridFromLazyStore(store);
       expect(JSON.parse(buffer.toString('utf8').split('\n')[2])[0].v).toBe('고친 값');
+    } finally {
+      await closeLazyGridStore(store);
+    }
+  });
+
+  test('큰 파일 경로도 조건부 서식을 굽는다(검토 14) — 통째 읽기 경로와 같은 칸이 칠해진다', async () => {
+    const bytes = fs.readFileSync('audit/office/corpus/xlsx/x03-conditional-formatting.xlsx');
+    const store = await ingestXlsxLazily(randomUUID(), bytes);
+    try {
+      const { buffer } = await serializeGridFromLazyStore(store);
+      const lines = buffer.toString('utf8').split('\n');
+      const header = JSON.parse(lines[0]);
+      const styled = (pick: (st: Record<string, unknown>) => boolean) =>
+        lines.slice(1, 17).flatMap((l) => JSON.parse(l)).filter((c: { s?: number } | 0) => c && c.s !== undefined && pick(header.styles[c.s])).length;
+      expect(styled((st) => Boolean(st.cb))).toBeGreaterThan(10); // 데이터 막대
+      expect(styled((st) => Boolean(st.ci))).toBeGreaterThan(10); // 아이콘
+      expect(styled((st) => st.bg === '#C6EFCE' && st.b === 1)).toBeGreaterThan(0); // 수식 규칙 $C2>=1
     } finally {
       await closeLazyGridStore(store);
     }

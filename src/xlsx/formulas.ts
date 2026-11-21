@@ -3,7 +3,7 @@ const { FormulaError } = FormulaParser;
 import type { GridDocument } from '../spreadsheet.js';
 // 값 import라 spreadsheet.ts(이 파일을 import함)와 순환이 생기지만, 호이스팅된 함수 선언을
 // 런타임(수식 평가 시점)에만 호출하므로 안전하다 — 모듈 평가 중에는 서로를 호출하지 않는다.
-import { unformattedCellValue } from '../spreadsheet.js';
+import { gridCellValue } from '../spreadsheet.js';
 import { EDIT_SOFT_ROW_LIMIT, EDIT_SOFT_COL_LIMIT, gridCellKey } from '../collab/gridShared.js';
 import type { LazyGridStore } from './lazyGridStore.js';
 import { getRow } from './lazyGridStore.js';
@@ -30,7 +30,7 @@ function rawCellText(grid: GridDocument, sheetIdx: number, row: number, col: num
   const sheet = grid.sheets[sheetIdx];
   if (!sheet) return '';
   const cell = sheet.rows[row]?.[col];
-  return cell === 0 || cell === undefined ? '' : cell.v;
+  return cell === 0 || cell === undefined ? '' : gridCellValue(cell);
 }
 
 /** 시트 이름 → 인덱스 매핑. fast-formula-parser가 `onCell`/`onRange`에 돌려주는 `ref.sheet`(참조된
@@ -236,7 +236,7 @@ function computeGridCellDisplaySync(
     const key = gridCellKey(sheetIdx, r, c);
     if (store.dirtyOverlay.has(key)) {
       const cell = store.dirtyOverlay.get(key);
-      return cell === 0 || cell === undefined ? '' : cell.v;
+      return cell === 0 || cell === undefined ? '' : gridCellValue(cell);
     }
     if (originalCol === undefined || originalCol < 0) return '';
     const originalRow = store.logicalToOriginalRow[sheetIdx]?.[r];
@@ -249,12 +249,8 @@ function computeGridCellDisplaySync(
     }
     const cell = cachedRow[originalCol];
     if (cell === 0 || cell === undefined) return '';
-    // 저장소 행에는 "표시용" 텍스트가 들어 있다(displayValue가 만든 모양 그대로 — 쉼표 천단위 등).
-    // Number("235,000")은 NaN이라 이걸 그대로 수식 엔진에 먹이면 쉼표 서식이 걸린 숫자를 참조하는
-    // 모든 수식이 그 칸을 텍스트로 취급한다(=C4*D4 → #VALUE!, SUM은 조용히 0 — E2E로 실제 재현).
-    // 뷰어 쪽 계산 경로(buildFormulaInputGrid, spreadsheet.ts)가 쓰는 것과 같은 unformattedCellValue
-    // 규칙을 여기에도 태워 "편집기에서만 틀리는" 불일치를 없앤다(그 함수 문서 주석의 경고 그대로).
-    return unformattedCellValue(cell.v, cell.s === undefined ? undefined : store.styles[cell.s]);
+    // 저장소 행의 v는 표시 글자("(4,321)" 등)라, 서식 전 값(gridCellValue)을 수식 엔진에 먹인다
+    return gridCellValue(cell);
   };
   const key = `${sheetIdx}:${row}:${col}`;
   const raw = rawCellTextSync(row, col);

@@ -38,7 +38,11 @@ import {
 } from '../docx/import.js';
 import { MarkupValidationError, addMarkup, deleteMarkup, listMarkup, updateMarkup } from '../markup.js';
 import { touchPresence } from '../presence.js';
-import { flushNow, getCurrentBytes, getChangeLog, getFileCharts, getFileExtras, getFileImages } from '../collab/room.js';
+import { flushNow, getCfRemoteAnswer, getCurrentBytes, getChangeLog, getFileCharts, getFileExtras, getFileImages } from '../collab/room.js';
+import { parseCfRemoteRequest } from '../xlsx/cfRangeValues.js';
+
+/** 편집 화면 조건부 서식 서버 답 — 편집할 때마다(0.3초 묶음) 다시 묻는다 */
+const CF_REMOTE_RATE_LIMIT = { max: 240, timeWindow: '1 minute' } as const;
 import {
   buildGridFromOriginal,
   computeLineOffsets,
@@ -47,12 +51,20 @@ import {
   type GridCell,
   type GridSheet,
   type GridHeader,
+  gridCellValue,
 } from '../spreadsheet.js';
 import { store } from '../storage.js';
 import { LEGACY_EDIT_TARGET, legacyDownload } from '../legacyOffice.js';
 import { isViewOnly, type DocumentMeta, type ViewClaims } from '../types.js';
 import { isOpenable, waitForInitialConversion } from '../conversionGate.js';
 import { buildViewerGridFile, saveGridFile } from '../xlsx/viewerGrid.js';
+import { localDayKey } from '../xlsx/viewerCondFormat.js';
+import { singleFlightWithBackoff } from '../xlsx/singleFlight.js';
+import type { GridChart } from '../xlsx/chartModel.js';
+import { chartDataOf, renderChartSvg } from '../xlsx/chartSvg.js';
+import { rowTopPx } from '../xlsx/sheetGeometry.js';
+import { cellBoxCssText, sanitizeCellStyle } from '../collab/cellBoxCss.js';
+import { FILL_MARK } from '../collab/numberFormat.js';
 
 export interface ViewContext {
   readonly claims: ViewClaims;
@@ -197,15 +209,20 @@ function offsetsLookValid(buffer: Buffer, lineOffsets: readonly number[]): boole
 /** grid.json 헤더 한 줄만 값싸게 들여다본다(버퍼 전체를 다시 스캔하지 않는다) — formatVersion
  * 확인 전용. 파싱이 실패하면(손상 등) undefined를 돌려줘 "버전을 알 수 없음"으로 취급한다 —
  * 어차피 아래 loadGridUncached의 자가치유(gridindex 재스캔) 경로가 이런 손상을 이미 다룬다. */
-function peekGridHeaderVersion(buffer: Buffer): number | undefined {
+function peekGridHeader(buffer: Buffer): Pick<GridHeader, 'formatVersion' | 'cfDay'> {
   try {
     const newline = buffer.indexOf(10);
     const headerEnd = newline === -1 ? buffer.length : newline;
     const header = JSON.parse(buffer.toString('utf8', 0, headerEnd)) as GridHeader;
-    return header.formatVersion;
+    return { formatVersion: header.formatVersion, cfDay: header.cfDay };
   } catch {
-    return undefined;
+    return {};
   }
+}
+
+/** 낡은 그리드 — 계산 방식 버전이 다르거나, TODAY()·NOW() 조건부 서식을 구운 날이 오늘이 아니다 */
+function gridIsStale(header: Pick<GridHeader, 'formatVersion' | 'cfDay'>): boolean {
+  return header.formatVersion !== GRID_CACHE_FORMAT_VERSION || (header.cfDay !== undefined && header.cfDay !== localDayKey());
 }
 
 /**
@@ -257,14 +274,15 @@ async function loadGridUncached(docId: string, allowRegenerate = true): Promise<
   } catch (error) {
     // 아직 만들지 않았다 — 메모리 저장 모드(향기랩)는 편집기로만 열어서 보기용 그리드를 미리 만들지 않는다
     // (documents.ts). 누가 보기 화면을 열면 그때 만든다.
-    if (!allowRegenerate || !(await regenerateStaleGridCache(docId))) throw error;
+    // 그리드가 아예 없으면 보기 화면이 오류다 — 일시 실패에서 빨리 회복하게 쉬는 시간을 짧게(45초)
+    if (!allowRegenerate || !(await gridRegen.run(docId, () => regenerateStaleGridCache(docId), 45_000))) throw error;
     return loadGridUncached(docId, false);
   }
-  if (allowRegenerate && peekGridHeaderVersion(buffer) !== GRID_CACHE_FORMAT_VERSION) {
+  if (allowRegenerate && gridIsStale(peekGridHeader(buffer))) {
     // 재생성이 성공하면 방금 막 저장한 최신 버퍼를 처음부터 다시 읽어 이어간다(아래 재귀 호출,
     // allowRegenerate=false로 무한 재귀를 막는다) — 실패하면(위 문서 주석) 그냥 아래로 흘러가
     // 지금 손에 있는(낡았을 수 있는) buffer를 기존 경로 그대로 서빙한다.
-    if (await regenerateStaleGridCache(docId)) {
+    if (await gridRegen.run(docId, () => regenerateStaleGridCache(docId))) {
       return loadGridUncached(docId, false);
     }
   }
@@ -287,8 +305,22 @@ async function loadGridUncached(docId: string, allowRegenerate = true): Promise<
   return grid;
 }
 
-export function loadGrid(docId: string): Promise<LoadedGrid> {
-  return gridCache.getOrLoad(docId, () => loadGridUncached(docId));
+/** 보기 그리드 재생성은 문서마다 한 번에 하나, 실패하면 10분 쉰다(요청마다 전체를 다시 만드는 폭주 방지) */
+const gridRegen = singleFlightWithBackoff(10 * 60_000);
+/** 날짜가 바뀐 그리드를 다시 불러오는 중인 것(문서마다 하나) */
+const staleReloads = new Map<string, Promise<LoadedGrid>>();
+
+export async function loadGrid(docId: string): Promise<LoadedGrid> {
+  const grid = await gridCache.getOrLoad(docId, () => loadGridUncached(docId));
+  // 메모리에 남은 그리드도 날짜가 바뀌었으면(TODAY() 조건부 서식) 다시 만든다 — 최근에 재생성이 실패했으면 쉬는 동안은 있는 그대로
+  if (!gridIsStale(grid.header) || gridRegen.backingOff(docId)) return grid;
+  let reload = staleReloads.get(docId);
+  if (!reload) {
+    invalidateViewCaches(docId);
+    reload = gridCache.getOrLoad(docId, () => loadGridUncached(docId)).finally(() => staleReloads.delete(docId));
+    staleReloads.set(docId, reload);
+  }
+  return reload;
 }
 
 /**
@@ -346,10 +378,11 @@ function searchGrid(grid: LoadedGrid, query: string, limit: number, skipHidden =
       const cells = JSON.parse(raw) as Array<GridCell | 0>;
       for (let c = 0; c < cells.length; c += 1) {
         const cell = cells[c];
-        if (cell === 0 || hidden?.col(c) || !cell.v.toLowerCase().includes(needle)) continue;
+        // 보이는 글자(채움 표시는 빼고)와 값(서식 전 — ####로 가린 칸, (4,321) → -4321) 둘 다로 찾는다
+        if (cell === 0 || hidden?.col(c) || !(cell.v.replace(FILL_MARK, '').toLowerCase().includes(needle) || (cell.n ?? '').toLowerCase().includes(needle))) continue;
         total += 1;
         if (hits.length < limit) {
-          hits.push({ sheet: sheetIdx, r, c: c + 1, snippet: cell.v.slice(0, 120) });
+          hits.push({ sheet: sheetIdx, r, c: c + 1, snippet: cell.v.replace(FILL_MARK, ' ').slice(0, 120) });
         }
       }
     }
@@ -389,6 +422,44 @@ function sliceRows(
     rows.push(JSON.parse(grid.buffer.toString('utf8', begin, finish)));
   }
   return rows;
+}
+
+/** 차트를 보기 화면용 그림(SVG data URL)으로 — 크기는 그 시트의 열 폭·행 높이로 앵커에서 계산한다 */
+function chartImagesOf(charts: readonly GridChart[], grid: LoadedGrid) {
+  const rowCache = new Map<string, Array<GridCell | 0>>();
+  const valueText = (sheetName: string, r: number, c: number): string => {
+    const s = grid.header.sheets.findIndex((sh) => sh.name === sheetName);
+    if (s < 0 || r >= grid.header.sheets[s].rowCount) return '';
+    const key = `${s}:${r}`;
+    let row = rowCache.get(key);
+    if (!row) rowCache.set(key, (row = sliceRows(grid, s, r + 1, 1)[0] ?? []));
+    const cell = row[c];
+    return cell ? gridCellValue(cell) : '';
+  };
+  return charts.flatMap((chart) => {
+    const sheet = grid.header.sheets.find((sh) => sh.name === chart.sheetName);
+    if (!sheet) return [];
+    const colLeft = (col: number) => {
+      let x = 0;
+      for (let i = 0; i < col; i += 1) x += sheet.colWidths[i] ?? sheet.defaultColWidth;
+      return x;
+    };
+    const rowTop = (row: number) => rowTopPx(sheet.rowHeights, sheet.defaultRowHeight, row);
+    const to = chart.to ?? { row: chart.from.row + 15, col: chart.from.col + 7, dx: 0, dy: 0 };
+    const width = Math.round(chart.size?.width ?? colLeft(to.col) + to.dx - colLeft(chart.from.col) - chart.from.dx);
+    const height = Math.round(chart.size?.height ?? rowTop(to.row) + to.dy - rowTop(chart.from.row) - chart.from.dy);
+    if (!(width > 0 && height > 0)) return [];
+    const svg = renderChartSvg(chart.kind, chartDataOf(chart, valueText), width, height);
+    return [{
+      id: chart.id,
+      sheetName: chart.sheetName,
+      name: chart.title,
+      from: chart.from,
+      to: chart.to,
+      size: { width, height },
+      src: `data:image/svg+xml;base64,${Buffer.from(svg, 'utf8').toString('base64')}`,
+    }];
+  });
 }
 
 /**
@@ -817,6 +888,25 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
+  // 파일에 있는 차트 — 보기 화면은 편집 화면과 같은 그리기(xlsx/chartSvg.ts)로 서버가 만든 SVG를 그림처럼 칸 위치에 얹는다.
+  // 값은 지금 그리드의 칸 값(편집 후 저장된 값)으로 다시 계산하고, 칸이 비면 파일에 저장된 값을 쓴다.
+  app.get<{ Querystring: TokenQuery }>(
+    '/api/view/xlsx-chart-images',
+    { schema: { querystring: tokenQuerySchema } },
+    async (request, reply) => {
+      const view = await resolveView(request.query.token, reply);
+      if (!view) return reply;
+      if (view.meta.ext !== 'xlsx') return { success: true, data: { images: [] } };
+      try {
+        const [charts, grid] = await Promise.all([getFileCharts(view.meta.id), loadGrid(view.meta.id)]);
+        return { success: true, data: { images: chartImagesOf(charts, grid) } };
+      } catch (error) {
+        request.log.warn(error, 'xlsx chart image failed');
+        return { success: true, data: { images: [] } };
+      }
+    },
+  );
+
   // 파일의 하이퍼링크(바로가기)·목록 상자(데이터 유효성 "목록") — 편집 화면이 링크 이동·목록 고르기에 쓴다.
   app.get<{ Querystring: TokenQuery }>(
     '/api/view/xlsx-extras',
@@ -831,6 +921,26 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
         request.log.warn(error, 'xlsx extras read failed');
         return { success: true, data: { links: [], lists: [] } };
       }
+    },
+  );
+
+  // 편집 화면 조건부 서식 — 범위 전체를 보아야 하는 규칙(COUNTIF($A:$A,$A1)·중복·상위·색조 …)용 범위 값 개수 표.
+  // 편집 화면은 보고 있는 페이지만 받으므로 서버(편집 방의 지금 상태)가 만들어 준다(src/xlsx/cfRangeValues.ts).
+  app.post<{ Querystring: TokenQuery; Body: unknown }>(
+    '/api/view/xlsx-cf-ranges',
+    { schema: { querystring: tokenQuerySchema }, bodyLimit: 131_072, config: { rateLimit: CF_REMOTE_RATE_LIMIT } },
+    async (request, reply) => {
+      const view = await resolveView(request.query.token, reply);
+      if (!view) return reply;
+      // 편집 방 전용 — 편집 권한 토큰만(내려받기만 되는 토큰은 열린 편집 방에 일을 시킬 수 없다)
+      if (!view.claims.perms.canEdit) return reply.code(403).send({ success: false, error: '편집 권한이 없습니다.' });
+      const req = parseCfRemoteRequest(request.body);
+      if (view.meta.ext !== 'xlsx' || !req) {
+        return reply.code(400).send({ success: false, error: '잘못된 요청입니다.' });
+      }
+      const data = await getCfRemoteAnswer(view.meta.id, req);
+      if (!data) return reply.code(409).send({ success: false, error: '편집 방이 열려 있지 않습니다.' });
+      return { success: true, data };
     },
   );
 
@@ -958,7 +1068,13 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
         return reply.code(400).send({ success: false, error: '그리드 뷰 문서가 아닙니다.' });
       }
       const grid = await loadGrid(view.meta.id);
-      return { success: true, data: grid.header };
+      // 테두리 선 종류·색, 무늬 채우기, 글자 회전·들여쓰기 CSS는 편집 화면과 같은 함수(collab/cellBoxCss.ts)로 만들어 함께 보낸다
+      // 서식 값은 한 번 더 검사한다(큰 파일은 편집 방의 서식이 그대로 그리드 파일에 들어간다) — 보기 화면 <style>로 들어가는 값이다
+      const styles = grid.header.styles.map((style) => {
+        const safe = sanitizeCellStyle(style);
+        return { ...safe, ...cellBoxCssText(safe) };
+      });
+      return { success: true, data: { ...grid.header, styles } };
     },
   );
 

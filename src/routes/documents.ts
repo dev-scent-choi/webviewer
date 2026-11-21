@@ -118,7 +118,7 @@ async function runGridExtraction(app: FastifyInstance, meta: DocumentMeta): Prom
       // 큰 파일은 편집기용 스트리밍 읽기를 한 번만 한다 — 그 결과로 보기용 표를 만들고, 편집기를 열면 같은 결과를
       // 그대로 이어받는다(prewarmXlsxRoom, 3분 안에 안 열면 버림). 예전엔 업로드 때 한 번, 편집기 열 때 또 한 번 읽었다.
       const prewarmed = isLargeXlsx(xlsxBytes) ? await prewarmXlsxRoom(meta.id, xlsxBytes) : null;
-      const built = prewarmed ? await serializeGridFromLazyStore(prewarmed) : await buildViewerGridFile(xlsxBytes);
+      const built = prewarmed ? await serializeGridFromLazyStore(prewarmed, xlsxBytes) : await buildViewerGridFile(xlsxBytes);
       sheetCount = built.sheetCount;
       if (sheetCount === 0) throw new ConversionError('표시할 시트가 없습니다. 파일이 비어 있거나 지원되지 않는 내용입니다.');
       await saveGridFile(store, meta.id, built.buffer);

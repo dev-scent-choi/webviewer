@@ -38,6 +38,30 @@ async function shotPagesView(page, base, name) {
   fs.writeFileSync(path.join(OUT, 'lo', `${name}.pdf`), Buffer.from(await pdf.arrayBuffer()));
 }
 
+// 점검표(checklist.json)의 DOM 항목(viewDom/editDom) — 글자로는 못 재는 차트·조건부 서식·테두리 등을 화면 요소로 센다
+const checklist = JSON.parse(fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/(\w:)/, '$1')), 'checklist.json'), 'utf8')).items;
+function domProbes(page, mode) {
+  return page.evaluate(([mode]) => {
+    const tds = [...document.querySelectorAll(mode === 'view' ? '#grid-table td[data-r]' : '#grid-edit-table td[data-row]')];
+    const cs = (el, pseudo) => getComputedStyle(el, pseudo);
+    const isRed = (c) => /rgb\(192, 0, 0\)/.test(c);
+    return {
+      charts: mode === 'view' ? document.querySelectorAll('#grid-image-layer img[src^="data:image/svg"]').length : document.querySelectorAll('.grid-chart').length,
+      dataBars: tds.filter((td) => /linear-gradient/.test(cs(td).backgroundImage) && !/repeating/.test(cs(td).backgroundImage)).length,
+      cfIcons: tds.filter((td) => !['none', 'normal', '""', ''].includes(cs(td, '::after').content) && !td.classList.contains('g-header-dropdown')).length,
+      redBorders: tds.filter((td) => isRed(cs(td).borderRightColor) && cs(td).borderRightStyle !== 'none').length,
+      styledBorders: tds.filter((td) => isRed(cs(td).borderRightColor) && /dashed|dotted|double/.test(cs(td).borderRightStyle)).length,
+      patternFills: tds.filter((td) => /repeating-linear-gradient/.test(cs(td).backgroundImage)).length,
+      rotated: [...document.querySelectorAll((mode === 'view' ? '#grid-table' : '#grid-edit-table') + ' .g-cell-spill')].filter((s) => cs(s).transform !== 'none' || cs(s).writingMode.startsWith('vertical')).length,
+      frozen: mode === 'view' ? document.querySelectorAll('#grid-table td.g-frozen').length : document.querySelectorAll('#grid-edit-table .g-frozen-pane').length,
+      lowRow: (() => {
+        const td = document.querySelector(mode === 'view' ? '#grid-table td[data-r="3"][data-c="1"]' : '#grid-edit-table td[data-row="2"][data-col="0"]');
+        return td ? Math.round(td.getBoundingClientRect().height) : -1;
+      })(),
+    };
+  }, [mode]);
+}
+
 async function shotGrid(page, url, ready, name, mode) {
   await page.goto(BASE + url);
   await page.waitForSelector(ready, { timeout: 120000 });
@@ -49,7 +73,8 @@ async function shotGrid(page, url, ready, name, mode) {
     const file = path.join(OUT, mode, `${name}-s${i + 1}.png`);
     await page.screenshot({ path: file });
     const text = await page.locator(mode === 'view' ? '#grid-table' : '#grid-edit-table').innerText().catch(() => '');
-    shots.push({ file, tab: n ? (await page.locator('.grid-sheet-tab').nth(i).innerText()).trim() : '', text });
+    const dom = checklist.some((it) => it.doc === name && it.where.some((w) => w.endsWith('Dom'))) ? await domProbes(page, mode) : undefined;
+    shots.push({ file, tab: n ? (await page.locator('.grid-sheet-tab').nth(i).innerText()).trim() : '', text, dom });
   }
   return shots;
 }
@@ -94,6 +119,11 @@ try {
       const name = f.replace(/\.[^.]+$/, '');
       const entry = { name, ext, errors: [] };
       const t0 = Date.now();
+      // 이 문서의 옛 그림을 먼저 지운다 — 캡처가 실패했는데 옛 그림·나란히 그림이 남아 점수만 조용히 바뀌는 일이 없게(검토 r5 "15/14")
+      for (const sub of ['view', 'edit', 'sbs']) {
+        const d = path.join(OUT, sub);
+        if (fs.existsSync(d)) for (const old of fs.readdirSync(d)) if (old === `${name}.png` || old.startsWith(`${name}-`)) fs.rmSync(path.join(d, old), { force: true });
+      }
       try {
         const base = await upload(path.join(dir, f));
         entry.convertMs = Date.now() - t0;
@@ -110,10 +140,20 @@ try {
           }
         } finally { await ctx.close(); }
         await fetch(`${BASE}/api/documents/${base.id}`, { method: 'DELETE' }).catch(() => {});
-      } catch (e) { entry.errors.push(String(e).slice(0, 300)); }
+      } catch (e) {
+        entry.errors.push(String(e).slice(0, 300));
+        entry.failed = true;
+      }
+      if (!entry.edit || (ext === 'xlsx' && !entry.view)) entry.failed = true;
       console.log(`${entry.errors.length ? 'ERR ' : 'ok  '} ${f} ${entry.convertMs ?? '-'}ms ${entry.errors.join(' | ')}`);
       manifest.push(entry);
     }
   }
 } finally { await browser.close(); }
 fs.writeFileSync(path.join(OUT, `manifest${FILTER ? '-' + FILTER : ''}.json`), JSON.stringify(manifest, null, 2));
+// 캡처하지 못한 문서가 있으면 시끄럽게 실패한다(run.mjs가 점수를 내지 않고 멈춘다)
+const failed = manifest.filter((e) => e.failed);
+if (failed.length > 0) {
+  console.error(`캡처 실패 ${failed.length}건 — ${failed.map((e) => `${e.name}: ${e.errors.join(' | ') || '그림 없음'}`).join(' / ')}`);
+  process.exitCode = 1;
+}

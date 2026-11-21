@@ -7,6 +7,7 @@
  *
  * 정보는 서버가 원본에서 읽어 준다(/api/view/xlsx-extras, src/xlsx/sheetExtras.ts) — 편집 화면은 읽기만 한다.
  */
+import { officeAlert } from './officeDialog.js';
 
 interface CellRange {
   readonly r1: number;
@@ -19,6 +20,8 @@ interface SheetLink extends CellRange {
   readonly url?: string;
   readonly location?: string;
   readonly tooltip?: string;
+  /** 웹 화면에서 열 수 없는 주소(파일·네트워크 경로) — 열지 않고 안내만 */
+  readonly blocked?: string;
   /** 주소를 칸 값으로 만드는 수식(=HYPERLINK("#'"&$A2&"'!A1", …)의 첫 인자) — 누른 칸 기준으로 푼다 */
   readonly expr?: string;
   readonly anchor?: { readonly row: number; readonly col: number };
@@ -137,8 +140,9 @@ export function setupGridLinks(host: GridLinksHost): GridLinks {
     td.classList.toggle('g-link', Boolean(link));
     if (link) {
       const target = targetOf(link, row, col);
-      td.title =
-        link.tooltip ||
+      td.title = link.blocked
+        ? `${link.tooltip ? `${link.tooltip}\n` : ''}이 주소는 웹 화면에서 열 수 없습니다(파일·네트워크 경로): ${link.blocked}`
+        : link.tooltip ||
         (target.url ? `${target.url}\n클릭하면 열립니다 (Ctrl+클릭: 칸 선택)` : `클릭하면 ${target.location ?? '연결된 곳'}(으)로 이동합니다 (Ctrl+클릭: 칸 선택)`);
       td.dataset.linkTitle = '';
     } else if (td.dataset.linkTitle !== undefined) {
@@ -150,12 +154,19 @@ export function setupGridLinks(host: GridLinksHost): GridLinks {
 
   function follow(link: SheetLink, row: number, col: number): void {
     const { url, location } = targetOf(link, row, col);
-    if (url) {
+    // 파일에 적힌 바로가기 주소도 웹·메일·전화만 연다(javascript: 등 스크립트 주소는 열지 않는다)
+    if (url && /^(https?:|mailto:|tel:)/i.test(url.trim())) {
       window.open(url, '_blank', 'noopener,noreferrer');
       return;
     }
     const target = location ? parseLocation(location) : null;
-    if (target) host.goTo(target.sheetName, target.row, target.col);
+    if (target) {
+      host.goTo(target.sheetName, target.row, target.col);
+      return;
+    }
+    // 열지 않는 주소(파일·네트워크 경로, 스크립트 주소) — 아무 반응 없이 끝나지 않게 알린다
+    const shown = link.blocked ?? url;
+    if (shown) void officeAlert(`이 바로가기는 웹 화면에서 열 수 없습니다.\n${shown}\n(엑셀이 설치된 PC에서 파일을 내려받아 여세요.)`);
   }
 
   // 링크 칸 클릭 — 칸을 고르는 동작(mousedown)이 먼저 끝난 뒤 이동한다. 드래그로 여러 칸을 고른 경우는 제외.

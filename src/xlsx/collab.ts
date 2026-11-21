@@ -22,9 +22,12 @@ import {
   type SheetStructure,
 } from '../collab/gridShared.js';
 import type { GridCell, GridDocument, GridStyle } from '../spreadsheet.js';
-import { parseXlsxToGrid, unformattedCellValue, yieldToEventLoop, YIELD_EVERY_N_ROWS } from '../spreadsheet.js';
+import { gridCellValue, yieldToEventLoop, YIELD_EVERY_N_ROWS } from '../spreadsheet.js';
+import { parseViewerGrid } from './viewerGrid.js';
+import { sanitizeCellStyle, type BorderSpec } from '../collab/cellBoxCss.js';
 import type { LazyGridSheetMeta, LazyGridStore } from './lazyGridStore.js';
-import { GRID_COND_FORMATS_MAP, type CondFormatEntry } from '../collab/condFormatShared.js';
+import { GRID_COND_FORMATS_MAP, shiftSpan, type CondFormatEntry } from '../collab/condFormatShared.js';
+import { rewriteStructuredRefs, shiftTableRows, type TableAsRange, type TableColumnChanges } from './tableStyles.js';
 import { applyEditedCondFormats, preserveUnsupportedCfRules } from './condFormatExport.js';
 import { getRow } from './lazyGridStore.js';
 import { dateTextToDate, parseTypedNumber } from '../collab/cellValueShared.js';
@@ -46,12 +49,18 @@ export function toCellStyleAttrs(style: GridStyle): CellStyleAttrs {
   if (style.nf) attrs.nf = style.nf;
   if (style.nd) attrs.nd = style.nd;
   if (style.df) attrs.df = 1;
+  if (style.fmt) attrs.fmt = style.fmt;
   if (style.lk) attrs.lk = 1;
   if (style.nu) attrs.nu = 1;
   if (style.bt) attrs.bt = style.bt;
   if (style.br) attrs.br = style.br;
   if (style.bb) attrs.bb = style.bb;
   if (style.bl) attrs.bl = style.bl;
+  if (style.bd) attrs.bd = style.bd;
+  if (style.pat) attrs.pat = style.pat;
+  if (style.rot) attrs.rot = style.rot;
+  if (style.ind) attrs.ind = style.ind;
+  if (style.shr) attrs.shr = 1;
   return attrs;
 }
 
@@ -65,7 +74,9 @@ export function toCellStyleAttrs(style: GridStyle): CellStyleAttrs {
  * 동일한 서식을 찾기 때문에, 같은 서식이 키 순서만 달라 서로 다른 항목으로 중복 등록되면 스타일
  * 배열이 편집할 때마다 계속 늘어난다.
  */
-export function fromCellStyleAttrs(attrs: CellStyleAttrs): GridStyle {
+export function fromCellStyleAttrs(input: CellStyleAttrs): GridStyle {
+  // 편집자가 보낸 값 — 보기 화면 CSS로 흘러가므로 여기(서버 진입점)에서 검사한다(색은 #RRGGBB, 이름은 알려진 것만)
+  const attrs = sanitizeCellStyle(input);
   const style: { -readonly [K in keyof GridStyle]?: GridStyle[K] } = {};
   if (attrs.b) style.b = 1;
   if (attrs.i) style.i = 1;
@@ -81,12 +92,18 @@ export function fromCellStyleAttrs(attrs: CellStyleAttrs): GridStyle {
   if (attrs.nf) style.nf = attrs.nf;
   if (attrs.nd) style.nd = attrs.nd;
   if (attrs.df) style.df = 1;
+  if (attrs.fmt) style.fmt = attrs.fmt;
   if (attrs.lk) style.lk = 1;
   if (attrs.nu) style.nu = 1;
   if (attrs.bt) style.bt = attrs.bt;
   if (attrs.br) style.br = attrs.br;
   if (attrs.bb) style.bb = attrs.bb;
   if (attrs.bl) style.bl = attrs.bl;
+  if (attrs.bd) style.bd = attrs.bd;
+  if (attrs.pat) style.pat = attrs.pat;
+  if (attrs.rot) style.rot = attrs.rot;
+  if (attrs.ind) style.ind = attrs.ind;
+  if (attrs.shr) style.shr = 1;
   return style;
 }
 
@@ -134,12 +151,6 @@ function mergeCoveredCells(merges: readonly GridMergeShape[]): Set<string> {
   return covered;
 }
 
-/** parseXlsxToGrid가 만든 표시용 텍스트(예: "2,287")를 협업 문서의 실제 셀 값으로 그대로 심으면
- * 안 된다 — Number("2,287")는 NaN이라, 이 값을 참조하는 다른 수식(SUM 등)이 이 셀을 숫자가 아닌
- * 것으로 취급해 조용히 0으로 계산해버린다(실제 재현된 버그: 합계 열이 항상 0으로 보임).
- * 규칙 자체는 읽기전용 뷰어의 수식 계산 패스와 똑같아야 하므로 spreadsheet.ts에 한 번만 두고
- * 여기서는 그대로 가져다 쓴다(unformattedCellValue 문서 주석 참고). */
-const seedableCellValue = unformattedCellValue;
 
 /** 읽기전용 그리드 뷰(parseXlsxToGrid의 결과)를 협업용 Y.Doc에 시딩한다.
  * 큰 시트를 셀 하나하나 동기로 심으면 그동안 서버 전체가 멈추므로(spreadsheet.ts의
@@ -182,7 +193,7 @@ export async function seedGridFromXlsx(ydoc: Y.Doc, grid: GridDocument): Promise
             const key = gridCellKey(sheetIdx, r, c);
             const style = cell.s !== undefined ? grid.styles[cell.s] : undefined;
             if (cell.v !== '') {
-              const value = seedableCellValue(cell.v, style);
+              const value = gridCellValue(cell);
               cells.set(key, value);
             }
             if (style) {
@@ -206,7 +217,7 @@ export async function seedGridFromXlsx(ydoc: Y.Doc, grid: GridDocument): Promise
  * 지웠다"로 해석해 canonical을 0(빈 칸)으로 되돌린다. 페이지를 비우는 것(unseed)도 똑같이 키
  * 삭제이므로, 표식이 없으면 "스크롤해서 화면에서 사라진 500행"이 canonical에서 통째로 지워지고
  * 그 상태가 그대로 파일에 저장된다 — 사용자가 아무것도 지우지 않았는데 데이터가 날아간다.
- * 반대로 페이지를 채우는 것(seed)은 seedableCellValue로 서식이 벗겨진 편집용 텍스트를 쓰므로
+ * 반대로 페이지를 채우는 것(seed)은 gridCellValue(서식 전 값 글자)를 쓰므로
  * (예: "1,000" → "1000"), 표식이 없으면 canonical의 올바른 표시 텍스트를 그 벗겨진 값으로
  * 덮어쓴다(seedRoom이 최초 시딩을 관찰 시작 "전"에 하는 것과 같은 이유의 문제 — 윈도잉에서는
  * 시딩이 관찰이 걸린 뒤에도 계속 일어나므로 시점으로는 피할 수 없다).
@@ -291,7 +302,7 @@ function resolveGridCell(
  * 시트 전체를 선점적으로 읽는 게 비대칭이었고 그게 바로 이 비용의 정체였다.
  *
  * 고치는 방법은 콘텐츠가 이미 쓰는 패턴을 그대로 따르는 것이다: 이 함수는 어차피 페이지의 각 셀을
- * `resolveGridCell`로 읽으면서 `seedableCellValue`(쉼표 서식 판정) 때문에 그 셀의 style을 이미
+ * `resolveGridCell`로 읽으면서 그 셀의 style을 이미
  * 구해 두고 있었다 — 그 style을 그대로 GRID_STYLES_MAP에도 같이 쓰기만 하면, 서식도 콘텐츠와
  * **정확히 같은 시점에, 정확히 같은 창(구독된 페이지)만** 채워진다. 추가 디스크 읽기도, 추가
  * 청크 루프도 없다.
@@ -345,7 +356,7 @@ export async function seedGridPageFromXlsx(
           const key = gridCellKey(sheetIdx, r, c);
           const style = cell.s !== undefined ? store.styles[cell.s] : undefined;
           if (cell.v !== '') {
-            const value = seedableCellValue(cell.v, style);
+            const value = gridCellValue(cell);
             cells.set(key, value);
           }
           // 서식도 콘텐츠와 같은 창(이 페이지)만, 같은 시점에 채운다 — 함수 docblock의
@@ -514,6 +525,7 @@ const BORDER_WEIGHT_TO_EXCEL: Record<1 | 2, ExcelJS.BorderStyle> = {
 const PX_TO_PT = 72 / 96;
 
 function numFmtStringFor(style: CellStyleAttrs): string | undefined {
+  if (style.fmt) return style.fmt; // 파일에 있던 서식 코드 그대로(툴바로 바꾸면 편집기가 fmt를 지운다)
   if (!style.nf) return style.df ? 'yyyy-mm-dd' : undefined;
   const decimals = style.nd ? `.${'0'.repeat(style.nd)}` : '';
   switch (style.nf) {
@@ -553,19 +565,33 @@ export function applyStyleToCell(cell: ExcelJS.Cell, style: CellStyleAttrs | und
     name: style.ff,
     size: style.fs ? Math.round(style.fs * PX_TO_PT) : undefined,
   };
+  const argbOf = (css: string) => ({ argb: `FF${css.replace('#', '').toUpperCase()}` });
   cell.fill = style.bg
-    ? { type: 'pattern', pattern: 'solid', fgColor: { argb: `FF${style.bg.replace('#', '').toUpperCase()}` } }
-    : { type: 'pattern', pattern: 'none' };
+    ? { type: 'pattern', pattern: 'solid', fgColor: argbOf(style.bg) }
+    : style.pat
+      ? {
+          type: 'pattern',
+          pattern: style.pat[0] as ExcelJS.FillPatterns,
+          ...(style.pat[1] ? { fgColor: argbOf(style.pat[1]) } : {}),
+          ...(style.pat[2] ? { bgColor: argbOf(style.pat[2]) } : {}),
+        }
+      : { type: 'pattern', pattern: 'none' };
   cell.alignment = {
     horizontal: style.a ? ALIGN_TO_EXCEL[style.a] : undefined,
     vertical: style.va ? VALIGN_TO_EXCEL[style.va] : undefined,
     wrapText: style.wrap === 1,
+    ...(style.rot ? { textRotation: style.rot === 255 ? ('vertical' as const) : style.rot > 90 ? 90 - style.rot : style.rot } : {}),
+    ...(style.ind ? { indent: style.ind } : {}),
+    ...(style.shr ? { shrinkToFit: true } : {}),
   };
+  // 선 종류·색(bd)이 있으면 그대로, 없으면 굵기(1=thin, 2=medium) — 파일에서 읽은 점선·색 테두리가 저장 때 실선이 되지 않게
+  const side = (weight: 1 | 2 | undefined, spec: BorderSpec | undefined): Partial<ExcelJS.Border> | undefined =>
+    weight ? { style: (spec?.[0] as ExcelJS.BorderStyle | undefined) ?? BORDER_WEIGHT_TO_EXCEL[weight], ...(spec?.[1] ? { color: argbOf(spec[1]) } : {}) } : undefined;
   cell.border = {
-    top: style.bt ? { style: BORDER_WEIGHT_TO_EXCEL[style.bt] } : undefined,
-    right: style.br ? { style: BORDER_WEIGHT_TO_EXCEL[style.br] } : undefined,
-    bottom: style.bb ? { style: BORDER_WEIGHT_TO_EXCEL[style.bb] } : undefined,
-    left: style.bl ? { style: BORDER_WEIGHT_TO_EXCEL[style.bl] } : undefined,
+    top: side(style.bt, style.bd?.t),
+    right: side(style.br, style.bd?.r),
+    bottom: side(style.bb, style.bd?.b),
+    left: side(style.bl, style.bd?.l),
   };
   cell.numFmt = numFmtStringFor(style) ?? 'General';
 }
@@ -573,7 +599,7 @@ export function applyStyleToCell(cell: ExcelJS.Cell, style: CellStyleAttrs | und
 /** canonicalGrid 셀(GridCell | 0)에서 표시 텍스트만 뽑는다 — 빈 칸(0 sentinel)은 빈 문자열로
  * 취급한다. */
 export function cellText(cell: GridCell | 0 | undefined): string {
-  return cell === 0 || cell === undefined ? '' : cell.v;
+  return cell === 0 || cell === undefined ? '' : gridCellValue(cell);
 }
 
 /** 셀이 참조하는 스타일 인덱스를 실제 GridStyle로 해석한다 — LazyGridStore.styles는 공용 스타일
@@ -728,6 +754,171 @@ export function applyEditedSizes(
   });
 }
 
+/**
+ * ExcelJS가 읽은 표의 머리 줄·요약 행·필터 단추를 원본대로 되돌린다. ExcelJS는 headerRowCount가 없으면(엑셀 기본값 1 — 엑셀이
+ * 만든 파일은 보통 적지 않는다) 머리 줄이 없다고 읽어 headerRowCount="0"으로 저장하고, hiddenButton이 없는 열(단추 보임)도
+ * 단추를 숨겨 저장했다 — 값 하나만 고쳐 저장해도 엑셀에서 표 머리 줄이 데이터가 되고 필터 단추가 사라졌다.
+ */
+function restoreTableHeaderAndButtons(workbook: ExcelJS.Workbook, originalXlsxBytes: Uint8Array): void {
+  const tables = workbook.worksheets.flatMap((ws) => ws.getTables() as unknown as Array<{ table: LoadedTableModel }>);
+  if (tables.length === 0) return;
+  const xmlByName = new Map<string, string>();
+  for (const bytes of Object.values(unzipSync(originalXlsxBytes, { filter: (f) => /^xl\/tables\/[^/]+\.xml$/.test(f.name) }))) {
+    const xml = strFromU8(bytes);
+    const name = /<table\b[^>]*?\sname="([^"]*)"/.exec(xml)?.[1];
+    if (name) xmlByName.set(name.replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&'), xml);
+  }
+  for (const { table: m } of tables) {
+    const xml = xmlByName.get(m.name);
+    if (!xml) continue;
+    const head = /<table\b[^>]*>/.exec(xml)?.[0] ?? '';
+    m.headerRow = !/\sheaderRowCount="0"/.test(head);
+    m.totalsRow = /\stotalsRowCount="[1-9]/.test(head);
+    const hidden = new Set([...xml.matchAll(/<filterColumn\b[^>]*>/g)].filter((f) => /hiddenButton="(1|true)"/.test(f[0])).map((f) => Number(/colId="(\d+)"/.exec(f[0])?.[1])));
+    m.columns.forEach((c, i) => (c.filterButton = !hidden.has(i)));
+  }
+}
+
+/**
+ * 표 열 이름을 머리 칸 글자에 맞추고(편집 화면에서 머리 칸을 고치면 엑셀처럼 열 이름이 바뀐다 — 다르면 엑셀이 파일을 "복구"한다),
+ * 이름이 바뀐 열·지운 열을 가리키는 구조적 참조(표1[값] 등)를 모든 수식에서 고친다(바뀐 이름으로 / #REF!로). 바뀐 것이 없으면 수식을 훑지 않는다.
+ */
+function applyTableColumnChanges(workbook: ExcelJS.Workbook, deleted: ReadonlyMap<string, ReadonlySet<string>>, removed: ReadonlyMap<string, TableAsRange | null>): void {
+  const changes = new Map<string, TableColumnChanges>();
+  for (const [name, range] of removed) changes.set(name, { renames: new Map(), deleted: new Set(), range });
+  const boxes: Array<{ ws: ExcelJS.Worksheet; name: string; r0: number; c0: number; r1: number; c1: number }> = [];
+  for (const ws of workbook.worksheets) {
+    for (const { table: m } of ws.getTables() as unknown as Array<{ table: LoadedTableModel }>) {
+      const box = /^\$?([A-Z]+)\$?(\d+):\$?([A-Z]+)\$?(\d+)$/.exec(m.tableRef ?? '');
+      if (!box) continue;
+      const r0 = Number(box[2]) - 1;
+      const c0 = colIndexOf(box[1]);
+      boxes.push({ ws, name: m.name, r0, c0, r1: Number(box[4]) - 1, c1: colIndexOf(box[3]) });
+      const renames = new Map<string, string>();
+      if (m.headerRow !== false) {
+        m.columns.forEach((col, i) => {
+          const text = String(ws.getCell(r0 + 1, c0 + 1 + i).text ?? '').trim();
+          if (text === '' || text === col.name || m.columns.some((o) => o !== col && o.name.toLowerCase() === text.toLowerCase())) return;
+          renames.set(col.name.toLowerCase(), text);
+          col.name = text;
+        });
+      }
+      const gone = deleted.get(m.name.toLowerCase()) ?? new Set<string>();
+      if (renames.size > 0 || gone.size > 0) changes.set(m.name.toLowerCase(), { renames, deleted: gone });
+    }
+  }
+  if (changes.size === 0) return;
+  for (const ws of workbook.worksheets) {
+    ws.eachRow((row, r) => {
+      row.eachCell((cell, c) => {
+        const v = cell.value as { formula?: unknown } | null;
+        if (!v || typeof v !== 'object' || typeof v.formula !== 'string' || !v.formula.includes('[')) return;
+        const own = boxes.find((b) => b.ws === ws && r - 1 >= b.r0 && r - 1 <= b.r1 && c - 1 >= b.c0 && c - 1 <= b.c1)?.name;
+        const next = rewriteStructuredRefs(v.formula, changes, own, r - 1);
+        if (next !== v.formula) cell.value = { ...(cell.value as object), formula: next } as ExcelJS.CellValue;
+      });
+    });
+  }
+}
+
+/** ExcelJS가 읽어 둔 표(xl/tables/tableN.xml)의 모델 — 저장할 때 tableRef·autoFilterRef·columns를 그대로 쓴다 */
+interface LoadedTableModel {
+  name: string;
+  tableRef: string;
+  autoFilterRef?: string;
+  headerRow?: boolean;
+  totalsRow?: boolean;
+  columns: Array<{ name: string; [k: string]: unknown }>;
+}
+
+/**
+ * 행/열 삽입·삭제(0부터 센 at)를 엑셀 표에 반영한다 — ExcelJS의 spliceRows/spliceColumns는 칸만 옮기고 표는 그대로 두어,
+ * 표 위에 행을 넣고 저장하면 표 범위(ref)·필터 범위가 한 줄 위에 남았다. 엑셀처럼: 표 안쪽에 넣으면 표가 늘고, 위(왼쪽)에
+ * 넣으면 통째로 내려가고, 지우면 줄어든다(다 지우면 표를 뺀다). 열을 표 안에 넣으면 "열N" 열을 더하고 머리 칸에 이름을 쓴다.
+ * 조건부 서식 범위와 같은 구간 계산(shiftSpan)을 쓴다.
+ */
+function shiftWorksheetTables(
+  sheet: ExcelJS.Worksheet,
+  onRows: boolean,
+  at: number,
+  count: number,
+  insert: boolean,
+  deletedColumns: Map<string, Set<string>>,
+  removedTables: Map<string, TableAsRange | null>,
+): Array<{ row: number; col: number; names: string[] }> {
+  const headers: Array<{ row: number; col: number; names: string[] }> = [];
+  for (const table of sheet.getTables() as unknown as Array<{ table: LoadedTableModel }>) {
+    const m = table.table;
+    const box = /^\$?([A-Z]+)\$?(\d+):\$?([A-Z]+)\$?(\d+)$/.exec(m.tableRef ?? '');
+    if (!box) continue;
+    const c0 = colIndexOf(box[1]);
+    const r0 = Number(box[2]) - 1;
+    const c1 = colIndexOf(box[3]);
+    const r1 = Number(box[4]) - 1;
+    // 행은 화면(tableStyles.ts shiftTables)과 같은 규칙 — 머리 줄 삭제·요약 행 삭제·데이터 행 0개
+    const rowsBox = onRows ? shiftTableRows({ r0, r1, headerRows: m.headerRow === false ? 0 : 1, totalsRows: m.totalsRow ? 1 : 0 }, at, count, insert) : null;
+    const span = onRows ? (rowsBox ? [rowsBox.r0, rowsBox.r1] : null) : shiftSpan(c0, c1, at, count, insert);
+    if (!span) {
+      // 표를 뺀다 — 남은 자리가 있으면 그 표를 가리키는 구조적 참조를 칸 주소로, 없으면 #REF!로(applyTableColumnChanges)
+      const rest = onRows ? shiftSpan(r0, r1, at, count, insert) : null;
+      const headerGone = m.headerRow !== false && at <= r0 && r0 < at + count;
+      const totalsKept = Boolean(m.totalsRow) && !(at <= r1 && r1 < at + count);
+      removedTables.set(
+        m.name.toLowerCase(),
+        rest
+          ? { c0, columns: m.columns.map((c) => c.name), dataR0: rest[0] + (headerGone || m.headerRow === false ? 0 : 1), dataR1: rest[1] - (totalsKept ? 1 : 0), ...(totalsKept ? { totalsRow: rest[1] } : {}) }
+          : null,
+      );
+      sheet.removeTable(m.name);
+      continue;
+    }
+    if (rowsBox) m.totalsRow = rowsBox.totalsRows > 0;
+    const [n0, n1] = span;
+    const next = onRows ? { r0: n0, r1: n1, c0, c1 } : { r0, r1, c0: n0, c1: n1 };
+    if (!onRows) {
+      if (insert && at > c0 && at <= c1) {
+        const used = new Set(m.columns.map((c) => c.name.toLowerCase()));
+        let k = 1;
+        const added = Array.from({ length: count }, () => {
+          while (used.has(`열${k}`.toLowerCase())) k += 1;
+          used.add(`열${k}`.toLowerCase());
+          return { name: `열${k}`, filterButton: true };
+        });
+        m.columns.splice(at - c0, 0, ...added);
+        if (m.headerRow !== false) headers.push({ row: r0 + 1, col: at + 1, names: added.map((a) => a.name) });
+      } else if (!insert) {
+        const from = Math.max(at, c0) - c0;
+        const to = Math.min(at + count - 1, c1) - c0;
+        if (to >= from) {
+          // 지운 열 이름 — 저장 끝에 그 열을 가리키는 구조적 참조를 #REF!로(applyTableColumnChanges)
+          const gone = deletedColumns.get(m.name.toLowerCase()) ?? new Set<string>();
+          for (const c of m.columns.slice(from, to + 1)) gone.add(c.name.toLowerCase());
+          deletedColumns.set(m.name.toLowerCase(), gone);
+          m.columns.splice(from, to - from + 1);
+        }
+      }
+    }
+    m.tableRef = `${colLettersOf(next.c0)}${next.r0 + 1}:${colLettersOf(next.c1)}${next.r1 + 1}`;
+    if (m.autoFilterRef) m.autoFilterRef = `${colLettersOf(next.c0)}${next.r0 + 1}:${colLettersOf(next.c1)}${next.r1 + 1 - (m.totalsRow ? 1 : 0)}`;
+  }
+  return headers;
+}
+function colIndexOf(letters: string): number {
+  let n = 0;
+  for (const ch of letters) n = n * 26 + (ch.charCodeAt(0) - 64);
+  return n - 1;
+}
+function colLettersOf(col0: number): string {
+  let n = col0 + 1;
+  let s = '';
+  while (n > 0) {
+    const m = (n - 1) % 26;
+    s = String.fromCharCode(65 + m) + s;
+    n = Math.floor((n - 1) / 26);
+  }
+  return s;
+}
+
 /** exportXlsxFromGrid 참고 — mergesEdited 시트의 병합을 모두 풀고 sheetMeta.merges(1부터 센 좌표)로 다시 건다. */
 export function applyEditedMerges(
   store: Pick<LazyGridStore, 'sheetMeta'>,
@@ -762,6 +953,7 @@ export async function exportXlsxFromGrid(
   // 차트·그림(그리기 파트)은 ExcelJS를 거치지 않고 원본 그대로 되붙인다 — drawingPassthrough.ts 참고
   const { bytes: loadable, stash: drawings } = stripDrawings(originalXlsxBytes);
   await workbook.xlsx.load(loadable as unknown as ArrayBuffer);
+  restoreTableHeaderAndButtons(workbook, originalXlsxBytes);
   const visibleSheets = workbook.worksheets.filter((sheet) => !sheet.state || sheet.state === 'visible');
   const originalSheetCount = visibleSheets.length;
 
@@ -783,6 +975,10 @@ export async function exportXlsxFromGrid(
     Boolean((sheet as unknown as { sheetProtection?: unknown }).sheetProtection),
   );
 
+  /** 표에서 지운 열(소문자 표 이름 → 열 이름) — 구조적 참조를 #REF!로 바꾼다(applyTableColumnChanges) */
+  const deletedTableColumns = new Map<string, Set<string>>();
+  /** 뺀 표(일반 범위가 됐거나 다 지워짐) — 구조적 참조를 칸 주소·#REF!로 */
+  const removedTables = new Map<string, TableAsRange | null>();
   for (let sheetIdx = 0; sheetIdx < store.sheetMeta.length; sheetIdx += 1) {
     if (removedSheets.has(sheetIdx)) continue;
     const target = store.sheetMeta[sheetIdx];
@@ -813,6 +1009,7 @@ export async function exportXlsxFromGrid(
       if (op.sheet !== sheetIdx) continue;
       const onRows = op.kind === 'insertRows' || op.kind === 'deleteRows';
       const insert = op.kind === 'insertRows' || op.kind === 'insertCols';
+      const tableHeaders = shiftWorksheetTables(sheet, onRows, op.at, op.count, insert, deletedTableColumns, removedTables);
       if (onRows) {
         if (insert) {
           sheet.spliceRows(op.at + 1, 0, ...Array.from({ length: op.count }, () => [] as unknown[]));
@@ -828,6 +1025,8 @@ export async function exportXlsxFromGrid(
         sheet.spliceColumns(op.at + 1, op.count);
         expectedColCount -= op.count;
       }
+      // 표 안에 넣은 열의 머리 칸 = 열 이름(엑셀이 요구한다) — 칸을 옮긴 뒤에 쓴다
+      for (const h of tableHeaders) h.names.forEach((name, i) => (sheet.getCell(h.row, h.col + i).value = name));
     }
 
     // 위 재생 이후에도 남는 차이는 삽입·삭제 연산 없이 rowCount/colCount만 직접 줄어든 경우다
@@ -900,6 +1099,8 @@ export async function exportXlsxFromGrid(
       await maybeYield();
     }
   }
+
+  applyTableColumnChanges(workbook, deletedTableColumns, removedTables);
 
   // 자동 필터: 범위를 맞추고 조건에 안 맞는 행을 숨긴다(조건 XML은 쓰기 뒤 writeFilterCriteria가 붙인다)
   const filtersByName = new Map<string, SheetFilter>();
@@ -986,5 +1187,5 @@ function applySheetDisplayOrder(
 
 /** 저장 직후 뷰어용 그리드(읽기전용 열람 캐시)를 새 xlsx 바이트에서 다시 뽑아낸다. */
 export function reparseGridForViewer(newXlsxBytes: Uint8Array): Promise<GridDocument> {
-  return parseXlsxToGrid(Buffer.from(newXlsxBytes));
+  return parseViewerGrid(newXlsxBytes);
 }

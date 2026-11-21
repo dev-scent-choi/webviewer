@@ -156,6 +156,13 @@ for it in check:
         if where == 'editImages':
             n = (e.get('edit') or {}).get('images', 0)
             results.append({'id': it['id'], 'doc': it['doc'], 'where': where, 'item': f">={it['min']} 그림", 'ok': n >= it['min'], 'got': n}); continue
+        if where.endswith('Dom'):  # 화면 요소 수(capture.mjs domProbes) — 시트를 합친다. max가 있으면 이하여야 통과
+            shots = e.get(where[:-3]) or []
+            vals = [s['dom'][it['probe']] for s in shots if s.get('dom') and it['probe'] in s['dom']]
+            n = vals[0] if (vals and it.get('max') is not None) else sum(vals)  # max 항목은 첫 시트만 본다
+            ok = bool(vals) and (0 <= n <= it['max'] if it.get('max') is not None else n >= it['min'])
+            label = f"{it['probe']} {'<=' + str(it['max']) if it.get('max') is not None else '>=' + str(it['min'])}"
+            results.append({'id': it['id'], 'doc': it['doc'], 'where': where, 'item': label, 'ok': ok, 'got': n}); continue
         if r['ext'] == 'xlsx':
             txt = '\n'.join(s.get('text', '') for s in (e.get(where) or []))
         elif where == 'view':
@@ -179,8 +186,8 @@ for ext in ('docx', 'pptx', 'xlsx'):
     summary[ext] = {
         'viewLook': mean([r.get('viewLook') for r in rs]), 'editLook': mean([r.get('editLook') for r in rs]),
         'viewText': mean([r.get('viewText') for r in rs]), 'editText': mean([r.get('editText') for r in rs]),
-        'checksView': f"{sum(c['ok'] for c in cs if c['where'] == 'view')}/{sum(1 for c in cs if c['where'] == 'view')}",
-        'checksEdit': f"{sum(c['ok'] for c in cs if c['where'] != 'view')}/{sum(1 for c in cs if c['where'] != 'view')}",
+        'checksView': f"{sum(c['ok'] for c in cs if c['where'].startswith('view'))}/{sum(1 for c in cs if c['where'].startswith('view'))}",
+        'checksEdit': f"{sum(c['ok'] for c in cs if not c['where'].startswith('view'))}/{sum(1 for c in cs if not c['where'].startswith('view'))}",
     }
 json.dump({'summary': summary, 'documents': rows, 'checks': results}, open(os.path.join(OUT, 'scores.json'), 'w', encoding='utf-8'), ensure_ascii=False, indent=2)
 lines = ['## 형식별 요약', '', '| 형식 | 보기 모양 | 편집 모양 | 보기 글자 | 편집 글자 | 점검표(보기) | 점검표(편집) |', '|---|---|---|---|---|---|---|']
