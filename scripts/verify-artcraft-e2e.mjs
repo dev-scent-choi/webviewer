@@ -1,5 +1,5 @@
 // 아트크래프트(브라우저 엔진) 보기 — 설계 2026-11-21 §7의 브라우저 검사 일곱 가지 + 메인 화면 단추·열린 뒤 Worker 죽음, 쪽 수 비교 기록.
-//  (1) 아트크래프트로 열려 쪽 수·첫 쪽 그림(잉크 비율·LibreOffice 첫 쪽과 줄 잉크 분포 상관·한글 글자 층·한글 글자 자리에 실제 잉크)
+//  (1) 아트크래프트로 열려 쪽 수·첫 쪽 그림(잉크 비율·LibreOffice 첫 쪽과 줄 잉크 분포 상관·한글 글자 층·한글 span 80 % 이상이 LibreOffice 같은 자리 잉크의 0.3배 이상)
 //  (2) 확대·회전·쪽 이동·섬네일·찾기  (3) 서버 변환 요청 0건  (4) wasm을 막으면 리브레오피스로 자동 전환 + 안내
 //  (5) 내려받기 권한 없는 토큰은 서버 변환으로  (6) CPU×4 첫 쪽 시간(환산 — CDP 스로틀은 메인 스레드만 늦추고 Worker는 늦추지 않으므로
 //      스로틀한 전체 시간 − Worker 시간 + 4 × Worker 시간(Worker가 잰 initMs·openMs·firstRenderMs). 로컬 서버라 받기 시간은 사실상 0 — 목표 docx 2.5초·pptx·doc 2초, 고객 pptx 3초)
@@ -107,6 +107,23 @@ async function gray(png) {
   const { data, info } = await sharp(png).flatten({ background: '#ffffff' }).resize({ width: 128 }).grayscale().raw().toBuffer({ resolveWithObject: true });
   return { data, w: info.width, h: info.height };
 }
+/** 줄이지 않은 회색조 — 글자 상자(span) 단위로 견줄 때 */
+async function grayFull(png) {
+  const { data, info } = await sharp(png).flatten({ background: '#ffffff' }).grayscale().raw().toBuffer({ resolveWithObject: true });
+  return { data, w: info.width, h: info.height };
+}
+/** 쪽 비율 상자(fx·fy·fw·fh) 안 어두운(< 128) 화소 비율 */
+function darkRatioIn(g, b) {
+  const x0 = Math.max(0, Math.floor(b.fx * g.w));
+  const y0 = Math.max(0, Math.floor(b.fy * g.h));
+  const x1 = Math.min(g.w, Math.ceil((b.fx + b.fw) * g.w));
+  const y1 = Math.min(g.h, Math.ceil((b.fy + b.fh) * g.h));
+  let dark = 0;
+  for (let y = y0; y < y1; y += 1) for (let x = x0; x < x1; x += 1) if (g.data[y * g.w + x] < 128) dark += 1;
+  return (x1 - x0) * (y1 - y0) > 0 ? dark / ((x1 - x0) * (y1 - y0)) : 0;
+}
+// 자체 점검 — 왼쪽 절반이 검은 2×1 그림
+if (darkRatioIn({ data: Uint8Array.from([0, 255]), w: 2, h: 1 }, { fx: 0, fy: 0, fw: 0.5, fh: 1 }) !== 1) throw new Error('darkRatioIn 자체 점검 실패');
 /** 화소 줄마다 잉크 비율(밝기 < 200) — 흰 바탕과 상관없이 줄·문단 배치를 본다 */
 const rowInk = (g) => Array.from({ length: g.h }, (_, y) => g.data.subarray(y * g.w, (y + 1) * g.w).filter((v) => v < 200).length / g.w);
 /** 쪽 높이를 n띠로 — 띠 b는 LibreOffice 쪽의 [b/n, (b+1)/n], 아트크래프트 쪽은 그 위치를 stretch로 나눈 곳 */
@@ -233,16 +250,16 @@ try {
     const sim = layoutCorr(mine, lo);
     const ink = inkRatio(mine);
     const loInk = inkRatio(lo);
-    // 한글 글자 층 span 상자 안 캔버스 화소 중 어두운 것(휘도 < 128) — 글자 층만 있고 글자가 그려지지 않은(두부·빈) 쪽을 거른다
+    // 한글 글자 층 span 상자마다 캔버스 화소 중 어두운 것(휘도 < 128)의 비율 — 상자는 쪽 비율로 돌려주고 LibreOffice 같은 자리와 견준다
     const glyph = await o.page.evaluate(() => {
       const frame = document.querySelector('.page-frame[data-page="1"]');
       const cv = frame?.querySelector('canvas');
       const spans = [...(frame?.querySelectorAll('.pdf-text-layer span') ?? [])].filter((s) => /[가-힣]/.test(s.textContent ?? ''));
-      if (!cv || !spans.length) return { runs: spans.length, dark: 0 };
+      if (!cv || !spans.length) return { runs: spans.length, boxes: [] };
       const ctx = cv.getContext('2d');
       const r = cv.getBoundingClientRect();
       const k = cv.width / r.width;
-      let dark = 0;
+      const boxes = [];
       for (const s of spans) {
         const b = s.getBoundingClientRect();
         const x = Math.max(0, Math.floor((b.left - r.left) * k));
@@ -251,17 +268,23 @@ try {
         const h = Math.min(cv.height - y, Math.ceil(b.height * k));
         if (w <= 0 || h <= 0) continue;
         const d = ctx.getImageData(x, y, w, h).data;
+        let dark = 0;
         for (let i = 0; i < d.length; i += 4) if (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2] < 128) dark += 1;
+        boxes.push({ fx: x / cv.width, fy: y / cv.height, fw: w / cv.width, fh: h / cv.height, dark: dark / (w * h) });
       }
-      return { runs: spans.length, dark };
+      return { runs: spans.length, boxes };
     });
     const hangul = glyph.runs > 0;
+    // span 단위(최종 재검토 N3): 상자 넓이 대비 어두운 비율이 LibreOffice 같은 자리의 0.3배 이상인 span이 80 % 이상 — 두부 상자·밑줄·표 선만으로는 못 넘는다
+    const loFull = await grayFull(loPng);
+    const spanOk = glyph.boxes.filter((b) => b.dark >= 0.3 * darkRatioIn(loFull, b)).length;
+    const spanShare = glyph.boxes.length ? spanOk / glyph.boxes.length : 0;
     // 판정: 줄 잉크 분포(64띠, 세로 늘이기 허용) 상관 ≥ 0.6 — 흰 바탕에 좌우되지 않고 줄·문단 배치가 LibreOffice와 닮았는지(빈·뒤섞인·다른 쪽은 낮다).
-    // 잉크 비율은 LibreOffice의 0.5~2배(빈·반쯤 그린·검은 쪽 거르기). 한글은 글자 층에 있고(엔진이 꺼냄) 그 자리에 잉크가 있어야(실제로 그림) 한다.
+    // 잉크 비율은 LibreOffice의 0.5~2배(빈·반쯤 그린·검은 쪽 거르기). 한글은 글자 층에 있고(엔진이 꺼냄) 그 자리에 잉크가 LibreOffice만큼 있어야(실제로 그림) 한다.
     const inkOk = ink > 0 && ink >= loInk * 0.5 && ink <= loInk * 2;
     rec(
-      `${c.name}: (1) 첫 쪽 그림 — 잉크 ${pct(ink)}(LibreOffice ${pct(loInk)}) · 줄 분포 상관 ${sim.toFixed(3)} · 한글 글자 층 ${glyph.runs}개 · 그 자리 어두운 화소 ${glyph.dark}`,
-      inkOk && sim >= 0.6 && (!c.hangul || (hangul && glyph.dark > 0)),
+      `${c.name}: (1) 첫 쪽 그림 — 잉크 ${pct(ink)}(LibreOffice ${pct(loInk)}) · 줄 분포 상관 ${sim.toFixed(3)} · 한글 글자 층 ${glyph.runs}개 · LibreOffice 자리 잉크의 0.3배 이상 span ${spanOk}/${glyph.boxes.length}(${pct(spanShare)})`,
+      inkOk && sim >= 0.6 && (!c.hangul || (hangul && spanShare >= 0.8)),
     );
 
     // (2) 확대·회전·쪽 이동·섬네일·찾기
