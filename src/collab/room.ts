@@ -98,7 +98,7 @@ import {
   type LazyGridSheetMeta,
   type LazyGridStore,
 } from '../xlsx/lazyGridStore.js';
-import { answerCfRemote, cfTallyApplyBatch, cfTallyDropSheet, cfTallyRelease, newCfRoomTally, type CfCellChange, type CfRemoteAnswer, type CfRemoteRequest, type CfRoomTally } from '../xlsx/cfRangeValues.js';
+import { answerCfRemote, cfAnswerSlot, cfTallyApplyBatch, cfTallyDropSheet, cfTallyRelease, newCfRoomTally, type CfCellChange, type CfRemoteAnswer, type CfRemoteRequest, type CfRoomTally } from '../xlsx/cfRangeValues.js';
 import { rewriteStructuredRefs, shiftTables, type TableColumnChanges } from '../xlsx/tableStyles.js';
 import {
   duplicateSlideContent,
@@ -640,7 +640,7 @@ async function applyCellsChangeToCanonical(
  * 편집 화면 조건부 서식용 서버 답(/api/view/xlsx-cf-ranges, src/xlsx/cfRangeValues.ts). 범위는 이 방의 규칙에서만 뽑는다.
  * 열린 xlsx 편집 방이 없으면 null.
  */
-export async function getCfRemoteAnswer(docId: string, req: CfRemoteRequest): Promise<CfRemoteAnswer | null> {
+export async function getCfRemoteAnswer(docId: string, req: CfRemoteRequest, pass?: WildcardBudget): Promise<CfRemoteAnswer | null> {
   const room = rooms.get(docId);
   if (!room?.lazyGrid) return null;
   await room.ready;
@@ -653,7 +653,7 @@ export async function getCfRemoteAnswer(docId: string, req: CfRemoteRequest): Pr
   if (rooms.get(docId) !== room) return null; // 기다리는 사이 방이 닫혔다(닫힌 lazyGrid를 읽지 않는다 — 최종 검토 M2)
   const entries = room.ydoc.getMap<readonly CondFormatEntry[]>(GRID_COND_FORMATS_MAP).get(String(req.sheet)) ?? [];
   const computed = room.ydoc.getMap<string>(GRID_COMPUTED_MAP);
-  const answer = await answerCfRemote(room.cfRanges, store, req, entries, (r, c) => computed.get(gridCellKey(req.sheet, r, c))).catch((error: unknown) => {
+  const answer = await cfAnswerSlot(room.cfRanges, () => answerCfRemote(room.cfRanges, store, req, entries, (r, c) => computed.get(gridCellKey(req.sheet, r, c)), pass)).catch((error: unknown) => {
     if (rooms.get(docId) !== room) return null; // 세는 사이 방이 닫혀 저장소가 닫혔다 — 409
     throw error;
   });

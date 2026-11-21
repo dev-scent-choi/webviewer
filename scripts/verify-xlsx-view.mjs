@@ -354,10 +354,12 @@ try {
     const ranges = Array.from({ length: 64 }, (_, i) => ({ r0: i, c0: 0, r1: 19_999, c1: 0, crit: ['K1'] }));
     check('서버 답: 내려받기만 되는 토큰은 403', (await ask(dlToken, { sheet: 0, ranges })).status === 403);
     const t0 = Date.now();
-    const answers = await Promise.all(Array.from({ length: 4 }, () => ask(token, { sheet: 0, ranges }).then((r) => r.json())));
-    const okShape = answers.every((a) => a.data && 'cells' in a.data.ranges[0] && a.data.ranges.slice(1).every((r) => r.skipped));
+    // 문서마다 답 만들기는 동시에 하나(하나는 뒤에서 기다림) — 나머지는 409(편집 화면은 "일부 생략"으로 두고 다음에 다시 묻는다)
+    const replies = await Promise.all(Array.from({ length: 4 }, () => ask(token, { sheet: 0, ranges }).then(async (r) => ({ status: r.status, body: await r.json() }))));
+    const answers = replies.filter((r) => r.status === 200).map((r) => r.body);
+    const okShape = answers.length >= 1 && answers.every((a) => a.data && 'cells' in a.data.ranges[0] && a.data.ranges.slice(1).every((r) => r.skipped)) && replies.every((r) => r.status === 200 || r.status === 409);
     const bytes = Math.max(...answers.map((a) => JSON.stringify(a).length));
-    check('서버 답: 64범위 × 동시 4요청 — 규칙 범위만 답하고 나머지는 skipped, 답이 작다', okShape && bytes < 20_000, `${Date.now() - t0}ms, 답 최대 ${bytes}바이트`);
+    check('서버 답: 64범위 × 동시 4요청 — 규칙 범위만 답하고 나머지는 skipped, 답이 작다, 겹친 요청은 409', okShape && bytes < 20_000, `${Date.now() - t0}ms, 답 ${answers.length}개·409 ${replies.length - answers.length}개, 답 최대 ${bytes}바이트`);
     check('서버 답: 그 뒤에도 서버가 응답한다', (await fetch(`${BASE}/api/formats`)).ok);
     warm.provider.destroy();
     void tok;

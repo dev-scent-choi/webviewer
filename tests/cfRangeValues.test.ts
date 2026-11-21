@@ -302,7 +302,7 @@ describe('collab/room.ts: getCfRemoteAnswer (편집 화면 조건부 서식 서�
     expect(paintCell([rule], 5, 0, 'K6', stats, () => '')).toBeNull();
   }, 60_000);
 
-  test('C1: 2만 행 × 10열(모두 다른 값) — 64범위 × 동시 4요청이 상한 안(메모리·멈춤)', async () => {
+  test('C1: 2만 행 × 10열(모두 다른 값) — 64범위 × 동시 4요청이 상한 안(메모리·멈춤), 둘은 바쁨(409)', async () => {
     const { getCfRemoteAnswer } = await import('../src/collab/room.js');
     const { CF_ROOM_CELL_CAP, CF_ROOM_DISTINCT_CAP } = await import('../src/xlsx/cfRangeValues.js');
     const { docId } = await openRoom(await makeSheetXlsx(20_000, 10, [{ ref: 'A1:J20000', formula: 'COUNTIF($A:$J,A1)>1' }]));
@@ -315,10 +315,15 @@ describe('collab/room.ts: getCfRemoteAnswer (편집 화면 조건부 서식 서�
     // 거의 시트 전체인 범위를 한 행씩 밀어 64개 — 규칙 범위($A:$J, 20만 칸) 하나만 답한다
     const ranges = Array.from({ length: 64 }, (_, i) => ({ r0: i, c0: 0, r1: 19_999, c1: 9, crit: [`K${i + 1}`] }));
     const t0 = performance.now();
-    const answers = await Promise.all(Array.from({ length: 4 }, () => getCfRemoteAnswer(docId, { sheet: 0, ranges })));
+    const settled = await Promise.allSettled(Array.from({ length: 4 }, () => getCfRemoteAnswer(docId, { sheet: 0, ranges })));
     const ms = performance.now() - t0;
     const stall = meter.stop();
     clearInterval(sampler);
+    // 문서마다 답 만들기는 동시에 하나 — 하나는 뒤에서 기다렸다 답하고, 나머지 둘은 CfBusyError(경로 409, 재검토 2 판정)
+    const { CfBusyError } = await import('../src/xlsx/cfRangeValues.js');
+    const answers = settled.flatMap((r) => (r.status === 'fulfilled' ? [r.value] : []));
+    expect(answers).toHaveLength(2);
+    expect(settled.filter((r) => r.status === 'rejected' && r.reason instanceof CfBusyError)).toHaveLength(2);
     for (const a of answers) {
       expect(a!.ranges[0]).toMatchObject({ cells: 200_000 });
       expect(a!.ranges.slice(1).every((r) => 'skipped' in r)).toBe(true);

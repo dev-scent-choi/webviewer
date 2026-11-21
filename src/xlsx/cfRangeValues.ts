@@ -29,7 +29,7 @@ import {
   type CondFormatEntry,
 } from '../collab/condFormatShared.js';
 import { gridCellValue, yieldToEventLoop } from '../spreadsheet.js';
-import { WILDCARD_WORK_BUDGET, WildcardBudgetError, runWildcardStep, withWildcardBudget, type WildcardBudget } from '../collab/wildcard.js';
+import { WILDCARD_STEP_BUDGET, WILDCARD_WORK_BUDGET, WildcardBudgetError, runWildcardStep, withWildcardBudget, type WildcardBudget } from '../collab/wildcard.js';
 import { getRowCells, type LazyGridStore } from './lazyGridStore.js';
 
 /** 방 하나가 세는 칸 수 상한(모든 범위 합) */
@@ -78,6 +78,10 @@ export interface CfRoomTally {
   chain: Promise<unknown>;
   /** 반영 중인 칸 편집(웹소켓으로 막 들어온 것) — 답하기 전에 기다린다 */
   applying: Promise<void>;
+  /** 지금 답을 만드는 요청(문서마다 동시에 하나만 — cfAnswerSlot) */
+  answering?: Promise<unknown>;
+  /** 그 뒤에 기다리는 요청이 이미 하나 있다(더 오면 409) */
+  answerWaiting?: boolean;
   /** 칸 편집이 있었는지(수식 칸 값이 낡았을 수 있다) */
   edited: boolean;
   /** 마지막으로 쓴 때(전역 상한 — 오래 안 쓴 방부터 버린다) */
@@ -337,6 +341,54 @@ export function parseCfRemoteRequest(body: unknown): CfRemoteRequest | null {
   return { sheet: sheet as number, ranges: out, ...(Array.isArray(stats) ? { stats: stats as string[] } : {}) };
 }
 
+/**
+ * 토큰마다 1분 동안 쓸 수 있는 와일드카드 작업량(단계 예산의 10배 = 5e8) — 요청 하나는 최악 약 2초(WILDCARD_WORK_BUDGET)라,
+ * 요청 수 제한만으로는 한 토큰이 서버 CPU를 계속 쓸 수 있었다(재검토 2 판정). 다 쓰면 그 토큰의 요청은 바로 overBudget으로 답한다.
+ * shortcut: 고정 1분 창(창이 바뀌는 순간 최대 2배까지 몰릴 수 있다), 더 고르게 하려면 미끄러지는 창으로.
+ */
+export const CF_TOKEN_WINDOW_MS = 60_000;
+export const CF_TOKEN_WORK_PER_WINDOW = 10 * WILDCARD_STEP_BUDGET;
+const tokenWork = new Map<string, { start: number; used: number }>();
+/** 이 토큰의 이번 요청 예산 — 끝나면 cfTokenSpend로 쓴 만큼 적는다 */
+export function cfTokenBudget(token: string, now = Date.now()): WildcardBudget {
+  if (tokenWork.size > 10_000) for (const [k, w] of tokenWork) if (now - w.start >= CF_TOKEN_WINDOW_MS) tokenWork.delete(k);
+  let w = tokenWork.get(token);
+  if (!w || now - w.start >= CF_TOKEN_WINDOW_MS) tokenWork.set(token, (w = { start: now, used: 0 }));
+  return { left: Math.max(0, Math.min(WILDCARD_WORK_BUDGET, CF_TOKEN_WORK_PER_WINDOW - w.used)) };
+}
+export function cfTokenSpend(token: string, budget: WildcardBudget, startLeft: number): void {
+  const w = tokenWork.get(token);
+  if (w) w.used += Math.max(0, startLeft - budget.left);
+}
+
+/**
+ * 문서(방)마다 답 만들기는 동시에 하나 — 진행 중이면 하나만 뒤에서 기다리고(그 뒤에 이어 계산), 더 오면 CfBusyError(경로 409, 편집 화면은
+ * 그 범위를 "일부 생략"으로 두고 다음 편집 때 다시 묻는다).
+ */
+export class CfBusyError extends Error {
+  constructor() {
+    super('cf-ranges busy');
+  }
+}
+export async function cfAnswerSlot<T>(t: CfRoomTally, work: () => Promise<T>): Promise<T> {
+  if (t.answering) {
+    if (t.answerWaiting) throw new CfBusyError();
+    t.answerWaiting = true;
+    try {
+      while (t.answering) await t.answering.catch(() => undefined);
+    } finally {
+      t.answerWaiting = false;
+    }
+  }
+  const run = work();
+  t.answering = run;
+  try {
+    return await run;
+  } finally {
+    if (t.answering === run) t.answering = undefined;
+  }
+}
+
 /** 편집 화면의 물음에 답한다(세어 둔 표가 없거나 낡았으면 먼저 센다) */
 export async function answerCfRemote(
   t: CfRoomTally,
@@ -344,12 +396,13 @@ export async function answerCfRemote(
   req: CfRemoteRequest,
   entries: readonly CondFormatEntry[],
   computedAt: (row: number, col: number) => string | undefined,
+  /** 이 요청이 쓸 와일드카드 예산(토큰의 1분 예산에서 떼어 온 것 — cfTokenBudget). 없으면 WILDCARD_WORK_BUDGET */
+  pass: WildcardBudget = { left: WILDCARD_WORK_BUDGET },
 ): Promise<CfRemoteAnswer> {
   const s = await ensureSheetTally(t, store, req.sheet, entries, computedAt);
   let stale = false;
   let overBudget = false;
   // 와일드카드 예산 — 요청 하나에 WILDCARD_WORK_BUDGET, 조건 하나마다 단계 하나(WILDCARD_STEP_BUDGET)씩 떼어 쓰고 20ms마다 양보한다
-  const pass: WildcardBudget = { left: WILDCARD_WORK_BUDGET };
   let lastYield = performance.now();
   const ranges: CfRemoteRangeAnswer[] = [];
   for (const q of req.ranges) {
