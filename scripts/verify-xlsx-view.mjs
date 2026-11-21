@@ -1,4 +1,5 @@
 // 엑셀 보기·편집 화면 회귀 검사(검토 r2·r3에서 고친 것) — 실제 브라우저로 연다.
+//  11) 병합 칸(2026-11-21): 칸 안 줄 바꿈·앞 공백, 숨긴 행 낀 병합, 위로 멀리 있는 세로 병합 아래 스크롤, 여러 행 병합 칸 왼쪽 테두리(보기·편집)
 //   1) 악의적 차트(공유 맵에 스크립트를 심은 차트)가 실행되지 않고 <img>로 그려진다
 //   2) 엑셀 표 덧칠: 정렬(값 섞기) 뒤에도 줄무늬가 행 위치 그대로, 행 삽입 뒤에는 표 범위가 함께 늘어난다
 //   3) 무거운 조건부 서식(SUMPRODUCT 40개 × 2만 행): 보기·편집 화면 "일부 생략" 알림, 편집 화면이 멈추지 않는다
@@ -123,6 +124,71 @@ try {
     await page.screenshot({ path: `${OUT}/1-evil-chart-edit.png` });
     await page.close();
     provider.destroy();
+  }
+
+  // 11) 병합 칸이 엑셀처럼(2026-11-21 병합 점검) — 합성 파일
+  //   줄 바꿈 병합 칸의 칸 안 줄 바꿈·앞 공백, 줄 바꿈 없는 칸의 앞 공백, 숨긴 행이 낀 병합, 위로 멀리 있는 세로 병합(스크롤 창),
+  //   여러 행 병합 칸 왼쪽 테두리(편집 화면)
+  {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('M');
+    const JSONISH = '{\n    "a":1,\n    "b":2\n}';
+    const thin = { style: 'thin' };
+    ws.mergeCells('B2:D5');
+    ws.getCell('B2').value = JSONISH;
+    ws.getCell('B2').alignment = { wrapText: true, vertical: 'middle' };
+    for (let r = 2; r <= 5; r += 1) for (let c = 2; c <= 4; c += 1) ws.getCell(r, c).border = { top: thin, left: thin, bottom: thin, right: thin };
+    ws.mergeCells('F2:F3');
+    ws.getCell('F2').value = '    들여쓴 글';
+    ws.mergeCells('H2:H6');
+    ws.getCell('H2').value = '숨긴 행 낀 병합';
+    ws.getRow(4).hidden = true;
+    ws.getCell('I5').value = 'I5';
+    ws.mergeCells('B10:B400');
+    ws.getCell('B10').value = '긴 병합';
+    ws.getCell('C390').value = 'C390';
+    const { tok } = await upload('merge-look.xlsx', Buffer.from(await wb.xlsx.writeBuffer()));
+    const page = await browser.newPage({ viewport: { width: 1200, height: 700 } });
+    const HOST = { view: '#grid-scroll', edit: '.grid-editor-scroll' };
+    // 두 화면 공통: 칸(1부터 센 행·열)과 열 머리글 찾기
+    const inPage = (fn, kind, arg) => page.evaluate(([k, src, a]) => {
+      const td = (r, c) => document.querySelector(k === 'view' ? `#grid-table td[data-r="${r}"][data-c="${c}"]` : `#grid-edit-table td[data-row="${r - 1}"][data-col="${c - 1}"]`);
+      const head = (c) => (k === 'view' ? document.querySelectorAll('.g-head-cell')[c] : document.querySelector(`#grid-edit-table thead th[data-col="${c - 1}"]`));
+      return new Function('td', 'head', 'a', src)(td, head, a);
+    }, [kind, fn, arg]);
+    const PROBE = `
+      const box = (el) => (el ? el.getBoundingClientRect() : null);
+      const text = (el) => el?.querySelector('.g-cell-spill')?.innerText ?? null;
+      let visibleSum = 0;
+      for (let r = 2; r <= 6; r += 1) visibleSum += box(td(r, 9))?.height ?? 0;
+      const b2 = td(2, 2);
+      return { wrapText: text(b2), lead: text(td(2, 6)), h2: box(td(2, 8))?.height, visibleSum, i5Left: box(td(5, 9))?.left, iHeadLeft: box(head(9))?.left, leftLine: b2 ? getComputedStyle(b2, '::before').left : null };`;
+    const C390 = `const t = td(390, 3), h = head(3); return t && h ? Math.round(t.getBoundingClientRect().left - h.getBoundingClientRect().left) : null;`;
+    const scrolledC390 = async (kind) => {
+      await page.evaluate((h) => { const el = document.querySelector(h); el.scrollTop = 380 * 20; el.dispatchEvent(new Event('scroll')); }, HOST[kind]);
+      await wait(1200);
+      return inPage(C390, kind);
+    };
+    await page.goto(BASE + tok.viewerUrl);
+    await page.waitForSelector('#grid-table td[data-r]');
+    await wait(800);
+    const v = await inPage(PROBE, 'view');
+    await page.screenshot({ path: `${OUT}/11-merge-view.png` });
+    const vC390 = await scrolledC390('view');
+    await openEditor(page, tok);
+    await wait(1200);
+    const e = await inPage(PROBE, 'edit');
+    await page.screenshot({ path: `${OUT}/11-merge-edit.png` });
+    const eC390 = await scrolledC390('edit');
+    check('병합: 줄 바꿈 병합 칸의 칸 안 줄 바꿈·앞 공백을 그대로(보기·편집)', v.wrapText === JSONISH && e.wrapText === JSONISH, JSON.stringify([v.wrapText, e.wrapText]));
+    check('병합: 줄 바꿈 없는 칸의 앞 공백을 그대로(보기·편집)', v.lead === '    들여쓴 글' && e.lead === '    들여쓴 글', JSON.stringify([v.lead, e.lead]));
+    const near = (a, b) => typeof a === 'number' && typeof b === 'number' && Math.abs(a - b) <= 2;
+    check('병합: 숨긴 행이 낀 병합의 높이 = 보이는 행 높이 합, 오른쪽 칸이 제 열에(보기·편집)',
+      near(v.h2, v.visibleSum) && near(e.h2, e.visibleSum) && near(v.i5Left, v.iHeadLeft) && near(e.i5Left, e.iHeadLeft),
+      JSON.stringify({ v, e }));
+    check('병합: 위로 멀리 있는 세로 병합(B10:B400) 아래로 스크롤해도 칸이 밀리지 않는다(보기·편집)', near(vC390, 0) && near(eC390, 0), `보기 ${vC390}px, 편집 ${eC390}px`);
+    check('병합: 여러 행 병합 칸의 왼쪽 테두리는 칸 안쪽에(편집 — 아래 행에 덮여 끊기지 않게)', e.leftLine === '0px', String(e.leftLine));
+    await page.close();
   }
 
   // 2) 엑셀 표 덧칠 — 정렬 뒤·행 삽입 뒤

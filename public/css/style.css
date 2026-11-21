@@ -1265,7 +1265,8 @@ h2 {
      불가능해진다. 실제 자르기/넘침은 안의 .g-cell-spill(renderGridViewport가 값이 있을 때만
      만든다)이 각 칸마다 필요한 폭을 계산해서 처리한다. */
   overflow: visible;
-  white-space: nowrap;
+  /* 엑셀은 칸 글자의 공백을 줄이지 않는다(앞 공백 들여쓰기 등) — nowrap이 아니라 pre */
+  white-space: pre;
   /* 엑셀 기본 세로 맞춤은 아래 — 위/가운데는 칸 서식(.gsN)이 덮는다 */
   vertical-align: bottom;
   background-clip: padding-box;
@@ -1909,6 +1910,8 @@ body.home-hidden .doclist-link { display: none !important; }
   height: auto;
   padding: 0 0.2rem;
   vertical-align: bottom;
+  /* 공백은 엑셀처럼 그대로(보기 화면 .grid-table td와 같다) — 줄 바꿈 칸은 applyStyleToTd가 pre-wrap */
+  white-space: pre;
 }
 .grid-edit-table tbody .g-edit-rownum { vertical-align: middle; }
 /* 숨긴 행·열 — 높이/폭 0으로 자리만 지킨다(병합 계산이 어긋나지 않게) */
@@ -1981,7 +1984,7 @@ body.home-hidden .doclist-link { display: none !important; }
   color: var(--v-text);
   outline: none;
   cursor: cell;
-  white-space: nowrap;
+  white-space: pre;
   /* 실제 엑셀처럼 오른쪽 이웃 칸이 비어 있으면 내용이 그 위로 넘쳐 보여야 한다 — td 자체를
      hidden으로 잘라버리면 그 표현이 불가능하다. 실제 자르기/넘침은 .g-cell-spill(위 .grid-table
      td와 같은 클래스, applySpillDisplay가 폭을 계산해 인라인 style로 얹는다)이 담당한다. */
@@ -2075,6 +2078,8 @@ body.home-hidden .doclist-link { display: none !important; }
   border-left: var(--g-bl, none);
   pointer-events: none;
 }
+/* 여러 행 병합 칸의 왼쪽 선은 칸 안쪽에 — 아래 행들(<tr>마다 쌓임 맥락)이 왼쪽 이웃 칸 격자선으로 첫 행 아래를 덮어 선이 끊겼다 */
+.grid-edit-table td.g-bord-tl[rowspan]::before { left: 0; }
 
 /* 클릭하면 부모 창에 알림을 보내는 잠긴 병합 셀(예: 제목 배너) — 클릭 가능함을 드러낸다 */
 .grid-edit-table td.g-clickable-header { cursor: pointer; }

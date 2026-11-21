@@ -237,7 +237,9 @@ function applyStyleToTd(td: HTMLTableCellElement, cellStyle: CellStyleAttrs | un
   // 자동 줄 바꿈 — 셀 높이는 고정이라(틀고정 sticky 좌표 계산이 고정 행 높이를 전제로 함) 줄이
   // 너무 많아지면 아래가 잘릴 수 있다. 그래도 한 줄에 다 몰아넣고 말줄임표로 자르는 것보다는
   // 실제로 줄바꿈되는 쪽이 "자동 줄 바꿈"이라는 기능 자체엔 맞다.
-  td.style.whiteSpace = style?.wrap ? 'normal' : '';
+  // 줄 바꿈 칸은 칸 안의 줄 바꿈(Alt+Enter)·앞 공백도 엑셀처럼 그대로(pre-wrap), 긴 낱말은 칸 폭에서 끊는다
+  td.style.whiteSpace = style?.wrap ? 'pre-wrap' : '';
+  td.style.overflowWrap = style?.wrap ? 'anywhere' : '';
   if (style?.a) {
     td.style.textAlign = ALIGN_TO_CSS[style.a];
   } else if (style?.nf || (style?.fmt && !isTextNumFmt(style.fmt))) {
@@ -594,10 +596,12 @@ async function main(): Promise<void> {
         );
     const parsedKey = parseGridCellKey(key);
     // 서식 숫자·날짜가 칸 폭보다 길면 엑셀처럼 '####'(보기 화면과 같은 어림 — numberFormat.ts)
-    const text =
+    const shownText =
       style?.fmt && !isTextNumFmt(style.fmt) && !style.wrap && parsedKey && td.colSpan <= 1 && isNumberOrDateValue(raw.startsWith('=') ? String(computeCellDisplay(parsedKey.sheetIdx, parsedKey.row, parsedKey.col)) : raw)
         ? hashIfTooWide(shown.text, colWidthOfSheet(parsedKey.sheetIdx, parsedKey.col), style.fs ?? EXCEL_DEFAULT_FONT_PX)
         : shown.text;
+    // 줄 바꿈 서식이 없는 칸은 엑셀처럼 한 줄로(칸 안 줄 바꿈은 그리지 않는다 — 공백은 CSS white-space:pre로 남는다)
+    const text = style?.wrap ? shownText.replace(/\r/g, '') : shownText.replace(/\r?\n|\r/g, '');
     // 서식 코드의 글자 색([Red] 등)은 값마다 다르다 — 없으면 칸 서식 색으로 되돌린다(조건부 서식이 그 위에 덧입힌다)
     if (shown.color) td.dataset.fc = shown.color;
     else delete td.dataset.fc;
@@ -1390,6 +1394,18 @@ async function main(): Promise<void> {
     return { anchors, covered };
   }
 
+  /** 창 첫 행을 덮는 세로 병합의 앵커 행까지 창을 끌어올린다 — 앵커 <td>(rowspan)가 없으면 그 아래 행들의 칸이
+   * 한 칸씩 왼쪽으로 밀려 그려졌다(보기 화면 viewer.js의 GRID_MERGE_EXPAND_CAP과 같은 방식).
+   * shortcut: 1000행 넘게 위에 있는 앵커는 당겨오지 않는다(그 병합 아래 칸은 예전처럼 밀린다), 그런 병합이 실제로 나오면 덮인 칸을 그리는 저하 방식으로 */
+  function withMergeAnchors(first: number, floor: number): number {
+    let top = first;
+    for (const [key, { rs }] of vwAnchors) {
+      const r0 = Number(key.slice(0, key.indexOf(':')));
+      if (r0 < top && r0 >= floor && r0 + rs > first && first - r0 <= 1000) top = r0;
+    }
+    return top;
+  }
+
   /** ---------- 스크롤 전용 증분 패치 상태 ----------
    * renderTableVirtualized()는 스크롤이 한 번 일어날 때마다 <colgroup>/<thead>/보이는 모든
    * <tr>·<td>를 통째로 버리고 다시 만들었다 — 각 <td>에 붙는 5~8개의 이벤트 리스너(focus/
@@ -1792,7 +1808,7 @@ async function main(): Promise<void> {
     // replaceChildren()이 clamp한 값(0)이 나온다.)
     const scrollTop = scrollTopSnapshot;
     const viewportHeight = viewportHeightSnapshot;
-    const firstVisible = Math.max(freezeRows, rowLayout.rowAt(scrollTop) - OVERSCAN_ROWS);
+    const firstVisible = withMergeAnchors(Math.max(freezeRows, rowLayout.rowAt(scrollTop) - OVERSCAN_ROWS), freezeRows);
     const lastVisible = Math.min(renderRowCount - 1, rowLayout.rowAt(scrollTop + viewportHeight) + OVERSCAN_ROWS);
 
     const tbody = document.createElement('tbody');
@@ -1902,7 +1918,7 @@ async function main(): Promise<void> {
     const freezeRows = vwFreezeRows;
     const scrollTop = scrollHostEl.scrollTop;
     const viewportHeight = scrollHostEl.clientHeight;
-    const firstVisible = Math.max(freezeRows, rowLayout.rowAt(scrollTop) - OVERSCAN_ROWS);
+    const firstVisible = withMergeAnchors(Math.max(freezeRows, rowLayout.rowAt(scrollTop) - OVERSCAN_ROWS), freezeRows);
     const lastVisible = Math.min(renderRowCount - 1, rowLayout.rowAt(scrollTop + viewportHeight) + OVERSCAN_ROWS);
     if (firstVisible === vwFirstVisible && lastVisible === vwLastVisible) return; // 창이 그대로면 할 일 없음
 

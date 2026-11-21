@@ -77,3 +77,30 @@ describe('보기용 그리드 — 큰 파일용 스트리밍 경로(viewerGrid.t
     expect(worksheetXmlBytes(Buffer.from('not a zip'))).toBe(0);
   });
 });
+
+describe('병합 칸 글자(2026-11-21 병합 점검) — 화면이 엑셀처럼 그리려면 서버가 줄 바꿈·앞 공백을 그대로 넘겨야 한다', () => {
+  test('줄 바꿈 병합 칸의 칸 안 줄 바꿈·앞 공백, 세로 가운데·줄 바꿈 서식이 두 경로 모두 그대로', async () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('M');
+    ws.mergeCells('B2:D5');
+    ws.getCell('B2').value = '{\n    "a":1\n}';
+    ws.getCell('B2').alignment = { wrapText: true, vertical: 'middle' };
+    ws.getCell('F2').value = '    앞 공백';
+    const bytes = Buffer.from(await wb.xlsx.writeBuffer());
+    const full = await parseXlsxToGrid(bytes);
+    const anchor = full.sheets[0].rows[1][1] as { v: string; s: number };
+    expect(anchor.v).toBe('{\n    "a":1\n}');
+    expect(full.styles[anchor.s]).toMatchObject({ w: 1, va: 'm' });
+    expect((full.sheets[0].rows[1][5] as { v: string }).v).toBe('    앞 공백');
+    expect(full.sheets[0].merges).toEqual([{ r: 2, c: 2, rs: 4, cs: 3 }]);
+    const store = await ingestXlsxLazily(randomUUID(), bytes);
+    try {
+      const lines = (await serializeGridFromLazyStore(store)).buffer.toString('utf8').split('\n');
+      const row2 = JSON.parse(lines[2]);
+      expect(row2[1].v).toBe('{\n    "a":1\n}');
+      expect(row2[5].v).toBe('    앞 공백');
+    } finally {
+      await closeLazyGridStore(store);
+    }
+  });
+});

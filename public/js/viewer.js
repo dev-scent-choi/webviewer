@@ -1161,7 +1161,8 @@ function injectGridStyles(styles) {
     // 줄 바꿈·세로 맞춤은 .grid-table td의 기본값(nowrap·bottom)과 겹치므로 아래 테두리처럼
     // `.grid-table td.gsN` 특이도로 낸다(지정 없으면 엑셀처럼 아래 맞춤)
     const cellParts = [];
-    if (style.w) cellParts.push('white-space:normal;word-break:break-all');
+    // 줄 바꿈 칸: 칸 안 줄 바꿈(Alt+Enter)·앞 공백은 엑셀처럼 그대로, 긴 낱말은 칸 폭에서 끊는다(편집 화면 applyStyleToTd와 같다)
+    if (style.w) cellParts.push('white-space:pre-wrap;overflow-wrap:anywhere');
     if (style.va === 't') cellParts.push('vertical-align:top');
     if (style.va === 'm') cellParts.push('vertical-align:middle');
     // 엑셀 테두리 굵기(1=가는 선, 2=굵은 선)를 그리드 동시편집기(src/client/grid-editor.ts의
@@ -1644,7 +1645,8 @@ function renderGridViewport() {
       const linkTitle = link ? ` title="${escapeHtml(linkTitleOf(link, r, c))}"` : '';
       const cellStyleObj = isEmpty || cell.s === undefined ? undefined : gridState.styles[cell.s];
       // 표시 글자는 서버가 칸 서식(numberFormat.ts — 편집 화면과 같은 서식기)대로 이미 만들어 둔다
-      const shown = isEmpty ? '' : cell.v;
+      // 줄 바꿈 서식이 없는 칸은 엑셀처럼 한 줄로(칸 안 줄 바꿈은 그리지 않는다 — 공백은 CSS white-space:pre로 남는다)
+      const shown = isEmpty ? '' : cellStyleObj && cellStyleObj.w ? cell.v.replace(/\r/g, '') : cell.v.replace(/\r?\n|\r/g, '');
       // 엑셀 기본 정렬 — 정렬을 따로 지정하지 않은 칸에서 숫자·날짜는 오른쪽, 논리값은 가운데.
       // (판정은 넘침 여부와 같은 규칙: isSpillEligible이 "기본 왼쪽 정렬인 텍스트"만 true를 준다.)
       if (shown && !(cellStyleObj && cellStyleObj.a) && !isSpillEligible(cellStyleObj, shown)) {
