@@ -25,7 +25,7 @@ const JWT_ALGORITHM = 'HS256';
 
 export function issueViewToken(claims: ViewClaims, ttlSeconds: number): string {
   return jwt.sign(
-    { docId: claims.docId, viewer: claims.viewer, perms: claims.perms },
+    { docId: claims.docId, viewer: claims.viewer, perms: claims.perms, ...(claims.engine ? { engine: claims.engine } : {}) },
     jwtSecret,
     { expiresIn: ttlSeconds, algorithm: JWT_ALGORITHM },
   );
@@ -41,7 +41,7 @@ export function verifyViewToken(token: string): ViewClaims {
   if (typeof payload !== 'object' || payload === null) {
     throw new InvalidTokenError();
   }
-  const { docId, viewer, perms } = payload as Record<string, unknown>;
+  const { docId, viewer, perms, engine } = payload as Record<string, unknown>;
   if (typeof docId !== 'string' || typeof viewer !== 'string' || typeof perms !== 'object' || perms === null) {
     throw new InvalidTokenError();
   }
@@ -53,5 +53,5 @@ export function verifyViewToken(token: string): ViewClaims {
     canEdit: raw.canEdit === true,
     ...(raw.pdfEditor === true ? { pdfEditor: true } : {}),
   };
-  return { docId, viewer, perms: permissions };
+  return { docId, viewer, perms: permissions, ...(engine === 'artcraft' ? { engine: 'artcraft' as const } : {}) };
 }

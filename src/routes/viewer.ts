@@ -11,6 +11,8 @@ import os from 'node:os';
 import path from 'node:path';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { recordAudit } from '../audit.js';
+import { ARTCRAFT_FORMATS, artcraftInfo, engineFor, sourceExtOf } from '../artcraftEngine.js';
+import { readArtcraftManifest } from '../artcraftManifest.js';
 import { SizedLruCache } from '../cache.js';
 import { config } from '../config.js';
 import { findConverter } from '../converters/index.js';
@@ -41,7 +43,7 @@ import {
 import { cachedDocxDrawing, DrawingRateLimited, renderDocxDrawingPng } from '../docx/drawingImage.js';
 import { MarkupValidationError, addMarkup, deleteMarkup, listMarkup, updateMarkup } from '../markup.js';
 import { touchPresence } from '../presence.js';
-import { docxFragmentsOf, flushNow, getCfRemoteAnswer, getCurrentBytes, getChangeLog, getFileCharts, getFileExtras, getFileImages, invalidateFileExtras } from '../collab/room.js';
+import { docxFragmentsOf, flushNow, getCfRemoteAnswer, getCurrentBytes, hasUnsavedEdits, getChangeLog, getFileCharts, getFileExtras, getFileImages, invalidateFileExtras } from '../collab/room.js';
 import { CfBusyError, cfTokenBudget, cfTokenRetryAfterMs, cfTokenSpend, parseCfRemoteRequest } from '../xlsx/cfRangeValues.js';
 import type { WildcardBudget } from '../collab/wildcard.js';
 
@@ -766,6 +768,11 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
               .then((bytes) => readSlideSizeEmu(unzipSync(bytes, { filter: (f) => f.name === 'ppt/presentation.xml' })))
               .catch(() => null)
           : null;
+      // 여는 엔진 — 클레임은 "요청"만 담고 판정은 매번(설계 2026-11-21 §3.2). 아트크래프트는 서버 변환 없이 원본을 브라우저가 그린다
+      const manifest = readArtcraftManifest();
+      const sourceExt = sourceExtOf(view.meta);
+      const engine = engineFor(sourceExt, view.claims.perms, view.claims.engine, manifest !== null);
+      const artcraft = engine.engine === 'artcraft' && manifest ? artcraftInfo(sourceExt, request.query.token!, manifest) : undefined;
       return {
         success: true,
         data: {
@@ -793,6 +800,9 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
           ),
           viewerUrl: `${viewPathFor(view.meta.ext, view.meta.viewKind)}?token=${encodeURIComponent(request.query.token!)}`,
           processing: view.meta.status === 'processing',
+          engine: artcraft ? 'artcraft' : 'libreoffice',
+          ...(engine.reason ? { engineReason: engine.reason } : {}),
+          ...(artcraft ? { artcraft } : {}),
           // 향기랩 옛 형식(.doc·.xls·.ppt) — 편집기가 형식 이름·내려받기 문구·매크로 경고를 보인다(설계 §2.5)
           // .doc 이름의 OOXML(ZIP)은 실제로 OOXML이라 옛 형식 문구를 보이지 않는다(내려받기는 그래도 안 고쳤으면 올린 바이트 그대로)
           legacy:
@@ -1733,6 +1743,44 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
         .type('application/octet-stream')
         .header('content-disposition', `attachment; filename*=UTF-8''${encodedName}`)
         .send(data);
+    },
+  );
+
+  /**
+   * 아트크래프트 엔진(브라우저 Worker)이 그릴 원본 바이트(설계 2026-11-21 §3.2·§6). 사용자 내려받기가 아니라 열기라서 'downloaded'가 아니라
+   * 'engine_open'으로 감사하고 저장 대화상자 머리글도 붙이지 않는다. canDownload + 토큰이 artcraft를 요청 + 엔진이 그리는 형식만.
+   * LibreOffice는 띄우지 않는다 — 고친 옛 형식(.doc)은 409(Worker가 서버 변환으로 넘어간다).
+   */
+  app.get<{ Querystring: TokenQuery }>(
+    '/api/view/engine-source',
+    {
+      schema: { querystring: tokenQuerySchema },
+      config: { rateLimit: { max: 60, timeWindow: '1 minute', keyGenerator: (request: { query?: unknown; ip: string }) => `engine:${(request.query as { token?: string } | undefined)?.token ?? request.ip}` } },
+    },
+    async (request, reply) => {
+      const view = await resolveView(request.query.token, reply);
+      if (!view) return reply;
+      if (!view.claims.perms.canDownload || view.claims.engine !== 'artcraft') {
+        return reply.code(403).send({ success: false, error: '브라우저 엔진으로 열 권한이 없습니다.' });
+      }
+      const meta = view.meta;
+      if (!ARTCRAFT_FORMATS.has(sourceExtOf(meta))) {
+        return reply.code(400).send({ success: false, error: '이 형식은 브라우저 엔진이 지원하지 않습니다' });
+      }
+      let data: Uint8Array;
+      if (meta.legacy) {
+        // 내려받기(legacyDownload)와 같은 "고쳤는지" 판단 — 안 고쳤으면 올린 바이트, 고쳤으면 다시 바꾸려면 LibreOffice가 필요해 넘긴다
+        const stored = await store.readOriginal(meta.id, meta.ext);
+        if ((await hasUnsavedEdits(meta.id)) || createHash('sha256').update(stored).digest('hex') !== meta.legacy.sha256) {
+          return reply.code(409).send({ success: false, error: '고친 옛 형식 문서는 서버 변환으로 엽니다.' });
+        }
+        data = await store.readDerived(meta.id, 'legacy');
+      } else {
+        // 내려받기와 같은 원천 — 편집 방이 떠 있으면 저장 전 최신 바이트
+        data = (await getCurrentBytes(meta.id)) ?? (await store.readOriginal(meta.id, meta.ext));
+      }
+      await recordAudit({ type: 'engine_open', docId: meta.id, viewer: view.claims.viewer });
+      return reply.type('application/octet-stream').header('cache-control', 'private, no-store').send(data);
     },
   );
 

@@ -18,6 +18,8 @@ import { buildGridFromOriginal, saveGridDerived, type GridDocument } from '../sp
 import { newDocumentId, store } from '../storage.js';
 import type { DocumentMeta, LegacyExt, ViewKind } from '../types.js';
 import { invalidateViewCaches } from './viewer.js';
+import { engineFor, sourceExtOf, type Engine } from '../artcraftEngine.js';
+import { readArtcraftManifest } from '../artcraftManifest.js';
 import { isOpenable, trackInitialConversion } from '../conversionGate.js';
 import { assertZipNotTooLarge, ZipTooLargeError } from '../zipGuard.js';
 import { buildViewerGridFile, isLargeXlsx, saveGridFile, serializeGridFromLazyStore } from '../xlsx/viewerGrid.js';
@@ -35,6 +37,8 @@ const tokenBodySchema = {
     canEdit: { type: 'boolean', default: false },
     // PDF를 PDF 편집기(editor-pdf.html)로 열지 — 향기랩만 true를 보낸다. 없으면 pdf는 지금처럼 보기 화면만(editorUrlFor 참고)
     pdfEditor: { type: 'boolean', default: false },
+    // 여는 엔진(설계 2026-11-21 §3.1) — artcraft는 브라우저 wasm 엔진. 안 되는 경우는 거절하지 않고 libreoffice + engineReason
+    engine: { type: 'string', enum: ['libreoffice', 'artcraft'], default: 'libreoffice' },
   },
 } as const;
 
@@ -45,6 +49,7 @@ interface TokenBody {
   readonly canCopy: boolean;
   readonly canEdit: boolean;
   readonly pdfEditor: boolean;
+  readonly engine: Engine;
 }
 
 /** LibreOffice가 중간 진행률을 제공하지 않으므로 단계 완료 시점마다 진행률을 기록한다. */
@@ -526,7 +531,7 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
       if (!isOpenable(meta)) {
         return reply.code(404).send({ success: false, error: '문서를 찾을 수 없습니다.' });
       }
-      const { viewer, canPrint, canDownload, canCopy, canEdit, pdfEditor } = request.body;
+      const { viewer, canPrint, canDownload, canCopy, canEdit, pdfEditor, engine } = request.body;
       const isEditableExt = EDITABLE_EXTS.has(meta.ext);
       // canEdit은 두 가지 용도로 쓰인다: (1) docx/xlsx 실시간 동시편집 참여 허용 — 이 경우 해당
       // 확장자용 변환기가 실제로 있어야 한다(편집 UI는 있는데 저장이 막히는 상황을 막기 위함).
@@ -535,6 +540,7 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
       // WebSocket(src/routes/edit.ts)은 docx/xlsx가 아니면 canEdit 값과 무관하게 접속 자체를 거부해
       // canEdit이 마크업 용도로 켜진 문서가 잘못 동시편집 룸에 들어가 원본을 덮어쓰는 일을 막는다.
       const effectiveCanEdit = canEdit && (!isEditableExt || findConverter(meta.ext) !== null);
+      const decision = engineFor(sourceExtOf(meta), { canDownload }, engine, readArtcraftManifest() !== null);
       const token = issueViewToken(
         {
           docId: meta.id,
@@ -546,6 +552,7 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
             canEdit: effectiveCanEdit,
             ...(meta.ext === 'pdf' && pdfEditor && canDownload ? { pdfEditor: true } : {}),
           },
+          ...(engine === 'artcraft' ? { engine: 'artcraft' as const } : {}),
         },
         config.tokenTtlSeconds,
       );
@@ -553,7 +560,7 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
         type: 'token_issued',
         docId: meta.id,
         viewer,
-        detail: `print=${canPrint} download=${canDownload} copy=${canCopy} edit=${effectiveCanEdit}${callerProject ? ` caller=${callerProject}` : ''}`,
+        detail: `print=${canPrint} download=${canDownload} copy=${canCopy} edit=${effectiveCanEdit} engine=${decision.engine}${callerProject ? ` caller=${callerProject}` : ''}`,
       });
       // 문서(docx)·그리드(xlsx)·슬라이드(pptx) 편집기 전부 canEdit:false여도 읽기 전용으로 그대로
       // 열 수 있다(collab/room.ts가 그 연결의 실제 쓰기를 서버에서 막는다) — 과거 연도 접속현황처럼
@@ -569,6 +576,8 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
           viewerUrl: `${viewPathFor(meta.ext, meta.viewKind)}?token=${encodeURIComponent(token)}`,
           editorUrl: editorUrlFor(meta.ext, { effectiveCanEdit, canDownload, pdfEditor }, token),
           expiresInSeconds: config.tokenTtlSeconds,
+          engine: decision.engine,
+          ...(decision.reason ? { engineReason: decision.reason } : {}),
         },
       };
     },
