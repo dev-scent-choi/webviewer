@@ -38,7 +38,8 @@ export function blockedViewKey(e: { readonly key: string; readonly code?: string
     if (ZOOM_KEYS.has(key)) return false;
     const letter = /^Key([A-Z])$/.exec(e.code ?? '')?.[1].toLowerCase() ?? (/^[a-z]$/.test(key) ? key : null);
     if (!letter) return false;
-    return !(letter === 'f' || letter === 'a' || (letter === 'c' && e.canCopy) || (letter === 'p' && e.canPrint === true));
+    // r·l 은 브라우저 자체 단축키(새로 고침·주소창) — 보기 화면과 같이 막지 않는다
+    return !(letter === 'f' || letter === 'a' || letter === 'r' || letter === 'l' || (letter === 'c' && e.canCopy) || (letter === 'p' && e.canPrint === true));
   }
   return key === 'delete' || key === 'backspace' || key === 'f2';
 }

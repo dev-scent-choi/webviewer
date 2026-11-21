@@ -55,7 +55,10 @@ describe('blockedViewKey — 편집 단축키는 무시, 찾기·이동은 그�
 describe('blockedViewKey — Ctrl+글자는 허용 목록(F·A·C(복사)·P(인쇄))과 확대 키만', () => {
   test.each<[string, string | undefined, boolean, boolean, boolean]>([
     // 허용 목록 밖의 글자는 모두 막는다(굵게·밑줄·기울임·메모·채우기 …)
-    ...['b', 'd', 'i', 'u', 'm', 'k', 'e', 'l', 'r', 'g', 'j'].map((key): [string, undefined, boolean, boolean, boolean] => [key, undefined, true, true, true]),
+    ...['b', 'd', 'i', 'u', 'm', 'k', 'e', 'g', 'j'].map((key): [string, undefined, boolean, boolean, boolean] => [key, undefined, true, true, true]),
+    // 브라우저 단축키(새로 고침·주소창)는 보기 화면처럼 막지 않는다
+    ['r', undefined, true, true, false],
+    ['l', undefined, true, true, false],
     ['p', undefined, true, true, false],
     ['p', undefined, true, false, true],
     ['P', undefined, true, false, true],
