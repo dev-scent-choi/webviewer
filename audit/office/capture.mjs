@@ -119,6 +119,11 @@ try {
       const name = f.replace(/\.[^.]+$/, '');
       const entry = { name, ext, errors: [] };
       const t0 = Date.now();
+      // 이 문서의 옛 그림을 먼저 지운다 — 캡처가 실패했는데 옛 그림·나란히 그림이 남아 점수만 조용히 바뀌는 일이 없게(검토 r5 "15/14")
+      for (const sub of ['view', 'edit', 'sbs']) {
+        const d = path.join(OUT, sub);
+        if (fs.existsSync(d)) for (const old of fs.readdirSync(d)) if (old === `${name}.png` || old.startsWith(`${name}-`)) fs.rmSync(path.join(d, old), { force: true });
+      }
       try {
         const base = await upload(path.join(dir, f));
         entry.convertMs = Date.now() - t0;
@@ -135,10 +140,20 @@ try {
           }
         } finally { await ctx.close(); }
         await fetch(`${BASE}/api/documents/${base.id}`, { method: 'DELETE' }).catch(() => {});
-      } catch (e) { entry.errors.push(String(e).slice(0, 300)); }
+      } catch (e) {
+        entry.errors.push(String(e).slice(0, 300));
+        entry.failed = true;
+      }
+      if (!entry.edit || (ext === 'xlsx' && !entry.view)) entry.failed = true;
       console.log(`${entry.errors.length ? 'ERR ' : 'ok  '} ${f} ${entry.convertMs ?? '-'}ms ${entry.errors.join(' | ')}`);
       manifest.push(entry);
     }
   }
 } finally { await browser.close(); }
 fs.writeFileSync(path.join(OUT, `manifest${FILTER ? '-' + FILTER : ''}.json`), JSON.stringify(manifest, null, 2));
+// 캡처하지 못한 문서가 있으면 시끄럽게 실패한다(run.mjs가 점수를 내지 않고 멈춘다)
+const failed = manifest.filter((e) => e.failed);
+if (failed.length > 0) {
+  console.error(`캡처 실패 ${failed.length}건 — ${failed.map((e) => `${e.name}: ${e.errors.join(' | ') || '그림 없음'}`).join(' / ')}`);
+  process.exitCode = 1;
+}
