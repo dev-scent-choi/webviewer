@@ -244,6 +244,8 @@ interface Room {
   autosaveTimer: NodeJS.Timeout | null;
   /** 문서 시딩(원본 → Y.Doc)이 끝났는지 — 첫 연결에 syncStep1을 보내기 전에 기다린다 */
   ready: Promise<void>;
+  /** 시딩이 잘 끝났다 — 그 전에는 방 크기를 알 수 없어 닫기 유예를 하지 않는다(재검토 I2) */
+  seeded?: boolean;
   /**
    * true인 동안 발생한 ydoc 'update'는 scheduleAutosave를 다시 예약하지 않는다.
    * flushToStore 자신이 저장 결과를 Y.Doc에 반영(pptx 배열 재작성, 저장 시각 기록)할 때만
@@ -2444,6 +2446,7 @@ function getOrCreateRoom(docId: string, ext: string): Room {
   // 시딩(파일을 방에 처음 올리는 쓰기)은 편집이 아니다 — 끝나면 "편집됨"을 지운다. 안 그러면 아무도 고치지 않은 문서를
   // 열었다 닫기만 해도(읽기 전용 포함) 파일을 다시 저장했다. 참여자는 시딩이 끝난 뒤에야 문서를 받으므로 그 전의 편집은 없다.
   room.ready = seedRoom(room).then(() => {
+    room.seeded = true;
     room.editedSinceSave = false;
     if (room.autosaveTimer) {
       clearTimeout(room.autosaveTimer);
@@ -3073,6 +3076,7 @@ function envBytes(name: string, fallback: number): number {
 /** 유예할 때 남는 메모리 어림(바이트) — shortcut: Y.Doc은 인코딩 길이로 잰다(실제 메모리는 몇 배), 더 정확히 재야 하면 v8 힙 표본으로 */
 function lingerBytesOf(room: Room): number {
   let bytes = (room.originalPdfBytes?.length ?? 0) + (room.pdfEncryptedFile?.length ?? 0) + (room.originalXlsxBytes?.length ?? 0);
+  for (const part of room.pdfParts?.values() ?? []) bytes += part.length; // PDF에 넣은 그림·글꼴 조각
   try {
     bytes += Y.encodeStateAsUpdate(room.ydoc).length;
   } catch {
@@ -3100,7 +3104,8 @@ function roomCloseGraceMs(): number {
 /** 남겨 둘 수 있으면 타이머를 걸고 true(저장은 부르는 쪽이 지금 한다), 아니면 false(바로 닫는다) */
 function lingerRoom(room: Room): boolean {
   const ms = roomCloseGraceMs();
-  if (ms === 0 || closeWithoutGrace.has(room.docId) || largeRoomDocIds.has(room.docId)) return false;
+  // 채우는 중인 방은 크기를 아직 모른다(큰 PDF는 채운 뒤에야 원본을 쥔다) — 유예하지 않고 예전처럼 바로 닫는다
+  if (ms === 0 || !room.seeded || closeWithoutGrace.has(room.docId) || largeRoomDocIds.has(room.docId)) return false;
   const bytes = lingerBytesOf(room);
   const total = envBytes('DOCVIEW_ROOM_LINGER_TOTAL_BYTES', ROOM_LINGER_TOTAL_BYTES);
   if (bytes > Math.min(envBytes('DOCVIEW_ROOM_LINGER_MAX_BYTES', ROOM_LINGER_MAX_BYTES), total)) return false;

@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { makeSampleDocx } from './helpers.js';
+import { makeSampleDocx, makeSamplePdf } from './helpers.js';
 
 /**
  * FINAL-REVIEW I2 — 닫기 유예가 방 개수(20)로만 묶여 큰 PDF·덱·문서 방 20개가 45초 동안 메모리에 남을 수 있던 문제.
@@ -75,5 +75,24 @@ describe('I2: 닫기 유예의 바이트 상한', () => {
     expect(isRoomOpen(a)).toBe(false); // 가장 오래된 방
     expect(isRoomOpen(b)).toBe(true);
     expect(isRoomOpen(c)).toBe(true);
+  });
+  test('재검토 I2: 큰 PDF를 불러오는 중(채우기 전) 마지막 사람이 나가면 유예 없이 닫힌다', async () => {
+    const { store } = await import('../src/storage.js');
+    const { joinEditSession, isRoomOpen } = await import('../src/collab/room.js');
+    const docId = randomUUID();
+    await store.saveOriginal(docId, 'pdf', await makeSamplePdf(2));
+    await store.writeMeta({ id: docId, name: 'x.pdf', ext: 'pdf', status: 'ready', pageCount: 2, createdAt: new Date().toISOString(), progress: 100 });
+    const realRead = store.readOriginal.bind(store);
+    vi.spyOn(store, 'readOriginal').mockImplementation(async (...args: Parameters<typeof store.readOriginal>) => {
+      await new Promise((r) => setTimeout(r, 300)); // 큰 파일 — 읽는 데 오래 걸린다
+      return realRead(...args);
+    });
+    const s = new FakeSocket();
+    const joining = joinEditSession(s as never, request, docId, 'pdf');
+    await new Promise((r) => setTimeout(r, 20));
+    s.emit('close'); // 아직 채우는 중
+    expect(isRoomOpen(docId)).toBe(false);
+    await joining;
+    vi.restoreAllMocks();
   });
 });
