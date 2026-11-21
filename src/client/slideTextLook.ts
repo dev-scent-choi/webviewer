@@ -1,6 +1,6 @@
 import { Plugin, PluginKey } from 'prosemirror-state';
 import { Decoration, DecorationSet } from 'prosemirror-view';
-import type { Node as PMNode } from 'prosemirror-model';
+import { DOMSerializer, type Node as PMNode } from 'prosemirror-model';
 import { DEFAULT_INSETS_EMU, type SlideLevelLook, type SlideShapeMeta } from '../collab/pptxShared.js';
 import { autoNumberPlan, gapCss, lineHeightCss } from '../pptx/paragraphLook.js';
 import { fontSizeCss, slideMediaUrl } from '../pptx/textSchema.js';
@@ -230,12 +230,14 @@ const stepRank = (a: Autofit) => {
 };
 
 /**
- * 글을 고친 뒤 자동 맞춤 단계를 다시 고른다 — PowerPoint처럼 지금 단계에서 시작해, 넘치면 넘치지 않을 때까지 작게, 넘치지 않으면
- * 한 단계 크게 해도 들어가는 동안 크게(글을 지우면 커진다). 측정은 화면 캔버스가 아니라 슬라이드 좌표(1pt = 4px)의 화면 밖 복제본에서,
+ * 글을 고친 뒤 자동 맞춤 단계를 다시 고른다 — PowerPoint처럼 지금 단계에서 시작해, 글이 늘어 넘치면 작게, 한 단계 키워도 상자에
+ * 들어가면 크게(글을 지우면 커진다). 측정은 화면 캔버스가 아니라 슬라이드 좌표(1pt = 4px)의 화면 밖 사본(문서를 그대로 직렬화)에서,
  * 글상자 안쪽 크기는 meta(EMU)로 잡는다 — 예전엔 화면 캔버스에서 재서 창 크기에 따라 같은 글이 다른 단계가 됐다(2차 검토 R2-I3).
+ * "넘침"은 고치기 전 글의 높이(같은 단계)와 상자 높이 중 큰 쪽을 기준으로 본다 — PowerPoint가 저장한 단계가 이 편집기의 글꼴 측정으로는
+ * 조금 넘치는 경우가 있어(정답 p03: PowerPoint도 상자 아래로 약간 넘침), 상자 높이만 보면 한 글자만 쳐도 한 단계 작아졌다.
  * 바뀌지 않으면 current를 그대로 돌려준다.
  */
-export function refitAutofit(box: HTMLElement, dom: HTMLElement, meta: SlideShapeMeta, current: Autofit): Autofit {
+export function refitAutofit(box: HTMLElement, dom: HTMLElement, meta: SlideShapeMeta, current: Autofit, before: PMNode, after: PMNode): Autofit {
   if (!meta.w || !meta.h || meta.vert) return current;
   const extra = textRectInsets(meta.presetGeom, meta.w, meta.h);
   const [l, t, r, b] = (meta.insets ?? DEFAULT_INSETS_EMU).map((v, i) => v + (meta.geom ? 0 : extra[i]));
@@ -252,22 +254,31 @@ export function refitAutofit(box: HTMLElement, dom: HTMLElement, meta: SlideShap
     'style',
     `position: fixed; left: -100000px; top: 0; visibility: hidden; padding: 0; height: auto; display: block; transform: none; width: ${width}px; --slide-pt: ${MEASURE_PT_PX}px;`,
   );
-  const clone = dom.cloneNode(true) as HTMLElement;
-  clone.removeAttribute('contenteditable');
-  measureHost.replaceChildren(clone);
-  const fits = (step: Autofit) => {
-    applyAutofit(clone, step);
-    return clone.scrollHeight <= room;
+  const host = measureHost;
+  const serializer = DOMSerializer.fromSchema(after.type.schema);
+  const copyOf = (doc: PMNode) => {
+    const el = document.createElement('div');
+    el.className = dom.className;
+    el.style.cssText = dom.style.cssText;
+    el.append(serializer.serializeFragment(doc.content));
+    return el;
   };
+  const height = (el: HTMLElement, step: Autofit) => {
+    applyAutofit(el, step);
+    host.replaceChildren(el);
+    return el.scrollHeight;
+  };
+  const beforeEl = copyOf(before);
+  const afterEl = copyOf(after);
+  const allowed = Math.max(room, height(beforeEl, current));
   let result = current;
   const rank = stepRank(current);
-  if (!fits(current)) {
-    const smaller = AUTOFIT_STEPS.filter((_, i) => i > rank);
-    result = smaller.find(fits) ?? AUTOFIT_STEPS[AUTOFIT_STEPS.length - 1];
+  if (height(afterEl, current) > allowed) {
+    result = AUTOFIT_STEPS.filter((_, i) => i > rank).find((s) => height(afterEl, s) <= allowed) ?? AUTOFIT_STEPS[AUTOFIT_STEPS.length - 1];
   } else {
-    for (let i = Math.ceil(rank) - 1; i >= 0 && fits(AUTOFIT_STEPS[i]); i -= 1) result = AUTOFIT_STEPS[i];
+    for (let i = Math.ceil(rank) - 1; i >= 0 && height(afterEl, AUTOFIT_STEPS[i]) <= room; i -= 1) result = AUTOFIT_STEPS[i];
   }
-  measureHost.replaceChildren();
+  host.replaceChildren();
   return result;
 }
 

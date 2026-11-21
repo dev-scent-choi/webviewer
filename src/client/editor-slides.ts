@@ -691,7 +691,7 @@ function renderCanvasForSlideInner(entryId: string): void {
         this.updateState(this.state.apply(tr));
         if (focusedView === this) refreshRibbonState(this);
         // 내가 글을 고쳤을 때만(원격 동기화 반영은 제외) 자동 맞춤을 다시 계산한다 — 열기만 해서는 원본 배율을 바꾸지 않는다
-        if (tr.docChanged && canEdit && !tr.getMeta(ySyncPluginKey)) scheduleRefit(shapeId);
+        if (tr.docChanged && canEdit && !tr.getMeta(ySyncPluginKey)) scheduleRefit(shapeId, tr.before);
       },
       // 서식 툴바가 "지금 어느 텍스트박스를 편집 중인지" 알 수 있는 유일한 경로 — handleDOMEvents의
       // 반환값 false는 "이 이벤트를 ProseMirror가 가로채 막지 말고 브라우저 기본 동작(포커스 이동)을
@@ -755,18 +755,20 @@ function showSaveNotice(text: string): void {
 
 /** 글을 고친 글상자의 자동 맞춤(normAutofit)을 다음 그림 틀에서 다시 맞추고, 바뀌었으면 meta에 적어 저장·다른 참여자에게
  * 넘긴다(PowerPoint처럼 글이 늘면 작아지고 줄면 커진다 — 검토 Minor 3). 맞춤 도형이 아니면 아무것도 안 한다. */
-const refitPending = new Set<string>();
-function scheduleRefit(shapeId: string): void {
+/** 글상자 → 이번 그림 틀에서 처음 고치기 전의 문서(여러 번 고쳐도 한 번만 다시 맞춘다) */
+const refitPending = new Map<string, PMNode>();
+function scheduleRefit(shapeId: string, before: PMNode): void {
   if (refitPending.has(shapeId)) return;
-  refitPending.add(shapeId);
+  refitPending.set(shapeId, before);
   requestAnimationFrame(() => {
+    const beforeDoc = refitPending.get(shapeId)!;
     refitPending.delete(shapeId);
     const view = mountedViews.get(shapeId);
     const shapeMap = slideContents.get(activeSlideId ?? '')?.get(shapeId);
     const meta = shapeMap?.get('meta') as SlideShapeMeta | undefined;
     const box = view?.dom.parentElement;
     if (!view || !shapeMap || !meta?.autofit || !box) return;
-    const fit = refitAutofit(box, view.dom, meta, meta.autofit);
+    const fit = refitAutofit(box, view.dom, meta, meta.autofit, beforeDoc, view.state.doc);
     if (fit.fontScale !== meta.autofit.fontScale || fit.lnSpcReduction !== meta.autofit.lnSpcReduction) {
       shapeMap.set('meta', { ...meta, autofit: fit });
     }

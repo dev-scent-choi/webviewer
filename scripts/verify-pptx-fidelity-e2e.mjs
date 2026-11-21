@@ -285,6 +285,43 @@ rec('위조한 끝 속성이 저장 XML에 들어가지 않고 슬라이드 XML�
 rec('감싼 도형(mc:AlternateContent)은 원문 그대로 저장', slide2.includes('<mc:Fallback><p:sp><p:nvSpPr><p:cNvPr id="11"'), '');
 await page.screenshot({ path: path.join(shotDir, 'pptx-editor.png') });
 rec('페이지 오류 없음', errors.length === 0, errors.slice(0, 2).join(' | '));
+// 자동 맞춤 다시 맞춤은 창 크기와 무관하고, 한 글자 편집에 PowerPoint 값(47.5%)을 흔들지 않는다(2차 검토 R2-I3)
+{
+  const form = new FormData();
+  form.append('file', new Blob([fs.readFileSync('audit/office/corpus/pptx/p03-autofit.pptx')]), 'p03.pptx');
+  const pid = (await (await fetch(`${BASE}/api/documents`, { method: 'POST', body: form })).json()).data.id;
+  for (;;) { const st = (await (await fetch(`${BASE}/api/documents/${pid}`)).json()).data; if (st.status === 'ready') break; await new Promise((r) => setTimeout(r, 400)); }
+  const pt = (await (await fetch(`${BASE}/api/documents/${pid}/tokens`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ viewer: 'af', canPrint: true, canDownload: true, canCopy: true, canEdit: true }) })).json()).data;
+  const scales = [];
+  for (const vp of [{ width: 1400, height: 900 }, { width: 900, height: 700 }, { width: 1920, height: 1080 }]) {
+    const p2 = await browser.newPage({ viewport: vp });
+    await p2.goto(BASE + pt.editorUrl);
+    await p2.waitForSelector('#slide-canvas .slide-textbox .ProseMirror');
+    await p2.waitForTimeout(2000);
+    const sid = await p2.locator('#slide-canvas .slide-textbox').filter({ hasText: '12. 향기랩' }).getAttribute('data-shape-id');
+    const pm = p2.locator(`#slide-canvas .slide-textbox[data-shape-id="${sid}"] .ProseMirror`);
+    // 창 크기와 무관하게 같은 자리(마지막 단락 끝)에 커서를 둔다 — 좁은 창에선 마우스 좌표가 다른 상자에 떨어질 수 있다
+    await pm.evaluate((el) => {
+      el.focus();
+      const last = el.querySelector('p:last-of-type');
+      const range = document.createRange();
+      range.selectNodeContents(last);
+      range.collapse(false);
+      const sel = getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+    });
+    await p2.waitForTimeout(200);
+    await p2.keyboard.type('!');
+    await p2.waitForTimeout(600);
+    scales.push(await pm.evaluate((e) => e.style.getPropertyValue('--fs-scale')));
+    await p2.keyboard.press('Backspace');
+    await p2.waitForTimeout(800);
+    await p2.close();
+  }
+  rec('자동 맞춤: 한 글자 편집은 창 크기(1400·900·1920)와 무관하게 47.5% 유지', scales.every((v) => v === '0.475'), JSON.stringify(scales));
+  await fetch(`${BASE}/api/documents/${pid}`, { method: 'DELETE' }).catch(() => {});
+}
 await browser.close();
 await fetch(`${BASE}/api/documents/${id}`, { method: 'DELETE' }).catch(() => {});
 const fails = results.filter((r) => !r.ok);
