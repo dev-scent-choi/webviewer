@@ -136,3 +136,37 @@ vitest 전체 110파일 879개 통과, tsc, build:editor·build:server, verify:p
 ### 숫자
 - 공식 `audit:office -- --only pptx --no-office`: PPT 편집 점검표 **52/52**(위치 허용 ±1%), 편집 모양 **0.975**, 보기 0.95·0.945(회귀 없음).
 - verify:pptx **24/24**, verify:reconnect **12/12**, tsc·build 통과, vitest 전체 **906/906**(110파일, 한 번에 통과 — 앞 실행에서 기기 부하로 room 시험이 시간 초과했을 때는 그 파일만 다시 돌려 통과).
+
+## 8. 3차 검토(REVIEW-PPTX-r3.md) 항목별 답
+
+커밋 24f40fb…017cb96.
+
+| 항목 | 결과 | 무엇을·근거 |
+|---|---|---|
+| R3-I1 반쯤 열린 연결 + 혼자 편집하는 방이 바로 닫혀 입력 손실 | **고침(공유 동시편집 층)** | ① **방 닫기 유예**: 마지막 참여자가 나가면 저장은 지금처럼 바로 하되(편집이 있었을 때만), 방은 같은 세대로 45초 남긴다(`DOCVIEW_ROOM_CLOSE_GRACE_MS`, 0=끔, 최대 120초). 그 안에 다시 붙으면 같은 세대라 Yjs가 빠진 변경을 정상적으로 다시 보낸다 — 새로 고침·손실·중복 없음. 남겨 두는 방은 최대 20개(넘으면 가장 오래된 방부터 닫음), 큰 엑셀 방(largeRoom)은 남기지 않음, 문서 삭제(`forceCloseRoom`)는 유예 없이 바로 닫음, 타이머는 `unref`(서버 종료를 붙잡지 않음 — 남은 방은 이미 저장됨). 유예 중 추가 자동저장은 없다(편집이 없으니 예약 자체가 없음). ② **그래도 방이 새로 만들어진 경우**(유예 뒤, 서버 재시작): 안내에 "연결이 끊긴 뒤 입력한 내용은 반영되지 않았을 수 있다"를 적고, 이 화면에서 고친 곳(문단·셀)의 현재 글자를 모아 **'내 입력 내용 복사'·'내려받기'**를 건넨다. 반쯤 열린 연결은 보낸 것이 닿았는지 알 수 없으므로 고친 기록은 접속 상태와 무관하게 모두 남긴다(보수적). 그런 내용이 있으면 **저절로 새로 고치지 않는다**. 실제 브라우저(`verify:reconnect`): PPT·워드·엑셀 반쯤 열림 → 재접속에서 안내 없이 이어지고 그 사이 입력이 저장 파일에 한 번씩 |
+| R3-m2 2.5초 자동 새로 고침 | **고침** | 잃을 입력이 없을 때만, 보이는 10초 초읽기(aria-live) 뒤 다시 불러온다. 입력이 있었으면 사용자가 누를 때만 |
+| R3-I2 세대 값을 모르는 옛 번들은 여전히 합쳐짐 | **고침(서버 판정)** | 주소에 `epoch`가 없는 연결은 첫 SyncStep1의 상태 벡터를 이 방 세대의 Yjs 상태와 비교해, 비어 있지 않은데 **겹치는 client id가 하나도 없으면**(= 이전 세대 문서를 가진 탭) 동기화 메시지를 하나도 받지 않고 메시지 8 + 닫기 **4409**(이유 문구 한국어)로 거절한다. 옛 번들은 4400대를 영구 거부로 다뤄 다시 붙지 않고 이유를 보여 준다. 새 번들은 보통 닫기(1000)에 자체 안내. 빈 상태 벡터(새 탭)·같은 세대 상태(유예 안 재접속)는 통과. y-websocket은 열리자마자 SyncStep1부터 보내므로 다른 메시지가 먼저 오면 판정 없이 통과. 브라우저 시험(옛 번들 흉내: 주소의 epoch 제거 + 메시지 7·8 버림): **PPT·워드·엑셀·PDF 넷 다** 서버 재시작 뒤 4409·다시 붙지 않음, 새 탭 내용·저장 파일 한 벌. 워드 옛 번들의 유예 안 재접속은 받아 주고 이어서 입력도 저장 |
+| 배포 절차(선택) | 문서화 | 서버 판정으로 비밀 값 교체는 **필수가 아니다**. 그래도 옛 번들 탭을 확실히 모두 새로 고치게 하려면: 운영 실행 파일을 읽기만 해 확인한 결과 8010(`start.bat`)은 `start.local.bat`에서 `DOCVIEW_SECRET`을 고정해 넣고, 8000(`run-webviewer.bat` → `npm run dev`)은 그 줄이 주석이다(값은 보지도 옮기지도 않음). 배포 때 `start.local.bat`의 값을 새로 바꾸고 예약 작업을 다시 시작하면, 열린 탭은 재접속 때 토큰 오류(4401)로 멈추고 새로 고침 안내를 받는다. 대가: 그때까지 발급된 열람 링크(연동 쪽 토큰 포함)가 모두 무효 |
+| R3-m1 rPr의 이름공간 선언 삭제 | **고침** | `@_xmlns`/`@_xmlns:접두어` 속성은 남긴다(값은 공백·따옴표·`<>` 없는 URI 글자 512자까지). 모르는 속성·자식을 버릴 때도 저장 알림("알 수 없는 글자 속성을 빼고 저장했습니다.") — 전에는 조용히. 검토의 r12: `xmlns:x` kept, `<x:foo` kept, `x:tag`(스키마에 없는 속성)만 빠지고 알림. 시험 추가 |
+| 저장 두 번 시험("expected 1, got 2") | **원인 확정: 시험 간섭 + 별개의 실제 이중 저장 하나 발견·수정** | 부하(방 시험 3벌 동시)에서 재현해 실행 기록으로 확인: 같은 파일의 앞 시험이 **room.js 첫 변환 때문에 20초 한도를 넘겨 시간 초과**되면 vitest는 다음 시험으로 넘어가지만 그 몸통은 뒤에서 계속 돌아, 다음 시험이 `resetModules`로 새로 만든 store에 저장한다 → 다음 시험의 첫 확인에서 2번. 실제 서버의 이중 저장이 아니다. 조치: 그 파일만 시간 한도 90초(`vi.setConfig`) — 같은 부하 3벌에서 그 파일 통과. 조사 중 **진짜 이중 저장 하나**를 찾았다: 2차에서 넣은 PPT 저장 알림(`PPTX_SAVE_NOTICE_MAP`) 쓰기가 자동저장 예약에서 빠져 있지 않아, 알림이 있는 저장마다 8초 뒤 같은 내용을 한 번 더 저장했다 → savedAt 쓰기처럼 `suppressAutosaveReschedule`로 감쌌다. 유예는 이 경로를 바꾸지 않는다(닫을 때 저장은 그대로 한 번, 편집 없으면 0번) |
+| Minor 9 뒤집힌 그라데이션·Minor 12 스마트아트 | **연기(메모 유지)** | 9: MS Office 정답 PDF로 flipH/flipV + 그라데이션 각도 조합을 확인하기 전엔 손대지 않는다(LibreOffice 그림과 Office가 다를 수 있음). 12: 실제 스마트아트 표본(dsp:drawing 없는 파일 포함)이 생기면 그리기 경로 확인 |
+
+### 공유 파일 변경(3차, 다른 갈래와 합칠 때)
+- `src/collab/room.ts`:
+  - `[RX-C1]` 블록 확장(joinEditSession 바로 위): `clientEpochOf`, `refuseStale`, `passesStateCheck`(+`stateChecked` WeakSet), 유예용 `MAX_LINGERING_ROOMS`·`lingeringRooms`·`closeWithoutGrace`·`roomCloseGraceMs`·`lingerRoom`·`wakeLingeringRoom`.
+  - `joinEditSession`: 첫머리(세대 읽기 → 거절 확인 → 유예 방 깨우기 → 방 → 세대 알림), 메시지 처리와 대기 메시지 처리에 `passesStateCheck` 한 겹.
+  - 닫기 정리를 `teardownRoom(room)` 함수로 분리(내용은 그대로) — `closeConn`의 마지막 참여자 분기는 `lingerRoom`이면 저장만, 아니면 `teardownRoom`.
+  - `forceCloseRoom`: `closeWithoutGrace` 표시 + 유예 중이던 방 바로 정리.
+  - pptx 저장 알림 쓰기를 `suppressAutosaveReschedule`로 감쌈.
+  - import: `./roomEpoch.js`에서 `MESSAGE_ROOM_STALE`·`ROOM_STALE_CLOSE_CODE`·`ROOM_STALE_REASON` 추가.
+- `src/collab/roomEpoch.ts`: `ROOM_STALE_REASON` 추가, 4409 설명 갱신.
+- `src/client/roomEpoch.ts`: 고친 곳 기록(afterTransaction), `recoveryText`, 안내 화면(복사·내려받기·초읽기) 다시 씀.
+- `src/client/editor-pdf.ts`: 거부로 멈춘 뒤 status 이벤트가 '보기 전용'을 덮지 않게 한 줄.
+- `vitest.config.ts`: env `DOCVIEW_ROOM_CLOSE_GRACE_MS: '0'`(기존 방 시험은 닫히면 바로 정리되길 기대 — 유예 시험은 따로 켬).
+- 시험: `tests/roomCloseGrace.test.ts`(새), `tests/roomEpochRecovery.test.ts`(새), `tests/roomAutosaveLoop.test.ts`(시간 한도 한 줄), `tests/pptxQualityFixes.test.ts`(R3-m1).
+- `scripts/verify-reconnect-e2e.mjs`: 시험 서버를 직접 띄우고 다시 띄우도록 다시 씀(39항목).
+
+### 숫자
+- 공식 `audit:office -- --only pptx --port 8155 --no-office`: PPT 편집 점검표 **52/52**, 편집 모양 **0.975**, 보기 **0.95·0.945**(변화 없음). Office는 띄우지 않음.
+- verify:pptx **24/24**, verify:reconnect **39/39**(유예·반쯤 열림 각 3형식, 서버 재시작 3형식 + 입력 없는 탭 초읽기, 옛 번들 4형식), tsc 통과, vitest 전체 **913/913**(112파일).
+- 남은 것: 부하(방 시험 여러 벌 동시)에서 다른 room 시험 몇 개가 첫 import 때문에 20초 시간 초과하는 것은 그대로(기준 94ab62b에도 있음, 혼자·전체 실행에선 통과). 엑셀 '내 입력 내용'은 셀 키(`시트:행:열`) 그대로 보인다.
