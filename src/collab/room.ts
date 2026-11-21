@@ -647,9 +647,14 @@ export async function getCfRemoteAnswer(docId: string, req: CfRemoteRequest): Pr
   let timer: NodeJS.Timeout | undefined;
   await Promise.race([Promise.all([room.cfRanges.applying, room.canonicalGrowth]), new Promise((resolve) => (timer = setTimeout(resolve, 2_000)))]);
   clearTimeout(timer);
+  if (rooms.get(docId) !== room) return null; // 기다리는 사이 방이 닫혔다(닫힌 lazyGrid를 읽지 않는다 — 최종 검토 M2)
   const entries = room.ydoc.getMap<readonly CondFormatEntry[]>(GRID_COND_FORMATS_MAP).get(String(req.sheet)) ?? [];
   const computed = room.ydoc.getMap<string>(GRID_COMPUTED_MAP);
-  return answerCfRemote(room.cfRanges, store, req, entries, (r, c) => computed.get(gridCellKey(req.sheet, r, c)));
+  const answer = await answerCfRemote(room.cfRanges, store, req, entries, (r, c) => computed.get(gridCellKey(req.sheet, r, c))).catch((error: unknown) => {
+    if (rooms.get(docId) !== room) return null; // 세는 사이 방이 닫혀 저장소가 닫혔다 — 409
+    throw error;
+  });
+  return rooms.get(docId) === room ? answer : null;
 }
 
 /**
@@ -2514,8 +2519,9 @@ function teardownRoom(room: Room): void {
   void persistChangeLog(room.docId, room.kind, changeLogOf(room));
   if (room.lazyGrid) void closeLazyGridStore(room.lazyGrid);
   void room.ready
-    // 편집이 없었으면 다시 저장하지 않는다(모든 형식) — 읽기만 해도 파일이 바뀌지 않게
-    .then(() => (!room.editedSinceSave ? undefined : queueFlush(room)))
+    // 편집이 없었으면 다시 저장하지 않는다(모든 형식) — 읽기만 해도 파일이 바뀌지 않게.
+    // 저장하지 않아도 같은 줄(runSerialized)에 서서, 진행 중인 저장(유예 때 시작한 것 등)이 끝난 뒤에 정리한다(최종 검토 M1)
+    .then(() => (!room.editedSinceSave ? runSerialized(room.docId, async () => undefined) : queueFlush(room)))
     .catch((error) => console.error(`동시편집 종료 저장 실패 (문서 ${room.docId}):`, error))
     .finally(() => {
       room.ydoc.destroy();
