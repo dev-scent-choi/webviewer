@@ -154,3 +154,34 @@ docx 왕복(`npx tsx audit/office/roundtrip-docx.ts`, 말뭉치 10 + 검토 재�
 
 - C1에서 fast-formula-parser 라이브러리의 COUNTIF처럼 원래 대소문자를 구분하던 경로(`Criteria.parse`가 'i' 없이 부름)는 그대로 구분한다. 동작을 바꾸지 않으려고 손대지 않았다. 엑셀은 구분하지 않는다.
 - I2의 어림에는 Y.Doc 인코딩이 든다. 방을 닫을 때 한 번 문서 크기만큼 일한다. 저장도 같은 크기만큼 일하므로 감수했다.
+
+## 재검토 반영 (FINAL-REVIEW.md "재검토" 절, fe23856 → af2856d)
+
+| 항목 | 커밋 | 고친 것 | 고치기 전(RED) → 뒤 |
+|---|---|---|---|
+| C1 남은 것 — 총 작업량 | badb0f1 | `wildcard.ts`가 맞추기마다 실제로 한 일을 예산에서 뺀다. 가운데 조각은 칸 길이 × 조각 길이, SEARCH 찾기는 칸 길이 × 조건 길이다. 예산이 모자라면 `WildcardBudgetError`를 던진다. 예산은 **5·10⁷**(`WILDCARD_WORK_BUDGET`)이고 다음 범위마다 하나씩이다: **xlsx-cf-ranges 요청 하나**(넘은 범위는 `skipped`, 답에 `overBudget: true` → 편집 화면 "일부 생략"), **업로드·재생성 굽기 하나**(그 규칙은 칠하지 않고 `cfSkipped`), **업로드 수식 계산 전체 하나**(넘은 칸은 계산 실패 → 수식 원문). 범위 밖에서는 매처 하나(엑셀 함수 호출 하나)마다 예산 하나다. 편집 방의 비동기 재계산과 브라우저가 여기에 해당한다 | 조건 2,000개 × 32k자 칸 200개 요청 13초 → 1초 안 + `overBudget`. 수식 엔진 COUNTIF 한 번 3.7초 → 1초 안. 업로드 수식 100개 5초 안. 굽기 `cfSkipped`. 정상 요청(`a*1`·`*99`)은 결과 그대로 (`tests/finalReviewC1Budget.test.ts`) |
+| I2 틈 | da3eb82 | `room.seeded`(시딩이 잘 끝남)가 아니면 유예하지 않는다. 채우는 중인 방은 예전처럼 바로 닫는다. `pdfParts`도 크기 어림에 넣었다 | 원본 읽기가 느린 PDF를 채우는 중 나가면 유예됨 → 바로 닫힘 |
+| M3 남은 것 | 9eb376e | `ensureBuiltinLists`의 기본 번호 정의 찾기(`abstractNumIdNamed`)를 indexOf 순회로 바꿨다. 닫는 태그와 이름 자리는 앞으로만 찾는다 | 안 닫힌 `<w:abstractNum>` 1만 개 4.7초 → 300ms 안. 두 번 저장해도 numId·정의 수 그대로 (`tests/finalReviewM3Numbering.test.ts`) |
+| 4. teardown 순서(기준부터 있던 것) | af2856d | `persistChangeLog`·`closeLazyGridStore`를 M1과 같은 줄(runSerialized) 뒤, `ydoc.destroy` 직전으로 옮겼다 | 저장 도중 닫으면 저장이 읽는 중에 행 저장소 파일이 이미 지워져 있었다 → 저장 중에는 남아 있고, 저장본에 편집이 들어가며, 끝나면 지워진다 |
+
+**예산 5·10⁷의 근거**: 이 PC에서 와일드카드 맞추기는 약 1.4ms에 10⁶ 단위를 처리한다. 그래서 예산 하나를 다 써도 약 70ms다. 정상 문서는 크게 밑돈다. 예를 들어 10만 칸 × 평균 20자 × `abc*`는 사실상 앞 조각 비교뿐이다.
+
+**바뀐 계약**: xlsx-cf-ranges 답에 `overBudget?: true`가 생겼다. 편집 화면은 이 필드를 몰라도 그 범위가 `skipped`라 "일부 생략"을 보인다.
+
+**검증(af2856d)**
+
+| 항목 | 결과 |
+|---|---|
+| tsc | 통과 |
+| vitest | 1210/1211(138파일). 실패 1개는 부하 때 멈춤 시간 시험(`cfRangeValues.test.ts` C1, 479ms > 100ms)이고, 그 파일만 돌리면 10/10 |
+| verify:xlsx | 34/34 |
+| verify:xlsx:browser | 39/39 |
+| verify:reconnect | 39/39 |
+| docx 왕복 | 20/20 |
+
+시험 서버는 8146(내가 띄움)과 8147(verify:reconnect)이었고, PID로 껐다. 다른 작업의 8148(PID 33544)은 건드리지 않았다. `npm run build:editor`가 이 폴더의 `public/js` 번들을 다시 만들었으므로, 8148 서버도 다음 요청부터 새 번들을 내보낸다.
+
+**남는 것**
+
+- 편집 방의 비동기 수식 재계산은 함수 호출 하나마다 예산 하나다. 그래서 거의 맞는 COUNTIF가 든 수식 칸이 많으면, 칸마다 최대 약 70ms씩 막는다. 칸 사이에는 디스크 읽기에서 양보한다. 페이지 단위로 예산을 묶으려면 비동기 경계를 넘어 예산을 넘겨야 해서 손대지 않았다.
+- 예산을 넘은 COUNTIF 수식은 오류값이나 계산 실패로 남는다. 틀린 개수를 내지는 않는다.
