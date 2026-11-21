@@ -3,6 +3,7 @@ import {
   ByteLru,
   JobQueue,
   MAX_ORIGINAL_BYTES,
+  PageFailures,
   drawPlan,
   originalProblem,
   pageCountSuspicious,
@@ -13,6 +14,7 @@ import {
   targetPixelWidth,
   type PageText,
 } from '../src/client/view/artcraftLogic.js';
+import { isArtcraftUnavailable } from '../src/client/view/logic.js';
 
 const LETTER = { w: 612, h: 792 };
 
@@ -254,5 +256,25 @@ describe('ByteLru.delete', () => {
     lru.delete('zz');
     expect(lru.keys()).toEqual(['b']);
     expect(lru.bytes).toBe(5);
+  });
+});
+
+describe('리브레오피스 전환 판단 — ArtcraftUnavailable 이름일 때만, 같은 쪽 연속 두 번째 실패면 올린다', () => {
+  test('이름으로 가린다(클래스는 동적 import라 view.ts가 쓰지 않는다)', async () => {
+    const { ArtcraftUnavailable } = await import('../src/client/view/artcraftSource.js');
+    const dead = new ArtcraftUnavailable('멈춤');
+    expect(dead.name).toBe('ArtcraftUnavailable');
+    expect(isArtcraftUnavailable(dead)).toBe(true);
+    expect(isArtcraftUnavailable(new Error('쪽을 그리지 못했습니다'))).toBe(false);
+    expect(isArtcraftUnavailable(new DOMException('x', 'AbortError'))).toBe(false);
+    expect(isArtcraftUnavailable(undefined)).toBe(false);
+  });
+  test('한 번 실패는 다시 그리기, 같은 쪽 두 번째 연속 실패면 올린다, 성공하면 셈을 지운다', () => {
+    const f = new PageFailures();
+    expect(f.fail(3)).toBe(false);
+    expect(f.fail(4)).toBe(false); // 다른 쪽은 따로 센다
+    expect(f.fail(3)).toBe(true);
+    f.ok(4);
+    expect(f.fail(4)).toBe(false);
   });
 });

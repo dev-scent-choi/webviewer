@@ -59,6 +59,7 @@ function opened(): Engine {
 }
 
 async function init(m: Extract<WorkerRequest, { cmd: 'init' }>): Promise<WorkerReply> {
+  const t0 = performance.now();
   const wasm = fetch(m.wasm, { credentials: 'same-origin' }).then((res) => {
     if (!res.ok) throw new Error(`엔진을 받지 못했습니다(${res.status})`);
     return res;
@@ -74,9 +75,12 @@ async function init(m: Extract<WorkerRequest, { cmd: 'init' }>): Promise<WorkerR
   if (problem) throw new Error(problem);
   for (const font of fonts) {
     const [ptr, n] = put(e, font);
-    e.sp_add_font(ptr, n, 0, 0);
+    const faces = e.sp_add_font(ptr, n, 0, 0);
     e.sp_free(ptr, n);
+    // 글꼴이 하나도 들어가지 않으면 한글이 빠진 채 그려진다 — 열기 실패(→ 서버 변환, 설계 §4.2)
+    if (faces < 1) throw new Error('글꼴을 넣지 못했습니다');
   }
+  const t1 = performance.now();
   const [namePtr, nameLen] = put(e, encoder.encode(m.name));
   const [ptr, n] = put(e, original);
   const h = e.sp_open(namePtr, nameLen, ptr, n);
@@ -87,10 +91,11 @@ async function init(m: Extract<WorkerRequest, { cmd: 'init' }>): Promise<WorkerR
   docHandle = h;
   const count = e.sp_count(h);
   const sizes = Array.from({ length: count }, (_, i) => ({ w: e.sp_page_w(h, i), h: e.sp_page_h(h, i) }));
-  return { id: m.id, count, sizes };
+  return { id: m.id, count, sizes, initMs: Math.round(t1 - t0), openMs: Math.round(performance.now() - t1) };
 }
 
-function render(m: Extract<WorkerRequest, { cmd: 'render' }>): { id: number; w: number; h: number; rgba: ArrayBuffer } {
+function render(m: Extract<WorkerRequest, { cmd: 'render' }>): { id: number; w: number; h: number; rgba: ArrayBuffer; ms: number } {
+  const t0 = performance.now();
   const e = opened();
   if (e.sp_render(docHandle, m.page - 1, Math.round(m.scale * 1000))) throw new Error(lastMessage(e) || '쪽을 그리지 못했습니다');
   const w = e.sp_out_w();
@@ -98,7 +103,7 @@ function render(m: Extract<WorkerRequest, { cmd: 'render' }>): { id: number; w: 
   const ptr = e.sp_out_ptr();
   const rgba = e.memory.buffer.slice(ptr, ptr + w * h * 4);
   e.sp_out_clear(); // 큰 RGBA를 엔진 쪽에서 바로 놓는다
-  return { id: m.id, w, h, rgba };
+  return { id: m.id, w, h, rgba, ms: Math.round(performance.now() - t0) };
 }
 
 function text(page: number): PageText {

@@ -24,8 +24,9 @@ export type WorkerCall =
   | { readonly cmd: 'render'; readonly page: number; readonly scale: number }
   | { readonly cmd: 'text'; readonly page: number };
 export type WorkerRequest = WorkerCall & { readonly id: number };
-export interface InitReply { readonly id: number; readonly count: number; readonly sizes: PageSize[] }
-export interface RenderReply { readonly id: number; readonly w: number; readonly h: number; readonly rgba: ArrayBuffer }
+/** initMs = 받기·컴파일·글꼴 넣기, openMs = sp_open·쪽 크기(Worker 안 performance.now — e2e CPU×4 환산에 쓴다) */
+export interface InitReply { readonly id: number; readonly count: number; readonly sizes: PageSize[]; readonly initMs?: number; readonly openMs?: number }
+export interface RenderReply { readonly id: number; readonly w: number; readonly h: number; readonly rgba: ArrayBuffer; readonly ms?: number }
 export interface TextReply { readonly id: number; readonly text: PageText }
 /** fatal = wasm trap(RuntimeError) — 엔진 상태가 오염됐을 수 있어 Worker를 끈다 */
 export interface ErrorReply { readonly id: number; readonly error: string; readonly fatal?: boolean }
@@ -99,6 +100,20 @@ export function pageCountSuspicious(experimental: boolean, engineCount: number, 
 }
 
 /** 바이트 상한 LRU — 쪽 그림(ImageData)을 보관한다. 방금 넣은 것은 상한보다 커도 남긴다 */
+/** 쪽마다 연달아 실패한 횟수 — 한 번은 다음 그리기에 다시, 같은 쪽 두 번째면 엔진을 버린다(설계 §4.2, 최종 검토 I2) */
+export class PageFailures {
+  private readonly counts = new Map<number, number>();
+  /** 실패를 적고, 같은 쪽 연속 두 번째 이상이면 true */
+  fail(page: number): boolean {
+    const n = (this.counts.get(page) ?? 0) + 1;
+    this.counts.set(page, n);
+    return n >= 2;
+  }
+  ok(page: number): void {
+    this.counts.delete(page);
+  }
+}
+
 export class ByteLru<V> {
   private readonly map = new Map<string, V>();
   private total = 0;

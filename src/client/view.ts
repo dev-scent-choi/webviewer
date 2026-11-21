@@ -6,7 +6,8 @@
 import { renderPresenceNames } from './presence.js';
 import { applyWatermark } from './watermark.js';
 import type { ShellCtx } from './view/ctx.js';
-import { chooseBodyKind, createEscapeChain, editHref, pathOf } from './view/logic.js';
+import { chooseBodyKind, createEscapeChain, editHref, isArtcraftUnavailable, pathOf } from './view/logic.js';
+import type { ArtcraftSource } from './view/artcraftSource.js';
 import { PagesBody, type PageSource } from './view/pagesBody.js';
 import { PngSource } from './view/pngSource.js';
 import { setupToolbar } from './view/toolbar.js';
@@ -122,6 +123,8 @@ async function firstSource(info: ViewInfo, libreSource: () => Promise<PageSource
       const { openArtcraftSource } = await import('./view/artcraftSource.js');
       const source = await openArtcraftSource(info);
       showEngineBadge(info, true);
+      // verify:artcraft가 CPU×4를 환산하려고 읽는다(Worker 안 시간)
+      (document.getElementById('engine-badge') as HTMLElement).dataset.workerTiming = JSON.stringify(source.timing);
       return source;
     } catch (error) {
       console.warn('브라우저 엔진으로 열지 못해 서버 변환으로 보여 줍니다:', error);
@@ -191,15 +194,11 @@ async function boot(): Promise<void> {
   setupDeterrents(ctx, escape.run);
   body.onDraw(() => postReady());
   // pdf.js로 그리다 실패하면(깨진 파일·휴대폰 메모리) 같은 자리에 서버 PNG로(설계 §4·§7).
-  // 아트크래프트가 그리다 실패·멈추면(Worker 오류·20초 초과) 서버 변환 원천으로(설계 2026-11-21 §4.2) — 여러 쪽이 함께 실패해도 한 번만
+  // 아트크래프트가 멈추면(ArtcraftUnavailable: Worker 오류·20초 초과·같은 쪽 연속 실패) 서버 변환 원천으로(설계 2026-11-21 §4.2) —
+  // 한 번 실패한 쪽은 원천이 다음 그리기에 다시 그린다. 여러 쪽이 함께 실패해도 한 번만
   let leavingArtcraft = false;
-  body.onDrawError(() => {
-    if (body.kind === 'pages-pdfjs') {
-      notice(FALLBACK_NOTICE);
-      body.replaceSource(png());
-      return;
-    }
-    if (body.kind !== 'pages-artcraft' || leavingArtcraft) return;
+  const leaveArtcraft = (error: unknown): void => {
+    if (body.kind !== 'pages-artcraft' || !isArtcraftUnavailable(error) || leavingArtcraft) return;
     leavingArtcraft = true;
     notice(ARTCRAFT_FALLBACK_NOTICE);
     showEngineBadge(info, false);
@@ -207,6 +206,15 @@ async function boot(): Promise<void> {
       (next) => body.replaceSource(next),
       (error) => showError(error instanceof Error ? error.message : '문서를 열 수 없습니다.', info.editorUrl),
     );
+  };
+  if (first.kind === 'pages-artcraft') (first as ArtcraftSource).onDead = leaveArtcraft;
+  body.onDrawError((error) => {
+    if (body.kind === 'pages-pdfjs') {
+      notice(FALLBACK_NOTICE);
+      body.replaceSource(png());
+      return;
+    }
+    leaveArtcraft(error);
   });
   await body.mount(document.getElementById('pages') as HTMLElement);
   // 떠날 때 pdf.js 문서·워커를 돌려준다(bfcache 복귀 때는 쓰지 않으므로 persisted면 둔다)

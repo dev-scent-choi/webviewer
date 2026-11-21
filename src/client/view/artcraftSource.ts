@@ -6,6 +6,7 @@
 import {
   ByteLru,
   JobQueue,
+  PageFailures,
   drawPlan,
   pageCountSuspicious,
   quickPixelWidth,
@@ -20,12 +21,14 @@ import {
   type WorkerReply,
   type WorkerRequest,
 } from './artcraftLogic.js';
-import { SEARCH_LIMIT } from './logic.js';
+import { ARTCRAFT_UNAVAILABLE, SEARCH_LIMIT, isArtcraftUnavailable } from './logic.js';
 import type { DrawOpts, PageSource } from './pagesBody.js';
 import type { PageSize, SearchHit, ViewInfo } from './types.js';
 
 /** 브라우저 엔진으로 열 수 없음 — view.ts가 리브레오피스로 넘어간다 */
-export class ArtcraftUnavailable extends Error {}
+export class ArtcraftUnavailable extends Error {
+  override name = ARTCRAFT_UNAVAILABLE;
+}
 
 /** 열기 = wasm·글꼴·원본 받기 + 엔진 open(설계에 값이 없어 이 계획이 정함 — 느린 회선의 4 MB 받기를 감안) */
 export const OPEN_TIMEOUT_MS = 60_000;
@@ -35,6 +38,7 @@ export const RENDER_TIMEOUT_MS = 20_000;
 const IMAGE_CACHE_BYTES = 64 * 1024 * 1024;
 
 const abortError = () => new DOMException('그리기를 멈췄습니다.', 'AbortError');
+const isAbort = (error: unknown) => error instanceof DOMException && error.name === 'AbortError';
 
 interface Job {
   readonly msg: WorkerCall;
@@ -159,6 +163,11 @@ export class ArtcraftSource implements PageSource {
   private readonly sharpening = new Map<number, AbortController>();
   /** 선명하게 그리기가 실패한 쪽 — qualityKey를 1 올려 PagesBody가 다음 ensureDrawn에서 다시 그리게 한다 */
   private readonly sharpFailed = new Set<number>();
+  private readonly failures = new PageFailures();
+  /** 선명하게 그리기 중 Worker가 죽었다 — view.ts가 draw 실패와 같은 전환을 건다(그 오류는 PagesBody를 거치지 않는다) */
+  onDead: ((error: Error) => void) | null = null;
+  /** Worker 안에서 잰 열기 시간(ms) — e2e가 CPU×4를 환산한다(CDP 스로틀은 Worker를 늦추지 않는다) */
+  timing = { initMs: 0, openMs: 0, firstRenderMs: 0 };
 
   constructor(
     private readonly client: WorkerClient,
@@ -181,18 +190,32 @@ export class ArtcraftSource implements PageSource {
 
   /** 열 때 1쪽 1배를 미리 — 첫 쪽 20초 제한을 여기서 재고, 첫 draw는 보관한 그림을 바로 쓴다 */
   async warmUp(): Promise<void> {
-    await this.render(1, quickPixelWidth(this.sizes[0]), true);
+    this.timing.firstRenderMs = (await this.renderReply(1, quickPixelWidth(this.sizes[0]), true)).ms ?? 0;
   }
 
+  /** 한 번 실패한 쪽은 다음 그리기에 다시 — 같은 쪽이 연달아 두 번 실패하면 ArtcraftUnavailable(view.ts가 서버 변환으로) */
   async draw(page: number, canvas: HTMLCanvasElement, opts: DrawOpts, signal: AbortSignal): Promise<void> {
+    try {
+      await this.drawOnce(page, canvas, opts, signal);
+      this.failures.ok(page);
+    } catch (error) {
+      if (signal.aborted || isAbort(error) || isArtcraftUnavailable(error)) throw error;
+      if (this.failures.fail(page)) {
+        throw new ArtcraftUnavailable(`${page}쪽을 연달아 그리지 못했습니다: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      throw error;
+    }
+  }
+
+  private async drawOnce(page: number, canvas: HTMLCanvasElement, opts: DrawOpts, signal: AbortSignal): Promise<void> {
     const size = this.sizes[page - 1];
     if (!size) throw new Error(`${page}쪽이 없습니다.`);
     const px = targetPixelWidth(opts.cssWidth, opts.dpr, size);
-    this.sharpFailed.delete(page);
     this.sharpening.get(page)?.abort();
     this.sharpening.delete(page);
     if (drawPlan(this.pixelWidthsOf(page), px, size.w) !== 'two-stage') {
       paint(canvas, await this.render(page, px, true, signal));
+      this.sharpFailed.delete(page); // 선명한 그림이 붙었다
       return;
     }
     paint(canvas, await this.render(page, quickPixelWidth(size), true, signal));
@@ -202,12 +225,20 @@ export class ArtcraftSource implements PageSource {
     this.render(page, px, false, sharpen.signal).then(
       (img) => {
         if (canvas.width > 0) paint(canvas, img);
+        this.sharpFailed.delete(page);
       },
       (error: unknown) => {
-        // 실패하면 1배 그림이 남는다 — qualityKey가 달라져 다음 스크롤·확대 때 다시 그린다(취소는 제외)
-        if (!(error instanceof DOMException && error.name === 'AbortError')) this.sharpFailed.add(page);
+        if (isAbort(error)) return;
+        // Worker가 죽었으면(시간 초과·trap) 흐린 그림으로 두지 말고 서버 변환으로
+        if (isArtcraftUnavailable(error)) {
+          this.onDead?.(error as Error);
+          return;
+        }
+        // 실패하면 1배 그림이 남는다 — qualityKey가 달라져 다음 스크롤·확대 때 다시 그린다
+        this.sharpFailed.add(page);
       },
-    ).finally(() => {
+    ).catch(() => undefined) // paint가 던져도 처리 안 된 거부로 새지 않게(1배 그림이 남는다)
+      .finally(() => {
       if (this.sharpening.get(page) === sharpen) this.sharpening.delete(page);
     });
   }
@@ -253,6 +284,7 @@ export class ArtcraftSource implements PageSource {
   }
 
   destroy(): void {
+    this.onDead = null; // 닫으면서 끊은 선명하게 그리기가 전환을 걸지 않게
     this.client.terminate();
   }
 
@@ -268,11 +300,15 @@ export class ArtcraftSource implements PageSource {
     const key = `${page}:${px}`;
     const hit = this.images.get(key);
     if (hit) return hit;
+    return (await this.renderReply(page, px, urgent, signal)).img;
+  }
+
+  private async renderReply(page: number, px: number, urgent: boolean, signal?: AbortSignal): Promise<{ img: ImageData; ms?: number }> {
     const size = this.sizes[page - 1];
     const reply = await this.client.call<RenderReply>({ cmd: 'render', page, scale: px / size.w }, RENDER_TIMEOUT_MS, urgent, signal);
     const img = new ImageData(new Uint8ClampedArray(reply.rgba), reply.w, reply.h);
-    this.images.set(key, img);
-    return img;
+    this.images.set(`${page}:${px}`, img);
+    return { img, ms: reply.ms };
   }
 
   private textOf(page: number): Promise<PageText> {
@@ -302,6 +338,8 @@ export async function openArtcraftSource(info: ViewInfo): Promise<ArtcraftSource
       throw new ArtcraftUnavailable(`쪽 수가 서버 변환(${info.pageCount})과 많이 다릅니다(${opened.count})`);
     }
     const source = new ArtcraftSource(client, opened.sizes, info.permissions.canCopy);
+    source.timing.initMs = opened.initMs ?? 0;
+    source.timing.openMs = opened.openMs ?? 0;
     await source.warmUp();
     return source;
   } catch (error) {

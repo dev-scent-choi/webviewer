@@ -13,6 +13,12 @@ export const MAX_CANVAS_PIXELS = 16_777_216;
 /** 찾기 결과 상한(서버 /api/view/search limit 최대와 같다) */
 export const SEARCH_LIMIT = 500;
 
+/** 아트크래프트를 버리고 서버 변환으로 갈 오류의 이름(artcraftSource.ts ArtcraftUnavailable) — view.ts는 그 파일을 동적 import하므로 이름으로만 가린다 */
+export const ARTCRAFT_UNAVAILABLE = 'ArtcraftUnavailable';
+export function isArtcraftUnavailable(error: unknown): boolean {
+  return (error as Error | null | undefined)?.name === ARTCRAFT_UNAVAILABLE;
+}
+
 /** 권한 → 안쪽: 내려받기 권한이 있을 때만 PDF를 브라우저로 받는다(설계 V5·§4) */
 export function chooseBodyKind(perms: Pick<ViewPermissions, 'canDownload'>): 'pages-pdfjs' | 'pages-png' {
   return perms.canDownload ? 'pages-pdfjs' : 'pages-png';
