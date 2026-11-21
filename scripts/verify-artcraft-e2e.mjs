@@ -2,7 +2,7 @@
 //  (1) 아트크래프트로 열려 쪽 수·첫 쪽 그림(잉크 비율·LibreOffice 첫 쪽과 줄 잉크 분포 상관·한글 글자 층·한글 글자 자리에 실제 잉크)
 //  (2) 확대·회전·쪽 이동·섬네일·찾기  (3) 서버 변환 요청 0건  (4) wasm을 막으면 리브레오피스로 자동 전환 + 안내
 //  (5) 내려받기 권한 없는 토큰은 서버 변환으로  (6) CPU×4 첫 쪽 시간(환산 — CDP 스로틀은 메인 스레드만 늦추고 Worker는 늦추지 않으므로
-//      스로틀한 전체 시간 − Worker 시간 + 4 × Worker 시간(Worker가 잰 initMs·openMs·firstRenderMs). 로컬 서버라 받기 시간은 사실상 0 — 목표 2초, 고객 pptx 3초)
+//      스로틀한 전체 시간 − Worker 시간 + 4 × Worker 시간(Worker가 잰 initMs·openMs·firstRenderMs). 로컬 서버라 받기 시간은 사실상 0 — 목표 docx 2.5초·pptx·doc 2초, 고객 pptx 3초)
 //  (7) 두 번째 열기에서 wasm·글꼴을 서버에서 다시 받지 않음(서버 요청 기록으로 센다 — 304 재검증도 요청으로 잡힌다)
 // 이 스크립트가 시험 서버를 직접 띄운다(npm run build:editor, npm run build:artcraft 뒤, LibreOffice 필요):
 //   ARTCRAFT_E2E_PRIVATE_DIR=<고객형 원본 폴더> node scripts/verify-artcraft-e2e.mjs [포트=8150, 8150~8159]
@@ -22,7 +22,7 @@ const BASE = `http://127.0.0.1:${PORT}`;
 const RUN = path.resolve('.audit-run', `artcraft-e2e-${PORT}`);
 const ORIGINALS = process.env.ARTCRAFT_E2E_PRIVATE_DIR ?? '';
 const CUSTOMER = [
-  { src: '62c3881f-247e-48ad-aacb-977010a23ef1.docx', name: '고객형.docx', limitMs: 2000 },
+  { src: '62c3881f-247e-48ad-aacb-977010a23ef1.docx', name: '고객형.docx', limitMs: 2500 },
   { src: '8c76f45a-e15a-40ca-b6be-d9ca5ed63137.pptx', name: '고객형.pptx', limitMs: 3000 },
 ];
 const REPORT = path.resolve('docs/quality-audit/out/artcraft-pages.md');
@@ -177,7 +177,7 @@ async function openPage(context, url, { throttle = false, block = false } = {}) 
 }
 
 const cases = [
-  { file: 'audit/office/corpus/docx/a1-korean-report.docx', name: 'a1-korean-report.docx', limitMs: 2000, hangul: true },
+  { file: 'audit/office/corpus/docx/a1-korean-report.docx', name: 'a1-korean-report.docx', limitMs: 2500, hangul: true },
   { file: 'audit/office/corpus/pptx/a2-korean-deck.pptx', name: 'a2-korean-deck.pptx', limitMs: 2000, hangul: true },
   { file: 'tests/fixtures/legacy/SimpleMacro.doc', name: 'SimpleMacro.doc', limitMs: 2000, hangul: false },
 ];

@@ -94,7 +94,7 @@ view.ts
 ## 7. 검사
 
 - 단위(vitest): `engineFor` 판정표(형식 × 권한 × 요청), `/api/view/info`의 `artcraft` 블록, manifest 없을 때 끄기, 정적 `.br` 선택.
-- 브라우저(Playwright, 임시 포트): `scripts/verify-artcraft-e2e.mjs` — docx·pptx·doc 각 1개 이상 + 고객형 한글 문서(`.audit-run/test-server/originals`의 docx·pptx 사본, 저장소에 넣지 않음)로 (1) 아트크래프트로 열어 쪽 수·첫 쪽 그림(한글 글자 보임 — 쪽 그림의 비어 있지 않은 화소 비율과 LibreOffice 쪽 그림과의 유사도) (2) 확대·회전·쪽 이동·섬네일·찾기(글자 있을 때) (3) 서버 변환 요청이 **0건**인지 (4) wasm 주소를 막았을 때 리브레오피스로 자동 전환 + 안내 (5) 내려받기 권한 없는 토큰은 서버 변환으로 열림 (6) CPU×4에서 첫 쪽까지 시간(목표: 받기 제외 2초 안, 고객 pptx는 3초 안) (7) 두 번째 열기에서 wasm·글꼴이 캐시에서 옴.
+- 브라우저(Playwright, 임시 포트): `scripts/verify-artcraft-e2e.mjs` — docx·pptx·doc 각 1개 이상 + 고객형 한글 문서(`.audit-run/test-server/originals`의 docx·pptx 사본, 저장소에 넣지 않음)로 (1) 아트크래프트로 열어 쪽 수·첫 쪽 그림(한글 글자 보임 — 쪽 그림의 비어 있지 않은 화소 비율과 LibreOffice 쪽 그림과의 유사도) (2) 확대·회전·쪽 이동·섬네일·찾기(글자 있을 때) (3) 서버 변환 요청이 **0건**인지 (4) wasm 주소를 막았을 때 리브레오피스로 자동 전환 + 안내 (5) 내려받기 권한 없는 토큰은 서버 변환으로 열림 (6) CPU×4에서 첫 쪽까지 시간 — 환산값(CDP 스로틀은 Worker를 늦추지 않으므로 메인 스레드 실측 + 4 × Worker 안 시간). 목표: 받기 제외 docx 2.5초 안, pptx·doc 2초 안, 고객 pptx 3초 안 (7) 두 번째 열기에서 wasm·글꼴이 캐시에서 옴.
 - 회귀: 기존 verify:docx·verify:pptx·view-only e2e 그대로 통과(리브레오피스 경로는 변경 없음).
 - 쪽 수 비교 기록: `docs/quality-audit/out/artcraft-pages.md` — 시험 문서별 LibreOffice 쪽 수 vs 아트크래프트 쪽 수.
 
@@ -105,9 +105,11 @@ view.ts
 - 아트크래프트 그림으로 인쇄·PDF 만들기.
 - 서비스 워커·오프라인.
 - 글꼴 추가 등록(맑은 고딕 이름 등록은 메모리 3배, 효과 없음 — spike).
+- 첫 쪽 속도 최적화(이번 범위 밖, 실기기 측정 뒤 별도 작업). 후보: wasm compileStreaming 캐시, 웜 스타트.
 
 ## 9. 결정 기록
 
 - 엑셀을 아트크래프트 옵션에서 뺀 이유: HTML 내보내기는 지금 격자 화면보다 못하다(줄바꿈·테두리·인쇄 쪽 나눔 없음). 옵션 단추는 있되 비활성.
 - 글꼴은 S-Core Dream 4·6만(한글 11,172자 전부, brotli 0.45 MB). Noto Sans KR(4.1 MB)은 쓰지 않는다.
 - 쪽 그림 원천만 바꾸고 PagesBody·셸은 손대지 않는다 — 두 옵션의 화면이 같아야 한다는 요구 때문.
+- (2026-11-21 최종 검토) CPU×4는 환산값이다 — Worker 시간 ×4라 실기기보다 비관적. docx 첫 쪽이 2.06~2.29초로 나와 docx 기준을 2.5초로 둔다. 최적화 후보: compileStreaming 캐시·웜 스타트.

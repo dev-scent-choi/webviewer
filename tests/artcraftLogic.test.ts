@@ -4,6 +4,7 @@ import {
   JobQueue,
   MAX_ORIGINAL_BYTES,
   PageFailures,
+  fontProblem,
   drawPlan,
   originalProblem,
   pageCountSuspicious,
@@ -276,5 +277,14 @@ describe('리브레오피스 전환 판단 — ArtcraftUnavailable 이름일 때
     expect(f.fail(3)).toBe(true);
     f.ok(4);
     expect(f.fail(4)).toBe(false);
+  });
+});
+
+describe('글꼴 넣기 결과 검사(sp_add_font 반환 = 들어간 글꼴 수)', () => {
+  test('0개 이하이면 열기 실패 문구, 1개 이상이면 통과', () => {
+    expect(fontProblem(0)).toBe('글꼴을 넣지 못했습니다');
+    expect(fontProblem(-1)).toBe('글꼴을 넣지 못했습니다');
+    expect(fontProblem(1)).toBeNull();
+    expect(fontProblem(2)).toBeNull();
   });
 });

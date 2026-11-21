@@ -2,7 +2,7 @@
  * 아트크래프트 엔진 Worker(문서 하나 = wasm 인스턴스 하나) — DOM·Canvas 없음, RGBA 버퍼를 넘겨준다(spike §7.2).
  * 받는 것은 같은 출처의 정적 자산(/artcraft/*)과 원본(/api/view/engine-source)뿐이다(설계 §6). 작업은 artcraftSource.ts가 하나씩 보낸다.
  */
-import { MAX_ORIGINAL_BYTES, originalProblem, stubImports, type PageText, type WorkerReply, type WorkerRequest } from './artcraftLogic.js';
+import { MAX_ORIGINAL_BYTES, fontProblem, originalProblem, stubImports, type PageText, type WorkerReply, type WorkerRequest } from './artcraftLogic.js';
 
 interface Engine {
   readonly memory: WebAssembly.Memory;
@@ -77,8 +77,8 @@ async function init(m: Extract<WorkerRequest, { cmd: 'init' }>): Promise<WorkerR
     const [ptr, n] = put(e, font);
     const faces = e.sp_add_font(ptr, n, 0, 0);
     e.sp_free(ptr, n);
-    // 글꼴이 하나도 들어가지 않으면 한글이 빠진 채 그려진다 — 열기 실패(→ 서버 변환, 설계 §4.2)
-    if (faces < 1) throw new Error('글꼴을 넣지 못했습니다');
+    const bad = fontProblem(faces);
+    if (bad) throw new Error(bad);
   }
   const t1 = performance.now();
   const [namePtr, nameLen] = put(e, encoder.encode(m.name));
