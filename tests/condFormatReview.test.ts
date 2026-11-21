@@ -209,7 +209,7 @@ describe('검토 N2 — 조건부 서식 굽기의 시간 예산·멈춤·메모
     expect(memMb).toBeLessThan(300);
   }, 120_000);
   test('수식 엔진으로만 되는 무거운 규칙은 미리 어림해 건너뛰고 알린다', async () => {
-    const x = await bigBook(20_000, 2, '<conditionalFormatting sqref="A1:A20000"><cfRule type="expression" dxfId="0" priority="1"><formula>SUMPRODUCT(($A$1:$A$20000=$A1)*1)&gt;1</formula></cfRule></conditionalFormatting>');
+    const x = await bigBook(20_000, 2, '<conditionalFormatting sqref="A1:A20000"><cfRule type="expression" dxfId="0" priority="1"><formula>MATCH($A1,$A$1:$A$20000,0)&gt;1</formula></cfRule></conditionalFormatting>');
     const { baked, ms } = await measureBake(x);
     expect(baked.cfSkipped).toBe(1);
     expect(ms).toBeLessThan(500);
@@ -228,16 +228,18 @@ describe('검토 r3 — 시트 XML 풀기 실패', () => {
 });
 
 describe('무거운 규칙 어림(보기·편집 화면 공통 — 검토 r3 E1)', () => {
-  test('2만 행 SUMPRODUCT 규칙은 건너뛰고, COUNTIF·작은 범위는 칠한다', async () => {
+  test('2만 행을 칸마다 읽는 수식 엔진 규칙(MATCH)은 건너뛰고, COUNTIF·SUMPRODUCT(→COUNTIF)·작은 범위는 칠한다', async () => {
     const { cfRuleTooCostly, cfEngineRanges } = await import('../src/collab/condFormatShared.js');
     const entry = (f: string, r1 = 19_999) => ({ id: 'x', ranges: [{ r0: 0, c0: 0, r1, c1: 0 }], rule: { t: 'expr' as const, f, s: { bg: '#FF0000' } } });
-    expect(cfRuleTooCostly(entry('SUMPRODUCT(($A$1:$A$20000=$A1)*1)>1'), 20_000, 5)).toBe(true);
+    expect(cfRuleTooCostly(entry('MATCH($A1,$A$1:$A$20000,0)>1'), 20_000, 5)).toBe(true);
+    // 검토 r4: SUMPRODUCT((범위=값)*1)는 COUNTIF로 바꿔 범위 값 표로 계산하므로 무겁지 않다
+    expect(cfRuleTooCostly(entry('SUMPRODUCT(($A$1:$A$20000=$A1)*1)>1'), 20_000, 5)).toBe(false);
     expect(cfRuleTooCostly(entry('COUNTIF($A:$A,$A1)>1'), 20_000, 5)).toBe(false);
     expect(cfEngineRanges(entry('COUNTIF($A:$A,$A1)>1'), 20_000, 5)).toEqual([]);
-    expect(cfRuleTooCostly(entry('SUMPRODUCT(($A$1:$A$50=$A1)*1)>1', 49), 20_000, 5)).toBe(false);
-    expect(cfEngineRanges(entry('SUMPRODUCT(($A$2:$A$50=$A1)*1)>1'), 20_000, 5)).toEqual([{ r0: 1, r1: 49, cols: 1 }]);
+    expect(cfRuleTooCostly(entry('MATCH($A1,$A$1:$A$50,0)>1', 49), 20_000, 5)).toBe(false);
+    expect(cfEngineRanges(entry('MATCH($A1,$A$2:$A$50,0)>1'), 20_000, 5)).toEqual([{ r0: 1, r1: 49, cols: 1 }]);
     // 칸 몇 개짜리 규칙이라도 칸 하나가 너무 큰 범위를 읽으면 건너뛴다(칸 하나에 오래 걸린다)
-    expect(cfRuleTooCostly(entry('SUMPRODUCT(($A:$C=$A1)*1)>1', 0), 200_000, 5)).toBe(true);
+    expect(cfRuleTooCostly(entry('MATCH($A1,$A:$C,0)>1', 0), 200_000, 5)).toBe(true);
   });
 });
 
