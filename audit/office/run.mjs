@@ -2,7 +2,7 @@
 // 1) 정답 PDF(MS Office)가 없으면 ref_office.ps1로 만든다(이 PC에 Office가 있을 때만)
 // 2) 이 작업 폴더의 서버를 시험용 포트·전용 데이터/임시/LibreOffice 프로필로 따로 띄운다(운영 8000/8010과 겹치지 않게)
 // 3) capture.mjs로 보기·편집 화면을 찍고 4) compare.py로 나란히 그림과 점수(scores.md)를 낸다 5) 띄운 서버만 끈다
-// 사용: npm run audit:office [-- --port 8141 --only docx --no-office]
+// 사용: npm run audit:office [-- --port 8141 --only docx] [--no-office]  (--no-office: 정답 PDF가 없어도 MS Office를 띄우지 않고 멈춘다)
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -22,8 +22,8 @@ for (const d of ['data', 'tmp', 'lo']) fs.mkdirSync(path.join(run, d), { recursi
 const refDir = path.join(OUT, 'ref');
 const want = (ONLY ? [ONLY] : ['docx', 'xlsx', 'pptx']).flatMap((k) => fs.readdirSync(path.join(CORPUS, k)).filter((f) => !f.startsWith('~$')).map((f) => f.replace(/\.[^.]+$/, '')));
 const missing = want.filter((n) => !fs.existsSync(path.join(refDir, `${n}.pdf`)));
-if (missing.length && NO_OFFICE) console.log(`정답 PDF ${missing.length}개 없음 — --no-office라 만들지 않는다: ${missing.join(', ')}`);
-else if (missing.length && process.platform === 'win32') {
+if (missing.length && NO_OFFICE) throw new Error(`정답 PDF ${missing.length}개 없음(${missing.join(', ')}) — --no-office라 MS Office를 띄우지 않는다`);
+if (missing.length && process.platform === 'win32') {
   // 정답은 Office로 다시 저장하기 전 원본(raw)에서 만든다 — git엔 raw가 없으니 먼저 다시 만든다(a1~a3은 ArtCraft 시험 파일이라 corpus 것을 쓴다)
   if (!fs.existsSync(path.join(CORPUS, 'raw'))) {
     spawnSync('python', ['audit/office/gen_corpus.py', 'audit/office/corpus'], { stdio: 'inherit' });
@@ -34,9 +34,10 @@ else if (missing.length && process.platform === 'win32') {
 }
 
 const env = { ...process.env, DOCVIEW_PORT: String(PORT), DOCVIEW_HOST: '127.0.0.1', DOCVIEW_DATA_DIR: path.join(run, 'data'), TMP: path.join(run, 'tmp'), TEMP: path.join(run, 'tmp'), DOCVIEW_LO_PROFILE_ROOT: path.join(run, 'lo') };
-const server = spawn(process.execPath, ['node_modules/tsx/dist/cli.mjs', 'src/server.ts'], { env, stdio: ['ignore', 'pipe', 'pipe'] });
-const log = fs.createWriteStream(path.join(run, 'server-audit.log'));
-server.stdout.pipe(log); server.stderr.pipe(log);
+// 서버 로그는 파일에 바로 쓴다 — 파이프로 받으면 아래 spawnSync(캡처)가 도는 동안 아무도 파이프를 비우지 않아, Windows에서
+// 파이프 버퍼(약 64KB)가 차는 순간 서버가 통째로 멈췄다(p03~p04에서 fetch failed — 검토 I6).
+const logFd = fs.openSync(path.join(run, 'server-audit.log'), 'w');
+const server = spawn(process.execPath, ['node_modules/tsx/dist/cli.mjs', 'src/server.ts'], { env, stdio: ['ignore', logFd, logFd] });
 try {
   const base = `http://127.0.0.1:${PORT}`;
   for (let i = 0; ; i += 1) {

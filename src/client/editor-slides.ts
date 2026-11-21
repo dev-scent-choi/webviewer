@@ -10,6 +10,7 @@ import { ySyncPlugin, yCursorPlugin, yUndoPlugin, ySyncPluginKey, undo, redo } f
 import { initOfficeShell } from './officeShell.js';
 import { setupSlideDesign } from './slideDesignUi.js';
 import {
+  PPTX_SAVE_NOTICE_MAP,
   PPTX_SLIDES_ARRAY,
   PPTX_SLIDE_CONTENTS_MAP,
   PPTX_SLIDE_VISUALS_MAP,
@@ -26,7 +27,9 @@ import {
 } from '../collab/pptxShared.js';
 import { DOC_META_MAP, DOC_META_SAVED_AT_KEY, DOC_META_SAVE_ERROR_AT_KEY } from '../collab/gridShared.js';
 import { pickPresenceColorForName, renderPresenceAvatars } from './presence.js';
-import { pptxTextSchema } from '../pptx/textSchema.js';
+import { pptxTextSchema, setSlideMediaUrl, slideMediaUrl } from '../pptx/textSchema.js';
+import { guardRoomEpoch } from './roomEpoch.js';
+import { applyAutofit, applyTextboxLook, autoNumberPlugin, refitAutofit, unmirroredFill, curvedShapePath, ensureLevelRules, turnCss } from './slideTextLook.js';
 
 /** src/pptx/collab.ts가 서버 쪽에서 선언한 것과 같은 모양이지만, 그 파일은 node:crypto/fflate 등
  * 서버 전용 의존성을 끌고 있어 클라이언트 번들에 그대로 import할 수 없다 — Yjs 공유 타입 자체는
@@ -52,6 +55,8 @@ interface ViewInfo {
 }
 
 const token = new URLSearchParams(location.search).get('token');
+// 그림 글머리 등 슬라이드 그림 주소(textSchema·slideTextLook이 CSS url()로 쓴다)
+setSlideMediaUrl((path) => `/api/view/slide-media?token=${encodeURIComponent(token ?? '')}&path=${encodeURIComponent(path)}`);
 const titleEl = document.getElementById('doc-title')!;
 const connStatusEl = document.getElementById('conn-status')!;
 const railEl = document.getElementById('slides-rail') as HTMLElement;
@@ -243,6 +248,11 @@ function buildSlideKeymap(): Record<string, Command> {
     // splitBlock은 문단 끝에서 Enter를 치면 속성 없는 새 문단을 만들어, 하위 글머리 목록에서 다음
     // 항목이 최상위 수준으로 튀어나왔다.
     Enter: splitBlockAs((node) => ({ type: node.type, attrs: node.attrs })),
+    // PowerPoint처럼 Shift+Enter는 문단을 나누지 않는 줄 바꿈(<a:br/>)
+    'Shift-Enter': (state, dispatch) => {
+      dispatch?.(state.tr.replaceSelectionWith(pptxTextSchema.nodes.br.create()).scrollIntoView());
+      return true;
+    },
   };
 }
 
@@ -412,20 +422,54 @@ function renderSlideVisual(visual: SlideVisual, pageImageUrl: string | null): HT
   el.style.top = `${emuToPx(visual.y ?? 0)}px`;
   el.style.width = `${emuToPx(visual.w ?? 0)}px`;
   el.style.height = `${emuToPx(visual.h ?? 0)}px`;
+  // 회전·뒤집기(그룹 회전 포함) — 그림·도형은 거울로 뒤집는다
+  const turn = turnCss(visual, true);
+  if (turn) el.style.transform = turn;
+  const shadow = visual.shadow
+    ? `${emuToPx(visual.shadow.dx)}px ${emuToPx(visual.shadow.dy)}px ${emuToPx(visual.shadow.blur)}px ${visual.shadow.color}`
+    : '';
 
   if (visual.kind === 'image' && visual.mediaPath) {
     const img = document.createElement('img');
-    img.src = `/api/view/slide-media?token=${encodeURIComponent(token ?? '')}&path=${encodeURIComponent(visual.mediaPath)}`;
+    img.src = slideMediaUrl(visual.mediaPath);
     img.alt = '';
+    // 그림 자르기(srcRect): 남은 부분이 상자를 채우도록 원본을 키워 잘린 만큼 밀어 둔다(상자가 overflow:hidden)
+    if (visual.crop) {
+      const [l, t, r, b] = visual.crop;
+      const w = emuToPx(visual.w ?? 0) / (1 - l - r);
+      const h = emuToPx(visual.h ?? 0) / (1 - t - b);
+      img.classList.add('slide-visual-cropped');
+      Object.assign(img.style, { width: `${w}px`, height: `${h}px`, left: `${-l * w}px`, top: `${-t * h}px` });
+    }
     el.append(img);
     applyVisualStroke(el, visual);
+    if (shadow) el.style.boxShadow = shadow;
   } else if (visual.kind === 'shape') {
-    if (visual.fill) el.style.background = visual.fill;
+    if (visual.geom) el.dataset.geom = visual.geom;
+    if (visual.fill) el.style.background = unmirroredFill(visual.fill, visual);
     applyVisualStroke(el, visual);
-    if (visual.geom) {
-      const clip = PRESET_CLIP[visual.geom];
-      if (clip) el.style.clipPath = clip;
-      else el.classList.add(`slide-shape-${ROUNDED_ALIAS[visual.geom] ?? visual.geom}`);
+    const curved = curvedShapePath(visual.geom, emuToPx(visual.w ?? 0), emuToPx(visual.h ?? 0));
+    const clip = curved ? `path('${curved}')` : visual.geom ? PRESET_CLIP[visual.geom] : undefined;
+    if (clip) {
+      // 잘라 낸 모양의 그림자는 모양을 따라야 한다 — clip-path는 자기 그림자까지 자르므로 바깥 껍데기에 drop-shadow
+      const fillEl = document.createElement('div');
+      fillEl.className = 'slide-shape-fill';
+      fillEl.style.background = el.style.background;
+      fillEl.style.clipPath = clip;
+      el.style.background = '';
+      el.style.overflow = 'visible';
+      if (shadow) el.style.filter = `drop-shadow(${shadow})`;
+      el.append(fillEl);
+      if (visual.geom === 'can') {
+        // 캔 윗면(밝은 타원) — PowerPoint가 윗면을 한 단계 밝게 칠한다
+        const top = document.createElement('div');
+        top.className = 'slide-shape-can-top';
+        top.style.height = `${(Math.min(emuToPx(visual.w ?? 0), emuToPx(visual.h ?? 0)) / 8) * 2}px`;
+        el.append(top);
+      }
+    } else {
+      if (visual.geom) el.classList.add(`slide-shape-${ROUNDED_ALIAS[visual.geom] ?? visual.geom}`);
+      if (shadow) el.style.boxShadow = shadow;
     }
     // 둥근 사각형 계열은 원본 조정값으로 계산한 실제 반지름 — 클래스의 비율 반지름보다 우선한다
     // (adj 0인 "둥근 사각형"은 직각으로 보여야 한다). 예전 시딩 데이터엔 없어 클래스 값을 쓴다.
@@ -444,7 +488,20 @@ function renderSlideVisual(visual: SlideVisual, pageImageUrl: string | null): HT
       el.append(tr);
     }
   } else if (visual.kind === 'placeholder') {
-    el.textContent = visual.label ?? '콘텐츠';
+    if (visual.parts?.length) {
+      // 스마트아트 그림 대체본(dsp:drawing) — 틀 안에 도형들을 그대로 그린다
+      el.classList.add('slide-visual-drawing');
+      for (const part of visual.parts) el.append(renderSlideVisual(part, null));
+    } else {
+      el.textContent = visual.label ?? '콘텐츠';
+    }
+  }
+  if (visual.kind === 'shape' && visual.text) {
+    const label = document.createElement('div');
+    label.className = 'slide-visual-text';
+    label.textContent = visual.text;
+    if (visual.textColor && /^#[0-9A-Fa-f]{6}$/.test(visual.textColor)) label.style.color = visual.textColor;
+    el.append(label);
   }
   return el;
 }
@@ -531,6 +588,7 @@ function renderCanvasForSlideInner(entryId: string): void {
   canvasEl.style.width = `${emuToPx(SLIDE_W_EMU)}px`;
   canvasEl.style.height = `${emuToPx(SLIDE_H_EMU)}px`;
   canvasEl.style.setProperty('--slide-pt', `${slidePtPx()}px`);
+  ensureLevelRules();
   canvasEl.replaceChildren();
 
   // 이미지·단순 도형·표/차트·스마트아트 자리표시자 — 편집 대상이 아니라 텍스트박스보다 먼저
@@ -583,6 +641,9 @@ function renderCanvasForSlideInner(entryId: string): void {
       if (!event.keysChanged.has('meta')) return;
       const next = shapeMap.get('meta') as SlideShapeMeta;
       if (next.fill && /^#[0-9A-Fa-f]{6}$/.test(next.fill)) box.style.background = next.fill;
+      // 다른 참여자(또는 내)가 글을 고쳐 다시 맞춘 자동 맞춤 배율
+      const view = mountedViews.get(shapeId);
+      if (view && next.autofit && Number.isFinite(next.autofit.fontScale) && Number.isFinite(next.autofit.lnSpcReduction)) applyAutofit(view.dom, next.autofit);
     };
     shapeMap.observe(onShapeMetaChange);
     const previousUnobserve = activePerSlideUnobserve;
@@ -617,7 +678,7 @@ function renderCanvasForSlideInner(entryId: string): void {
     const view = new EditorView(box, {
       state: EditorState.create({
         schema: pptxTextSchema,
-        plugins: [ySyncPlugin(fragment), yCursorPlugin(provider.awareness), yUndoPlugin(), keymap(buildSlideKeymap())],
+        plugins: [ySyncPlugin(fragment), yCursorPlugin(provider.awareness), yUndoPlugin(), keymap(buildSlideKeymap()), autoNumberPlugin(meta.levels)],
       }),
       editable: () => canEdit,
       // 커서가 움직이거나 서식이 바뀔 때마다 리본의 눌림 상태(굵게/정렬 등)와 글꼴·크기 칸을
@@ -629,6 +690,8 @@ function renderCanvasForSlideInner(entryId: string): void {
       dispatchTransaction(this: EditorView, tr) {
         this.updateState(this.state.apply(tr));
         if (focusedView === this) refreshRibbonState(this);
+        // 내가 글을 고쳤을 때만(원격 동기화 반영은 제외) 자동 맞춤을 다시 계산한다 — 열기만 해서는 원본 배율을 바꾸지 않는다
+        if (tr.docChanged && canEdit && !tr.getMeta(ySyncPluginKey)) scheduleRefit(shapeId, tr.before);
       },
       // 서식 툴바가 "지금 어느 텍스트박스를 편집 중인지" 알 수 있는 유일한 경로 — handleDOMEvents의
       // 반환값 false는 "이 이벤트를 ProseMirror가 가로채 막지 말고 브라우저 기본 동작(포커스 이동)을
@@ -662,20 +725,54 @@ function renderCanvasForSlideInner(entryId: string): void {
     if (meta.w !== null && meta.h !== null && meta.w !== undefined && meta.h !== undefined && meta.w < TINY_SHAPE_EMU && meta.h < TINY_SHAPE_EMU) {
       box.classList.add('slide-textbox-tiny');
     }
-    if (meta.defaultSizePt) view.dom.style.fontSize = `calc(${meta.defaultSizePt} * var(--slide-pt, 1pt))`;
     const alignCss = { ctr: 'center', r: 'right', just: 'justify', l: '' }[meta.defaultAlign ?? 'l'];
     if (alignCss) view.dom.style.textAlign = alignCss;
-    // 목록 수준별 글머리·들여쓰기·크기 — CSS(.slide-textbox p[data-lvl])가 이 변수들을 읽는다.
-    meta.levels?.forEach((level, i) => {
-      view.dom.style.setProperty(`--l${i}-marl`, String(level.marLPt));
-      view.dom.style.setProperty(`--l${i}-ind`, String(level.indentPt));
-      view.dom.style.setProperty(`--l${i}-bu`, level.bullet === null ? 'none' : JSON.stringify(level.bullet));
-      view.dom.style.setProperty(`--l${i}-sz`, `calc(${level.sizePt} * var(--slide-pt, 1pt))`);
-      if (level.color && /^#[0-9A-Fa-f]{6}$/.test(level.color)) view.dom.style.setProperty(`--l${i}-color`, level.color);
-    });
+    // 수준별 글머리·들여쓰기·크기·간격·글꼴, 자동 맞춤, 세로 쓰기, 회전, 모양 안 글자 칸(slideTextLook.ts)
+    applyTextboxLook(box, view.dom, meta, emuToPx);
     viewDefaults.set(view, { sizePt: meta.defaultSizePt ?? DEFAULT_TEXT_PT, align: meta.defaultAlign ?? 'l' });
     mountedViews.set(shapeId, view);
   }
+}
+
+/** 저장 알림 띠(닫기 단추 포함) — 같은 알림이 다시 오면 글만 바꾼다 */
+function showSaveNotice(text: string): void {
+  let bar = document.getElementById('slide-save-notice');
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'slide-save-notice';
+    bar.className = 'slide-save-notice';
+    bar.setAttribute('role', 'alert');
+    const message = document.createElement('span');
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.textContent = '닫기';
+    close.addEventListener('click', () => bar?.remove());
+    bar.append(message, close);
+    document.body.append(bar);
+  }
+  bar.querySelector('span')!.textContent = `저장 알림: ${text}`;
+}
+
+/** 글을 고친 글상자의 자동 맞춤(normAutofit)을 다음 그림 틀에서 다시 맞추고, 바뀌었으면 meta에 적어 저장·다른 참여자에게
+ * 넘긴다(PowerPoint처럼 글이 늘면 작아지고 줄면 커진다 — 검토 Minor 3). 맞춤 도형이 아니면 아무것도 안 한다. */
+/** 글상자 → 이번 그림 틀에서 처음 고치기 전의 문서(여러 번 고쳐도 한 번만 다시 맞춘다) */
+const refitPending = new Map<string, PMNode>();
+function scheduleRefit(shapeId: string, before: PMNode): void {
+  if (refitPending.has(shapeId)) return;
+  refitPending.set(shapeId, before);
+  requestAnimationFrame(() => {
+    const beforeDoc = refitPending.get(shapeId)!;
+    refitPending.delete(shapeId);
+    const view = mountedViews.get(shapeId);
+    const shapeMap = slideContents.get(activeSlideId ?? '')?.get(shapeId);
+    const meta = shapeMap?.get('meta') as SlideShapeMeta | undefined;
+    const box = view?.dom.parentElement;
+    if (!view || !shapeMap || !meta?.autofit || !box) return;
+    const fit = refitAutofit(box, view.dom, meta, meta.autofit, beforeDoc, view.state.doc);
+    if (fit.fontScale !== meta.autofit.fontScale || fit.lnSpcReduction !== meta.autofit.lnSpcReduction) {
+      shapeMap.set('meta', { ...meta, autofit: fit });
+    }
+  });
 }
 
 /** 이 슬라이드를 LibreOffice가 렌더링한 페이지 번호(/api/view/pages/N). 복제본은 sourcePageNumber가
@@ -1259,6 +1356,7 @@ async function main(): Promise<void> {
   provider = new WebsocketProvider(`${wsProtocol}//${location.host}/ws/edit`, info.docId, ydoc, {
     params: { token },
   });
+  guardRoomEpoch(provider, ydoc); // 재연결 시 이전 세대 방 상태를 합치지 않는다(src/collab/roomEpoch.ts)
 
   const myColor = pickPresenceColorForName(info.viewer);
   provider.awareness.setLocalStateField('user', { name: info.viewer, color: myColor });
@@ -1342,6 +1440,15 @@ async function main(): Promise<void> {
         status === 'saving' ? '저장 중…' : status === 'saved' ? '모든 변경 내용이 저장됨' : '저장 실패 — 편집을 계속하면 다시 시도합니다';
     }
   }
+  // 저장하며 원문을 다 지키지 못한 일(서버 알림) — 조용히 버리지 않고 보여 준다
+  const saveNotices = ydoc.getMap<{ at: number; text: string }>(PPTX_SAVE_NOTICE_MAP);
+  let lastNoticeAt = saveNotices.get('last')?.at ?? 0;
+  saveNotices.observe(() => {
+    const notice = saveNotices.get('last');
+    if (!notice || notice.at <= lastNoticeAt) return;
+    lastNoticeAt = notice.at;
+    showSaveNotice(String(notice.text));
+  });
   if (canEdit) {
     ydoc.on('afterTransaction', (tx) => {
       if (!tx.local || tx.changed.size === 0) return;

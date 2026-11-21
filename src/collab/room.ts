@@ -108,7 +108,10 @@ import {
 } from '../pptx/collab.js';
 import { parseSlideVisuals } from '../pptx/slideContent.js';
 import { buildStoreSheetNameIndex, computeGridCellDisplayAsync, formatComputedValueForStorage } from '../xlsx/formulas.js';
+import { randomUUID } from 'node:crypto';
+import { MESSAGE_ROOM_EPOCH, MESSAGE_ROOM_STALE, ROOM_EPOCH_PARAM, ROOM_STALE_CLOSE_CODE, ROOM_STALE_REASON } from './roomEpoch.js';
 import {
+  PPTX_SAVE_NOTICE_MAP,
   PPTX_SLIDE_CONTENTS_MAP,
   PPTX_SLIDE_VISUALS_MAP,
   PPTX_SLIDES_ARRAY,
@@ -1962,13 +1965,23 @@ async function flushToStore(room: Room): Promise<void> {
     // 받아들인다)이 끝난 뒤 배열이 이 시점과 달라졌는지 비교하기 위한 스냅샷 — 진짜 위험 구간은
     // exportPptxFromSlides의 동기적 zip 조작(끼어들 틈 없음)이 아니라 바로 이 await다.
     const snapshotBeforeSave = JSON.stringify(slidesArray.toArray());
-    const { bytes: newPptxBytes, finalParts, survivingEntryIds } = exportPptxFromSlides(
+    const { bytes: newPptxBytes, finalParts, survivingEntryIds, notices } = exportPptxFromSlides(
       original,
       slidesArray,
       slideContents,
       slideDesignOf(ydoc),
     );
     await store.saveOriginal(docId, meta.ext, Buffer.from(newPptxBytes));
+    // [pptx 품질 갈래] 고친 글상자의 원문을 다 지키지 못했으면(위조·연결 대상 없음 등) 편집 화면에 알린다 — 조용히 버리지 않는다
+    // 저장 결과 쓰기라 다음 자동저장을 예약하지 않는다(안 그러면 알림이 있을 때마다 같은 내용을 한 번 더 저장 — 3차 검토 이중 저장)
+    if (notices.length > 0) {
+      room.suppressAutosaveReschedule = true;
+      try {
+        ydoc.getMap(PPTX_SAVE_NOTICE_MAP).set('last', { at: Date.now(), text: notices.join(' ') });
+      } finally {
+        room.suppressAutosaveReschedule = false;
+      }
+    }
 
     // 저장이 끝난 직후, Yjs 배열을 "방금 디스크에 쓴 내용"과 다시 일치시킨다: 모든 항목을
     // finalParts 순서의 'original' 항목으로 재구성한다. 이렇게 하지 않으면 (1) duplicate 항목이
@@ -2411,6 +2424,29 @@ function getOrCreateRoom(docId: string, ext: string): Room {
   return room;
 }
 
+/** 방을 메모리에서 내린다(마지막 참여자가 나간 뒤 — 바로 또는 유예가 끝난 뒤). 편집이 남아 있으면 저장하고 Y.Doc을 정리한다. */
+function teardownRoom(room: Room): void {
+  wakeLingeringRoom(room.docId); // [RX-C1] 유예 타이머가 남아 있으면 정리
+  // 룸이 닫히면 남은 지연 제거 예약은 전부 취소한다 — 이제 Yjs를 비울 이유가 없고(문서
+  // 전체가 메모리에서 사라진다), 살아 있는 타이머는 10초 뒤 이미 destroy된 Y.Doc을
+  // 건드리려 하며 그동안 Room과 lazyGrid를 GC에서 붙잡아 둔다.
+  cancelPendingUnseeds(room.docId);
+  rooms.delete(room.docId);
+  largeRoomDocIds.delete(room.docId);
+  cfTallyRelease(room.cfRanges); // [통합] 엑셀 갈래의 조건부 서식 값 개수 표 — 유예가 끝나거나 강제로 닫을 때 여기서 놓는다
+  // 이 룸의 메모리 전용 변경 이력(cellChangeLog/docxChangeTracker/pptxChangeTracker)이 사라지기
+  // 전 마지막 기회 — ydoc.destroy() 전에 지금 상태를 그대로 캡처해 디스크에 남긴다
+  // (changeLogPersistence.ts 문서 주석의 "왜"). rooms.delete 이후에도 room 참조는 그대로
+  // 살아있으므로 여기서 읽는 데 문제없다.
+  void persistChangeLog(room.docId, room.kind, changeLogOf(room));
+  if (room.lazyGrid) void closeLazyGridStore(room.lazyGrid);
+  void room.ready
+    // 편집이 없었으면 다시 저장하지 않는다(모든 형식) — 읽기만 해도 파일이 바뀌지 않게
+    .then(() => (!room.editedSinceSave ? undefined : queueFlush(room)))
+    .catch((error) => console.error(`동시편집 종료 저장 실패 (문서 ${room.docId}):`, error))
+    .finally(() => room.ydoc.destroy());
+}
+
 function closeConn(room: Room, conn: WebSocket): void {
   const controlled = room.conns.get(conn);
   if (controlled) {
@@ -2433,24 +2469,14 @@ function closeConn(room: Room, conn: WebSocket): void {
         clearTimeout(room.autosaveTimer);
         room.autosaveTimer = null;
       }
-      // 룸이 닫히면 남은 지연 제거 예약은 전부 취소한다 — 이제 Yjs를 비울 이유가 없고(문서
-      // 전체가 메모리에서 사라진다), 살아 있는 타이머는 10초 뒤 이미 destroy된 Y.Doc을
-      // 건드리려 하며 그동안 Room과 lazyGrid를 GC에서 붙잡아 둔다.
-      cancelPendingUnseeds(room.docId);
-      rooms.delete(room.docId);
-      largeRoomDocIds.delete(room.docId);
-      cfTallyRelease(room.cfRanges);
-      // 이 룸의 메모리 전용 변경 이력(cellChangeLog/docxChangeTracker/pptxChangeTracker)이 사라지기
-      // 전 마지막 기회 — ydoc.destroy() 전에 지금 상태를 그대로 캡처해 디스크에 남긴다
-      // (changeLogPersistence.ts 문서 주석의 "왜"). rooms.delete 이후에도 room 참조는 그대로
-      // 살아있으므로 여기서 읽는 데 문제없다.
-      void persistChangeLog(room.docId, room.kind, changeLogOf(room));
-      if (room.lazyGrid) void closeLazyGridStore(room.lazyGrid);
-      void room.ready
-        // 편집이 없었으면 다시 저장하지 않는다(모든 형식) — 읽기만 해도 파일이 바뀌지 않게
-        .then(() => (!room.editedSinceSave ? undefined : queueFlush(room)))
-        .catch((error) => console.error(`동시편집 종료 저장 실패 (문서 ${room.docId}):`, error))
-        .finally(() => room.ydoc.destroy());
+      // [RX-C1] R3-I1: 잠시 남겨 둘 수 있으면 저장만 지금 하고 방은 유예(같은 세대로 다시 붙을 수 있게), 아니면 예전처럼 바로 닫는다
+      if (lingerRoom(room)) {
+        void room.ready
+          .then(() => (!room.editedSinceSave ? undefined : queueFlush(room)))
+          .catch((error) => console.error(`동시편집 종료 저장 실패 (문서 ${room.docId}):`, error));
+      } else {
+        teardownRoom(room);
+      }
     } else if (subscription !== undefined && before !== null) {
       // 룸이 계속 살아 있는 경우에만 reconcile한다 — 위 분기에서는 곧 Y.Doc이 destroy되므로
       // 채우거나 비울 대상 자체가 없다.
@@ -2491,13 +2517,19 @@ export function isRoomOpen(docId: string): boolean {
 export function forceCloseRoom(docId: string, reason = '문서가 삭제되었습니다.'): void {
   const room = rooms.get(docId);
   if (!room) return;
-  for (const conn of [...room.conns.keys()]) {
-    try {
-      conn.close(4410, reason);
-    } catch {
-      /* 이미 닫힌 연결 */
+  closeWithoutGrace.add(docId); // [RX-C1] 삭제된 문서의 방은 유예 없이 바로 닫는다
+  try {
+    for (const conn of [...room.conns.keys()]) {
+      try {
+        conn.close(4410, reason);
+      } catch {
+        /* 이미 닫힌 연결 */
+      }
+      closeConn(room, conn);
     }
-    closeConn(room, conn);
+    if (room.conns.size === 0 && rooms.get(docId) === room) teardownRoom(room); // 이미 유예 중이던 방
+  } finally {
+    closeWithoutGrace.delete(docId);
   }
 }
 
@@ -2841,6 +2873,139 @@ function toUint8Array(data: ArrayBuffer | Buffer | ArrayBufferView): Uint8Array 
  * earlyMessages: 호출자(edit.ts)가 인증 확인(그 자체도 비동기)을 하는 동안 이미 도착해 버린
  * 메시지들 — 같은 이유로 여기서 만드는 큐에 먼저 합쳐 순서대로 처리한다.
  */
+/* ===== [RX-C1] 방 세대(epoch) 확인·방 닫기 유예·옛 상태 거절 — 2·3차 검토 RX-C1, R3-I1, R3-I2 =====
+ * 설명·약속은 src/collab/roomEpoch.ts. 이 블록 + joinEditSession 첫머리(세대 확인·유예 깨우기·세대 알림)와 메시지 처리 앞
+ * 상태 벡터 확인 + closeConn의 "마지막 참여자 퇴장" 분기(유예 아니면 teardownRoom) + forceCloseRoom 두 줄이 이 변경 전부다. */
+const roomEpochs = new WeakMap<Room, string>();
+
+/** 이 방 세대 값 — 방(객체)이 새로 만들어지면 새 값 */
+function epochOf(room: Room): string {
+  let epoch = roomEpochs.get(room);
+  if (!epoch) {
+    epoch = randomUUID();
+    roomEpochs.set(room, epoch);
+  }
+  return epoch;
+}
+
+function clientEpochOf(request: IncomingMessage): string | null {
+  try {
+    return new URL(request.url ?? '', 'http://localhost').searchParams.get(ROOM_EPOCH_PARAM);
+  } catch {
+    return null;
+  }
+}
+
+/** 이전 세대 상태를 가진 연결을 거절한다 — 새 번들은 메시지 8을 받고(안내 후 새로 불러오기) 닫기 코드는 보통(1000)이라 편집기의
+ * 영구 거부 처리와 겹치지 않는다. 옛 번들(메시지 8을 모름)에는 4409(4400대 = 편집기가 다시 접속을 멈추고 이유를 보여 줌)와 이유 글. */
+function refuseStale(socket: WebSocket, forOldBundle: boolean): void {
+  const encoder = encoding.createEncoder();
+  encoding.writeVarUint(encoder, MESSAGE_ROOM_STALE);
+  try {
+    socket.send(encoding.toUint8Array(encoder));
+  } catch {
+    /* 이미 닫힌 연결 — 닫기만 한다 */
+  }
+  try {
+    if (forOldBundle) socket.close(ROOM_STALE_CLOSE_CODE, ROOM_STALE_REASON);
+    else socket.close(1000, 'room-epoch-stale');
+  } catch {
+    /* 이미 닫힌 연결 */
+  }
+}
+
+/**
+ * 다시 접속한 클라이언트가 들고 온 세대(웹소켓 주소 epoch 매개변수)가 지금 방과 다르면(방이 없거나 새로 만들어졌으면) 동기화
+ * 메시지를 하나도 받지 않고 거절한다 — 방을 새로 만들지도 않는다. 세대 값이 없는 접속은 첫 동기화의 상태 벡터로 다시 본다(passesStateCheck).
+ */
+function rejectStaleReconnect(docId: string, socket: WebSocket, clientEpoch: string | null): boolean {
+  if (!clientEpoch) return false;
+  const room = rooms.get(docId);
+  if (room && epochOf(room) === clientEpoch) return false;
+  refuseStale(socket, false);
+  return true;
+}
+
+/** 지금 방 세대를 이 연결에 알린다(클라이언트가 다음 접속 주소에 싣는다) */
+function sendRoomEpoch(room: Room, socket: WebSocket): void {
+  const encoder = encoding.createEncoder();
+  encoding.writeVarUint(encoder, MESSAGE_ROOM_EPOCH);
+  encoding.writeVarString(encoder, epochOf(room));
+  send(room, socket, encoding.toUint8Array(encoder));
+}
+
+/**
+ * [R3-I2] 세대 값 없이 들어온 연결(배포 전에 열린 옛 번들, 세대를 받기 전에 끊긴 탭)의 첫 동기화(SyncStep1) 확인 — 상태 벡터에 이
+ * 방이 아는 클라이언트(이 세대의 서버 시딩·참여자)가 하나도 없는데 다른 클라이언트가 있으면 다른 세대의 상태다 → 거절(합치면 두 벌).
+ * 빈 문서로 처음 여는 탭은 상태 벡터가 비어 있어 통과한다. 확인 전 쓰기(SyncStep2·update)는 받지 않는다. 통과하면 다시 보지 않는다.
+ */
+const stateChecked = new WeakSet<WebSocket>();
+function passesStateCheck(room: Room, socket: WebSocket, bytes: Uint8Array, hasEpoch: boolean): boolean {
+  if (hasEpoch || stateChecked.has(socket)) return true;
+  try {
+    const decoder = decoding.createDecoder(bytes);
+    if (decoding.readVarUint(decoder) !== MESSAGE_SYNC) return true; // awareness 등은 문서에 쓰지 않는다
+    stateChecked.add(socket);
+    // y-websocket 클라이언트(옛 번들 포함)는 열리자마자 SyncStep1부터 보낸다 — 그 밖의 첫 메시지는 판정할 상태가 없다
+    if (decoding.readVarUint(decoder) !== messageYjsSyncStep1) return true;
+    const theirs = Y.decodeStateVector(decoding.readVarUint8Array(decoder));
+    if (theirs.size === 0) return true;
+    const ours = Y.decodeStateVector(Y.encodeStateVector(room.ydoc));
+    for (const id of theirs.keys()) if (ours.has(id)) return true;
+  } catch {
+    return true; // 모양이 깨진 메시지는 handleMessage가 기존대로 다룬다
+  }
+  refuseStale(socket, true);
+  closeConn(room, socket);
+  return false;
+}
+
+/**
+ * [R3-I1] 방 닫기 유예 — 마지막 참여자가 나가면 저장은 지금처럼 바로 하되, 방(같은 세대, 메모리의 Yjs 상태)은 잠시 남겨 둔다.
+ * 그 안에 다시 접속하면(와이파이 끊김·덮개·반쯤 열린 연결 뒤 재접속) 같은 세대라 Yjs가 빠진 변경을 정상적으로 다시 보낸다 — 손실·중복
+ * 없음. 예전엔 혼자 편집할 때 끊김이 짧아도 방이 바로 닫혀 매번 "방 재생성"이 됐다. 유예 시간은 DOCVIEW_ROOM_CLOSE_GRACE_MS(기본
+ * 45초, 0 = 끔, 최대 120초). 한꺼번에 남겨 두는 방은 MAX_LINGERING_ROOMS개까지(넘으면 가장 오래된 방부터 닫는다), 큰 엑셀 방은 남기지
+ * 않는다(메모리). 타이머는 프로세스를 붙잡지 않는다(unref) — 서버가 꺼지면 남은 방은 이미 저장돼 있다.
+ */
+const MAX_LINGERING_ROOMS = 20;
+const lingeringRooms = new Map<string, { room: Room; timer: ReturnType<typeof setTimeout> }>();
+/** 문서 삭제 등으로 유예 없이 바로 닫아야 하는 방 */
+const closeWithoutGrace = new Set<string>();
+
+function roomCloseGraceMs(): number {
+  const raw = process.env.DOCVIEW_ROOM_CLOSE_GRACE_MS;
+  const value = raw === undefined || raw === '' ? 45_000 : Number(raw);
+  return Number.isFinite(value) && value >= 0 ? Math.min(value, 120_000) : 45_000;
+}
+
+/** 남겨 둘 수 있으면 타이머를 걸고 true(저장은 부르는 쪽이 지금 한다), 아니면 false(바로 닫는다) */
+function lingerRoom(room: Room): boolean {
+  const ms = roomCloseGraceMs();
+  if (ms === 0 || closeWithoutGrace.has(room.docId) || largeRoomDocIds.has(room.docId)) return false;
+  while (lingeringRooms.size >= MAX_LINGERING_ROOMS) {
+    const [oldestId, oldest] = lingeringRooms.entries().next().value as [string, { room: Room; timer: ReturnType<typeof setTimeout> }];
+    clearTimeout(oldest.timer);
+    lingeringRooms.delete(oldestId);
+    if (oldest.room.conns.size === 0 && rooms.get(oldestId) === oldest.room) teardownRoom(oldest.room);
+  }
+  const timer = setTimeout(() => {
+    lingeringRooms.delete(room.docId);
+    if (room.conns.size === 0 && rooms.get(room.docId) === room) teardownRoom(room);
+  }, ms);
+  timer.unref?.();
+  lingeringRooms.set(room.docId, { room, timer });
+  return true;
+}
+
+/** 유예 중인 방에 누가 다시 들어오면 닫기 예약을 푼다 */
+function wakeLingeringRoom(docId: string): void {
+  const lingering = lingeringRooms.get(docId);
+  if (!lingering) return;
+  clearTimeout(lingering.timer);
+  lingeringRooms.delete(docId);
+}
+/* ===== [RX-C1] 끝 ===== */
+
 export async function joinEditSession(
   socket: WebSocket,
   _rawRequest: IncomingMessage,
@@ -2853,7 +3018,13 @@ export async function joinEditSession(
   // 알 수 없으면 null(테스트처럼 누가 편집했는지 중요하지 않은 호출부는 그냥 생략).
   viewer: string | null = null,
 ): Promise<void> {
+  // [RX-C1] 세대 확인 → 유예 중인 방이면 깨우기 → 세대 알림
+  const clientEpoch = clientEpochOf(_rawRequest);
+  if (rejectStaleReconnect(docId, socket, clientEpoch)) return;
+  wakeLingeringRoom(docId);
   const room = getOrCreateRoom(docId, docExt);
+  sendRoomEpoch(room, socket);
+  const hasEpoch = clientEpoch !== null;
 
   socket.binaryType = 'arraybuffer';
   room.conns.set(socket, new Set());
@@ -2869,7 +3040,7 @@ export async function joinEditSession(
       pendingMessages.push(bytes);
       return;
     }
-    handleMessage(room, socket, bytes);
+    if (passesStateCheck(room, socket, bytes, hasEpoch)) handleMessage(room, socket, bytes); // [RX-C1] R3-I2
   });
 
   let pongReceived = true;
@@ -2901,7 +3072,11 @@ export async function joinEditSession(
   await room.ready;
   if (!room.conns.has(socket)) return; // 대기 중 연결이 이미 끊겼으면 조용히 종료
   seeded = true;
-  for (const bytes of pendingMessages) handleMessage(room, socket, bytes);
+  for (const bytes of pendingMessages) {
+    if (!room.conns.has(socket)) return; // [RX-C1] 상태 벡터 확인에서 거절돼 닫힘
+    if (passesStateCheck(room, socket, bytes, hasEpoch)) handleMessage(room, socket, bytes);
+  }
+  if (!room.conns.has(socket)) return;
 
   const syncEncoder = encoding.createEncoder();
   encoding.writeVarUint(syncEncoder, MESSAGE_SYNC);

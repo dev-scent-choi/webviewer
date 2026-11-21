@@ -67,6 +67,7 @@ import {
   type CopiedFormat,
 } from './wordCommands.js';
 import { officeAlert } from './officeDialog.js';
+import { guardRoomEpoch } from './roomEpoch.js';
 
 /** 레이아웃 탭 용지 크기(dxa, 세로 기준) */
 const PAPER_SIZES = {
@@ -593,6 +594,7 @@ async function main(): Promise<void> {
   const provider = new WebsocketProvider(`${wsProtocol}//${location.host}/ws/edit`, info.docId, ydoc, {
     params: { token },
   });
+  guardRoomEpoch(provider, ydoc); // 재연결 시 이전 세대 방 상태를 합치지 않는다(src/collab/roomEpoch.ts)
 
   // 이름 기준으로 색을 정한다(ydoc.clientID는 접속마다 무작위라 같은 사람이 다른 브라우저로
   // 들어오면 매번 색이 달라져 버린다) — 같은 이름이면 항상 같은 색.

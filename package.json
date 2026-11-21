@@ -31,6 +31,7 @@
     "verify:xlsx": "node scripts/verify-xlsx-fidelity-e2e.mjs",
     "verify:xlsx:browser": "node scripts/verify-xlsx-view.mjs",
     "verify:pptx": "node scripts/verify-pptx-fidelity-e2e.mjs",
+    "verify:reconnect": "node scripts/verify-reconnect-e2e.mjs",
     "verify:pdf": "node scripts/verify-pdf-editor-e2e.mjs",
     "verify:pdf-annots": "node scripts/verify-pdf-annots-e2e.mjs",
     "verify:pdf-organize": "node scripts/verify-pdf-organize-e2e.mjs",

@@ -23,6 +23,7 @@ import { setupOcr, type OcrUi } from './pdf/ocrUi.js';
 import { setupSignUi, type SignUi } from './pdf/signUi.js';
 import { setupCertSign, type CertSignUi } from './pdf/certSignUi.js';
 import { pickPresenceColorForName, renderPresenceAvatars } from './presence.js';
+import { guardRoomEpoch } from './roomEpoch.js';
 
 interface ViewInfo {
   readonly viewerUrl?: string;
@@ -52,9 +53,11 @@ function connect(info: ViewInfo): { ydoc: Y.Doc; provider: WebsocketProvider } {
   const ydoc = new Y.Doc();
   const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const provider = new WebsocketProvider(`${wsProtocol}//${location.host}/ws/edit`, info.docId, ydoc, { params: { token } });
+  guardRoomEpoch(provider, ydoc); // 재연결 시 이전 세대 방 상태를 합치지 않는다(src/collab/roomEpoch.ts)
   provider.awareness.setLocalStateField('user', { name: info.viewer, color: pickPresenceColorForName(info.viewer) });
   const conn = $('conn-status');
   provider.on('status', ({ status }: { status: string }) => {
+    if (!provider.shouldConnect && status !== 'connected') return; // 거부당해 멈췄으면 '보기 전용' 표시를 덮지 않는다
     conn.dataset.state = status;
     conn.textContent = status === 'connected' ? (info.permissions.canEdit ? '연결됨' : '읽기 전용') : '연결 중…';
   });

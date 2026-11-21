@@ -12,6 +12,7 @@ import { ConversionError, type Converter } from './types.js';
 import { guardedUnzipSync } from '../zipGuard.js';
 import { createLibreOfficeWorker } from './loWorker.js';
 import { ensureFontSubstitutions } from './loFontSubstitution.js';
+import { boldPptxTableHeaders } from '../pptx/loPreprocess.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -253,7 +254,7 @@ export function literalizeDocxThemeFonts(docxBytes: Uint8Array): Uint8Array {
   return zipSync(updated);
 }
 
-type SourcePreprocessor = (bytes: Uint8Array) => Uint8Array;
+type SourcePreprocessor = (bytes: Uint8Array) => Uint8Array | Promise<Uint8Array>;
 
 /**
  * 프로필 풀: 매 변환마다 새 프로필을 만들면 LibreOffice가 프로필 초기화에
@@ -315,7 +316,7 @@ async function convertWithSoffice(
       const original = await fs.readFile(sourcePath);
       let staged: Uint8Array;
       try {
-        staged = preprocess(original);
+        staged = await preprocess(original);
       } catch {
         // 전처리에 실패해도 변환 자체는 원본으로 계속한다.
         staged = original;
@@ -559,13 +560,13 @@ export const officeConverter: Converter = {
   name: 'libreoffice',
   extensions: ['doc', 'docx', 'ppt', 'pptx', 'odt', 'odp', 'rtf', 'txt', 'hwp', 'hwpx'],
   async convert(sourcePath, targetPdfPath, sourceName) {
-    const isDocx = path.extname(sourcePath).toLowerCase() === '.docx';
+    const ext = path.extname(sourcePath).toLowerCase();
     await convertWithSoffice(
       sourcePath,
       targetPdfPath,
       ['--convert-to', 'pdf'],
       sourceName,
-      isDocx ? literalizeDocxThemeFonts : undefined,
+      ext === '.docx' ? literalizeDocxThemeFonts : ext === '.pptx' ? boldPptxTableHeaders : undefined,
     );
   },
 };

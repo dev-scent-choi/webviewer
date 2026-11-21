@@ -21,6 +21,7 @@ const rec = (name, ok, detail = '') => {
   console.log(`${ok ? 'OK  ' : 'FAIL'} ${name}${detail ? ` — ${detail}` : ''}`);
 };
 
+const MC_NS = 'xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:a14="http://schemas.microsoft.com/office/drawing/2010/main"';
 const NS = 'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"';
 const REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
 const rels = (items) =>
@@ -48,7 +49,29 @@ const SHAPES =
   `<a:solidFill><a:srgbClr val="0070C0"/></a:solidFill></p:spPr></p:sp>` +
   // id 6: 기본 둥근 사각형(짧은 변의 1/6 반지름)
   `<p:sp><p:nvSpPr><p:cNvPr id="6" name="둥근"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr>${xfrm(4572000, 4114800, 2743200, 914400)}<a:prstGeom prst="roundRect"><a:avLst/></a:prstGeom>` +
-  `<a:solidFill><a:srgbClr val="00B050"/></a:solidFill></p:spPr></p:sp>`;
+  `<a:solidFill><a:srgbClr val="00B050"/></a:solidFill></p:spPr></p:sp>` +
+  // id 7: 하이퍼링크·문단 안 줄 바꿈(a:br)·자동 번호 2개·어절 단위 줄 바꿈(eaLnBrk=0) — 품질 점검 말뭉치에 없는 기능
+  `<p:sp><p:nvSpPr><p:cNvPr id="7" name="목록"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr><p:spPr>${xfrm(914400, 5257800, 3657600, 1371600)}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/></p:spPr>` +
+  '<p:txBody><a:bodyPr wrap="square"/><a:lstStyle/>' +
+  '<a:p><a:pPr eaLnBrk="0"/><a:r><a:rPr lang="ko-KR" sz="1400"><a:hlinkClick r:id="rId9"/></a:rPr><a:t>링크글자</a:t></a:r><a:br><a:rPr lang="ko-KR" sz="1400"/></a:br><a:r><a:rPr lang="ko-KR" sz="1400"/><a:t>둘째줄</a:t></a:r></a:p>' +
+  '<a:p><a:pPr marL="342900" indent="-342900"><a:buAutoNum type="arabicPeriod"/></a:pPr><a:r><a:rPr lang="ko-KR" sz="1400"/><a:t>첫 항목</a:t></a:r></a:p>' +
+  '<a:p><a:pPr marL="342900" indent="-342900"><a:buAutoNum type="arabicPeriod"/></a:pPr><a:r><a:rPr lang="ko-KR" sz="1400"/><a:t>둘째 항목</a:t></a:r></a:p></p:txBody></p:sp>' +
+  // id 8: 세로 쓰기(eaVert)
+  `<p:sp><p:nvSpPr><p:cNvPr id="8" name="세로"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr><p:spPr>${xfrm(7772400, 457200, 914400, 2743200)}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/></p:spPr>` +
+  `<p:txBody><a:bodyPr vert="eaVert"/><a:lstStyle/>${text('세로글자')}</p:txBody></p:sp>` +
+  // id 9: 30° 돌린 오른쪽 화살표 도형(글자도 같이 돈다)
+  `<p:sp><p:nvSpPr><p:cNvPr id="9" name="화살표"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr>${xfrm(4572000, 5257800, 2743200, 914400).replace('<a:xfrm>', '<a:xfrm rot="1800000">')}<a:prstGeom prst="rightArrow"><a:avLst/></a:prstGeom>` +
+  `<a:solidFill><a:srgbClr val="4472C4"/></a:solidFill></p:spPr><p:txBody><a:bodyPr anchor="ctr"/><a:lstStyle/>${text('돌린 글')}</p:txBody></p:sp>` +
+  // id 10: 문단 안 수식(mc:AlternateContent/a14:m) + 숫자 문자 참조 글자·글꼴 이름(검토 I3·I4)
+  `<p:sp><p:nvSpPr><p:cNvPr id="10" name="수식"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr><p:spPr>${xfrm(457200, 3886200, 3200400, 685800)}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/></p:spPr>` +
+  '<p:txBody><a:bodyPr wrap="square"/><a:lstStyle/><a:p><a:r><a:rPr lang="ko-KR" sz="1400"><a:latin typeface="Evil&#10;Font"/></a:rPr><a:t>&#xAC00;&#xB098;&#xB2E4; E=</a:t></a:r>' +
+  `<mc:AlternateContent><mc:Choice Requires="a14"><a14:m><m:oMathPara xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"><m:oMath><m:r><m:t>mc2</m:t></m:r></m:oMath></m:oMathPara></a14:m></mc:Choice><mc:Fallback><a:r><a:rPr lang="en-US" sz="1400"/><a:t>mc²</a:t></a:r></mc:Fallback></mc:AlternateContent></a:p></p:txBody></p:sp>` +
+  // id 11: 슬라이드 최상위 mc:AlternateContent로 감싼 도형(검토 I5) — Fallback의 빨간 상자
+  `<mc:AlternateContent><mc:Choice Requires="a14"><p:sp><p:nvSpPr><p:cNvPr id="11" name="감싼 도형"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr>${xfrm(7315200, 3886200, 914400, 457200)}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></p:spPr></p:sp></mc:Choice>` +
+  `<mc:Fallback><p:sp><p:nvSpPr><p:cNvPr id="11" name="감싼 도형"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr>${xfrm(7315200, 3886200, 914400, 457200)}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></p:spPr></p:sp></mc:Fallback></mc:AlternateContent>` +
+  // id 12: 넘치면 글자 줄이기(normAutofit) 작은 상자 — 글을 늘리면 다시 맞춰 작아진다(검토 Minor 3)
+  `<p:sp><p:nvSpPr><p:cNvPr id="12" name="맞춤"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr><p:spPr>${xfrm(457200, 4800600, 2286000, 457200)}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/></p:spPr>` +
+  `<p:txBody><a:bodyPr wrap="square"><a:normAutofit/></a:bodyPr><a:lstStyle/>${text('맞춤')}</p:txBody></p:sp>`;
 
 const THEME =
   `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><a:theme ${NS} name="T"><a:themeElements>` +
@@ -89,8 +112,14 @@ async function buildFixture() {
   zip.file('ppt/slideMasters/_rels/slideMaster1.xml.rels', rels([['rId1', 'slideLayout', '../slideLayouts/slideLayout1.xml'], ['rId2', 'theme', '../theme/theme1.xml']]));
   zip.file('ppt/slideLayouts/slideLayout1.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><p:sldLayout ${NS} type="blank">${tree('')}<p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sldLayout>`);
   zip.file('ppt/slideLayouts/_rels/slideLayout1.xml.rels', rels([['rId1', 'slideMaster', '../slideMasters/slideMaster1.xml']]));
-  zip.file('ppt/slides/slide1.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><p:sld ${NS}>${tree(SHAPES)}<p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>`);
-  zip.file('ppt/slides/_rels/slide1.xml.rels', rels([['rId1', 'slideLayout', '../slideLayouts/slideLayout1.xml']]));
+  zip.file('ppt/slides/slide1.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><p:sld ${NS} ${MC_NS}>${tree(SHAPES)}<p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>`);
+  zip.file(
+    'ppt/slides/_rels/slide1.xml.rels',
+    rels([['rId1', 'slideLayout', '../slideLayouts/slideLayout1.xml']]).replace(
+      '</Relationships>',
+      `<Relationship Id="rId9" Type="${REL}/hyperlink" Target="https://example.com/" TargetMode="External"/></Relationships>`,
+    ),
+  );
   zip.file('ppt/theme/theme1.xml', THEME);
   return zip.generateAsync({ type: 'nodebuffer' });
 }
@@ -165,8 +194,134 @@ const thumb = await page.evaluate(async () => {
   return { loaded: img.naturalWidth > 0, small: img.src.includes('thumb=true'), status: res.status, width: img.naturalWidth };
 });
 rec('슬라이드 창 미리보기가 작은 그림으로 뜬다', thumb && thumb.loaded && thumb.small && thumb.status === 200 && thumb.width <= 600, JSON.stringify(thumb));
+// 하이퍼링크·줄 바꿈·자동 번호·어절 줄 바꿈·세로 쓰기·회전(품질 점검 P3·P4·P6 보강 — 말뭉치에 없는 기능)
+const extra = await page.evaluate(() => {
+  const box = (id) => document.querySelector(`#slide-canvas .slide-textbox[data-shape-id="${id}"]`);
+  const ps = [...(box('7')?.querySelectorAll('p') ?? [])];
+  const link = box('7')?.querySelector('.slide-hlink');
+  return {
+    link: link ? { color: getComputedStyle(link).color, underline: getComputedStyle(link).textDecorationLine } : null,
+    br: box('7')?.querySelectorAll('p br:not(.ProseMirror-trailingBreak)').length ?? 0,
+    nums: ps.slice(1).map((p) => getComputedStyle(p, '::before').content),
+    keep: ps[0] ? getComputedStyle(ps[0]).wordBreak : null,
+    vert: box('8') ? getComputedStyle(box('8').querySelector('.ProseMirror')).writingMode : null,
+    turn: box('9') ? getComputedStyle(box('9')).transform : null,
+  };
+});
+rec('하이퍼링크 글자: 테마 하이퍼링크 색 + 밑줄', extra.link?.color === 'rgb(0, 0, 255)' && extra.link.underline.includes('underline'), JSON.stringify(extra.link));
+rec('문단 안 줄 바꿈(a:br)이 보인다', extra.br === 1, String(extra.br));
+rec('자동 번호 1. 2.', JSON.stringify(extra.nums) === JSON.stringify(['"1."', '"2."']), JSON.stringify(extra.nums));
+rec('eaLnBrk=0 문단은 어절 단위 줄 바꿈(keep-all)', extra.keep === 'keep-all', String(extra.keep));
+rec('세로 쓰기(eaVert)', extra.vert === 'vertical-rl', String(extra.vert));
+rec('30° 돌린 도형의 글상자도 30° 회전', (() => { const m = /matrix\(([^,]+), ([^,]+)/.exec(extra.turn ?? ''); return m ? Math.abs((Math.atan2(Number(m[2]), Number(m[1])) * 180) / Math.PI - 30) < 0.5 : false; })(), String(extra.turn));
+// 저장 보존: 링크 글자 뒤에 타이핑하고 저장 → 내려받은 파일에 하이퍼링크·줄 바꿈·자동 번호·eaLnBrk·lang이 남는다
+await page.click('#slide-canvas .slide-textbox[data-shape-id="7"] .slide-hlink');
+await page.keyboard.press('End');
+await page.keyboard.type('추가');
+await page.waitForTimeout(1500);
+await fetch(`${BASE}/api/view/save?token=${encodeURIComponent(token.token)}`, { method: 'POST' });
+const saved = await (await fetch(`${BASE}/api/view/download?token=${encodeURIComponent(token.token)}`)).arrayBuffer();
+const savedSlide = await (await JSZip.loadAsync(saved)).file('ppt/slides/slide1.xml').async('string');
+const sp7 = /<p:sp>(?:(?!<\/p:sp>)[\s\S])*?id="7"[\s\S]*?<\/p:sp>/.exec(savedSlide)?.[0] ?? '';
+rec(
+  '고친 글상자 저장: 글자 반영 + 하이퍼링크·a:br·buAutoNum·eaLnBrk·lang 유지',
+  /둘째줄추가|링크글자추가/.test(sp7) && sp7.includes('<a:hlinkClick r:id="rId9"/>') && /<a:br>/.test(sp7) && (sp7.match(/<a:buAutoNum type="arabicPeriod"\/>/g) ?? []).length === 2 && sp7.includes('eaLnBrk="0"') && sp7.includes('lang="ko-KR"'),
+  sp7.slice(0, 400),
+);
+// 검토 I3·I4·I5·Minor 2·3·I2 — 실제 편집기에서 고치고 저장한 파일을 본다
+const box = (id) => `#slide-canvas .slide-textbox[data-shape-id="${id}"]`;
+const shown = await page.evaluate(() => ({
+  text10: document.querySelector('#slide-canvas .slide-textbox[data-shape-id="10"]')?.textContent ?? '',
+  snapshots: [...document.querySelectorAll('#slide-canvas .slide-visual-snapshot')].map((el) => [parseFloat(el.style.left), parseFloat(el.style.top)]),
+}));
+rec('숫자 문자 참조는 글자로, 수식은 대체 글자로 그 자리에 보인다', shown.text10.includes('가나다 E=') && shown.text10.includes('mc²') && !shown.text10.includes('&#'), shown.text10);
+// 감싼 도형 자리(8인치, 4.25인치 = 576px·306px 근처 — 캔버스 960px, 10인치 슬라이드)에 원본 렌더링 조각
+rec('mc:AlternateContent로 감싼 도형 자리에 원본 렌더링 조각', shown.snapshots.some(([x, y]) => Math.abs(x - 768) < 12 && Math.abs(y - 408) < 12), JSON.stringify(shown.snapshots));
+// 수식 상자: 첫 글자 뒤에 입력 + Shift+Enter 줄 바꿈
+const t10 = await page.locator(`${box('10')} p`).first().boundingBox();
+await page.mouse.click(t10.x + 4, t10.y + t10.height / 2);
+await page.keyboard.press('Home');
+await page.keyboard.press('ArrowRight');
+await page.keyboard.type('!');
+await page.keyboard.press('Shift+Enter');
+await page.keyboard.type('줄');
+// 자동 맞춤 상자: 글을 늘리면 다시 맞춰 글자가 작아진다
+const before12 = await page.locator(`${box('12')} .ProseMirror span, ${box('12')} .ProseMirror p`).first().evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
+await page.click(`${box('12')} .ProseMirror`);
+await page.keyboard.press('End');
+for (let i = 0; i < 4; i += 1) { await page.keyboard.press('Enter'); await page.keyboard.type('더 많은 글'); }
+await page.waitForTimeout(600);
+const after12 = await page.locator(`${box('12')} .ProseMirror span, ${box('12')} .ProseMirror p`).first().evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
+rec('자동 맞춤 상자: 글을 늘리면 글자가 작아진다', after12 < before12 * 0.95, `${before12} → ${after12}`);
+await page.waitForTimeout(1200);
+// 협업자 위조(검토 I2): 별도 Yjs 클라이언트가 글상자 7 첫 문단의 끝 속성에 다른 도형을 끼워 넣으려 한다
+{
+  const Y = await import('yjs');
+  const { WebsocketProvider } = await import('y-websocket');
+  const { default: WebSocket } = await import('ws');
+  const ydoc = new Y.Doc();
+  const prov = new WebsocketProvider(`${BASE.replace('http', 'ws')}/ws/edit`, id, ydoc, { params: { token: token.token }, WebSocketPolyfill: WebSocket });
+  await new Promise((resolve) => (prov.synced ? resolve() : prov.once('synced', resolve)));
+  const contents = ydoc.getMap('slideContents');
+  for (const per of contents.values()) {
+    const frag = per.get('7')?.get('content');
+    const para = frag?.get(0);
+    if (para) ydoc.transact(() => para.setAttribute('endRPr', '</a:p></p:txBody></p:sp><p:sp><p:nvSpPr><p:cNvPr id="999" name="injected"/>'));
+  }
+  await new Promise((r) => setTimeout(r, 800));
+  prov.destroy();
+}
+await page.waitForTimeout(1500);
+await fetch(`${BASE}/api/view/save?token=${encodeURIComponent(token.token)}`, { method: 'POST' });
+const saved2 = await (await fetch(`${BASE}/api/view/download?token=${encodeURIComponent(token.token)}`)).arrayBuffer();
+const slide2 = await (await JSZip.loadAsync(saved2)).file('ppt/slides/slide1.xml').async('string');
+const shapeXml = (n) => new RegExp(`<p:sp>(?:(?!</p:sp>)[\\s\\S])*?<p:cNvPr id="${n}"[\\s\\S]*?</p:sp>`).exec(slide2)?.[0] ?? '';
+const sp10 = shapeXml(10);
+rec('수식 상자 고쳐 저장: 수식 원문·대체 글자 유지, 글자·글꼴 이름 바르게(&amp;# 없음), Shift+Enter = a:br', sp10.includes('<a14:m>') && sp10.includes('<a:t>mc²</a:t>') && sp10.includes('typeface="Evil&#10;Font"') && !sp10.includes('&amp;#') && sp10.includes('<a:t>가!</a:t></a:r><a:br/>') && sp10.includes('<a:t>줄나다 E=</a:t>'), sp10.slice(0, 600));
+const fit12 = /<a:normAutofit fontScale="(\d+)"/.exec(shapeXml(12))?.[1];
+rec('자동 맞춤 상자 저장: 새 fontScale(100% 미만)', Boolean(fit12) && Number(fit12) < 100000, String(fit12));
+const { XMLValidator } = await import('fast-xml-parser');
+rec('위조한 끝 속성이 저장 XML에 들어가지 않고 슬라이드 XML이 올바르다', !slide2.includes('injected') && XMLValidator.validate(slide2) === true, slide2.includes('injected') ? 'injected 있음' : String(XMLValidator.validate(slide2)));
+rec('감싼 도형(mc:AlternateContent)은 원문 그대로 저장', slide2.includes('<mc:Fallback><p:sp><p:nvSpPr><p:cNvPr id="11"'), '');
 await page.screenshot({ path: path.join(shotDir, 'pptx-editor.png') });
 rec('페이지 오류 없음', errors.length === 0, errors.slice(0, 2).join(' | '));
+// 자동 맞춤 다시 맞춤은 창 크기와 무관하고, 한 글자 편집에 PowerPoint 값(47.5%)을 흔들지 않는다(2차 검토 R2-I3)
+{
+  const form = new FormData();
+  form.append('file', new Blob([fs.readFileSync('audit/office/corpus/pptx/p03-autofit.pptx')]), 'p03.pptx');
+  const pid = (await (await fetch(`${BASE}/api/documents`, { method: 'POST', body: form })).json()).data.id;
+  for (;;) { const st = (await (await fetch(`${BASE}/api/documents/${pid}`)).json()).data; if (st.status === 'ready') break; await new Promise((r) => setTimeout(r, 400)); }
+  const pt = (await (await fetch(`${BASE}/api/documents/${pid}/tokens`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ viewer: 'af', canPrint: true, canDownload: true, canCopy: true, canEdit: true }) })).json()).data;
+  const scales = [];
+  for (const vp of [{ width: 1400, height: 900 }, { width: 900, height: 700 }, { width: 1920, height: 1080 }]) {
+    const p2 = await browser.newPage({ viewport: vp });
+    await p2.goto(BASE + pt.editorUrl);
+    await p2.waitForSelector('#slide-canvas .slide-textbox .ProseMirror');
+    await p2.waitForTimeout(2000);
+    const sid = await p2.locator('#slide-canvas .slide-textbox').filter({ hasText: '12. 향기랩' }).getAttribute('data-shape-id');
+    const pm = p2.locator(`#slide-canvas .slide-textbox[data-shape-id="${sid}"] .ProseMirror`);
+    // 창 크기와 무관하게 같은 자리(마지막 단락 끝)에 커서를 둔다 — 좁은 창에선 마우스 좌표가 다른 상자에 떨어질 수 있다
+    await pm.evaluate((el) => {
+      el.focus();
+      const last = el.querySelector('p:last-of-type');
+      const range = document.createRange();
+      range.selectNodeContents(last);
+      range.collapse(false);
+      const sel = getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+    });
+    await p2.waitForTimeout(200);
+    await p2.keyboard.type('!');
+    await p2.waitForTimeout(600);
+    scales.push(await pm.evaluate((e) => e.style.getPropertyValue('--fs-scale')));
+    await p2.keyboard.press('Backspace');
+    await p2.waitForTimeout(800);
+    await p2.close();
+  }
+  rec('자동 맞춤: 한 글자 편집은 창 크기(1400·900·1920)와 무관하게 47.5% 유지', scales.every((v) => v === '0.475'), JSON.stringify(scales));
+  await fetch(`${BASE}/api/documents/${pid}`, { method: 'DELETE' }).catch(() => {});
+}
 await browser.close();
 await fetch(`${BASE}/api/documents/${id}`, { method: 'DELETE' }).catch(() => {});
 const fails = results.filter((r) => !r.ok);

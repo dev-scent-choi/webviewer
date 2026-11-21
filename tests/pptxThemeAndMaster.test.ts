@@ -79,10 +79,12 @@ describe('loadThemeColors', () => {
     expect(theme.resolve({ 'a:schemeClr': { '@_val': 'accent1' } })).toBe('#4472C4');
     expect(theme.resolve({ 'a:srgbClr': { '@_val': 'c00000' } })).toBe('#C00000');
   });
-  test('밝기 조정: lumMod/lumOff(HSL 밝기), tint(흰색과 혼합)', () => {
+  test('밝기 조정: lumMod/lumOff(HSL 밝기), tint(선형 밝기에서 흰색과 혼합)', () => {
     // 검정(tx1) + lumMod 75% + lumOff 25% → 밝기 0.25 → #404040 (PowerPoint "검정, 텍스트 1, 25% 밝게")
     expect(theme.resolve({ 'a:schemeClr': { '@_val': 'tx1', 'a:lumMod': { '@_val': '75000' }, 'a:lumOff': { '@_val': '25000' } } })).toBe('#404040');
-    expect(theme.resolve({ 'a:schemeClr': { '@_val': 'tx1', 'a:tint': { '@_val': '75000' } } })).toBe('#404040');
+    // tint는 선형 밝기(scRGB)에서 섞는다 — PowerPoint·LibreOffice가 부제목 "tx1 tint 75%"를 #898989로 그린다(MS Office 정답 p01)
+    expect(theme.resolve({ 'a:schemeClr': { '@_val': 'tx1', 'a:tint': { '@_val': '75000' } } })).toBe('#898989');
+    expect(theme.resolve({ 'a:srgbClr': { '@_val': 'FFFFFF', 'a:shade': { '@_val': '50000' } } })).toBe('#BCBCBC');
   });
   test('테마 파트가 없으면 테마 색을 추측하지 않는다(undefined), 직접 RGB는 그대로', () => {
     const bare = loadThemeColors({ 'ppt/slides/slide1.xml': enc('<p:sld/>') }, 'slide1.xml');
@@ -125,10 +127,11 @@ describe('글자의 테마 색: 화면엔 풀어서, 저장엔 원본 그대로'
           '</p:txBody></p:sp>',
       ) +
       '</p:sld>';
-    const [shape] = parseSlideShapes(slideXml, loadThemeColors(deck(), 'slide1.xml'));
+    const trusted = new Set<string>();
+    const [shape] = parseSlideShapes(slideXml, loadThemeColors(deck(), 'slide1.xml'), trusted);
     const mark = shape.doc.firstChild!.firstChild!.marks.find((m) => m.type.name === 'textColor')!;
     expect(mark.attrs.color).toBe('#2F5597'); // 4472C4의 75% 밝기
-    expect(serializeTxBodyXml(shape.doc)).toContain(
+    expect(serializeTxBodyXml(shape.doc, trusted)).toContain(
       '<a:solidFill><a:schemeClr val="accent1"><a:lumMod val="75000"/></a:schemeClr></a:solidFill>',
     );
   });

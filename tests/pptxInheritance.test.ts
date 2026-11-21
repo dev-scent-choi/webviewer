@@ -95,8 +95,8 @@ describe('resolveSlideShapeLooks: 목록 수준(글머리·들여쓰기)', () =>
   });
 });
 
-describe('resolveSlideShapeLooks: 그린 도형의 글자는 기본 가운데', () => {
-  test('개체 틀·글상자가 아닌 도형은 정렬이 없으면 가운데, 글상자(txBox=1)는 마스터 기본(왼쪽)', () => {
+describe('resolveSlideShapeLooks: 정렬이 없는 도형 글자는 마스터 기본(왼쪽)', () => {
+  test('그린 도형도 글상자(txBox=1)도 정렬이 없으면 마스터 기본 — PowerPoint는 새 도형에 algn="ctr"을 직접 적는다(MS Office 정답 p07)', () => {
     const zip = deck();
     const slide = new TextDecoder()
       .decode(zip['ppt/slides/slide1.xml'])
@@ -108,7 +108,7 @@ describe('resolveSlideShapeLooks: 그린 도형의 글자는 기본 가운데', 
       );
     zip['ppt/slides/slide1.xml'] = new TextEncoder().encode(slide);
     const looks = resolveSlideShapeLooks(zip, 'slide1.xml');
-    expect(looks.get('7')?.defaultAlign).toBe('ctr');
+    expect(looks.get('7')?.defaultAlign).toBe('l');
     expect(looks.get('8')?.defaultAlign).toBe('l');
   });
 });

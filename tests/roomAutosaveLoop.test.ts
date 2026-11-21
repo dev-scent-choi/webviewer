@@ -8,6 +8,10 @@ import * as encoding from 'lib0/encoding';
 import * as Y from 'yjs';
 import { messageYjsSyncStep1, messageYjsSyncStep2, messageYjsUpdate, readUpdate, writeSyncStep1, writeUpdate } from 'y-protocols/sync';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+
+// 부하가 걸리면 첫 시험의 room.js 첫 import(변환)만 20초를 넘길 수 있다. 시간 초과된 시험은 멈추지 않고 뒤에서 계속 돌아,
+// 다음 시험이 resetModules로 만든 같은 store에 저장해 "1번 기대, 2번"이 됐다(3차 검토 — 실제 이중 저장이 아니라 시험 간섭).
+vi.setConfig({ testTimeout: 90_000, hookTimeout: 90_000 });
 import { makeSampleDocx } from './helpers.js';
 
 const MESSAGE_SYNC = 0;

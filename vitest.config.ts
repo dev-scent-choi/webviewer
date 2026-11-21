@@ -9,6 +9,8 @@ export default defineConfig({
     setupFiles: ['tests/setupLoProfile.ts'],
     // LibreOffice 상주 변환기(src/converters/loWorker.ts)는 시험 프로세스마다 soffice를 띄우게 되므로 끈다 —
     // 변환기 자체는 tests/loWorker.test.ts가 따로 켜서 시험한다.
-    env: { DOCVIEW_LO_WORKER: '0' }, // 기본도 꺼짐이지만 명시해 둔다
+    // 방 닫기 유예(room.ts, 기본 45초)는 끈다 — 기존 시험은 마지막 참여자가 나가면 방이 바로 닫힌다고 본다. 유예 자체는
+    // tests/roomCloseGrace.test.ts가 값을 직접 켜서 시험한다.
+    env: { DOCVIEW_LO_WORKER: '0', DOCVIEW_ROOM_CLOSE_GRACE_MS: '0' }, // LO 변환기는 기본도 꺼짐이지만 명시해 둔다
   },
 });
