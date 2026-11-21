@@ -1,6 +1,6 @@
 import { strToU8 } from 'fflate';
 import { describe, expect, test } from 'vitest';
-import { parseSheetExtras, resolveDefinedNameLocation, tableFilterOf } from '../src/xlsx/sheetExtras.js';
+import { parseDefinedNames, parseSheetExtras, readSheetExtrasFromEntries, resolveDefinedNameLocation, tableFilterOf } from '../src/xlsx/sheetExtras.js';
 import { evalLinkExpr, parseLocation } from '../src/client/gridLinks.js';
 
 const RELS = (items: string) => `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${items}</Relationships>`;
@@ -58,17 +58,38 @@ describe('정의된 이름으로 가는 링크', () => {
     '<definedName name="목표" localSheetId="1">자료!$A$1</definedName>' +
     '<definedName name="여럿">자료!$A$1:$B$2,자료!$D$4</definedName>' +
     '<definedName name="세율">0.1</definedName></definedNames></workbook>';
+  const names = parseDefinedNames(wb);
 
   test('이름을 칸 주소로 — 시트 범위 이름이 먼저, 여러 영역이면 첫 영역', () => {
-    expect(resolveDefinedNameLocation('목표', '요약', wb)).toBe("'자료'!$E$3000");
-    expect(resolveDefinedNameLocation('목표', '자료', wb)).toBe('자료!$A$1');
-    expect(resolveDefinedNameLocation('여럿', '요약', wb)).toBe('자료!$A$1:$B$2');
+    expect(resolveDefinedNameLocation('목표', '요약', names)).toBe("'자료'!$E$3000");
+    expect(resolveDefinedNameLocation('목표', '자료', names)).toBe('자료!$A$1');
+    expect(resolveDefinedNameLocation('여럿', '요약', names)).toBe('자료!$A$1:$B$2');
   });
 
   test('칸 주소·없는 이름은 그대로(화면이 "참조가 올바르지 않습니다"로 알린다)', () => {
-    expect(resolveDefinedNameLocation("'통신 규약'!B3", '요약', wb)).toBe("'통신 규약'!B3");
-    expect(resolveDefinedNameLocation('없는이름', '요약', wb)).toBe('없는이름');
-    expect(parseLocation(resolveDefinedNameLocation('세율', '요약', wb))).toBeNull();
+    expect(resolveDefinedNameLocation("'통신 규약'!B3", '요약', names)).toBe("'통신 규약'!B3");
+    expect(resolveDefinedNameLocation('없는이름', '요약', names)).toBe('없는이름');
+    expect(parseLocation(resolveDefinedNameLocation('세율', '요약', names))).toBeNull();
+  });
+
+  // 재검토 4 Critical: 링크마다 workbook.xml을 다시 훑어 8,000 링크 × 8,000 이름에 23.6초 걸렸다
+  test('8,000 링크 × 8,000 이름 — 200ms 안에, 결과는 같다', () => {
+    const N = 8000;
+    const defined = Array.from({ length: N }, (_, i) => `<definedName name="이름${i}">자료!$A$${i + 1}</definedName>`).join('');
+    const links = Array.from({ length: N }, (_, i) => `<hyperlink ref="A${i + 1}" location="이름${N - 1 - i}"/>`).join('');
+    const entries = {
+      'xl/workbook.xml': strToU8(`<workbook><sheets><sheet name="요약" sheetId="1" r:id="rId1"/><sheet name="자료" sheetId="2" r:id="rId2"/></sheets><definedNames>${defined}</definedNames></workbook>`),
+      'xl/_rels/workbook.xml.rels': strToU8(RELS('<Relationship Id="rId1" Type="…/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="…/worksheet" Target="worksheets/sheet2.xml"/>')),
+      'xl/worksheets/sheet1.xml': strToU8(`<worksheet><sheetData/><hyperlinks>${links}</hyperlinks></worksheet>`),
+      'xl/worksheets/sheet2.xml': strToU8('<worksheet><sheetData/></worksheet>'),
+    };
+    const started = performance.now();
+    const out = readSheetExtrasFromEntries(entries);
+    const ms = performance.now() - started;
+    expect(out.links).toHaveLength(N);
+    expect(out.links[0].location).toBe(`자료!$A$${N}`);
+    expect(out.links[N - 1].location).toBe('자료!$A$1');
+    expect(ms).toBeLessThan(200);
   });
 });
 

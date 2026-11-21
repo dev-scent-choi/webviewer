@@ -35,6 +35,7 @@ import { importDocx } from '../docx/import.js';
 import type { Node as PMNode } from 'prosemirror-model';
 import { fragmentHash, refHashOf, TRACKED_WRAP_TAGS, trackedWrapKey } from '../docx/ooxml.js';
 import { invalidateRenderCache } from '../rendering.js';
+import { SizedLruCache } from '../cache.js';
 import { exportPdfFromRoom, pdfChangeLogOf, PdfChangeTracker, PDF_META_MAP, PDF_SEED_ORIGIN, seedPdfModel } from '../pdf/pdfModel.js';
 import { finalizePdf } from '../pdf/pdfFinalize.js';
 import { isEncryptedPdf, type PdfProtection } from '../pdf/pdfSecurity.js';
@@ -1096,9 +1097,35 @@ export function discardPrewarmedXlsx(docId: string): void {
   void entry.store.then((store) => (store ? closeLazyGridStore(store) : undefined)).catch(() => undefined);
 }
 
+/**
+ * 파일 링크·목록·표 해석 결과 캐시 — 보기 화면을 열 때마다(열람만 토큰 포함) 원본을 다시 풀고 훑지 않게(재검토 4).
+ * 크기는 항목 수로 어림한다(링크 하나 수백 바이트).
+ */
+const fileExtrasCache = new SizedLruCache<SheetExtras>({
+  maxBytes: 64 * 1024 * 1024,
+  maxEntries: 200,
+  sizeOf: (e) => 4096 + (e.links.length + e.lists.length) * 300 + e.tables.length * 1000,
+});
+const extrasSourceIds = new WeakMap<Uint8Array, number>();
+let extrasSourceSeq = 0;
+
+/** 저장·원본 교체로 원본이 바뀌었을 때 — invalidateViewCaches가 부른다 */
+export function invalidateFileExtras(docId: string): void {
+  fileExtrasCache.invalidatePrefix(`${docId}#`);
+}
+
 /** 파일의 하이퍼링크(바로가기)·목록 상자 — 편집 화면이 링크 이동·목록 고르기에 쓴다. 열린 룸이 있으면 그 원본 기준. */
 export async function getFileExtras(docId: string): Promise<SheetExtras> {
-  const extras = readSheetExtrasFromEntries(await fileSkeletonOf(docId));
+  const before = rooms.get(docId);
+  if (before) await before.ready;
+  // 열린 방이면 그 원본 바이트 기준(바이트마다 번호 — 바이트 자체를 붙잡지 않는다), 아니면 저장된 원본(저장 때 invalidateFileExtras)
+  const roomBytes = before?.originalXlsxBytes;
+  let srcId = 0;
+  if (roomBytes) {
+    srcId = extrasSourceIds.get(roomBytes) ?? ++extrasSourceSeq;
+    extrasSourceIds.set(roomBytes, srcId);
+  }
+  const extras = await fileExtrasCache.getOrLoad(`${docId}#${srcId}`, async () => readSheetExtrasFromEntries(await fileSkeletonOf(docId)));
   // 편집 방은 원본 바이트 + 지금까지의 행/열 삽입·삭제(structuralOps)다 — 표 범위도 그만큼 옮겨 준다(저장할 때와 같다)
   const room = rooms.get(docId);
   if (!room?.originalXlsxBytes || !room.lazyGrid || room.structuralOps.length === 0) return extras;

@@ -1119,6 +1119,9 @@ const gridState = {
   /** 하이퍼링크 — /api/view/xlsx-links(src/xlsx/sheetExtras.ts SheetLink, 칸 좌표 0부터). sheetLinks는 지금 시트 것만 */
   links: [],
   sheetLinks: [],
+  /** 지금 시트 링크를 행 묶음(LINK_BUCKET행)별로 — 칸마다 목록 전체를 훑지 않게. 아주 긴 범위 링크는 wide에 */
+  sheetLinkBuckets: new Map(),
+  sheetLinksWide: [],
 };
 
 function colLetter(index) {
@@ -1326,9 +1329,31 @@ function linkCellText(r0, c0) {
   return cell && cell !== 0 ? cell.v : '';
 }
 
+const LINK_BUCKET = 64;
+
+function setSheetLinks(sheet) {
+  gridState.sheetLinks = sheet ? gridState.links.filter((l) => l.sheetName === sheet.name) : [];
+  gridState.sheetLinkBuckets = new Map();
+  gridState.sheetLinksWide = [];
+  for (const l of gridState.sheetLinks) {
+    const b1 = Math.floor(l.r1 / LINK_BUCKET);
+    const b2 = Math.floor(l.r2 / LINK_BUCKET);
+    if (b2 - b1 > 256) {
+      gridState.sheetLinksWide.push(l);
+      continue;
+    }
+    for (let b = b1; b <= b2; b += 1) {
+      const list = gridState.sheetLinkBuckets.get(b);
+      if (list) list.push(l);
+      else gridState.sheetLinkBuckets.set(b, [l]);
+    }
+  }
+}
+
 /** 칸(1부터)에 걸린 링크 — 수식 링크가 빈 값을 보이는 칸(IFERROR(…,""))이면 링크로 치지 않는다 */
 function linkAt(r, c) {
-  const link = gridState.sheetLinks.find((l) => r - 1 >= l.r1 && r - 1 <= l.r2 && c - 1 >= l.c1 && c - 1 <= l.c2);
+  const hit = (l) => r - 1 >= l.r1 && r - 1 <= l.r2 && c - 1 >= l.c1 && c - 1 <= l.c2;
+  const link = (gridState.sheetLinkBuckets.get(Math.floor((r - 1) / LINK_BUCKET)) || []).find(hit) || gridState.sheetLinksWide.find(hit);
   if (link && link.expr && linkCellText(r - 1, c - 1) === '') return undefined;
   return link;
 }
@@ -1866,7 +1891,7 @@ function activateSheet(index) {
   }
   renderGridHead();
   renderGridImages();
-  gridState.sheetLinks = gridState.links.filter((l) => l.sheetName === sheet.name);
+  setSheetLinks(sheet);
   gridState.selRange = null;
   gridState.selected = { row: 1, col: 1 };
   renderGridViewport();
@@ -2046,7 +2071,7 @@ async function initGridView() {
     .then((data) => {
       gridState.links = (data && data.links) || [];
       const sheet = gridState.sheets[gridState.active];
-      gridState.sheetLinks = sheet ? gridState.links.filter((l) => l.sheetName === sheet.name) : [];
+      setSheetLinks(sheet);
       renderGridViewport();
     })
     .catch(() => undefined);

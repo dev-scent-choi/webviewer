@@ -331,3 +331,84 @@ Remaining:
 3. (Minor) Up to 2× token-minute spend through the slot's waiting request.
 
 Security-wise C1 is closed: every server path is bounded per request, per page, per bake and per upload, with yields between steps.
+
+---
+
+## 재검토 4 (HEAD edd1314, read-only)
+
+How I checked:
+- Read the code.
+- Timed the defined-name resolution directly.
+- Ran `cfRemoteAbuse` (7/7) and `xlsxSheetExtras` (14/14) alone.
+
+### (A) Remaining items from 재검토 3 — d458f85..edd1314
+
+**Retry after 409 / 429 / overBudget — fixed.**
+- The delay is the longer of the server's hint and a back-off that doubles from 1 s up to 60 s; it never exceeds 60 s. A successful answer resets the back-off.
+- The criteria that were sent are put back into `asked`, so they are not lost.
+- `waitUntil` is per range. Until it passes, that range is not asked and keeps its last colors.
+- There is no tight loop. The worst case is one request per minute, forever, when the room is gone or the token lost edit rights. Acceptable.
+- Minor: `scheduleCfRemoteFetch` ignores new calls while a timer is set (`grid-editor.ts:3568`). While a retry timer of up to 60 s is pending, asks for other ranges triggered by edits wait for it. Those asks would mostly cost budget anyway (an edit clears that range's cache), so this is display lag, not a fault.
+
+**Criterion-answer cache — fixed, with one Minor.** (`cfRangeValues.ts:66-73,148,439-451`)
+- The key is the table object. The cache is dropped when an edit touches that range (`cfTallyApplyBatch`), when the table is rebuilt (dirty, global cap), and when the room closes (it lives on the tally).
+- It is reset once it passes 4,096 entries.
+- An in-flight request that keeps writing into a map detached by an edit does no harm.
+- The rev handling holds:
+  - `rev` is taken when counting starts.
+  - The client keeps a per-range `rev` and does not move it on an overBudget answer (`later` is filled before the rev is set).
+  - A changed rev replaces the criterion map, so stale colors cannot persist.
+  - The one pre-existing gap remains: computed formula values that change without a cell edit do not bump the rev (the stale notice covers it).
+- Minor: the cache memory is not counted in the global distinct-value cap. Criteria are arbitrary client strings up to 300 chars, so one range can hold about 4,096 × 300-char keys (≈2.5 MB). The number of ranges depends on the rules. Bounded per range, but not overall.
+
+**Lease budget for the waiting request — fixed.**
+- `begin` runs when the slot starts and `end` runs before the slot is released, so a waiting request gets what remains after the running one.
+- Neither runs on 409 busy or when the room is gone.
+- The 2× spend is gone.
+
+**Widened time limits — still meaningful.**
+- Every widened limit is still 3–20× below the pre-fix value it guards:
+  - stall 1 s vs 15.8 s
+  - 5 s vs 13 s
+  - 15 s vs 370 s
+  - 500 ms vs "never finishes"
+- A real regression would still fail them.
+
+### (B) Hyperlink commit 2b5e134
+
+**Critical: defined-name resolution is quadratic, and a read-only token reaches it.** (`src/xlsx/sheetExtras.ts:170-183, 192-198`)
+- `resolveDefinedNameLocation` runs for every link whose location is not a cell address. Each time it scans the whole workbook.xml, both the `<sheet>` list and every `<definedName>`.
+- Measured through `readSheetExtrasFromEntries` (links × names):
+  - 2,000 × 2,000: 1.4 s
+  - 4,000 × 4,000: 5.7 s
+  - 8,000 × 8,000: **23.6 s**
+- The crafted xlsx is a few KB compressed.
+- `getFileExtras` is not cached, and `/api/view/xlsx-links` has no extra rate limit. Every viewer of such a file, read-only tokens included, blocks the server for that long on each page load. The editor's `xlsx-extras` and `roomTables` go through the same function.
+- Fix: parse definedNames once per workbook into a map (lower-case name → global target and per-sheet targets), then resolve each link in O(1). Optionally cap the number of links.
+
+**Checked and clean:**
+- **Read-only filtering.** It drops `expr` (formula text) links and links whose top-left cell is in a hidden row or column. Links on hidden sheets are dropped too, because hidden sheets are not in the view grid header (`spreadsheet.ts:892`), so their links find no sheet.
+- **Escaping.**
+  - The link title goes through `escapeHtml`, which escapes `& < > " '`, inside a `title="…"` attribute.
+  - Notices are inserted with `textContent` only.
+  - The URL is never inserted into HTML.
+- **Scheme blocking.**
+  - Server `linkOf`: only safe URLs; `javascript:`, `data:` and `vbscript:` are dropped; file and UNC paths become `blocked` (shown as text, not opened).
+  - Viewer: `followLink` checks `/^(https?:|mailto:|tel:)/i` on the trimmed URL before `window.open(…, 'noopener,noreferrer')`. Formula links get the same check in `linkTargetOf`.
+  - Editor: `gridLinks.ts:124,161` keeps the same checks.
+- **`parseLinkLocation` (viewer.js) is the same as `parseLocation` (gridLinks.ts):** same regex, same range ordering, same `''` unescaping.
+
+**Minor:**
+- `hiddenLookup.row` scans every row-height run for each link (links × runs).
+- In viewer.js, `linkAt` does `sheetLinks.find` for every rendered cell. On a crafted file with many links, this only slows the viewer's own tab.
+
+### Verdict: not mergeable yet
+
+Must fix:
+1. **Critical (B):** the quadratic defined-name resolution, reachable with a read-only token. Build the map once.
+
+After that, mergeable. Minor items that can follow:
+- the shared fetch timer delaying other ranges after a retry
+- cache memory not counted in the global cap
+- the per-link scan in `hiddenLookup`
+- per-cell `linkAt` lookup in the viewer

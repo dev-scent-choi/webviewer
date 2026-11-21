@@ -167,19 +167,41 @@ export function readSheetExtras(xlsx: Uint8Array): SheetExtras {
  * 통합 문서 이름보다 먼저(엑셀과 같다). 칸 주소가 아닌 이름(수식·상수)이나 없는 이름은 그대로 두어 화면이 "참조가
  * 올바르지 않습니다"로 알린다. 여러 영역(A1,C3)이면 첫 영역.
  */
-export function resolveDefinedNameLocation(location: string, sheetName: string, workbookXml: string): string {
-  if (/^(?:(?:'(?:[^']|'')+'|[^!]+)!)?\$?[A-Za-z]{1,3}\$?\d+(?::\$?[A-Za-z]{1,3}\$?\d+)?$/.test(location.trim())) return location;
-  const want = location.trim().toLowerCase();
+export function resolveDefinedNameLocation(location: string, sheetName: string, names: DefinedNames): string {
+  if (names.size === 0 || CELL_LOCATION.test(location.trim())) return location;
+  const entry = names.get(location.trim().toLowerCase());
+  return entry?.bySheet.get(sheetName) ?? entry?.global ?? location;
+}
+
+const CELL_LOCATION = /^(?:(?:'(?:[^']|'')+'|[^!]+)!)?\$?[A-Za-z]{1,3}\$?\d+(?::\$?[A-Za-z]{1,3}\$?\d+)?$/;
+
+/** 소문자 이름 → 통합 문서 범위 대상과 시트별(시트 이름 → 대상) 대상 */
+export type DefinedNames = ReadonlyMap<string, { global?: string; readonly bySheet: Map<string, string> }>;
+
+/** 정의된 이름·링크 수 상한 — 조작한 작은 파일(이름·링크 수만)로 서버를 붙잡지 못하게. 실제 문서는 수백 개 정도다 */
+export const MAX_DEFINED_NAMES = 20_000;
+export const MAX_WORKBOOK_LINKS = 50_000;
+
+/** workbook.xml의 정의된 이름을 한 번만 읽어 둔다 — 링크마다 다시 훑으면 링크 수 × 이름 수(재검토 4: 8,000×8,000에 23.6초) */
+export function parseDefinedNames(workbookXml: string): DefinedNames {
+  const names = new Map<string, { global?: string; bySheet: Map<string, string> }>();
+  if (!/<definedName\b/.test(workbookXml)) return names;
   const sheets = [...workbookXml.matchAll(/<sheet\b[^>]*\bname="([^"]*)"/g)].map((m) => decodeXmlAttr(m[1]));
-  let global: string | undefined;
+  let count = 0;
   for (const m of workbookXml.matchAll(/<definedName\b([^>]*)>([^<]*)<\/definedName>/g)) {
-    if (decodeXmlAttr(/\bname="([^"]*)"/.exec(m[1])?.[1] ?? '').toLowerCase() !== want) continue;
+    if (++count > MAX_DEFINED_NAMES) {
+      console.warn(`정의된 이름이 ${MAX_DEFINED_NAMES}개를 넘어 나머지는 링크 해석에 쓰지 않습니다`);
+      break;
+    }
+    const key = decodeXmlAttr(/\bname="([^"]*)"/.exec(m[1])?.[1] ?? '').toLowerCase();
     const target = decodeXmlAttr(m[2]).split(',')[0].trim();
     const local = /\blocalSheetId="(\d+)"/.exec(m[1])?.[1];
-    if (local === undefined) global = target;
-    else if (sheets[Number(local)] === sheetName) return target;
+    let entry = names.get(key);
+    if (!entry) names.set(key, (entry = { bySheet: new Map() }));
+    if (local === undefined) entry.global = target;
+    else if (sheets[Number(local)] !== undefined) entry.bySheet.set(sheets[Number(local)], target);
   }
-  return global ?? location;
+  return names;
 }
 
 /** 이미 푼 파트 모음에서 — 큰 파일은 데이터를 뺀 뼈대(zipSkeleton.ts readXlsxSkeleton)를 넘긴다 */
@@ -187,15 +209,21 @@ export function readSheetExtrasFromEntries(entries: Readonly<Record<string, Uint
   const theme = entries['xl/theme/theme1.xml'];
   const out: SheetExtras = { links: [], lists: [], tables: [], themeColors: parseThemeColors(theme ? strFromU8(theme) : undefined) };
   const workbook = entries['xl/workbook.xml'];
-  const workbookXml = workbook && /<definedName\b/.test(strFromU8(workbook)) ? strFromU8(workbook) : '';
+  const names = parseDefinedNames(workbook ? strFromU8(workbook) : '');
+  let warned = false;
   for (const [sheetName, sheetPath] of sheetPathsByName(entries)) {
     const sheet = entries[sheetPath];
     if (!sheet) continue;
     const rels = entries[relsPathOf(sheetPath)];
     const extras = parseSheetExtras(sheetName, strFromU8(sheet), rels ? strFromU8(rels) : undefined);
-    out.links.push(...(workbookXml
-      ? extras.links.map((l) => (l.location ? { ...l, location: resolveDefinedNameLocation(l.location, sheetName, workbookXml) } : l))
-      : extras.links));
+    const room = MAX_WORKBOOK_LINKS - out.links.length;
+    if (extras.links.length > room && !warned) {
+      warned = true;
+      console.warn(`하이퍼링크가 ${MAX_WORKBOOK_LINKS}개를 넘어 나머지는 쓰지 않습니다`);
+    }
+    for (const l of extras.links.slice(0, Math.max(0, room))) {
+      out.links.push(l.location ? { ...l, location: resolveDefinedNameLocation(l.location, sheetName, names) } : l);
+    }
     out.lists.push(...extras.lists);
     for (const table of sheetTablesOf(entries, sheetPath)) out.tables.push({ ...table, sheetName });
   }

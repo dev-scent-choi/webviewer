@@ -41,7 +41,7 @@ import {
 import { cachedDocxDrawing, DrawingRateLimited, renderDocxDrawingPng } from '../docx/drawingImage.js';
 import { MarkupValidationError, addMarkup, deleteMarkup, listMarkup, updateMarkup } from '../markup.js';
 import { touchPresence } from '../presence.js';
-import { docxFragmentsOf, flushNow, getCfRemoteAnswer, getCurrentBytes, getChangeLog, getFileCharts, getFileExtras, getFileImages } from '../collab/room.js';
+import { docxFragmentsOf, flushNow, getCfRemoteAnswer, getCurrentBytes, getChangeLog, getFileCharts, getFileExtras, getFileImages, invalidateFileExtras } from '../collab/room.js';
 import { CfBusyError, cfTokenBudget, cfTokenRetryAfterMs, cfTokenSpend, parseCfRemoteRequest } from '../xlsx/cfRangeValues.js';
 import type { WildcardBudget } from '../collab/wildcard.js';
 
@@ -179,6 +179,7 @@ const pdfTextCache = new SizedLruCache<PageText[]>({
 export function invalidateViewCaches(docId: string): void {
   pdfTextCache.invalidate(docId);
   gridCache.invalidate(docId);
+  invalidateFileExtras(docId);
 }
 
 function buildLoadedGridFromOffsets(buffer: Buffer, lineOffsets: readonly number[]): LoadedGrid {
@@ -398,8 +399,20 @@ function searchGrid(grid: LoadedGrid, query: string, limit: number, skipHidden =
 
 /** 숨긴 행(높이 0)·열(폭 0)인지 — 열람만 토큰에는 그 칸 값을 보내지 않는다 */
 function hiddenLookup(sheet: Pick<GridSheet, 'rowHeights' | 'colWidths'>): { row: (r0: number) => boolean; col: (c0: number) => boolean } {
+  // 숨긴 행 묶음만 시작 순으로 — 칸·링크마다 행 높이 묶음을 전부 훑지 않고 이진 탐색(재검토 4)
+  const runs = sheet.rowHeights.filter(([, count, px]) => px === 0 && count > 0).sort((a, b) => a[0] - b[0]);
   return {
-    row: (r0) => sheet.rowHeights.some(([start, count, px]) => px === 0 && r0 >= start && r0 < start + count),
+    row: (r0) => {
+      let lo = 0;
+      let hi = runs.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (runs[mid][0] <= r0) lo = mid + 1;
+        else hi = mid;
+      }
+      // 행 높이 묶음은 겹치지 않는다(시작 순 연속 구간 — 보기 화면 GridRowLayout과 같은 전제)
+      return lo > 0 && r0 < runs[lo - 1][0] + runs[lo - 1][1];
+    },
     col: (c0) => sheet.colWidths[c0] === 0,
   };
 }
@@ -933,7 +946,8 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
   // (열람만에는 숨긴 칸 값·수식을 보내지 않는 것과 같다 — maskHiddenCells)
   app.get<{ Querystring: TokenQuery }>(
     '/api/view/xlsx-links',
-    { schema: { querystring: tokenQuerySchema } },
+    // 열람만 토큰도 닿는다 — 보기 화면을 열 때 한 번 부르므로 IP마다 분당 60회면 넉넉하다(캐시를 비켜 가는 남용 막기)
+    { schema: { querystring: tokenQuerySchema }, config: { rateLimit: { max: 60, timeWindow: '1 minute' } } },
     async (request, reply) => {
       const view = await resolveView(request.query.token, reply);
       if (!view) return reply;
