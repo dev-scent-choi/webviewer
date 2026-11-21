@@ -5,12 +5,14 @@
  */
 import type { ArtcraftManifest } from './artcraftManifest.js';
 
-export type Engine = 'libreoffice' | 'artcraft';
+/** libreoffice = 서버 변환 보기 화면, artcraft = 브라우저 wasm 엔진, editor = 읽기 전용 편집기 화면(보기 꾸밈, 설계 readonly-editor-look §3.2) */
+export type Engine = 'libreoffice' | 'artcraft' | 'editor';
 
 export const ENGINE_REASONS = {
   unsupported: '이 형식은 브라우저 엔진이 지원하지 않습니다',
   notInstalled: '브라우저 엔진이 설치되지 않았습니다',
   noDownload: '내려받기 권한이 없어 서버 변환으로 엽니다',
+  noEditor: '이 형식은 읽기 전용 편집기 화면이 없습니다',
 } as const;
 
 /** 브라우저 엔진이 그리는 형식 — .doc는 표가 깨지는 파일이 있어 "실험"(설계 §2). .ppt·엑셀·한글은 엔진 없음 */
@@ -19,6 +21,9 @@ export const ARTCRAFT_FORMATS: ReadonlyMap<string, { readonly kind: 'word' | 'de
   ['pptx', { kind: 'deck', experimental: false }],
   ['doc', { kind: 'word', experimental: true }],
 ] as const);
+
+/** 편집기 화면이 있는 형식 — 옛 형식(.doc·.xls·.ppt)은 업로드 때 바뀐 저장본의 meta.ext로 들어온다(editorUrlFor와 같은 규칙) */
+export const EDITOR_VIEW_FORMATS: ReadonlySet<string> = new Set(['docx', 'xlsx', 'pptx']);
 
 export interface ArtcraftInfo {
   readonly kind: 'word' | 'deck';
@@ -37,6 +42,11 @@ export function engineFor(
   requested: Engine | undefined,
   installed: boolean,
 ): { engine: Engine; reason?: string } {
+  if (requested === 'editor') {
+    if (!EDITOR_VIEW_FORMATS.has(ext)) return { engine: 'libreoffice', reason: ENGINE_REASONS.noEditor };
+    // 편집기 자료 경로는 열람만(편집·내려받기 둘 다 없음) 토큰을 받지 않는다(edit.ts isViewOnly → 4403)
+    return perms.canDownload ? { engine: 'editor' } : { engine: 'libreoffice', reason: ENGINE_REASONS.noDownload };
+  }
   if (requested !== 'artcraft') return { engine: 'libreoffice' };
   if (!installed) return { engine: 'libreoffice', reason: ENGINE_REASONS.notInstalled };
   if (!ARTCRAFT_FORMATS.has(ext)) return { engine: 'libreoffice', reason: ENGINE_REASONS.unsupported };

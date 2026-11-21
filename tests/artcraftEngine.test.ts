@@ -31,6 +31,7 @@ describe('engineFor — 형식 × 권한 × 요청 × 설치', () => {
       unsupported: '이 형식은 브라우저 엔진이 지원하지 않습니다',
       notInstalled: '브라우저 엔진이 설치되지 않았습니다',
       noDownload: '내려받기 권한이 없어 서버 변환으로 엽니다',
+      noEditor: '이 형식은 읽기 전용 편집기 화면이 없습니다',
     });
   });
 
@@ -51,5 +52,28 @@ describe('artcraftInfo — info의 artcraft 블록', () => {
     expect(artcraftInfo('doc', 't', M)).toMatchObject({ kind: 'word', experimental: true });
     expect(artcraftInfo('pptx', 't', M)).toMatchObject({ kind: 'deck', experimental: false, assets: { wasm: M.deck } });
     expect(artcraftInfo('xlsx', 't', M)).toBeUndefined();
+  });
+});
+
+describe('engineFor — 읽기 전용 편집기(editor, 설계 readonly-editor-look §3.2)', () => {
+  const table: Array<[string, boolean, Engine, string | undefined]> = [
+    ['docx', true, 'editor', undefined],
+    ['xlsx', true, 'editor', undefined],
+    ['pptx', true, 'editor', undefined],
+    ['docx', false, 'libreoffice', ENGINE_REASONS.noDownload],
+    ['xlsx', false, 'libreoffice', ENGINE_REASONS.noDownload],
+    ['pptx', false, 'libreoffice', ENGINE_REASONS.noDownload],
+    // 편집기가 없는 형식은 서버 변환 + 이유(내려받기 권한과 무관)
+    ['pdf', true, 'libreoffice', ENGINE_REASONS.noEditor],
+    ['pdf', false, 'libreoffice', ENGINE_REASONS.noEditor],
+    ['hwp', true, 'libreoffice', ENGINE_REASONS.noEditor],
+    ['doc', true, 'libreoffice', ENGINE_REASONS.noEditor],
+    ['constructor', true, 'libreoffice', ENGINE_REASONS.noEditor],
+  ];
+  test.each(table)('%s · 내려받기 %s → %s', (ext, canDownload, engine, reason) => {
+    // 아트크래프트 설치 여부(manifest)와 무관하다
+    for (const installed of [true, false]) {
+      expect(engineFor(ext, { canDownload }, 'editor', installed)).toEqual(reason ? { engine, reason } : { engine });
+    }
   });
 });

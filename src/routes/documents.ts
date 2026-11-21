@@ -37,8 +37,9 @@ const tokenBodySchema = {
     canEdit: { type: 'boolean', default: false },
     // PDF를 PDF 편집기(editor-pdf.html)로 열지 — 향기랩만 true를 보낸다. 없으면 pdf는 지금처럼 보기 화면만(editorUrlFor 참고)
     pdfEditor: { type: 'boolean', default: false },
-    // 여는 엔진(설계 2026-11-21 §3.1) — artcraft는 브라우저 wasm 엔진. 안 되는 경우는 거절하지 않고 libreoffice + engineReason
-    engine: { type: 'string', enum: ['libreoffice', 'artcraft'], default: 'libreoffice' },
+    // 여는 엔진(설계 2026-11-21 §3.1) — artcraft는 브라우저 wasm 엔진, editor는 읽기 전용 편집기 화면(보기 꾸밈, 설계 readonly-editor-look §3.2).
+    // 안 되는 경우는 거절하지 않고 libreoffice + engineReason
+    engine: { type: 'string', enum: ['libreoffice', 'artcraft', 'editor'], default: 'libreoffice' },
   },
 } as const;
 
@@ -539,7 +540,8 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
       // 뷰어 전용 권한이라 변환기 유무와 상관없이 요청한 대로 발급한다. 어느 쪽이든 동시편집
       // WebSocket(src/routes/edit.ts)은 docx/xlsx가 아니면 canEdit 값과 무관하게 접속 자체를 거부해
       // canEdit이 마크업 용도로 켜진 문서가 잘못 동시편집 룸에 들어가 원본을 덮어쓰는 일을 막는다.
-      const effectiveCanEdit = canEdit && (!isEditableExt || findConverter(meta.ext) !== null);
+      // engine:'editor'는 읽기 전용 참여만 — 요청의 canEdit과 무관하게 끈다(두 겹 중 서버 쪽 겹, 설계 §6)
+      const effectiveCanEdit = engine !== 'editor' && canEdit && (!isEditableExt || findConverter(meta.ext) !== null);
       const decision = engineFor(meta.ext, { canDownload }, engine, readArtcraftManifest() !== null);
       const token = issueViewToken(
         {
@@ -568,12 +570,15 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
       // 권한과 무관하게 항상 editorUrl을 내려준다.
       // (effectiveCanEdit이 pdf 등에서도 true일 수 있는데, 그런 문서는 markup 기능이 있는 viewer.html로 열려야 한다 —
       // pdf만 호출자가 pdfEditor를 보낼 때 PDF 편집기로. 규칙 전체는 editorUrlFor.)
+      const viewerUrl = `${viewPathFor(meta.ext, meta.viewKind)}?token=${encodeURIComponent(token)}`;
       return {
         success: true,
         data: {
           token,
-          // 쪽 문서는 통합 보기 껍데기, 엑셀 격자·도면·한글은 지금 보기 화면(viewPathFor) — 주소·토큰 계약은 그대로(설계 V2)
-          viewerUrl: `${viewPathFor(meta.ext, meta.viewKind)}?token=${encodeURIComponent(token)}`,
+          // 쪽 문서는 통합 보기 껍데기, 엑셀 격자·도면·한글은 지금 보기 화면(viewPathFor) — 주소·토큰 계약은 그대로(설계 V2).
+          // engine:'editor'면 편집기 화면 + ui=view(도구 숨김), fallbackUrl은 같은 토큰의 보기 화면(큰 엑셀 정원 초과 때 옮겨 간다)
+          viewerUrl: decision.engine === 'editor' ? `${editorPathFor(meta.ext)}?token=${encodeURIComponent(token)}&ui=view` : viewerUrl,
+          ...(decision.engine === 'editor' ? { fallbackUrl: viewerUrl } : {}),
           editorUrl: editorUrlFor(meta.ext, { effectiveCanEdit, canDownload, pdfEditor }, token),
           expiresInSeconds: config.tokenTtlSeconds,
           engine: decision.engine,
