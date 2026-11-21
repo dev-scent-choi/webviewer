@@ -792,6 +792,38 @@ function uniqueDrawingIds(body: string): string {
   });
 }
 
+/**
+ * 앞선 저장이 더한 기본 번호 정의(<w:name w:val="id"/>가 든 첫 <w:abstractNum>)의 abstractNumId — indexOf로 하나씩 본다(재검토 M3:
+ * `(?:(?!</w:abstractNum>)[\s\S])*` 정규식은 안 닫힌 abstractNum이 많으면 제곱으로 느려졌다). 정의 하나의 끝은 다음 닫는 태그나
+ * 다음 abstractNum 시작 중 앞선 것(정상 파일에서는 닫는 태그와 같다).
+ */
+function abstractNumIdNamed(xml: string, id: string): string | undefined {
+  const open = '<w:abstractNum';
+  const name = `<w:name w:val="${id}"/>`;
+  const nextOpen = (from: number) => {
+    let at = xml.indexOf(open, from);
+    while (at >= 0 && /\w/.test(xml[at + open.length] ?? '')) at = xml.indexOf(open, at + 1);
+    return at;
+  };
+  // 닫는 태그·이름 자리는 앞으로만 다시 찾는다(이미 지난 자리일 때만) — 전체가 한 번 훑기
+  let close = -2;
+  let nameAt = -2;
+  const after = (cached: number, needle: string, from: number) => (cached === -1 || cached >= from ? cached : xml.indexOf(needle, from));
+  for (let at = nextOpen(0); at >= 0; ) {
+    const headEnd = xml.indexOf('>', at);
+    if (headEnd < 0) return undefined;
+    const following = nextOpen(headEnd);
+    close = after(close, '</w:abstractNum>', headEnd);
+    nameAt = after(nameAt, name, headEnd);
+    if (nameAt < 0) return undefined; // 뒤에 이름이 없다
+    const end = Math.min(following < 0 ? xml.length : following, close < 0 ? xml.length : close);
+    const abstractId = /w:abstractNumId="(\d+)"/.exec(xml.slice(at, headEnd))?.[1];
+    if (abstractId !== undefined && nameAt < end) return abstractId;
+    at = following;
+  }
+  return undefined;
+}
+
 /** 편집기가 새로 켠 번호(docview:decimal·docview:bullet)를 numbering.xml에 정의로 더하고, 그 실제 numId를 돌려준다(없으면 파트를 만든다). */
 function ensureBuiltinLists(doc: PMNode, entries: Record<string, Uint8Array>): Map<string, string> {
   const used = new Set<string>();
@@ -812,8 +844,7 @@ function ensureBuiltinLists(doc: PMNode, entries: Record<string, Uint8Array>): M
   };
   for (const id of BUILTIN_LISTS.filter((l) => used.has(l.id)).map((l) => l.id)) {
     // 앞선 저장이 더한 정의(w:name 표지)가 있으면 그 번호를 다시 쓴다 — 저장마다 정의가 늘거나 numId가 바뀌지 않게
-    const abstractId = new RegExp(`<w:abstractNum\\b[^>]*w:abstractNumId="(\\d+)"[^>]*>(?:(?!</w:abstractNum>)[\\s\\S])*<w:name w:val="${id}"/>`).exec(xml)?.[1]
-      ?? String(maxOf('w:abstractNumId') + 1);
+    const abstractId = abstractNumIdNamed(xml, id) ?? String(maxOf('w:abstractNumId') + 1);
     if (!new RegExp(`w:abstractNumId="${abstractId}"`).test(xml)) xml = insertAbstractNum(xml, builtinAbstractNumXml(id, Number(abstractId)));
     let numId = new RegExp(`<w:num w:numId="(\\d+)"><w:abstractNumId w:val="${abstractId}"/></w:num>`).exec(xml)?.[1];
     if (!numId) {
