@@ -1,11 +1,13 @@
 // 아트크래프트(브라우저 엔진) 보기 — 설계 2026-11-21 §7의 브라우저 검사 일곱 가지 + 메인 화면 단추·열린 뒤 Worker 죽음, 쪽 수 비교 기록.
-//  (1) 아트크래프트로 열려 쪽 수·첫 쪽 그림(잉크 비율·LibreOffice 첫 쪽과의 유사도·한글 글자 층)
+//  (1) 아트크래프트로 열려 쪽 수·첫 쪽 그림(잉크 비율·LibreOffice 첫 쪽과 줄 잉크 분포 상관·한글 글자 층·한글 글자 자리에 실제 잉크)
 //  (2) 확대·회전·쪽 이동·섬네일·찾기  (3) 서버 변환 요청 0건  (4) wasm을 막으면 리브레오피스로 자동 전환 + 안내
-//  (5) 내려받기 권한 없는 토큰은 서버 변환으로  (6) CPU×4 첫 쪽 시간(로컬 서버라 받기 시간은 사실상 0 — 목표 2초, 고객 pptx 3초)
+//  (5) 내려받기 권한 없는 토큰은 서버 변환으로  (6) CPU×4 첫 쪽 시간(환산 — CDP 스로틀은 메인 스레드만 늦추고 Worker는 늦추지 않으므로
+//      스로틀한 전체 시간 − Worker 시간 + 4 × Worker 시간(Worker가 잰 initMs·openMs·firstRenderMs). 로컬 서버라 받기 시간은 사실상 0 — 목표 2초, 고객 pptx 3초)
 //  (7) 두 번째 열기에서 wasm·글꼴을 서버에서 다시 받지 않음(서버 요청 기록으로 센다 — 304 재검증도 요청으로 잡힌다)
 // 이 스크립트가 시험 서버를 직접 띄운다(npm run build:editor, npm run build:artcraft 뒤, LibreOffice 필요):
 //   ARTCRAFT_E2E_PRIVATE_DIR=<고객형 원본 폴더> node scripts/verify-artcraft-e2e.mjs [포트=8150, 8150~8159]
-// 고객형 문서는 그 폴더에서 .audit-run/artcraft-e2e-<포트>/로 복사해 쓴다(저장소에 넣지 않는다). 폴더가 없으면 그 둘은 건너뛴다(SKIP 줄).
+// 고객형 문서는 그 폴더에서 .audit-run/artcraft-e2e-<포트>/로 복사해 쓴다(저장소에 넣지 않는다). 변수가 없거나 폴더가 없으면 그 둘은 건너뛴다(SKIP 줄).
+// 다 통과하면 .audit-run/artcraft-e2e-<포트>/를 지운다(고객형 사본·서버 데이터). 실패하면 살펴보도록 남긴다.
 import { spawn, execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
@@ -18,8 +20,7 @@ const PORT = Number(process.argv[2] ?? 8150);
 if (!(PORT >= 8150 && PORT <= 8159)) throw new Error(`시험 포트는 8150~8159만 쓴다(받은 값 ${PORT})`);
 const BASE = `http://127.0.0.1:${PORT}`;
 const RUN = path.resolve('.audit-run', `artcraft-e2e-${PORT}`);
-const ORIGINALS =
-  process.env.ARTCRAFT_E2E_PRIVATE_DIR ?? process.env.ARTCRAFT_E2E_ORIGINALS ?? 'C:/Users/OpenMinds/projects/webviewer-q-all/.audit-run/test-server/originals';
+const ORIGINALS = process.env.ARTCRAFT_E2E_PRIVATE_DIR ?? '';
 const CUSTOMER = [
   { src: '62c3881f-247e-48ad-aacb-977010a23ef1.docx', name: '고객형.docx', limitMs: 2000 },
   { src: '8c76f45a-e15a-40ca-b6be-d9ca5ed63137.pptx', name: '고객형.pptx', limitMs: 3000 },
@@ -58,9 +59,22 @@ async function startServer() {
 }
 function stopServer() {
   // 내가 띄운 서버만(PID, 자식 포함) — 이름으로 node를 끄지 않는다
-  if (server?.pid) execFileSync('taskkill', ['/PID', String(server.pid), '/T', '/F'], { stdio: 'ignore' });
+  const pid = server?.pid;
   server = null;
+  if (pid) {
+    try {
+      execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' });
+    } catch {
+      // 이미 끝났다
+    }
+  }
 }
+// Ctrl+C·예외로 끝나도 시험 서버를 남기지 않는다
+process.on('SIGINT', () => {
+  stopServer();
+  process.exit(130);
+});
+process.on('exit', stopServer);
 /** 서버 기록에서 /artcraft/ 요청 줄 수(브라우저 캐시에서 오면 서버에 요청이 오지 않는다) */
 async function artcraftHits() {
   await sleep(500);
@@ -93,15 +107,44 @@ async function gray(png) {
   const { data, info } = await sharp(png).flatten({ background: '#ffffff' }).resize({ width: 128 }).grayscale().raw().toBuffer({ resolveWithObject: true });
   return { data, w: info.width, h: info.height };
 }
-/** 1 − 평균 밝기 차/255(겹치는 높이만) */
-function similarity(a, b) {
-  const h = Math.min(a.h, b.h);
-  let sum = 0;
-  for (let i = 0; i < h * a.w; i += 1) sum += Math.abs(a.data[i] - b.data[i]);
-  return 1 - sum / (h * a.w * 255);
+/** 화소 줄마다 잉크 비율(밝기 < 200) — 흰 바탕과 상관없이 줄·문단 배치를 본다 */
+const rowInk = (g) => Array.from({ length: g.h }, (_, y) => g.data.subarray(y * g.w, (y + 1) * g.w).filter((v) => v < 200).length / g.w);
+/** 쪽 높이를 n띠로 — 띠 b는 LibreOffice 쪽의 [b/n, (b+1)/n], 아트크래프트 쪽은 그 위치를 stretch로 나눈 곳 */
+function bands(rows, n, stretch = 1) {
+  return Array.from({ length: n }, (_, b) => {
+    const y0 = Math.floor((b / n / stretch) * rows.length);
+    const y1 = Math.max(y0 + 1, Math.floor(((b + 1) / n / stretch) * rows.length));
+    let sum = 0;
+    for (let y = y0; y < y1; y += 1) sum += rows[y] ?? 0;
+    return sum / (y1 - y0);
+  });
 }
-/** 흰 쪽과 LibreOffice 쪽의 유사도 — 흰 바탕이 많아 유사도가 원래 높으므로, 아트크래프트 그림은 이보다 LibreOffice에 가까워야 한다 */
-const blankSimilarity = (g) => similarity({ data: new Uint8Array(g.data.length).fill(255), w: g.w, h: g.h }, g);
+/** 피어슨 상관(한쪽이 고르면 0) */
+function pearson(a, b) {
+  const n = a.length;
+  const ma = a.reduce((x, y) => x + y, 0) / n;
+  const mb = b.reduce((x, y) => x + y, 0) / n;
+  let sab = 0;
+  let saa = 0;
+  let sbb = 0;
+  for (let i = 0; i < n; i += 1) {
+    sab += (a[i] - ma) * (b[i] - mb);
+    saa += (a[i] - ma) ** 2;
+    sbb += (b[i] - mb) ** 2;
+  }
+  return saa && sbb ? sab / Math.sqrt(saa * sbb) : 0;
+}
+/** 줄 잉크 분포 상관 — 줄 간격이 엔진마다 달라(LibreOffice가 1.1~1.2배 넓다) 아래로 갈수록 줄이 밀리므로 세로 늘이기 0.7~1.4배 중 가장 높은 값.
+ *  재 본 값(2026-11-21): 같은 문서 0.665~1.0, 다른 문서끼리 최대 0.587 → 기준 0.6 */
+function layoutCorr(mine, lo, n = 64) {
+  const m = rowInk(mine);
+  const l = bands(rowInk(lo), n);
+  let best = -1;
+  for (let s = 0.7; s <= 1.4001; s += 0.02) best = Math.max(best, pearson(bands(m, n, s), l));
+  return best;
+}
+// 자체 점검 — 같은 배치면 1, 뒤집힌 배치면 음수
+if (!(pearson([0, 1, 0, 1], [0, 2, 0, 2]) > 0.99 && pearson([0, 1, 0, 1], [1, 0, 1, 0]) < 0)) throw new Error('pearson 자체 점검 실패');
 const inkRatio = (g) => g.data.filter((v) => v < 200).length / g.data.length;
 const pct = (v) => `${(v * 100).toFixed(1)}%`;
 
@@ -128,7 +171,9 @@ async function openPage(context, url, { throttle = false, block = false } = {}) 
   await page.waitForSelector('.page-frame[data-page="1"].page-ready', { timeout: 90000 });
   const firstMs = Date.now() - t0;
   if (cdp) await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 });
-  return { page, errors, paths, blocked, firstMs };
+  // Worker 안에서 잰 시간(view.ts가 표지에 적는다) — 아트크래프트로 열리지 않았으면 null
+  const timing = await page.$eval('#engine-badge', (b) => (b.dataset.workerTiming ? JSON.parse(b.dataset.workerTiming) : null)).catch(() => null);
+  return { page, errors, paths, blocked, firstMs, timing };
 }
 
 const cases = [
@@ -137,10 +182,12 @@ const cases = [
   { file: 'tests/fixtures/legacy/SimpleMacro.doc', name: 'SimpleMacro.doc', limitMs: 2000, hangul: false },
 ];
 
-await startServer();
-const browser = await chromium.launch();
+let browser = null;
+let finished = false;
 try {
-  if (fs.existsSync(ORIGINALS)) {
+  await startServer();
+  browser = await chromium.launch();
+  if (ORIGINALS && fs.existsSync(ORIGINALS)) {
     fs.mkdirSync(path.join(RUN, 'cust'), { recursive: true });
     for (const c of CUSTOMER) {
       const to = path.join(RUN, 'cust', c.src);
@@ -148,7 +195,7 @@ try {
       cases.push({ file: to, name: c.name, limitMs: c.limitMs, hangul: true });
     }
   } else {
-    console.log(`SKIP 고객형 docx·pptx — 원본 폴더 없음(ARTCRAFT_E2E_PRIVATE_DIR): ${ORIGINALS}`);
+    console.log(`SKIP 고객형 docx·pptx — ARTCRAFT_E2E_PRIVATE_DIR ${ORIGINALS ? `폴더 없음: ${ORIGINALS}` : '변수 없음'}`);
   }
 
   const ids = {};
@@ -161,8 +208,14 @@ try {
     const before = await artcraftHits();
     const o = await openPage(context, tok.viewerUrl, { throttle: true });
 
-    // (6) CPU×4 첫 쪽
-    rec(`${c.name}: (6) CPU×4 첫 쪽 ${o.firstMs} ms ≤ ${c.limitMs}`, o.firstMs <= c.limitMs);
+    // (6) CPU×4(환산) 첫 쪽 — 메인 스레드 몫(스로틀됨) + 4 × Worker 몫
+    const workerMs = o.timing ? o.timing.initMs + o.timing.openMs + o.timing.firstRenderMs : null;
+    const mainMs = workerMs === null ? null : Math.max(0, o.firstMs - workerMs);
+    const cpu4Ms = workerMs === null ? null : mainMs + 4 * workerMs;
+    rec(
+      `${c.name}: (6) CPU×4(환산) 첫 쪽 ${cpu4Ms} ms ≤ ${c.limitMs} (메인 ${mainMs} + 4 × Worker ${workerMs}${o.timing ? ` = init ${o.timing.initMs}·open ${o.timing.openMs}·첫 그림 ${o.timing.firstRenderMs}` : ''}, 스로틀 실측 ${o.firstMs})`,
+      cpu4Ms !== null && cpu4Ms <= c.limitMs,
+    );
 
     // (1) 아트크래프트 표지·쪽 수·첫 쪽 그림
     const badge = await o.page.locator('#engine-badge').isVisible();
@@ -174,18 +227,41 @@ try {
     const loTok = await token(meta.id, {});
     const loPng = Buffer.from(await (await fetch(`${BASE}/api/view/pages/1?token=${encodeURIComponent(loTok.token)}&scale=2`)).arrayBuffer());
     const lo = await gray(loPng);
-    const sim = similarity(mine, lo);
-    const blank = blankSimilarity(lo);
+    // 실패하면 살펴보도록 시험 폴더에 남긴다(통과하면 폴더째 지운다)
+    fs.writeFileSync(path.join(RUN, `${c.name}-artcraft.png`), Buffer.from(dataUrl.split(',')[1], 'base64'));
+    fs.writeFileSync(path.join(RUN, `${c.name}-libreoffice.png`), loPng);
+    const sim = layoutCorr(mine, lo);
     const ink = inkRatio(mine);
     const loInk = inkRatio(lo);
-    const hangul = await o.page.$$eval('.pdf-text-layer span', (ss) => ss.some((s) => /[가-힣]/.test(s.textContent ?? '')));
-    // 판정: 화소 유사도는 흰 바탕이 지배해(흰 쪽도 LibreOffice와 0.84~0.999) 글꼴·줄 높이가 다른 문서에서는 흰 쪽보다 낮게도 나온다 —
-    // 그래서 유사도 ≥ 0.8은 "통째로 틀린 그림(검은·뒤집힌·색 깨진 쪽)"만 거르고, 빈·반쯤 그린 쪽은 잉크 비율이 LibreOffice의 0.5~2배인지로 거른다.
-    // 한글이 실제로 쪽에 있는지는 엔진 글자 층(.pdf-text-layer)에 한글이 있는지로 본다.
+    // 한글 글자 층 span 상자 안 캔버스 화소 중 어두운 것(휘도 < 128) — 글자 층만 있고 글자가 그려지지 않은(두부·빈) 쪽을 거른다
+    const glyph = await o.page.evaluate(() => {
+      const frame = document.querySelector('.page-frame[data-page="1"]');
+      const cv = frame?.querySelector('canvas');
+      const spans = [...(frame?.querySelectorAll('.pdf-text-layer span') ?? [])].filter((s) => /[가-힣]/.test(s.textContent ?? ''));
+      if (!cv || !spans.length) return { runs: spans.length, dark: 0 };
+      const ctx = cv.getContext('2d');
+      const r = cv.getBoundingClientRect();
+      const k = cv.width / r.width;
+      let dark = 0;
+      for (const s of spans) {
+        const b = s.getBoundingClientRect();
+        const x = Math.max(0, Math.floor((b.left - r.left) * k));
+        const y = Math.max(0, Math.floor((b.top - r.top) * k));
+        const w = Math.min(cv.width - x, Math.ceil(b.width * k));
+        const h = Math.min(cv.height - y, Math.ceil(b.height * k));
+        if (w <= 0 || h <= 0) continue;
+        const d = ctx.getImageData(x, y, w, h).data;
+        for (let i = 0; i < d.length; i += 4) if (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2] < 128) dark += 1;
+      }
+      return { runs: spans.length, dark };
+    });
+    const hangul = glyph.runs > 0;
+    // 판정: 줄 잉크 분포(64띠, 세로 늘이기 허용) 상관 ≥ 0.6 — 흰 바탕에 좌우되지 않고 줄·문단 배치가 LibreOffice와 닮았는지(빈·뒤섞인·다른 쪽은 낮다).
+    // 잉크 비율은 LibreOffice의 0.5~2배(빈·반쯤 그린·검은 쪽 거르기). 한글은 글자 층에 있고(엔진이 꺼냄) 그 자리에 잉크가 있어야(실제로 그림) 한다.
     const inkOk = ink > 0 && ink >= loInk * 0.5 && ink <= loInk * 2;
     rec(
-      `${c.name}: (1) 첫 쪽 그림 — 잉크 ${pct(ink)}(LibreOffice ${pct(loInk)}) · 유사도 ${sim.toFixed(3)}(흰 쪽 ${blank.toFixed(3)}) · 한글 글자 층 ${hangul}`,
-      inkOk && sim >= 0.8 && (!c.hangul || hangul),
+      `${c.name}: (1) 첫 쪽 그림 — 잉크 ${pct(ink)}(LibreOffice ${pct(loInk)}) · 줄 분포 상관 ${sim.toFixed(3)} · 한글 글자 층 ${glyph.runs}개 · 그 자리 어두운 화소 ${glyph.dark}`,
+      inkOk && sim >= 0.6 && (!c.hangul || (hangul && glyph.dark > 0)),
     );
 
     // (2) 확대·회전·쪽 이동·섬네일·찾기
@@ -253,7 +329,7 @@ try {
     rec(`${c.name}: (7) 두 번째 열기 — wasm·글꼴을 캐시에서(처음 ${mid - before}건, 두 번째 ${after - mid}건)`, mid > before && after === mid);
     await again.page.close();
     await context.close();
-    rows.push({ name: c.name, lo: meta.pageCount, art: total, sim, firstMs: o.firstMs });
+    rows.push({ name: c.name, lo: meta.pageCount, art: total, sim, firstMs: o.firstMs, workerMs, cpu4Ms });
   }
 
   // (4) wasm을 막으면 리브레오피스로 자동 전환 + 안내
@@ -278,13 +354,14 @@ try {
     if (!worker) {
       rec('열린 뒤 Worker 죽음 — Worker를 찾음', false, o.page.workers().map((w) => w.url()).join(', '));
     } else {
+      // 요청 세기는 죽이기 전부터 — 선명하게 그리기가 진행 중이면 확대를 누르기 전에 이미 전환한다(onDead)
+      const n = o.paths.length;
       await worker.evaluate(() =>
         setTimeout(() => {
           throw new Error('e2e: Worker를 일부러 멈춤');
         }),
       );
       await sleep(500);
-      const n = o.paths.length;
       await o.page.click('#zoom-in');
       const switched = await o.page
         .waitForFunction(() => /브라우저 엔진이 이 문서를 열지 못해/.test(document.querySelector('#view-notice')?.textContent ?? '') && document.querySelector('#engine-badge')?.hidden, null, { timeout: 30000 })
@@ -294,7 +371,7 @@ try {
         .then(() => true, () => false);
       await sleep(1000);
       const served = o.paths.slice(n).filter((p) => SERVER_CONVERT.test(p) || p === '/api/view/download');
-      rec('열린 뒤 Worker 죽음 → 리브레오피스로 전환 + 안내 + 1쪽 다시 그림', switched && redrawn && served.length > 0, served.slice(0, 3).join(', '));
+      rec('열린 뒤 Worker 죽음 → 리브레오피스로 전환 + 안내 + 1쪽 다시 그림', switched && redrawn && served.length > 0, `전환 ${switched} · 다시 그림 ${redrawn} · ${served.slice(0, 3).join(', ')}`);
     }
     await context.close();
   }
@@ -349,17 +426,24 @@ try {
       '',
       `만든 때 ${new Date().toISOString()} · \`scripts/verify-artcraft-e2e.mjs\` · 고객형 문서는 이름 대신 "고객형"으로 적음`,
       '',
-      '| 문서 | LibreOffice 쪽 | 아트크래프트 쪽 | 일치 | 첫 쪽 유사도 | 첫 쪽 ms(CPU×4) |',
-      '|---|---|---|---|---|---|',
-      ...rows.map((r) => `| ${r.name} | ${r.lo} | ${r.art} | ${r.art === r.lo ? '같음' : `다름(${r.art > r.lo ? '+' : ''}${r.art - r.lo})`} | ${r.sim.toFixed(3)} | ${r.firstMs} |`),
+      '| 문서 | LibreOffice 쪽 | 아트크래프트 쪽 | 일치 | 첫 쪽 줄 분포 상관 | 첫 쪽 ms(메인 스레드만 ×4 실측) | Worker ms | 첫 쪽 ms(CPU×4 환산) |',
+      '|---|---|---|---|---|---|---|---|',
+      ...rows.map((r) => `| ${r.name} | ${r.lo} | ${r.art} | ${r.art === r.lo ? '같음' : `다름(${r.art > r.lo ? '+' : ''}${r.art - r.lo})`} | ${r.sim.toFixed(3)} | ${r.firstMs} | ${r.workerMs} | ${r.cpu4Ms} |`),
       '',
     ].join('\n'),
   );
   console.log(`쪽 수 기록 → ${REPORT}`);
+  finished = true;
 } finally {
-  await browser.close();
+  await browser?.close().catch(() => undefined);
   stopServer();
 }
 const failed = results.filter((ok) => !ok).length;
+if (finished && !failed) {
+  await sleep(500); // 끈 서버가 파일을 놓을 때까지
+  fs.rmSync(RUN, { recursive: true, force: true });
+} else {
+  console.log(`시험 폴더를 살펴보도록 남김(고객형 사본·서버 데이터 포함 — 다 보면 지울 것): ${RUN}`);
+}
 console.log(`\n${results.length - failed}/${results.length} 통과`);
 process.exit(failed ? 1 : 0);
