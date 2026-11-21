@@ -23,7 +23,8 @@ describe('buildApp 정적 서빙', () => {
   });
 
   test('/artcraft/manifest.json은 public 전체 서빙으로도 새지 않는다(404), 해시 이름 wasm은 immutable', async () => {
-    for (const url of ['/artcraft/manifest.json', '/artcraft//manifest.json', '/artcraft/Manifest.json']) {
+    // 대소문자만 다른 앞머리도(Windows 파일 시스템은 대소문자를 가리지 않아 public 전체 서빙이 내준다 — 최종 검토 M1)
+    for (const url of ['/artcraft/manifest.json', '/artcraft//manifest.json', '/artcraft/Manifest.json', '/Artcraft/manifest.json', '/ARTCRAFT/manifest.json', '/ArtCraft/artcraft_word-0123456789.wasm.br', '/artcraft']) {
       expect((await app.inject({ method: 'GET', url })).statusCode, url).toBe(404);
     }
     const wasm = await app.inject({ method: 'GET', url: '/artcraft/artcraft_word-0123456789.wasm' });
@@ -35,6 +36,10 @@ describe('buildApp 정적 서빙', () => {
     const hashed = await app.inject({ method: 'GET', url: '/js/main.js?v=abc123' });
     expect(hashed.statusCode).toBe(200);
     expect(hashed.headers['cache-control']).toBe('public, max-age=31536000, immutable');
+    // 화면 HTML은 ?v=가 붙어도 immutable이 아니다(연동 측 캐시 깨기 &v=<시각>이 화면을 1년 굳힌다 — M2)
+    const html = await app.inject({ method: 'GET', url: '/view.html?token=x&v=abc' });
+    expect(html.statusCode).toBe(200);
+    expect(html.headers['cache-control']).toBe('no-cache');
     const plain = await app.inject({ method: 'GET', url: '/js/main.js' });
     expect(plain.statusCode).toBe(200);
     expect(plain.headers['cache-control']).toBe('no-cache');

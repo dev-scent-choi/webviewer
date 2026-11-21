@@ -137,12 +137,17 @@ export async function buildApp(): Promise<FastifyInstance> {
     root: publicDir,
     // send 기본 cache-control(public, max-age=0)이 setHeaders 뒤에 덮어써서 아래 값이 한 번도 나가지 않았다 — 끄고 setHeaders가 정한다
     cacheControl: false,
+    // /artcraft 은 위 허용 목록 라우트만 — 대소문자·점 경로를 달리해 이 전체 서빙으로 manifest·.br을 받지 못하게(Windows FS는 대소문자 무시)
+    allowedPath: (p) => !/^\/artcraft(\/|$)/i.test(path.posix.normalize(p.replaceAll('\\', '/'))),
     // 뷰어/관리 화면 JS가 브라우저에 캐시되어 구버전이 돌지 않도록 항상 재검증시킨다.
     // 단 화면 HTML이 내용 해시(?v=, assetVersion.ts)를 붙여 부른 주소는 내용이 바뀌면 주소도 바뀌므로 오래 보관해도 된다 —
     // 화면을 열 때마다 번들마다 재검증 요청이 가던 것을 없앤다.
     setHeaders(res) {
       const url = (res as { req?: { url?: string } }).req?.url ?? '';
-      res.setHeader('cache-control', /[?&]v=[0-9a-f]+/.test(url) ? 'public, max-age=31536000, immutable' : 'no-cache');
+      const p = url.split('?')[0];
+      // 화면 HTML은 ?v=가 붙어도 굳히지 않는다(연동 측의 &v=<시각> 캐시 깨기가 화면을 1년 굳힌다)
+      const html = p === '/' || p.endsWith('.html');
+      res.setHeader('cache-control', !html && /[?&]v=[0-9a-f]+/.test(url) ? 'public, max-age=31536000, immutable' : 'no-cache');
     },
   });
   await app.register(documentRoutes);
