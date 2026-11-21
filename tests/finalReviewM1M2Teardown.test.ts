@@ -136,4 +136,44 @@ describe('M1·M2: teardown과 진행 중 작업', () => {
     forceCloseRoom(docId); // 답을 준비하는 사이 방이 닫힌다
     expect(await asking).toBeNull();
   }, 60_000);
+  test('재검토 4: 저장 도중 닫혀도 엑셀 행 저장소 파일은 저장이 끝난 뒤에 지운다(저장본에 편집이 들어간다)', async () => {
+    const { joinEditSession, forceCloseRoom, getRoomLazyGridForTest } = await import('../src/collab/room.js');
+    const { store } = await import('../src/storage.js');
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('S');
+    for (let r = 1; r <= 50; r += 1) ws.addRow([`K${r}`]);
+    const docId = randomUUID();
+    await store.saveOriginal(docId, 'xlsx', Buffer.from((await wb.xlsx.writeBuffer()) as ArrayBuffer));
+    await store.writeMeta({ id: docId, name: 'x.xlsx', ext: 'xlsx', status: 'ready', pageCount: 1, createdAt: new Date().toISOString(), progress: 100, viewKind: 'grid' });
+    const s = new FakeSocket();
+    await joinEditSession(s as never, request, docId, 'xlsx', [], false, 'v');
+    const e = encoding.createEncoder();
+    encoding.writeVarUint(e, MESSAGE_PAGE_SUBSCRIBE);
+    encoding.writeVarString(e, JSON.stringify({ sheet: 0, pages: [0] }));
+    s.emit('message', encoding.toUint8Array(e));
+    s.syncStep1();
+    await flushEventLoop();
+    s.edit((doc) => doc.getMap<string>('cells').set('0:0:1', '고친값'));
+    await flushEventLoop();
+    const rowStore = getRoomLazyGridForTest(docId)!.rowStorePath;
+    const exists = () => fsSync.existsSync(rowStore);
+    expect(exists()).toBe(true);
+    const order: string[] = [];
+    const realSave = store.saveOriginal.bind(store);
+    vi.spyOn(store, 'saveOriginal').mockImplementation(async (...args: Parameters<typeof store.saveOriginal>) => {
+      await sleep(300);
+      order.push(`saving(rowStore=${exists()})`);
+      await realSave(...args);
+    });
+    s.emit('close'); // 유예 — 저장 시작
+    await sleep(20);
+    forceCloseRoom(docId);
+    await sleep(1_000);
+    await flushEventLoop();
+    expect(order[0]).toBe('saving(rowStore=true)');
+    expect(exists()).toBe(false);
+    const saved = new ExcelJS.Workbook();
+    await saved.xlsx.load((await store.readOriginal(docId, 'xlsx')) as never);
+    expect(saved.getWorksheet('S')!.getCell('B1').value).toBe('고친값');
+  }, 60_000);
 });

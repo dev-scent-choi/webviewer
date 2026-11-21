@@ -2515,18 +2515,18 @@ function teardownRoom(room: Room): void {
   rooms.delete(room.docId);
   largeRoomDocIds.delete(room.docId);
   cfTallyRelease(room.cfRanges); // [통합] 엑셀 갈래의 조건부 서식 값 개수 표 — 유예가 끝나거나 강제로 닫을 때 여기서 놓는다
-  // 이 룸의 메모리 전용 변경 이력(cellChangeLog/docxChangeTracker/pptxChangeTracker)이 사라지기
-  // 전 마지막 기회 — ydoc.destroy() 전에 지금 상태를 그대로 캡처해 디스크에 남긴다
-  // (changeLogPersistence.ts 문서 주석의 "왜"). rooms.delete 이후에도 room 참조는 그대로
-  // 살아있으므로 여기서 읽는 데 문제없다.
-  void persistChangeLog(room.docId, room.kind, changeLogOf(room));
-  if (room.lazyGrid) void closeLazyGridStore(room.lazyGrid);
   void room.ready
     // 편집이 없었으면 다시 저장하지 않는다(모든 형식) — 읽기만 해도 파일이 바뀌지 않게.
     // 저장하지 않아도 같은 줄(runSerialized)에 서서, 진행 중인 저장(유예 때 시작한 것 등)이 끝난 뒤에 정리한다(최종 검토 M1)
     .then(() => (!room.editedSinceSave ? runSerialized(room.docId, async () => undefined) : queueFlush(room)))
     .catch((error) => console.error(`동시편집 종료 저장 실패 (문서 ${room.docId}):`, error))
     .finally(() => {
+      // 이 룸의 메모리 전용 변경 이력(cellChangeLog/docxChangeTracker/pptxChangeTracker)이 사라지기
+      // 전 마지막 기회 — ydoc.destroy() 전에 지금 상태를 그대로 캡처해 디스크에 남긴다
+      // (changeLogPersistence.ts 문서 주석의 "왜"). rooms.delete 이후에도 room 참조는 그대로 살아 있다.
+      // 행 저장소 파일 지우기와 함께 진행 중인 저장이 끝난 뒤로 옮겼다(재검토 4: 예전엔 저장이 읽는 중에 파일을 지웠다)
+      void persistChangeLog(room.docId, room.kind, changeLogOf(room));
+      if (room.lazyGrid) void closeLazyGridStore(room.lazyGrid);
       room.ydoc.destroy();
       // [통합] 워드 보존 조각의 문서별 기록(최대 4MB JSON)을 놓는다 — 새 방은 loadSavedDocxFragments가 파일에서 다시 채운다
       if (!rooms.has(room.docId)) {
