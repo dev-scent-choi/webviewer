@@ -10,6 +10,8 @@
 //   7) 엑셀 표 경계(검토 r4 I2): 머리 줄 삭제는 막고, 데이터 행을 모두 지우면 첫 데이터 행을 비워 남기며(실행 취소·다시 실행
 //      버튼), 요약 행을 지우면 요약 행이 꺼진다
 //   8) SUMPRODUCT((범위=값)*1)는 칠하고, 엔진이 못 하는 규칙은 "일부 생략"을 알린다(검토 r4)
+//   9) SUMPRODUCT((범위=값)*1)는 정확히 같은 값만 — a*·<5·문의?는 다른 값과 맞지 않는다(검토 r5 F1)
+//  10) 20만 칸 범위에 2만 칸 붙여넣기 뒤 서버 답(표 다시 만들기) 동안 다른 요청이 100ms 넘게 기다리지 않는다(검토 r5 F2)
 //
 // 사용법(서버를 먼저 띄워 둘 것 — 업로드·토큰 API가 키 없이 열려 있는 로컬 서버):
 //   node scripts/verify-xlsx-view.mjs [http://127.0.0.1:8144] [스크린샷 폴더]
@@ -282,6 +284,64 @@ try {
     const editNotice = await page.evaluate(() => !document.getElementById('cf-skip-notice')?.hidden);
     check('엔진이 못 하는 규칙: 보기·편집 화면 "일부 생략" 알림', viewNotice && editNotice, `보기 ${viewNotice}, 편집 ${editNotice}`);
     await page.close();
+  }
+
+  // 9) F1 — 정확히 같은 값만
+  {
+    const b = unzipSync(new Uint8Array(await (async () => {
+      const wb = new ExcelJS.Workbook();
+      wb.addWorksheet('s').addRows([['a*'], ['abc'], ['<5'], [3], [1], ['문의?'], ['문의1'], ['x'], ['ABC'], ['abc']]);
+      return wb.xlsx.writeBuffer();
+    })()));
+    b['xl/worksheets/sheet1.xml'] = strToU8(strFromU8(b['xl/worksheets/sheet1.xml']).replace('</sheetData>', '</sheetData><conditionalFormatting sqref="A1:A10"><cfRule type="expression" dxfId="0" priority="1"><formula>SUMPRODUCT(($A$1:$A$10=$A1)*1)&gt;1</formula></cfRule></conditionalFormatting>'));
+    b['xl/styles.xml'] = strToU8(strFromU8(b['xl/styles.xml']).replace('<dxfs count="0"/>', '<dxfs count="1"><dxf><fill><patternFill><bgColor rgb="FFFFC7CE"/></patternFill></fill></dxf></dxfs>'));
+    const { tok } = await upload('exact.xlsx', Buffer.from(zipSync(b)));
+    const page = await browser.newPage({ viewport: { width: 1000, height: 600 } });
+    await page.goto(BASE + tok.viewerUrl);
+    await page.waitForSelector('#grid-table td[data-r]');
+    await wait(800);
+    const view = await bgOf(page, Array.from({ length: 10 }, (_, r) => `#grid-table td[data-c="1"][data-r="${r + 1}"]`).join(', '));
+    await openEditor(page, tok);
+    await wait(2500);
+    const edit = await Promise.all(Array.from({ length: 10 }, (_, r) => editBg(page, r)));
+    // 칠해야 하는 것: abc·ABC·abc(2·9·10행)만
+    const want = [false, true, false, false, false, false, false, false, true, true];
+    const ok = (list) => list.every((c, r) => (c === PINK) === want[r]);
+    check('F1: SUMPRODUCT 정확 비교 — a*·<5·문의?는 칠하지 않고 abc·ABC만(보기·편집)', ok(view) && ok(edit), `보기 ${view.map((c) => (c === PINK ? 1 : 0)).join('')} 편집 ${edit.map((c) => (c === PINK ? 1 : 0)).join('')}`);
+    await page.close();
+  }
+
+  // 10) F2 — 큰 붙여넣기 뒤 서버 답
+  {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('s');
+    for (let r = 1; r <= 20_000; r += 1) ws.addRow(Array.from({ length: 10 }, (_, c) => `v${r}_${c}`));
+    ws.addConditionalFormatting({ ref: 'A1:J20000', rules: [{ type: 'expression', priority: 1, formulae: ['COUNTIF($A:$J,A1)>1'], style: { fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: 'FFFFC7CE' } } } }] });
+    const { id, token } = await upload('paste.xlsx', Buffer.from(await wb.xlsx.writeBuffer()));
+    const { ydoc, provider } = await connect(id, token);
+    const ask = (crit) => fetch(`${BASE}/api/view/xlsx-cf-ranges?token=${encodeURIComponent(token)}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sheet: 0, ranges: [{ r0: 0, c0: 0, r1: 19_999, c1: 9, crit }] }) }).then((r) => r.json());
+    await ask(['v1_0']); // 처음 센다
+    ydoc.transact(() => {
+      const cells = ydoc.getMap('cells');
+      for (let r = 0; r < 20_000; r += 1) cells.set(`0:${r}:1`, String(500_000 + r));
+    });
+    await wait(4000); // 붙여넣기 반영(웹소켓 업데이트 풀기 — 조건부 서식과 무관한 기존 비용)이 끝나기를 기다린다
+    let worst = 0;
+    let pinging = true;
+    const pings = (async () => {
+      while (pinging) {
+        const t0 = Date.now();
+        await fetch(`${BASE}/api/formats`);
+        worst = Math.max(worst, Date.now() - t0);
+        await wait(10);
+      }
+    })();
+    const a = await ask(['500000', 'v1_0']);
+    pinging = false;
+    await pings;
+    const r = a.data?.ranges?.[0];
+    check('F2: 2만 칸 붙여넣기 뒤 서버 답(표 다시 만들기) 동안 다른 요청 지연 100ms 미만, 답이 맞다', worst < 100 && r?.agg?.count === 20_000 && r?.agg?.min === 500_000, `다른 요청 최대 ${worst}ms, count ${r?.agg?.count}`);
+    provider.destroy();
   }
 
   // 6) 서버 답 경로(C1)
