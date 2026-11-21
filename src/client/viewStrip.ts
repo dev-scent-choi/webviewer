@@ -25,13 +25,21 @@ export function stripActions(p: { readonly canPrint: boolean; readonly canDownlo
   return actions;
 }
 
-const BLOCKED_CTRL_KEYS = new Set(['s', 'h', 'v', 'x', 'z', 'y']);
+const ZOOM_KEYS = new Set(['+', '=', '-', '_', '0']);
 
-/** 보기 꾸밈에서 먹이지 않을 키 — 찾기(Ctrl+F)·확대·화살표 이동은 그대로, 입력칸(찾기 상자) 안은 막지 않는다 */
-export function blockedViewKey(e: { readonly key: string; readonly ctrl: boolean; readonly inField: boolean; readonly canCopy: boolean }): boolean {
+/**
+ * 보기 꾸밈에서 먹이지 않을 키 — Ctrl+글자는 허용 목록(찾기 F·전체 선택 A·복사 C(복사 권한)·인쇄 P(인쇄 권한))만,
+ * 확대(+ − 0)·화살표 이동은 그대로, 입력칸(찾기 상자) 안은 막지 않는다. code(KeyX)가 있으면 한글 입력 상태에서도 글자를 안다
+ */
+export function blockedViewKey(e: { readonly key: string; readonly code?: string; readonly ctrl: boolean; readonly inField: boolean; readonly canCopy: boolean; readonly canPrint?: boolean }): boolean {
   if (e.inField) return false;
   const key = e.key.toLowerCase();
-  if (e.ctrl) return BLOCKED_CTRL_KEYS.has(key) || (!e.canCopy && key === 'c');
+  if (e.ctrl) {
+    if (ZOOM_KEYS.has(key)) return false;
+    const letter = /^Key([A-Z])$/.exec(e.code ?? '')?.[1].toLowerCase() ?? (/^[a-z]$/.test(key) ? key : null);
+    if (!letter) return false;
+    return !(letter === 'f' || letter === 'a' || (letter === 'c' && e.canCopy) || (letter === 'p' && e.canPrint === true));
+  }
   return key === 'delete' || key === 'backspace' || key === 'f2';
 }
 
@@ -62,11 +70,11 @@ function isField(target: EventTarget | null): boolean {
  * 창의 잡기 단계에서 끊는다 — 편집기들의 키·우클릭 처리기는 모두 요소나 창의 거품 단계에 걸려 있어 여기서 멈추면 하나도 돌지 않는다.
  * 우클릭: 편집기 메뉴(행·열·시트 탭·칸)는 늘 없애고, 브라우저 기본 메뉴는 복사 권한이 있을 때만 둔다(보기 화면 view.ts setupDeterrents와 같은 규칙).
  */
-export function installViewGuards(canCopy: boolean): void {
+export function installViewGuards(canCopy: boolean, canPrint: boolean): void {
   window.addEventListener(
     'keydown',
     (event) => {
-      if (!blockedViewKey({ key: event.key, ctrl: event.ctrlKey || event.metaKey, inField: isField(event.target), canCopy })) return;
+      if (!blockedViewKey({ key: event.key, code: event.code, ctrl: event.ctrlKey || event.metaKey, inField: isField(event.target), canCopy, canPrint })) return;
       event.preventDefault();
       event.stopImmediatePropagation();
     },
@@ -92,6 +100,13 @@ export function installViewGuards(canCopy: boolean): void {
       true,
     );
   }
+}
+
+/** 편집 세션 영구 거부(edit.ts close 4xxx, 세 편집기 공통) — 보기 꾸밈의 정원 초과(4429)면 같은 토큰의 보기 화면으로(설계 §3.4), 그 밖은 이유를 보여 준다 */
+export function handleSessionRejected(event: { readonly code: number; readonly reason: string }, canEdit: boolean, viewerUrl: string | undefined, showFatal: (message: string) => void): void {
+  const fallback = capacityFallback(event.code, isViewUi(location.search, canEdit), viewerUrl);
+  if (fallback) fallBackToViewer(fallback);
+  else showFatal(event.reason || '서버가 연결을 거부했습니다.');
 }
 
 /** 안내를 띄우고 잠시 뒤 보기 화면으로(뒤로 가기로 다시 막힌 화면에 오지 않게 replace) */

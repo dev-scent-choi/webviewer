@@ -25,7 +25,7 @@ import { applyWatermark } from './watermark.js';
 import { parseTypedNumber } from '../collab/cellValueShared.js';
 import { FILL_MARK, formatValueText, hashIfTooWide, isNumberOrDateValue, isTextNumFmt, type FormattedValue } from '../collab/numberFormat.js';
 import { initOfficeShell } from './officeShell.js';
-import { capacityFallback, fallBackToViewer, isViewUi, stepIndex } from './viewStrip.js';
+import { handleSessionRejected, stepIndex } from './viewStrip.js';
 import { bindDropdown } from './ribbonMenus.js';
 import { currentRegion, setupGridCharts } from './gridCharts.js';
 import { setupGridLinks, type GridLinks } from './gridLinks.js';
@@ -341,9 +341,7 @@ async function main(): Promise<void> {
     if (event && event.code >= 4400) {
       provider.shouldConnect = false;
       // 보기 꾸밈이 큰 엑셀 정원 초과(4429)에 걸리면 같은 토큰의 보기 화면으로(설계 §3.4) — 편집 화면은 지금처럼 이유를 보여 준다
-      const fallback = capacityFallback(event.code, isViewUi(location.search, canEdit), info.viewerUrl);
-      if (fallback) fallBackToViewer(fallback);
-      else showFatalError(event.reason || '서버가 연결을 거부했습니다.');
+      handleSessionRejected(event, canEdit, info.viewerUrl, showFatalError);
     }
   });
   provider.on('sync', (isSynced: boolean) => {
@@ -3536,6 +3534,8 @@ async function main(): Promise<void> {
     busy: false,
     /** "잠시 뒤 다시"가 이어질 때마다 늘리는 간격(1초 → 최대 1분), 답을 받으면 0 */
     backoff: 0,
+    /** 403 — 이 토큰으로는 서버 답을 받을 수 없다(다시 묻지 않고 범위 전부 생략) */
+    denied: false,
   };
   const cfRectKey = (r: CfRect) => `${r.r0}:${r.c0}:${r.r1}:${r.c1}`;
   function rowsArrived(r0: number, r1: number): boolean {
@@ -3561,7 +3561,7 @@ async function main(): Promise<void> {
     const remote = cfRemoteForSheet();
     let hit = remote.ranges.get(cfRectKey(rect));
     if (!hit) {
-      hit = { rect, st: { cells: 0, crit: new Map(), asked: new Map(), askedEq: new Map() } };
+      hit = { rect, st: { cells: 0, crit: new Map(), asked: new Map(), askedEq: new Map(), skipped: cfRemote.denied || undefined } };
       remote.ranges.set(cfRectKey(rect), hit);
     }
     const st = hit.st;
@@ -3583,6 +3583,7 @@ async function main(): Promise<void> {
   /** 통계 규칙 — 서버가 보낸 작은 통계(아직 없으면 물어 두고 빈 통계 = 칠하지 않음) */
   function cfRemoteStats(id: string): CfStats {
     const remote = cfRemoteForSheet();
+    if (remote.denied) remote.stats.set(id, 'skipped');
     const st = remote.stats.get(id);
     if (st === 'skipped') showCfSkipNotice();
     if (st) return st === 'skipped' ? {} : st;
@@ -3598,6 +3599,7 @@ async function main(): Promise<void> {
     }, delay);
   }
   async function fetchCfRemote(): Promise<void> {
+    if (cfRemote.denied) return;
     if (cfRemote.busy) {
       scheduleCfRemoteFetch(200);
       return;
@@ -3658,6 +3660,14 @@ async function main(): Promise<void> {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
       });
+      if (res.status === 403) {
+        // 영구 거절 — 다시 묻지 않는다(범위·통계 모두 생략 + "일부 생략" 알림)
+        cfRemote.denied = true;
+        for (const { st } of cfRemote.ranges.values()) st.skipped = true;
+        for (const id of stats) cfRemote.stats.set(id, 'skipped');
+        showCfSkipNotice();
+        return;
+      }
       const json = (await res.json()) as { data?: CfRemoteAnswerJson; retryAfterMs?: number };
       if (sheet !== cfRemote.sheet) return;
       if (!json.data) {

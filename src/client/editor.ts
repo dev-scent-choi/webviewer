@@ -43,7 +43,7 @@ import { pickPresenceColorForName, renderPresenceAvatars } from './presence.js';
 import { applyWatermark } from './watermark.js';
 import { DOC_META_MAP, DOC_META_SAVED_AT_KEY, DOC_META_SAVE_ERROR_AT_KEY } from '../collab/gridShared.js';
 import { initOfficeShell } from './officeShell.js';
-import { capacityFallback, fallBackToViewer, isViewUi, pickBoundary } from './viewStrip.js';
+import { handleSessionRejected, pickBoundary } from './viewStrip.js';
 import { bindDropdown, fillColorPalette, type PaletteColor } from './ribbonMenus.js';
 import {
   applyMark,
@@ -656,9 +656,7 @@ async function main(): Promise<void> {
     if (event && event.code >= 4400) {
       provider.shouldConnect = false;
       // 보기 꾸밈이 정원 초과(4429)에 걸리면 같은 토큰의 보기 화면으로(설계 §3.4) — 그 밖은 지금처럼 이유를 보여 준다
-      const fallback = capacityFallback(event.code, isViewUi(location.search, canEdit), info.viewerUrl);
-      if (fallback) fallBackToViewer(fallback);
-      else showFatalError(event.reason || '서버가 연결을 거부했습니다.');
+      handleSessionRejected(event, canEdit, info.viewerUrl, showFatalError);
     }
   });
   let readyPosted = false;

@@ -52,6 +52,35 @@ describe('blockedViewKey — 편집 단축키는 무시, 찾기·이동은 그�
   });
 });
 
+describe('blockedViewKey — Ctrl+글자는 허용 목록(F·A·C(복사)·P(인쇄))과 확대 키만', () => {
+  test.each<[string, string | undefined, boolean, boolean, boolean]>([
+    // 허용 목록 밖의 글자는 모두 막는다(굵게·밑줄·기울임·메모·채우기 …)
+    ...['b', 'd', 'i', 'u', 'm', 'k', 'e', 'l', 'r', 'g', 'j'].map((key): [string, undefined, boolean, boolean, boolean] => [key, undefined, true, true, true]),
+    ['p', undefined, true, true, false],
+    ['p', undefined, true, false, true],
+    ['P', undefined, true, false, true],
+    ['c', undefined, false, true, true],
+    ['c', undefined, true, false, false],
+    ['f', undefined, false, false, false],
+    ['a', undefined, false, false, false],
+    ['+', undefined, false, false, false],
+    ['=', undefined, false, false, false],
+    ['-', undefined, false, false, false],
+    ['0', undefined, false, false, false],
+    ['ArrowDown', undefined, false, false, false],
+    ['Home', undefined, false, false, false],
+    // 한글 입력 상태 — key는 한글이지만 code로 글자를 안다
+    ['ㅠ', 'KeyB', true, true, true],
+    ['ㄹ', 'KeyF', false, false, false],
+    ['ㅔ', 'KeyP', true, true, false],
+  ])('Ctrl+%s (code %s) · 복사 %s · 인쇄 %s → %s', (key, code, canCopy, canPrint, expected) => {
+    expect(blockedViewKey({ key, code, ctrl: true, inField: false, canCopy, canPrint })).toBe(expected);
+  });
+  test('입력칸 안은 Ctrl+글자도 막지 않는다', () => {
+    expect(blockedViewKey({ key: 'b', ctrl: true, inField: true, canCopy: false, canPrint: false })).toBe(false);
+  });
+});
+
 describe('stepIndex — 시트·슬라이드 한 칸 앞/뒤(끝에서 멈춤)', () => {
   test.each([
     [3, 0, 1, 1],

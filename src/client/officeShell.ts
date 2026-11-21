@@ -335,7 +335,7 @@ export function initOfficeShell(options: OfficeShellOptions): OfficeShell {
   if (isViewUi(location.search, options.canEdit)) {
     document.body.classList.add('ui-view');
     document.body.classList.toggle('no-copy', !options.canCopy);
-    installViewGuards(options.canCopy);
+    installViewGuards(options.canCopy, options.canPrint);
     toolbar.querySelector('.office-titlebar')?.classList.add('view-strip');
     stripTools = document.createElement('div');
     stripTools.className = 'view-strip-tools';

@@ -8,7 +8,7 @@ import { keymap } from 'prosemirror-keymap';
 import type { Mark, MarkType, Node as PMNode } from 'prosemirror-model';
 import { ySyncPlugin, yCursorPlugin, yUndoPlugin, ySyncPluginKey, undo, redo } from 'y-prosemirror';
 import { initOfficeShell } from './officeShell.js';
-import { capacityFallback, fallBackToViewer, isViewUi, stepIndex } from './viewStrip.js';
+import { handleSessionRejected, stepIndex } from './viewStrip.js';
 import { setupSlideDesign } from './slideDesignUi.js';
 import {
   PPTX_SAVE_NOTICE_MAP,
@@ -1402,9 +1402,7 @@ async function main(): Promise<void> {
     if (event && event.code >= 4400) {
       provider.shouldConnect = false;
       // 보기 꾸밈이 정원 초과(4429)에 걸리면 같은 토큰의 보기 화면으로(설계 §3.4) — 그 밖은 지금처럼 이유를 보여 준다
-      const fallback = capacityFallback(event.code, isViewUi(location.search, canEdit), info.viewerUrl);
-      if (fallback) fallBackToViewer(fallback);
-      else showFatalError(event.reason || '서버가 연결을 거부했습니다.');
+      handleSessionRejected(event, canEdit, info.viewerUrl, showFatalError);
     }
   });
   provider.awareness.on('change', () => renderPresenceAvatars(presenceListEl, provider.awareness));
