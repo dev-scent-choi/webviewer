@@ -252,14 +252,18 @@ const DXA_TO_EMU = 635;
  *  - 표 열 너비: LibreOffice는 w:tblGrid를, Word는 칸 너비(w:tcW)를 따른다 → 병합 칸·표 안 표가 없는 단순한 표만 tblGrid를 첫 행 tcW로 맞춘다.
  */
 export function docxViewLayoutFixes(documentXml: string): string {
-  const sect = /<w:sectPr\b[\s\S]*?<\/w:sectPr>(?![\s\S]*<w:sectPr\b)/.exec(documentXml)?.[0] ?? '';
+  // 예전 정규식 /<w:sectPr\b[\s\S]*?<\/w:sectPr>(?![\s\S]*<w:sectPr\b)/ 과 같은 범위(첫 sectPr부터 마지막 sectPr 뒤 첫 닫는 태그까지) —
+  // 안 닫힌 꼬리에서 제곱으로 느려져(FINAL-REVIEW C2) indexOf로 찾는다
+  const lastSect = tagAt(documentXml, '<w:sectPr', documentXml.length, -1);
+  const sectClose = lastSect < 0 ? -1 : documentXml.indexOf('</w:sectPr>', lastSect);
+  const sect = sectClose < 0 ? '' : documentXml.slice(tagAt(documentXml, '<w:sectPr', 0, 1), sectClose + '</w:sectPr>'.length);
   const pageW = Number(/<w:pgSz\b[^>]*\bw:w="(\d+)"/.exec(sect)?.[1]);
   const marL = Number(/<w:pgMar\b[^>]*\bw:left="(\d+)"/.exec(sect)?.[1] ?? 1440);
   const marR = Number(/<w:pgMar\b[^>]*\bw:right="(\d+)"/.exec(sect)?.[1] ?? 1440);
   const contentEmu = Number.isFinite(pageW) ? (pageW - marL - marR) * DXA_TO_EMU : null;
-  const wrapped = documentXml.replace(/<wp:anchor\b[\s\S]*?<\/wp:anchor>/g, (anchor) => {
+  const fixAnchor = (anchor: string): string => {
     if (!/wrapText="bothSides"/.test(anchor)) return anchor;
-    const posH = /<wp:positionH\b[^>]*\brelativeFrom="(\w+)"[^>]*>([\s\S]*?)<\/wp:positionH>/.exec(anchor);
+    const posH = positionHOf(anchor);
     const align = /<wp:align>(\w+)<\/wp:align>/.exec(posH?.[2] ?? '')?.[1];
     let atEdge = align === 'left' || align === 'right' || align === 'inside' || align === 'outside';
     const offset = Number(/<wp:posOffset>(-?\d+)<\/wp:posOffset>/.exec(posH?.[2] ?? '')?.[1]);
@@ -269,8 +273,40 @@ export function docxViewLayoutFixes(documentXml: string): string {
       atEdge = left <= EDGE_EMU || contentEmu - (left + cx) <= EDGE_EMU;
     }
     return atEdge ? anchor.replace(/(<wp:wrap(?:Square|Tight|Through)\b[^>]*\bwrapText=")bothSides"/, '$1largest"') : anchor;
-  });
-  return simpleTableGridsFromCellWidths(wrapped);
+  };
+  // <wp:anchor …>…</wp:anchor>를 차례로 — 닫는 태그가 없으면 그 뒤엔 고칠 개체가 없다(예전 정규식과 같은 결과, 제곱 없음)
+  const parts: string[] = [];
+  let done = 0;
+  for (let at = tagAt(documentXml, '<wp:anchor', 0, 1); at >= 0; at = tagAt(documentXml, '<wp:anchor', done, 1)) {
+    const close = documentXml.indexOf('</wp:anchor>', at);
+    if (close < 0) break;
+    const end = close + '</wp:anchor>'.length;
+    parts.push(documentXml.slice(done, at), fixAnchor(documentXml.slice(at, end)));
+    done = end;
+  }
+  parts.push(documentXml.slice(done));
+  return simpleTableGridsFromCellWidths(parts.join(''));
+}
+
+/** open 뒤가 낱말 글자가 아닌(정규식 \b) 자리 — dir 1은 from부터 앞으로, -1은 from 이하에서 뒤로. 없으면 -1 */
+function tagAt(xml: string, open: string, from: number, dir: 1 | -1): number {
+  let at = dir === 1 ? xml.indexOf(open, from) : xml.lastIndexOf(open, from);
+  while (at >= 0) {
+    if (!/\w/.test(xml[at + open.length] ?? '')) return at;
+    if (dir === -1 && at === 0) return -1;
+    at = dir === 1 ? xml.indexOf(open, at + 1) : xml.lastIndexOf(open, at - 1);
+  }
+  return -1;
+}
+
+/** 첫 <wp:positionH relativeFrom="…">…</wp:positionH> — 예전 정규식처럼 [전체, relativeFrom, 안쪽] (정규식 대신 indexOf: 개체 안의 안 닫힌 태그로 느려지지 않게) */
+function positionHOf(anchor: string): [string, string, string] | null {
+  const at = tagAt(anchor, '<wp:positionH', 0, 1);
+  if (at < 0) return null;
+  const headEnd = anchor.indexOf('>', at);
+  const close = headEnd < 0 ? -1 : anchor.indexOf('</wp:positionH>', headEnd);
+  const from = close < 0 ? undefined : /\brelativeFrom="(\w+)"/.exec(anchor.slice(at, headEnd))?.[1];
+  return from === undefined ? null : [anchor.slice(at, close + '</wp:positionH>'.length), from, anchor.slice(headEnd + 1, close)];
 }
 
 /** 병합 칸·표 안 표가 없는 표의 w:tblGrid를 첫 행 칸 너비(dxa)로 — 칸 수와 열 수가 같을 때만 */
