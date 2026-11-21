@@ -112,3 +112,45 @@ docx 왕복(`npx tsx audit/office/roundtrip-docx.ts`, 말뭉치 10 + 검토 재�
 - **docx 조각 저장 경합(기존부터 있던 것)**: 닫히는 방의 마지막 저장과, 같은 문서로 막 새로 만든 방의 `loadSavedDocxFragments`가 겹치면 문서별 맵을 서로 덮을 수 있다. 세대 거절 덕분에 새 방은 새로 불러온 탭에서만 생긴다. 이번 통합으로 생긴 문제가 아니라서 고치지 않았다.
 - **세대 알림(메시지 7)과 Node 쪽 참여자**: `guardRoomEpoch`가 없는 y-websocket 참여자(시험 스크립트의 Node 참여자 등)는 메시지 7을 받으면 콘솔에 "Unable to compute message"를 남긴다. 해는 없다. 옛 번들도 같고, pptx 갈래 보고서가 다룬 범위다.
 - 머지 1 뒤 vitest의 실패 1개는 부하 탓이었다(단독 10/10). 머지 2·3 뒤에는 실패가 없다.
+
+## 최종 검토 반영 (FINAL-REVIEW.md, @9ffd696 → 926660b)
+
+각 항목은 재현 시험을 먼저 써서 실패(RED)를 확인한 뒤 고쳤다. 고친 커밋마다 시험이 하나씩 붙어 있다.
+
+| 항목 | 커밋 | 고친 것 | 고치기 전(RED) → 뒤 |
+|---|---|---|---|
+| C1 COUNTIF 와일드카드 정규식 되돌아가기 | d573405 | 새 `src/collab/wildcard.ts`가 `*`로 나눈 조각을 차례로 찾는다(칸 길이 × 조각 길이). 엑셀 `~*` `~?` `~~`를 처리하고, 대소문자 무시도 그대로다. 조건부 서식 `countIf`가 이 매처를 쓴다. 같은 패턴인 fast-formula-parser의 `WildCard.toRegex`(COUNTIF·SUMIF·AVERAGEIF·MATCH·VLOOKUP·HLOOKUP·SEARCH)는 `formulaOverrides.ts`에서 이 매처로 덮어쓴다. 서버 수식 엔진, 조건부 서식 대체 경로, 브라우저 chunk가 모두 이 모듈을 거친다(빌드한 chunk에 `patchFormulaWildcards` 들어 있는 것 확인). 그 밖의 `new RegExp`는 상수나 이스케이프한 값만 넣는다(검토 원문과 같음) | `*` 8개 × 200자 칸에서 시험 프로세스가 끝나지 않음 → 2~11ms (`tests/finalReviewC1Wildcard.test.ts` 16개) |
+| C2 docxViewLayoutFixes 제곱 정규식 | ec19099 | sectPr는 `indexOf`·`lastIndexOf`로 찾는다. 예전 정규식과 **같은 범위**(첫 sectPr부터 마지막 sectPr 뒤의 첫 닫는 태그까지)다. anchor와 개체 안의 positionH도 indexOf로 차례로 찾는다 | 닫힌 sectPr 400개 + 1MB 꼬리 41초 → 100ms 안. 안 닫힌 anchor 1MB 5초 → 100ms 안. 말뭉치 10 + 검토 문서 10의 결과는 고치기 전 sha256과 바이트 그대로 (`tests/finalReviewC2DocxLayout.test.ts` 22개) |
+| I1 /api/view/info 전체 풀기 | b56a4cd | `docxRender`는 워드 편집기가 `editor=1`을 붙였을 때만 만든다. word/ 아래 `.xml`·`.rels`만 푼다. 원본 sha1 판마다 한 번만 만든다(`SizedLruCache` 32MB·64개). 읽기 전용 info는 예전 비용(쪽 설정·기본 글꼴·간격)으로 돌아간다 | 읽기 전용도 만들고 매번 다시 풀던 것 → 만들지 않음·캐시 적중·원본이 바뀌면 다시 만듦 (`tests/finalReviewI1DocxInfo.test.ts` 3개) |
+| I2 유예가 개수로만 묶임 | c53a7ad | 방 크기 어림 = PDF 원본 + 암호화 원본 + 엑셀 원본 + Y.Doc 인코딩 길이. 방 하나가 **16MB**를 넘으면 유예하지 않는다(예전처럼 바로 닫음). 유예 중인 방들의 합이 **64MB**를 넘으면 가장 오래된 방부터 닫는다. 개수 상한 20은 그대로다 | 큰 방도 유예, 합 제한 없음 → 바로 닫힘, 오래된 방부터 닫힘 (`tests/finalReviewI2LingerBytes.test.ts` 2개) |
+| M1 teardown 정리가 진행 중 저장보다 먼저 | 437110f | 편집이 없어도 teardown이 `runSerialized(docId, 빈 작업)`에 선다. 그래서 진행 중인 저장 뒤에 `ydoc.destroy`와 조각 기록 삭제가 돈다 | 순서 ['destroyed','saved'] → ['saved','destroyed'], 조각 기록이 다시 생기지 않음 |
+| M2 닫힌 방으로 cf 답 | 437110f | 기다린 뒤와 센 뒤에 `rooms.get(docId) === room`을 다시 본다. 아니면 null을 돌려준다(경로는 409). 세는 중 저장소가 닫혀 던진 오류도 409로 바꾼다 | 닫힌 방의 답을 냄 → null (`tests/finalReviewM1M2Teardown.test.ts` 2개) |
+| M3 각주 복제 | 926660b | 각주 파트를 indexOf로 한 번 훑어 색인(Map)을 만든다: id → 각주, 복제 표지 → id, 가장 큰 id. 복제할 때 색인을 이어서 고친다. 쓰지 않는 복제본 지우기도 같은 순회로 한다. 번호 정의의 `maxOf`도 루프로 바꿨다 | 각주 20만 개에서 RangeError → 저장됨, 복제 id = 가장 큰 id + 1 (`tests/finalReviewM3NoteClone.test.ts`). 왕복 20/20 그대로 |
+
+**I2 상한의 근거**
+
+- 검토가 든 메모리 저장소 배포의 예산은 4GB다. Y.Doc은 메모리에서 인코딩 길이의 몇 배를 차지한다(어림 3~5배). 그래서 합 64MB 인코딩은 실제로 약 200~300MB(예산의 5~8%)이다.
+- 방 하나 16MB면 보통 문서·덱(인코딩 수 MB 이하)은 유예된다. 수십~수백 MB PDF와 큰 덱은 예전처럼 바로 닫힌다.
+- 큰 엑셀(`largeRoomDocIds`)은 원래 유예하지 않는다.
+- 중간 크기 엑셀은 원본 바이트를 어림에 넣는다. lazyGrid 디스크 캐시와 cf 값 개수 표는 어림에 넣지 않았다. 값 개수 표는 전역 LRU 상한이 따로 묶는다.
+- 시험할 때는 `DOCVIEW_ROOM_LINGER_MAX_BYTES`·`DOCVIEW_ROOM_LINGER_TOTAL_BYTES`로 바꾼다.
+
+**최종 검토 반영 뒤 검증**
+
+| 항목 | 결과 |
+|---|---|
+| tsc | 통과 |
+| vitest | **1204/1204**(136파일) |
+| verify:xlsx | 34/34 |
+| verify:xlsx:browser | 39/39 |
+| verify:pptx | 24/24 |
+| verify:docx | 32/32 |
+| verify:reconnect | 39/39 |
+| docx 왕복 | 20/20 |
+
+시험 서버는 8146(내가 띄움)과 8147(verify:reconnect가 띄움)이었고, PID로 껐다. audit:office는 이번에 다시 돌리지 않았다. C2의 보기 변환 결과는 말뭉치에서 바이트가 같고, 편집기 화면은 verify:docx로 확인했다.
+
+**남는 것**
+
+- C1에서 fast-formula-parser 라이브러리의 COUNTIF처럼 원래 대소문자를 구분하던 경로(`Criteria.parse`가 'i' 없이 부름)는 그대로 구분한다. 동작을 바꾸지 않으려고 손대지 않았다. 엑셀은 구분하지 않는다.
+- I2의 어림에는 Y.Doc 인코딩이 든다. 방을 닫을 때 한 번 문서 크기만큼 일한다. 저장도 같은 크기만큼 일하므로 감수했다.
