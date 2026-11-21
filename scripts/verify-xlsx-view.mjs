@@ -353,7 +353,11 @@ try {
     const dlToken = new URL(BASE + dl.viewerUrl).searchParams.get('token');
     const ask = (t, body) => fetch(`${BASE}/api/view/xlsx-cf-ranges?token=${encodeURIComponent(t)}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
     const ranges = Array.from({ length: 64 }, (_, i) => ({ r0: i, c0: 0, r1: 19_999, c1: 0, crit: ['K1'] }));
-    check('서버 답: 내려받기만 되는 토큰은 403', (await ask(dlToken, { sheet: 0, ranges })).status === 403);
+    // 읽기 전용 편집기 화면(내려받기 토큰)도 받는다(2026-11-21 최종 수정 1) — 편집·내려받기 둘 다 없는 토큰만 403
+    const none = (await (await fetch(`${BASE}/api/documents/${id}/tokens`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ viewer: 'n', canPrint: false, canDownload: false, canCopy: false, canEdit: false }) })).json()).data;
+    const noneToken = new URL(BASE + none.viewerUrl).searchParams.get('token');
+    const dlStatus = (await ask(dlToken, { sheet: 0, ranges })).status;
+    check('서버 답: 내려받기 토큰은 받고(403 아님) 권한 없는 토큰은 403', dlStatus !== 403 && (await ask(noneToken, { sheet: 0, ranges })).status === 403, `내려받기 ${dlStatus}`);
     const t0 = Date.now();
     // 문서마다 답 만들기는 동시에 하나(하나는 뒤에서 기다림) — 나머지는 409(편집 화면은 "일부 생략"으로 두고 다음에 다시 묻는다)
     const replies = await Promise.all(Array.from({ length: 4 }, () => ask(token, { sheet: 0, ranges }).then(async (r) => ({ status: r.status, body: await r.json() }))));
