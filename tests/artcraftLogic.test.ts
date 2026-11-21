@@ -192,3 +192,67 @@ describe('Worker 시간 제한(WorkerClient)', () => {
     }
   });
 });
+
+describe('WorkerClient — 끝난 요청은 abort 리스너를 떼고, trap이면 Worker를 끈다', () => {
+  function fakeSignal() {
+    const listeners = new Set<() => void>();
+    return {
+      listeners,
+      signal: {
+        aborted: false,
+        addEventListener: (_: string, fn: () => void) => listeners.add(fn),
+        removeEventListener: (_: string, fn: () => void) => listeners.delete(fn),
+      } as unknown as AbortSignal,
+    };
+  }
+  async function setup() {
+    const { WorkerClient, ArtcraftUnavailable } = await import('../src/client/view/artcraftSource.js');
+    const sent: { id: number }[] = [];
+    const worker = { postMessage: (m: { id: number }) => sent.push(m), terminate: vi.fn(), onmessage: null, onerror: null } as unknown as Worker & {
+      onmessage: (e: { data: unknown }) => void;
+    };
+    return { client: new WorkerClient(worker), worker, sent, ArtcraftUnavailable, reply: (data: unknown) => worker.onmessage({ data }) };
+  }
+  test('답을 받은 요청 N개 뒤 signal의 리스너는 0', async () => {
+    const { client, sent, reply } = await setup();
+    const { signal, listeners } = fakeSignal();
+    const done = [1, 2, 3].map((page) => client.call({ cmd: 'text', page }, 1000, true, signal));
+    expect(listeners.size).toBe(3);
+    for (let i = 0; i < 3; i += 1) reply({ id: sent[i].id, text: { w: 1, h: 1, runs: [] } });
+    await Promise.all(done);
+    expect(listeners.size).toBe(0);
+  });
+  test('오류 답·끝(terminate)도 리스너를 뗀다', async () => {
+    const { client, sent, reply } = await setup();
+    const { signal, listeners } = fakeSignal();
+    const a = client.call({ cmd: 'text', page: 1 }, 1000, true, signal);
+    const b = client.call({ cmd: 'text', page: 2 }, 1000, true, signal);
+    reply({ id: sent[0].id, error: '없음' });
+    await expect(a).rejects.toThrow('없음');
+    client.terminate();
+    await expect(b).rejects.toBeTruthy();
+    expect(listeners.size).toBe(0);
+  });
+  test('fatal(trap) 답이면 Worker를 끄고 대기 줄·이후 요청을 ArtcraftUnavailable로', async () => {
+    const { client, worker, sent, reply, ArtcraftUnavailable } = await setup();
+    const a = client.call({ cmd: 'text', page: 1 }, 1000);
+    const b = client.call({ cmd: 'text', page: 2 }, 1000);
+    reply({ id: sent[0].id, error: 'unreachable', fatal: true });
+    await expect(a).rejects.toBeInstanceOf(ArtcraftUnavailable);
+    await expect(b).rejects.toBeInstanceOf(ArtcraftUnavailable);
+    expect(worker.terminate).toHaveBeenCalledOnce();
+    await expect(client.call({ cmd: 'text', page: 3 }, 1000)).rejects.toBeInstanceOf(ArtcraftUnavailable);
+  });
+});
+
+describe('ByteLru.delete', () => {
+  test('지운 만큼 바이트를 뺀다, 없는 키는 그대로', () => {
+    const lru = new ByteLru<{ n: number }>(100, (v) => v.n);
+    lru.set('a', { n: 30 });
+    lru.set('b', { n: 5 });
+    lru.delete('a');
+    lru.delete('zz');
+    expect(lru.keys()).toEqual(['b']);
+    expect(lru.bytes).toBe(5);
+  });
+});

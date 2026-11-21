@@ -43,6 +43,8 @@ interface Job {
   readonly resolve: (reply: WorkerReply) => void;
   readonly reject: (error: unknown) => void;
   id: number;
+  /** 끝나면 떼어 낸다 — 문서 수명 signal에 남으면 job → resolve → 그림 버퍼를 붙잡아 LRU가 무력해진다 */
+  onAbort?: () => void;
 }
 
 /** Worker에 한 번에 하나씩 보낸다(엔진은 한 줄) — 급한 것 먼저, 취소된 것은 줄에서 뺀다, 시간 넘기면 Worker를 끈다 */
@@ -59,6 +61,7 @@ export class WorkerClient {
       event.preventDefault();
       this.die(new ArtcraftUnavailable(event.message || '브라우저 엔진이 멈췄습니다'));
     };
+    worker.onmessageerror = () => this.die(new ArtcraftUnavailable('브라우저 엔진의 답을 읽지 못했습니다'));
   }
 
   call<R extends WorkerReply>(msg: WorkerCall, timeoutMs: number, urgent = true, signal?: AbortSignal): Promise<R> {
@@ -66,13 +69,12 @@ export class WorkerClient {
     if (signal?.aborted) return Promise.reject(abortError());
     return new Promise<R>((resolve, reject) => {
       const job: Job = { msg, timeoutMs, signal, resolve: resolve as (reply: WorkerReply) => void, reject, id: 0 };
-      signal?.addEventListener(
-        'abort',
-        () => {
-          if (this.queue.remove(job)) reject(abortError());
-        },
-        { once: true },
-      );
+      if (signal) {
+        job.onAbort = () => {
+          if (this.queue.remove(job)) this.settle(job, () => reject(abortError()));
+        };
+        signal.addEventListener('abort', job.onAbort, { once: true });
+      }
       this.queue.push(job, urgent);
       this.pump();
     });
@@ -99,21 +101,37 @@ export class WorkerClient {
     if (this.timer !== null) clearTimeout(this.timer);
     this.timer = null;
     this.busy = null;
-    if (job.signal?.aborted) job.reject(abortError());
-    else if ('error' in reply) job.reject(new Error(reply.error));
-    else job.resolve(reply);
+    if ('error' in reply && reply.fatal) {
+      // wasm trap 뒤의 엔진 상태는 믿을 수 없다 — 끄고 이후 요청은 바로 거절
+      this.die(new ArtcraftUnavailable(reply.error), job);
+      return;
+    }
+    this.settle(job, () => {
+      if (job.signal?.aborted) job.reject(abortError());
+      else if ('error' in reply) job.reject(new Error(reply.error));
+      else job.resolve(reply);
+    });
     this.pump();
   }
 
-  private die(error: Error): void {
+  private settle(job: Job, done: () => void): void {
+    if (job.onAbort) job.signal?.removeEventListener('abort', job.onAbort);
+    job.onAbort = undefined;
+    done();
+  }
+
+  private die(error: Error, current: Job | null = this.busy): void {
     if (this.dead) return;
     this.dead = error;
     if (this.timer !== null) clearTimeout(this.timer);
     this.timer = null;
     this.worker.terminate();
-    this.busy?.reject(error);
+    if (current) this.settle(current, () => current.reject(error));
     this.busy = null;
-    for (let job = this.queue.shift(); job; job = this.queue.shift()) job.reject(error);
+    for (let job = this.queue.shift(); job; job = this.queue.shift()) {
+      const j = job;
+      this.settle(j, () => j.reject(error));
+    }
   }
 }
 
@@ -137,6 +155,10 @@ export class ArtcraftSource implements PageSource {
   readonly kind = 'pages-artcraft' as const;
   private readonly images = new ByteLru<ImageData>(IMAGE_CACHE_BYTES, (img) => img.data.byteLength);
   private readonly texts = new Map<number, Promise<PageText>>();
+  /** 쪽마다 진행 중인 선명하게 그리기 — release·다음 draw가 취소한다(PagesBody signal은 문서 수명이라 따로 둔다) */
+  private readonly sharpening = new Map<number, AbortController>();
+  /** 선명하게 그리기가 실패한 쪽 — qualityKey를 1 올려 PagesBody가 다음 ensureDrawn에서 다시 그리게 한다 */
+  private readonly sharpFailed = new Set<number>();
 
   constructor(
     private readonly client: WorkerClient,
@@ -154,7 +176,7 @@ export class ArtcraftSource implements PageSource {
   }
 
   qualityKey(_page: number, opts: DrawOpts): number {
-    return Math.ceil(opts.cssWidth * opts.dpr);
+    return Math.ceil(opts.cssWidth * opts.dpr) + (this.sharpFailed.has(_page) ? 1 : 0);
   }
 
   /** 열 때 1쪽 1배를 미리 — 첫 쪽 20초 제한을 여기서 재고, 첫 draw는 보관한 그림을 바로 쓴다 */
@@ -166,19 +188,28 @@ export class ArtcraftSource implements PageSource {
     const size = this.sizes[page - 1];
     if (!size) throw new Error(`${page}쪽이 없습니다.`);
     const px = targetPixelWidth(opts.cssWidth, opts.dpr, size);
+    this.sharpFailed.delete(page);
+    this.sharpening.get(page)?.abort();
+    this.sharpening.delete(page);
     if (drawPlan(this.pixelWidthsOf(page), px, size.w) !== 'two-stage') {
       paint(canvas, await this.render(page, px, true, signal));
       return;
     }
     paint(canvas, await this.render(page, quickPixelWidth(size), true, signal));
     // 선명한 그림은 급하지 않은 줄로 — 다 되면 같은 캔버스를 바꿔 칠한다(PagesBody가 버린 캔버스는 폭이 0)
-    // shortcut: a failed sharpen leaves the 1x picture; the next zoom or scroll redraws it.
-    this.render(page, px, false, signal).then(
+    const sharpen = new AbortController();
+    this.sharpening.set(page, sharpen);
+    this.render(page, px, false, sharpen.signal).then(
       (img) => {
         if (canvas.width > 0) paint(canvas, img);
       },
-      () => undefined,
-    );
+      (error: unknown) => {
+        // 실패하면 1배 그림이 남는다 — qualityKey가 달라져 다음 스크롤·확대 때 다시 그린다(취소는 제외)
+        if (!(error instanceof DOMException && error.name === 'AbortError')) this.sharpFailed.add(page);
+      },
+    ).finally(() => {
+      if (this.sharpening.get(page) === sharpen) this.sharpening.delete(page);
+    });
   }
 
   async drawText(page: number, layer: HTMLElement, cssWidth: number): Promise<void> {
@@ -212,6 +243,13 @@ export class ArtcraftSource implements PageSource {
     const canvas = document.createElement('canvas');
     paint(canvas, img);
     return canvas;
+  }
+
+  /** 이 쪽을 다 썼다 — 진행 중인 선명하게 그리기를 취소하고 보관 그림을 놓는다(설계 §4.1) */
+  release(page: number): void {
+    this.sharpening.get(page)?.abort();
+    this.sharpening.delete(page);
+    for (const px of this.pixelWidthsOf(page)) this.images.delete(`${page}:${px}`);
   }
 
   destroy(): void {

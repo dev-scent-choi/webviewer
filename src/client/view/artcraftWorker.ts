@@ -1,8 +1,8 @@
 /**
  * 아트크래프트 엔진 Worker(문서 하나 = wasm 인스턴스 하나) — DOM·Canvas 없음, RGBA 버퍼를 넘겨준다(spike §7.2).
- * 받는 것은 같은 출처의 정적 자산(/artcraft/*)과 원본(/api/view/download)뿐이다(설계 §6). 작업은 artcraftSource.ts가 하나씩 보낸다.
+ * 받는 것은 같은 출처의 정적 자산(/artcraft/*)과 원본(/api/view/engine-source)뿐이다(설계 §6). 작업은 artcraftSource.ts가 하나씩 보낸다.
  */
-import { originalProblem, stubImports, type PageText, type WorkerReply, type WorkerRequest } from './artcraftLogic.js';
+import { MAX_ORIGINAL_BYTES, originalProblem, stubImports, type PageText, type WorkerReply, type WorkerRequest } from './artcraftLogic.js';
 
 interface Engine {
   readonly memory: WebAssembly.Memory;
@@ -37,6 +37,8 @@ let docHandle = 0;
 async function bytesOf(url: string): Promise<Uint8Array> {
   const res = await fetch(url, { credentials: 'same-origin' });
   if (!res.ok) throw new Error(`받지 못했습니다(${res.status}): ${url.split('?')[0]}`);
+  // 큰 원본은 받기 전에 거절(압축 전송이면 길이가 작게 오므로 받은 뒤 originalProblem이 다시 본다)
+  if (Number(res.headers.get('content-length')) > MAX_ORIGINAL_BYTES) throw new Error('원본이 브라우저 엔진에 너무 큽니다');
   return new Uint8Array(await res.arrayBuffer());
 }
 
@@ -115,7 +117,9 @@ async function answer(m: WorkerRequest): Promise<void> {
       scope.postMessage(reply, [reply.rgba]);
     } else scope.postMessage({ id: m.id, text: text(m.page) });
   } catch (error) {
-    scope.postMessage({ id: m.id, error: error instanceof Error ? error.message : String(error) });
+    const fatal = error instanceof WebAssembly.RuntimeError;
+    if (fatal) engine = null; // trap 뒤 인스턴스는 다시 쓰지 않는다
+    scope.postMessage({ id: m.id, error: error instanceof Error ? error.message : String(error), fatal });
   }
 }
 

@@ -27,7 +27,8 @@ export type WorkerRequest = WorkerCall & { readonly id: number };
 export interface InitReply { readonly id: number; readonly count: number; readonly sizes: PageSize[] }
 export interface RenderReply { readonly id: number; readonly w: number; readonly h: number; readonly rgba: ArrayBuffer }
 export interface TextReply { readonly id: number; readonly text: PageText }
-export interface ErrorReply { readonly id: number; readonly error: string }
+/** fatal = wasm trap(RuntimeError) — 엔진 상태가 오염됐을 수 있어 Worker를 끈다 */
+export interface ErrorReply { readonly id: number; readonly error: string; readonly fatal?: boolean }
 export type WorkerReply = InitReply | RenderReply | TextReply | ErrorReply;
 
 /** 글자 상자 위 = 기준선 − 0.8 × 글자 크기, 높이 = 글자 크기(엔진은 기준선과 크기만 준다) */
@@ -133,6 +134,12 @@ export class ByteLru<V> {
   keys(): string[] {
     return [...this.map.keys()];
   }
+  delete(key: string): void {
+    const value = this.map.get(key);
+    if (value === undefined) return;
+    this.map.delete(key);
+    this.total -= this.sizeOf(value);
+  }
 }
 
 /** Worker 작업 줄 — 급한 것(보이는 쪽) 먼저, 같은 급끼리는 넣은 순서(PagesBody가 보이는 쪽부터 부른다) */
@@ -184,8 +191,8 @@ export function stubImports(descriptors: readonly WebAssembly.ModuleImportDescri
   return imports;
 }
 
-/** 엔진에 넘길 원본 상한 — 엔진은 32비트 wasm(메모리 4 GB)이고 입력을 한 번 더 복사한다 */
-export const MAX_ORIGINAL_BYTES = 200 * 1024 * 1024;
+/** 엔진에 넘길 원본 상한 — wasm 메모리 상한이 512 MB(--max-memory)이고 엔진이 입력을 두 번 복사하므로 약 150 MB */
+export const MAX_ORIGINAL_BYTES = 150 * 1024 * 1024;
 const ZIP = [0x50, 0x4b, 0x03, 0x04];
 const OLE = [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1];
 
