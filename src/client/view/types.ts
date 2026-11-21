@@ -32,6 +32,8 @@ export interface ArtcraftInfo {
   readonly experimental: boolean;
   readonly originalUrl: string;
   readonly assets: { readonly wasm: string; readonly fonts: readonly string[] };
+  /** Worker 번들 주소(?v=내용 해시) — 서버 /api/view/info가 붙인다 */
+  readonly workerUrl: string;
 }
 
 /** GET /api/view/info 의 data(이 화면이 쓰는 것만) */

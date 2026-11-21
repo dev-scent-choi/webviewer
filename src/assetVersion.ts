@@ -34,3 +34,9 @@ export function versionAssetUrls(html: string, publicDir: string): string {
     return version ? `${attr}${url}?v=${version}"` : whole;
   });
 }
+
+/** 주소 하나에 내용 해시 — HTML 밖에서 만드는 주소(아트크래프트 Worker, /api/view/info)도 옛 캐시를 피한다. 없는 파일은 그대로 */
+export function versionedUrl(urlPath: string, publicDir: string): string {
+  const version = versionOf(publicDir, urlPath);
+  return version ? `${urlPath}?v=${version}` : urlPath;
+}

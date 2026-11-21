@@ -13,6 +13,8 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { recordAudit } from '../audit.js';
 import { ARTCRAFT_FORMATS, ENGINE_REASONS, artcraftInfo, engineFor } from '../artcraftEngine.js';
 import { readArtcraftManifest } from '../artcraftManifest.js';
+import { versionedUrl } from '../assetVersion.js';
+import { fileURLToPath } from 'node:url';
 import { SizedLruCache } from '../cache.js';
 import { config } from '../config.js';
 import { findConverter } from '../converters/index.js';
@@ -46,6 +48,10 @@ import { touchPresence } from '../presence.js';
 import { docxFragmentsOf, flushNow, getCfRemoteAnswer, getCurrentBytes, getChangeLog, getFileCharts, getFileExtras, getFileImages, invalidateFileExtras } from '../collab/room.js';
 import { CfBusyError, cfTokenBudget, cfTokenRetryAfterMs, cfTokenSpend, parseCfRemoteRequest } from '../xlsx/cfRangeValues.js';
 import type { WildcardBudget } from '../collab/wildcard.js';
+
+/** 아트크래프트 Worker 번들 — info가 내용 해시를 붙여 준다(app.ts publicDir와 같은 폴더) */
+const PUBLIC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'public');
+const ARTCRAFT_WORKER = '/js/artcraftWorker.bundle.js';
 
 /** 편집 화면 조건부 서식 서버 답 — 편집할 때마다(0.3초 묶음) 다시 묻는다 */
 // 토큰(편집 화면)마다 분당 40회 — verify:xlsx:browser(편집·스크롤·1,500·2만 행 COUNTIF 등 39항목)에서 한 화면이 1분에 부른 최대가 18회라
@@ -801,7 +807,8 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
           processing: view.meta.status === 'processing',
           engine: artcraft ? 'artcraft' : 'libreoffice',
           ...(engine.reason ? { engineReason: engine.reason } : {}),
-          ...(artcraft ? { artcraft } : {}),
+          // Worker 주소에도 내용 해시 — 캐시된 옛 Worker가 새 artcraftSource와 어긋나지 않게
+          ...(artcraft ? { artcraft: { ...artcraft, workerUrl: versionedUrl(ARTCRAFT_WORKER, PUBLIC_DIR) } } : {}),
           // 향기랩 옛 형식(.doc·.xls·.ppt) — 편집기가 형식 이름·내려받기 문구·매크로 경고를 보인다(설계 §2.5)
           // .doc 이름의 OOXML(ZIP)은 실제로 OOXML이라 옛 형식 문구를 보이지 않는다(내려받기는 그래도 안 고쳤으면 올린 바이트 그대로)
           legacy:

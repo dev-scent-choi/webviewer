@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { versionAssetUrls } from '../src/assetVersion.js';
+import { versionAssetUrls, versionedUrl } from '../src/assetVersion.js';
 
 describe('화면 HTML의 JS·CSS 주소에 내용 해시', () => {
   test('있는 파일은 ?v=해시, 내용이 바뀌면 해시도 바뀐다, 없는 파일·외부 주소는 그대로', () => {
@@ -21,5 +21,13 @@ describe('화면 HTML의 JS·CSS 주소에 내용 해시', () => {
     const second = versionAssetUrls(html, dir);
     expect(second).not.toBe(first);
     expect(versionAssetUrls(html, dir)).toBe(second);
+  });
+
+  test('versionedUrl — 주소 하나에 ?v=해시(아트크래프트 Worker 주소), 없는 파일은 그대로', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asset-version-'));
+    fs.mkdirSync(path.join(dir, 'js'));
+    fs.writeFileSync(path.join(dir, 'js', 'w.js'), 'worker');
+    expect(versionedUrl('/js/w.js', dir)).toMatch(/^\/js\/w\.js\?v=[0-9a-f]{10}$/);
+    expect(versionedUrl('/js/none.js', dir)).toBe('/js/none.js');
   });
 });

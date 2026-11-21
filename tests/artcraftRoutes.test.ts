@@ -1,10 +1,17 @@
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 
 type Perms = { canPrint?: boolean; canDownload?: boolean; canCopy?: boolean; canEdit?: boolean };
+
+/** Worker 주소는 내용 해시를 붙여 옛 Worker 캐시를 피한다 — 번들(npm run build:editor)이 있으면 ?v=해시 */
+function expectedWorkerUrl(): string {
+  const file = path.resolve('public/js/artcraftWorker.bundle.js');
+  return existsSync(file) ? `/js/artcraftWorker.bundle.js?v=${createHash('sha256').update(readFileSync(file)).digest('hex').slice(0, 10)}` : '/js/artcraftWorker.bundle.js';
+}
 
 describe('아트크래프트 엔진 — 토큰 발급·/api/view/info', () => {
   let app: FastifyInstance;
@@ -128,6 +135,7 @@ describe('아트크래프트 엔진 — 토큰 발급·/api/view/info', () => {
       experimental: false,
       originalUrl: `/api/view/engine-source?token=${encodeURIComponent(t)}`,
       assets: { wasm: M.word, fonts: M.fonts },
+      workerUrl: expectedWorkerUrl(),
     });
   });
 

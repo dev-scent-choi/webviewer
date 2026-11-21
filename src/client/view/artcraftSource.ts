@@ -33,7 +33,6 @@ export const OPEN_TIMEOUT_MS = 60_000;
 export const RENDER_TIMEOUT_MS = 20_000;
 /** 쪽 그림 보관 상한 — 1600×2071 한 장이 약 13 MB라 보이는 쪽 ±2 정도 */
 const IMAGE_CACHE_BYTES = 64 * 1024 * 1024;
-const WORKER_URL = '/js/artcraftWorker.bundle.js';
 
 const abortError = () => new DOMException('그리기를 멈췄습니다.', 'AbortError');
 
@@ -255,7 +254,7 @@ export async function openArtcraftSource(info: ViewInfo): Promise<ArtcraftSource
   if (!a) throw new ArtcraftUnavailable('브라우저 엔진 정보가 없습니다');
   let client: WorkerClient | null = null;
   try {
-    client = new WorkerClient(new Worker(WORKER_URL, { type: 'module' }));
+    client = new WorkerClient(new Worker(a.workerUrl, { type: 'module' }));
     const opened = await client.call<InitReply>(
       { cmd: 'init', wasm: a.assets.wasm, fonts: a.assets.fonts, original: a.originalUrl, name: `document.${a.ext}` },
       OPEN_TIMEOUT_MS,
