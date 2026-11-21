@@ -155,3 +155,30 @@ describe('다시 열어 저장(REVIEW-r3 C-r3-1)', () => {
     expect(strFromU8(unzipSync(again)['word/document.xml'])).toBe(strFromU8(unzipSync(first)['word/document.xml']));
   });
 });
+
+describe('docxfrag.json: 지운 조각만, 한 세대만(REVIEW-r3 Minor)', () => {
+  test('저장본이 가리키는 조각·지난 세대에서 이어받은 조각은 쓰지 않고, 지운 조각만 상한 안에서', async () => {
+    const { deletedFragmentsJson } = await import('../src/collab/room.js');
+    const bytes = new Uint8Array(fs.readFileSync('audit/office/corpus/docx/d04-images.docx'));
+    const { doc, fragments } = importDocx(bytes);
+    expect(deletedFragmentsJson(fragments, doc, new Set())).toBe('{}'); // 지운 것이 없으면 빈 묶음
+    // 그림 문단 하나를 지운 문서
+    const kids: PMNode[] = [];
+    let dropped: PMNode | null = null;
+    doc.forEach((n) => {
+      let image = false;
+      n.descendants((c) => {
+        if (c.type.name === 'ooxml' && c.attrs.kind === 'image') image = true;
+      });
+      if (image && !dropped) dropped = n;
+      else kids.push(n);
+    });
+    const without = docxSchema.nodes.doc.create(null, kids);
+    const kept = JSON.parse(deletedFragmentsJson(fragments, without, new Set())) as Record<string, string>;
+    expect(Object.values(kept).some((xml) => xml.includes('<w:drawing'))).toBe(true);
+    expect(Object.keys(kept).length).toBeLessThan(fragments.size);
+    // 지난 세대에서 이어받은 조각은 다시 넘기지 않는다, 상한을 넘으면 거기서 끊는다
+    expect(deletedFragmentsJson(fragments, without, new Set(Object.keys(kept)))).toBe('{}');
+    expect(deletedFragmentsJson(fragments, without, new Set(), 10)).toBe('{}');
+  });
+});

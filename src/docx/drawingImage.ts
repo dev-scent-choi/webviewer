@@ -82,6 +82,12 @@ function queued<T>(task: () => Promise<T>): Promise<T> {
   return run;
 }
 
+/** 한 번에 LibreOffice로 그릴 조각 수 — 그림 하나가 변환을 깨도 그 묶음만 실패하게(그림 200개를 한 묶음으로 하면 하나 때문에 모두 회색) */
+const BATCH_SIZE = 50;
+
+/** 새 묶음을 그리려는데 분당 상한을 넘었다(라우트가 429로) */
+export class DrawingRateLimited extends Error {}
+
 /** 이미 그려 둔 그림(문서 판과 무관하게 문서 id + 조각 해시) — 있으면 상한 없이 바로 돌려준다 */
 export function cachedDocxDrawing(docId: string, ref: string): Promise<Buffer> | undefined {
   return pngs.get(`${docId}:${refHashOf(ref)}`);
@@ -90,12 +96,14 @@ export function cachedDocxDrawing(docId: string, ref: string): Promise<Buffer> |
 /**
  * ref: 편집기 노드의 조각 참조 — 이 문서(지금 원본, 열려 있는 방이면 그 방의 저장소까지)에 있는 조각만 그린다(없으면 null).
  * roomFragments: 열린 방의 보존 조각 저장소(지웠다 되돌린 조각도 그리게).
+ * allowNewBatch: LibreOffice로 새 묶음을 그려야 할 때만 부른다(분당 상한) — 저장으로 문서 판이 바뀐 뒤 다시 그리는 것도 센다.
  */
 export async function renderDocxDrawingPng(
   loadOriginal: () => Promise<Uint8Array>,
   docId: string,
   ref: string,
   roomFragments: ReadonlyMap<string, string> | null,
+  allowNewBatch: () => Promise<boolean>,
 ): Promise<Buffer | null> {
   const hash = refHashOf(ref);
   const pngKey = `${docId}:${hash}`;
@@ -111,16 +119,12 @@ export async function renderDocxDrawingPng(
   const inFile = info.drawn.includes(hash);
   const fragments = inFile ? info.fragments : roomFragments;
   if (!fragments?.get(hash)) return null;
-  const batchKey = inFile ? `${version}:all` : `${version}:${hash}`;
-  batchedDocs.add(docId);
-  const batch = await batches.getOrLoad(batchKey, () => renderBatch(bytes, fragments, inFile ? info.drawn : [hash], batchKey));
+  const chunk = inFile ? Math.floor(info.drawn.indexOf(hash) / BATCH_SIZE) : 0;
+  const batchKey = inFile ? `${version}:all:${chunk}` : `${version}:${hash}`;
+  const members = inFile ? info.drawn.slice(chunk * BATCH_SIZE, (chunk + 1) * BATCH_SIZE) : [hash];
+  if (!batches.get(batchKey) && !(await allowNewBatch())) throw new DrawingRateLimited();
+  const batch = await batches.getOrLoad(batchKey, () => renderBatch(bytes, fragments, members, batchKey));
   const page = batch.pages.get(hash);
   if (!page) return null;
   return pngs.getOrLoad(pngKey, () => queued(() => renderPage(`docx-drawing:${batch.key}`, page, 2, async () => batch.pdf, { load: async () => batch.sizes, save: async () => undefined })));
 }
-
-/** 그 문서 판의 묶음 PDF가 이미 있거나 만드는 중인지 — 있으면 그리기 상한을 세지 않는다(쪽 하나 그리기는 가볍다) */
-export function hasDocxDrawingBatch(docId: string): boolean {
-  return batchedDocs.has(docId);
-}
-const batchedDocs = new Set<string>();

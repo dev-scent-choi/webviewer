@@ -2,7 +2,7 @@ import { Plugin, PluginKey, type Transaction } from 'prosemirror-state';
 import { DOMSerializer, Fragment, Slice, type Mark, type Node as PMNode, type Schema } from 'prosemirror-model';
 import { ReplaceAroundStep, ReplaceStep } from 'prosemirror-transform';
 import { ySyncPluginKey } from 'y-prosemirror';
-import { docxSchema } from '../docx/schema.js';
+import { DOCX_REF_ATTRS as REF_ATTRS, docxRefsIn, docxSchema } from '../docx/schema.js';
 
 /**
  * 붙여넣기 지킴이 — 그림·글상자·번호 같은 보존 조각은 원본 XML이 서버 저장소(이 문서를 연 방)에만 있어, 같은 문서 안에서 옮기거나
@@ -12,24 +12,8 @@ import { docxSchema } from '../docx/schema.js';
  * 새로 친 글자·붙인 글자는 변경 추적 삽입(w:ins·w:moveTo — 원래 작성자 이름)을 달지 않는다(m4): 그 감싸개 안에서 쳐도 추적 없는 글자.
  */
 const SOURCE_ATTR = 'data-docx-source';
-const REF_ATTRS = ['pPrExtra', 'tcPrExtra', 'trPrExtra', 'tblPrExtra'] as const;
 const pasteKey = new PluginKey<Set<string>>('docxPaste');
-
-function refsIn(node: PMNode, into: Set<string>): void {
-  const add = (ref: unknown) => {
-    if (typeof ref === 'string' && ref.includes('@')) into.add(ref);
-  };
-  const visit = (n: PMNode) => {
-    if (n.type.name === 'ooxml' || n.type.name === 'ooxml_block') add(n.attrs.ref);
-    for (const key of REF_ATTRS) if (Array.isArray(n.attrs[key])) (n.attrs[key] as unknown[]).forEach(add);
-    for (const mark of n.marks) {
-      if (mark.type.name === 'runExtra' && Array.isArray(mark.attrs.refs)) (mark.attrs.refs as unknown[]).forEach(add);
-      if (mark.type.name === 'wrap') add(mark.attrs.pr);
-    }
-    n.forEach(visit);
-  };
-  visit(node);
-}
+const refsIn = docxRefsIn;
 
 /** 이 거래가 사용자가 넣은 글자(입력·붙여넣기·끌어 놓기)면, 넣은 범위의 변경 추적 삽입 감싸개를 뗀다 — 다른 참여자·되돌리기(Yjs)는 그대로 */
 function stripTrackedWraps(transactions: readonly Transaction[], tr: Transaction): Transaction | null {

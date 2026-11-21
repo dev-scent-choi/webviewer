@@ -26,12 +26,13 @@ import { prosemirrorToYXmlFragment, yXmlFragmentToProseMirrorRootNode } from 'y-
 import { recordAudit } from '../audit.js';
 import { persistChangeLog } from './changeLogPersistence.js';
 import { findConverter } from '../converters/index.js';
-import { docxSchema, DOCX_COMMENTS_MAP, DOCX_PAGE_MAP, DOCX_PAGE_SETUP_KEY, type DocxComment, type DocxPageSetup } from '../docx/schema.js';
+import { docxRefsIn, docxSchema, DOCX_COMMENTS_MAP, DOCX_PAGE_MAP, DOCX_PAGE_SETUP_KEY, type DocxComment, type DocxPageSetup } from '../docx/schema.js';
 import { DocxChangeTracker, type ParagraphChangeSummary } from './docxChangeLog.js';
 import { PptxChangeTracker, type PptxChangeSummary } from './pptxChangeLog.js';
 import { exportDocx } from '../docx/export.js';
 import { importDocx } from '../docx/import.js';
-import { fragmentHash } from '../docx/ooxml.js';
+import type { Node as PMNode } from 'prosemirror-model';
+import { fragmentHash, refHashOf, TRACKED_WRAP_TAGS, trackedWrapKey } from '../docx/ooxml.js';
 import { invalidateRenderCache } from '../rendering.js';
 import { exportPdfFromRoom, pdfChangeLogOf, PdfChangeTracker, PDF_META_MAP, PDF_SEED_ORIGIN, seedPdfModel } from '../pdf/pdfModel.js';
 import { finalizePdf } from '../pdf/pdfFinalize.js';
@@ -1706,30 +1707,59 @@ async function seedRoom(room: Room): Promise<void> {
 }
 
 /**
- * 보존 조각 저장소를 문서 곁에 둔다 — 지운 조각(EMF·차트·책갈피 등)이 든 채로 저장한 뒤 서버가 다시 켜져도, 편집기에서 되돌린
- * 그 조각이 다음 저장에 들어가게(새 방은 저장된 파일에서 조각을 다시 읽으므로 지운 것은 없다). 해시가 내용과 맞는 것만 읽는다.
- * shortcut: 문서마다 상한 16MB(넘으면 뒤에 들어온 것부터 버린다) — 아주 오래 편집한 문서의 되돌리기가 더 필요하면 판별로 나눈다.
+ * 지운 보존 조각을 문서 곁에 둔다(m3) — 지운 조각(EMF·차트·책갈피 등)이 빠진 채 저장된 뒤 방이 닫혔다 다시 열려도(연결이 잠깐 끊긴
+ * 참여자의 되돌리기가 새 방으로 이어지는 경우) 그 조각이 다음 저장에 들어가게. 저장 파일 자체에 남은 조각은 새 방이 파일에서 다시 읽으니
+ * 적지 않는다 — 이번 방에서 본 조각 중 저장본 문서가 더는 가리키지 않는 것만, 바뀌었을 때만 쓴다. 지난 방에서 이어받은 것은 한 번 더
+ * 넘기지 않는다(한 세대만 — 계속 쌓이지 않게). 해시가 내용과 맞는 것만 읽는다. 상한 4MB.
  */
-const DOCX_FRAGMENT_FILE_LIMIT = 16 * 1024 * 1024;
+const DOCX_FRAGMENT_FILE_LIMIT = 4 * 1024 * 1024;
+/** 문서 → 이번 방이 파일에서 이어받기만 한(지난 세대) 조각 해시, 마지막으로 쓴 내용 */
+const inheritedFragments = new Map<string, Set<string>>();
+const writtenFragments = new Map<string, string>();
 async function loadSavedDocxFragments(docId: string, fragments: Map<string, string>): Promise<void> {
+  const inherited = new Set<string>();
+  inheritedFragments.set(docId, inherited);
+  writtenFragments.delete(docId);
   try {
     if (!(await store.hasDerived(docId, 'docxfrag'))) return;
-    const saved = JSON.parse((await store.readDerived(docId, 'docxfrag')).toString('utf8')) as Record<string, unknown>;
-    for (const [hash, xml] of Object.entries(saved)) if (typeof xml === 'string' && !fragments.has(hash) && fragmentHash(xml) === hash) fragments.set(hash, xml);
+    const text = (await store.readDerived(docId, 'docxfrag')).toString('utf8');
+    writtenFragments.set(docId, text);
+    const saved = JSON.parse(text) as Record<string, unknown>;
+    for (const [hash, xml] of Object.entries(saved)) {
+      if (typeof xml !== 'string' || fragments.has(hash) || fragmentHash(xml) !== hash) continue;
+      fragments.set(hash, xml);
+      inherited.add(hash);
+    }
   } catch (error) {
     console.error(`보존 조각 저장소 읽기 실패 (문서 ${docId}):`, error);
   }
 }
-async function saveDocxFragments(docId: string, fragments: ReadonlyMap<string, string>): Promise<void> {
+/** 저장한 문서(pmDoc)가 가리키지 않는 이번 세대 조각만 남긴 JSON */
+export function deletedFragmentsJson(fragments: ReadonlyMap<string, string>, pmDoc: PMNode, inherited: ReadonlySet<string>, limit = DOCX_FRAGMENT_FILE_LIMIT): string {
+  const refs = new Set<string>();
+  docxRefsIn(pmDoc, refs);
+  const live = new Set([...refs].map(refHashOf));
+  // 변경 추적 삽입 표지(trackedWrapKey)는 감싸개 마크가 가리킨다
+  pmDoc.descendants((n) => {
+    for (const mark of n.marks)
+      if (mark.type.name === 'wrap' && TRACKED_WRAP_TAGS.has(String(mark.attrs.tag))) live.add(fragmentHash(trackedWrapKey(String(mark.attrs.tag), mark.attrs.attrs as Record<string, unknown> | null)));
+  });
   const kept: Record<string, string> = {};
   let bytes = 0;
   for (const [hash, xml] of fragments) {
+    if (live.has(hash) || inherited.has(hash)) continue;
     bytes += xml.length + hash.length + 8;
-    if (bytes > DOCX_FRAGMENT_FILE_LIMIT) break;
+    if (bytes > limit) break;
     kept[hash] = xml;
   }
+  return JSON.stringify(kept);
+}
+async function saveDocxFragments(docId: string, fragments: ReadonlyMap<string, string>, pmDoc: PMNode): Promise<void> {
+  const json = deletedFragmentsJson(fragments, pmDoc, inheritedFragments.get(docId) ?? new Set());
+  if (writtenFragments.get(docId) === json || (json === '{}' && !writtenFragments.has(docId))) return; // 바뀐 것이 없으면 쓰지 않는다
   try {
-    await store.saveDerived(docId, 'docxfrag', Buffer.from(JSON.stringify(kept), 'utf8'));
+    await store.saveDerived(docId, 'docxfrag', Buffer.from(json, 'utf8'));
+    writtenFragments.set(docId, json);
   } catch (error) {
     console.error(`보존 조각 저장소 저장 실패 (문서 ${docId}):`, error);
   }
@@ -1939,7 +1969,7 @@ async function flushToStore(room: Room): Promise<void> {
     const original = await store.readOriginal(docId, meta.ext);
     const newDocxBytes = exportDocx(original, pmDoc, docxPageSetupOf(room.ydoc), docxCommentsOf(room.ydoc), room.docxFragments ?? undefined);
     await store.saveOriginal(docId, meta.ext, Buffer.from(newDocxBytes));
-    if (room.docxFragments) await saveDocxFragments(docId, room.docxFragments);
+    if (room.docxFragments) await saveDocxFragments(docId, room.docxFragments, pmDoc);
 
     const converter = findConverter(meta.ext);
     if (converter) {

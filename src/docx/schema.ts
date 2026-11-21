@@ -87,6 +87,25 @@ export function setWordLineRatios(ratios: Readonly<Record<string, number>> | nul
   const valid = Object.entries(ratios ?? {}).filter(([name, r]) => name.length <= 64 && r >= 1 && r <= 3);
   lineRatios = { ...DEFAULT_LINE_RATIOS, ...Object.fromEntries(valid) };
 }
+/** 보존 조각 참조를 담는 문단·표 속성 */
+export const DOCX_REF_ATTRS = ['pPrExtra', 'tcPrExtra', 'trPrExtra', 'tblPrExtra'] as const;
+/** 노드(와 그 안)가 가리키는 보존 조각 참조("태그@해시") — 붙여넣기 지킴이(docxPaste.ts)와 서버 조각 저장소 정리(room.ts)가 함께 쓴다 */
+export function docxRefsIn(node: PMNode, into: Set<string>): void {
+  const add = (ref: unknown) => {
+    if (typeof ref === 'string' && ref.includes('@')) into.add(ref);
+  };
+  const visit = (n: PMNode) => {
+    if (n.type.name === 'ooxml' || n.type.name === 'ooxml_block') add(n.attrs.ref);
+    for (const key of DOCX_REF_ATTRS) if (Array.isArray(n.attrs[key])) (n.attrs[key] as unknown[]).forEach(add);
+    for (const mark of n.marks) {
+      if (mark.type.name === 'runExtra' && Array.isArray(mark.attrs.refs)) (mark.attrs.refs as unknown[]).forEach(add);
+      if (mark.type.name === 'wrap') add(mark.attrs.pr);
+    }
+    n.forEach(visit);
+  };
+  visit(node);
+}
+
 /** 그 글꼴의 Word 1줄 비율(모르면 undefined) */
 export const wordLineRatioOf = (font: string): number | undefined => lineRatios[font];
 

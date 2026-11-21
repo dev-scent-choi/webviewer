@@ -384,3 +384,18 @@ describe('Word 1줄 = 1.3 × win 높이(REVIEW-r3 I-r3-1)', () => {
     expect(span[1].style).toContain(`--doc-single-line: ${ratio}`);
   });
 });
+
+describe('그림 경로 상한(REVIEW-r3 Minor)', () => {
+  test('새 묶음을 그려야 할 때만 상한을 묻고, 넘었으면 LibreOffice를 부르지 않고 DrawingRateLimited', async () => {
+    const { renderDocxDrawingPng, DrawingRateLimited } = await import('../src/docx/drawingImage.js');
+    const bytes = new Uint8Array(fs.readFileSync('tests/fixtures/docx-review/H-emf-chart.docx'));
+    const { serverDrawn } = importDocx(bytes);
+    const hash = [...serverDrawn][0];
+    let asked = 0;
+    await expect(renderDocxDrawingPng(async () => bytes, 'rate-test', `w:drawing@${hash}`, null, async () => ((asked += 1), false))).rejects.toBeInstanceOf(DrawingRateLimited);
+    expect(asked).toBe(1);
+    // 이 문서에 없는 조각은 상한을 묻지도 않고 null
+    expect(await renderDocxDrawingPng(async () => bytes, 'rate-test', 'w:drawing@AAAAAAAAAAAAAAAAAAAA', null, async () => ((asked += 1), false))).toBeNull();
+    expect(asked).toBe(1);
+  });
+});
