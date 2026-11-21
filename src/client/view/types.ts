@@ -25,6 +25,15 @@ export interface ViewPermissions {
   readonly pdfEditor?: boolean;
 }
 
+/** /api/view/info의 artcraft 블록(서버 src/artcraftEngine.ts ArtcraftInfo와 같은 모양) */
+export interface ArtcraftInfo {
+  readonly kind: 'word' | 'deck';
+  readonly ext: string;
+  readonly experimental: boolean;
+  readonly originalUrl: string;
+  readonly assets: { readonly wasm: string; readonly fonts: readonly string[] };
+}
+
 /** GET /api/view/info 의 data(이 화면이 쓰는 것만) */
 export interface ViewInfo {
   readonly docId: string;
@@ -41,9 +50,14 @@ export interface ViewInfo {
   readonly viewerUrl: string;
   /** 첫 변환 중(editReady) — 쪽 자리에 "쪽을 준비하는 중"(설계 V8) */
   readonly processing: boolean;
+  /** 여는 엔진 — artcraft면 브라우저 wasm 엔진(artcraft 블록이 함께 온다) */
+  readonly engine?: 'libreoffice' | 'artcraft';
+  /** 아트크래프트를 요청했지만 서버 변환으로 여는 이유(한 줄 안내로 보인다) */
+  readonly engineReason?: string;
+  readonly artcraft?: ArtcraftInfo;
 }
 
-export type BodyKind = 'pages-png' | 'pages-pdfjs' | 'grid' | 'cad' | 'frame';
+export type BodyKind = 'pages-png' | 'pages-pdfjs' | 'pages-artcraft' | 'grid' | 'cad' | 'frame';
 
 /** number = 확대 %(logic.ts ZOOM_STEPS, 100 = 쪽 칸 폭 전체) */
 export type ZoomMode = number | 'fit-width' | 'fit-page';

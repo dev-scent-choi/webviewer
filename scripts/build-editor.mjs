@@ -78,6 +78,8 @@ await retry(() => build({
     'src/client/editor-pdf.ts',
     // 통합 보기 껍데기(public/view.html) — pdf.js 원천은 동적 import라 PNG 모드에서는 받지 않는다
     'src/client/view.ts',
+    // 아트크래프트 브라우저 엔진 Worker(module worker) — view.ts의 artcraftSource.ts가 /js/artcraftWorker.bundle.js로 띄운다
+    'src/client/view/artcraftWorker.ts',
   ],
   outdir: 'public/js',
   entryNames: '[name].bundle',

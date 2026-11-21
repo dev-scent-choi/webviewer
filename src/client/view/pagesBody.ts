@@ -17,7 +17,7 @@ export interface DrawOpts {
 }
 
 export interface PageSource {
-  readonly kind: 'pages-png' | 'pages-pdfjs';
+  readonly kind: 'pages-png' | 'pages-pdfjs' | 'pages-artcraft';
   readonly pageCount: number;
   /** 글자 층을 그리는가(pdf.js + canCopy) */
   readonly textSelectable: boolean;
