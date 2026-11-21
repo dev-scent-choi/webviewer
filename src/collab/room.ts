@@ -26,11 +26,13 @@ import { prosemirrorToYXmlFragment, yXmlFragmentToProseMirrorRootNode } from 'y-
 import { recordAudit } from '../audit.js';
 import { persistChangeLog } from './changeLogPersistence.js';
 import { findConverter } from '../converters/index.js';
-import { docxSchema, DOCX_COMMENTS_MAP, DOCX_PAGE_MAP, DOCX_PAGE_SETUP_KEY, type DocxComment, type DocxPageSetup } from '../docx/schema.js';
+import { docxRefsIn, docxSchema, DOCX_COMMENTS_MAP, DOCX_PAGE_MAP, DOCX_PAGE_SETUP_KEY, type DocxComment, type DocxPageSetup } from '../docx/schema.js';
 import { DocxChangeTracker, type ParagraphChangeSummary } from './docxChangeLog.js';
 import { PptxChangeTracker, type PptxChangeSummary } from './pptxChangeLog.js';
 import { exportDocx } from '../docx/export.js';
 import { importDocx } from '../docx/import.js';
+import type { Node as PMNode } from 'prosemirror-model';
+import { fragmentHash, refHashOf, TRACKED_WRAP_TAGS, trackedWrapKey } from '../docx/ooxml.js';
 import { invalidateRenderCache } from '../rendering.js';
 import { exportPdfFromRoom, pdfChangeLogOf, PdfChangeTracker, PDF_META_MAP, PDF_SEED_ORIGIN, seedPdfModel } from '../pdf/pdfModel.js';
 import { finalizePdf } from '../pdf/pdfFinalize.js';
@@ -227,6 +229,9 @@ interface Room {
   /** docx 룸에서만 쓰인다 — 문단 단위 누적 변경 추적기(docxChangeLog.ts 문서 주석 참고). 시딩이
    * 끝난 직후에야 만들 수 있어(기준선이 "시딩 직후의 문단 텍스트"이므로) seedRoom이 채운다. */
   docxChangeTracker: DocxChangeTracker | null;
+  /** docx 룸에서만 — 보존 조각 저장소(해시 → 원본 XML, src/docx/ooxml.ts). 처음 연 원본에서 만들어 방이 열려 있는 동안 유지한다:
+   * 지웠다가 저장 뒤 되돌린 그림·구역도 다시 저장되고, 문서에 없던 조각(다른 참여자가 Yjs로 보낸 임의 참조)은 저장되지 않는다. */
+  docxFragments: Map<string, string> | null;
   /** pptx 룸에서만 쓰인다 — 슬라이드/텍스트박스 단위 누적 변경 추적기(pptxChangeLog.ts 문서 주석
    * 참고). 슬라이드 목록 시딩 직후 seedRoom이 만들고, 슬라이드별 기준선은 doSeedSlideContent가 남긴다. */
   pptxChangeTracker: PptxChangeTracker | null;
@@ -1883,7 +1888,9 @@ async function seedRoom(room: Room): Promise<void> {
         (origin) => room.viewerByConn.get(origin as WebSocket) ?? null,
       );
     } else {
-      const { doc, comments } = importDocx(original);
+      const { doc, comments, fragments } = importDocx(original);
+      await loadSavedDocxFragments(docId, fragments);
+      room.docxFragments = fragments;
       const fragment = ydoc.getXmlFragment(XML_FRAGMENT_NAME);
       prosemirrorToYXmlFragment(doc, fragment);
       const commentsMap = ydoc.getMap<DocxComment>(DOCX_COMMENTS_MAP);
@@ -1898,6 +1905,70 @@ async function seedRoom(room: Room): Promise<void> {
   } catch (error) {
     console.error(`동시편집 세션 초기화 실패 (문서 ${docId}):`, error);
   }
+}
+
+/**
+ * 지운 보존 조각을 문서 곁에 둔다(m3) — 지운 조각(EMF·차트·책갈피 등)이 빠진 채 저장된 뒤 방이 닫혔다 다시 열려도(연결이 잠깐 끊긴
+ * 참여자의 되돌리기가 새 방으로 이어지는 경우) 그 조각이 다음 저장에 들어가게. 저장 파일 자체에 남은 조각은 새 방이 파일에서 다시 읽으니
+ * 적지 않는다 — 이번 방에서 본 조각 중 저장본 문서가 더는 가리키지 않는 것만, 바뀌었을 때만 쓴다. 지난 방에서 이어받은 것은 한 번 더
+ * 넘기지 않는다(한 세대만 — 계속 쌓이지 않게). 해시가 내용과 맞는 것만 읽는다. 상한 4MB.
+ */
+const DOCX_FRAGMENT_FILE_LIMIT = 4 * 1024 * 1024;
+/** 문서 → 이번 방이 파일에서 이어받기만 한(지난 세대) 조각 해시, 마지막으로 쓴 내용 */
+const inheritedFragments = new Map<string, Set<string>>();
+const writtenFragments = new Map<string, string>();
+async function loadSavedDocxFragments(docId: string, fragments: Map<string, string>): Promise<void> {
+  const inherited = new Set<string>();
+  inheritedFragments.set(docId, inherited);
+  writtenFragments.delete(docId);
+  try {
+    if (!(await store.hasDerived(docId, 'docxfrag'))) return;
+    const text = (await store.readDerived(docId, 'docxfrag')).toString('utf8');
+    writtenFragments.set(docId, text);
+    const saved = JSON.parse(text) as Record<string, unknown>;
+    for (const [hash, xml] of Object.entries(saved)) {
+      if (typeof xml !== 'string' || fragments.has(hash) || fragmentHash(xml) !== hash) continue;
+      fragments.set(hash, xml);
+      inherited.add(hash);
+    }
+  } catch (error) {
+    console.error(`보존 조각 저장소 읽기 실패 (문서 ${docId}):`, error);
+  }
+}
+/** 저장한 문서(pmDoc)가 가리키지 않는 이번 세대 조각만 남긴 JSON */
+export function deletedFragmentsJson(fragments: ReadonlyMap<string, string>, pmDoc: PMNode, inherited: ReadonlySet<string>, limit = DOCX_FRAGMENT_FILE_LIMIT): string {
+  const refs = new Set<string>();
+  docxRefsIn(pmDoc, refs);
+  const live = new Set([...refs].map(refHashOf));
+  // 변경 추적 삽입 표지(trackedWrapKey)는 감싸개 마크가 가리킨다
+  pmDoc.descendants((n) => {
+    for (const mark of n.marks)
+      if (mark.type.name === 'wrap' && TRACKED_WRAP_TAGS.has(String(mark.attrs.tag))) live.add(fragmentHash(trackedWrapKey(String(mark.attrs.tag), mark.attrs.attrs as Record<string, unknown> | null)));
+  });
+  const kept: Record<string, string> = {};
+  let bytes = 0;
+  for (const [hash, xml] of fragments) {
+    if (live.has(hash) || inherited.has(hash)) continue;
+    bytes += xml.length + hash.length + 8;
+    if (bytes > limit) break;
+    kept[hash] = xml;
+  }
+  return JSON.stringify(kept);
+}
+async function saveDocxFragments(docId: string, fragments: ReadonlyMap<string, string>, pmDoc: PMNode): Promise<void> {
+  const json = deletedFragmentsJson(fragments, pmDoc, inheritedFragments.get(docId) ?? new Set());
+  if (writtenFragments.get(docId) === json || (json === '{}' && !writtenFragments.has(docId))) return; // 바뀐 것이 없으면 쓰지 않는다
+  try {
+    await store.saveDerived(docId, 'docxfrag', Buffer.from(json, 'utf8'));
+    writtenFragments.set(docId, json);
+  } catch (error) {
+    console.error(`보존 조각 저장소 저장 실패 (문서 ${docId}):`, error);
+  }
+}
+
+/** 열려 있는 docx 방의 보존 조각 저장소(없으면 null) — 그림 경로(docx-drawing)가 지웠다 되돌린 조각도 그릴 수 있게 */
+export function docxFragmentsOf(docId: string): ReadonlyMap<string, string> | null {
+  return rooms.get(docId)?.docxFragments ?? null;
 }
 
 /**
@@ -2107,8 +2178,9 @@ async function flushToStore(room: Room): Promise<void> {
     const fragment = ydoc.getXmlFragment(XML_FRAGMENT_NAME);
     const pmDoc = yXmlFragmentToProseMirrorRootNode(fragment, docxSchema);
     const original = await store.readOriginal(docId, meta.ext);
-    const newDocxBytes = exportDocx(original, pmDoc, docxPageSetupOf(room.ydoc), docxCommentsOf(room.ydoc));
+    const newDocxBytes = exportDocx(original, pmDoc, docxPageSetupOf(room.ydoc), docxCommentsOf(room.ydoc), room.docxFragments ?? undefined);
     await store.saveOriginal(docId, meta.ext, Buffer.from(newDocxBytes));
+    if (room.docxFragments) await saveDocxFragments(docId, room.docxFragments, pmDoc);
 
     const converter = findConverter(meta.ext);
     if (converter) {
@@ -2291,7 +2363,7 @@ export async function getCurrentBytes(docId: string): Promise<Uint8Array | null>
   }
   const fragment = room.ydoc.getXmlFragment(XML_FRAGMENT_NAME);
   const pmDoc = yXmlFragmentToProseMirrorRootNode(fragment, docxSchema);
-  return exportDocx(original, pmDoc, docxPageSetupOf(room.ydoc), docxCommentsOf(room.ydoc));
+  return exportDocx(original, pmDoc, docxPageSetupOf(room.ydoc), docxCommentsOf(room.ydoc), room.docxFragments ?? undefined);
 }
 
 /** 디자인·전환·애니메이션 탭에서 바꾼 슬라이드 설정 */
@@ -2343,6 +2415,7 @@ function getOrCreateRoom(docId: string, ext: string): Room {
     viewerByConn: new Map<WebSocket, string>(),
     cellChangeLog: new Map<string, CellChangeEntry>(),
     docxChangeTracker: null,
+    docxFragments: null,
     pptxChangeTracker: null,
     readOnlyConns: new Set<WebSocket>(),
     autosaveTimer: null,

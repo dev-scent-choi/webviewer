@@ -3,6 +3,7 @@
 // 2) 이 작업 폴더의 서버를 시험용 포트·전용 데이터/임시/LibreOffice 프로필로 따로 띄운다(운영 8000/8010과 겹치지 않게)
 // 3) capture.mjs로 보기·편집 화면을 찍고 4) compare.py로 나란히 그림과 점수(scores.md)를 낸다 5) 띄운 서버만 끈다
 // 사용: npm run audit:office [-- --port 8141 --only docx] [--no-office]  (--no-office: 정답 PDF가 없어도 MS Office를 띄우지 않고 멈춘다)
+//   --no-office는 다른 작업이 쓰는 PC에서 Office 창을 건드리지 않게 하려는 것이다(사용자 엑셀 창이 사라진 일이 있었다)
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';

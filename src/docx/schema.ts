@@ -1,5 +1,5 @@
 import OrderedMap from 'orderedmap';
-import { Schema, type MarkSpec, type Node as PMNode, type NodeSpec } from 'prosemirror-model';
+import { DOMSerializer, Schema, type DOMOutputSpec, type MarkSpec, type Node as PMNode, type NodeSpec } from 'prosemirror-model';
 import { addListNodes } from 'prosemirror-schema-list';
 import { tableNodes } from 'prosemirror-tables';
 
@@ -7,7 +7,8 @@ import { tableNodes } from 'prosemirror-tables';
  * docx 실시간 동시편집 1차 스코프에 맞춘 최소 스키마.
  * 지원: 문단, 제목(1~6), 굵게/기울임/밑줄/취소선, 표, 글머리·번호 목록(표시만 — 목록은
  * word/numbering.xml 연동 없이 내보낼 때 "• "/"1. " 접두사가 붙은 일반 문단으로 평탄화된다).
- * 미지원(가져오기 시 유실): 이미지, 머리글/바닥글, 각주, 하이퍼링크, 사용자 지정 스타일.
+ * 그림·글상자·필드·각주 참조·책갈피 등 직접 고치지 않는 요소는 ooxml 노드에 원본 XML 그대로 담겨 화면에 보이고
+ * 저장할 때 그대로 되돌아간다(손실 없음). 머리글/바닥글·각주 본문은 문서 밖(원본 파트 그대로)이라 편집기가 읽기 전용으로 그린다.
  */
 /** docx의 w:ind — 단위는 전부 dxa(twip, 1/20pt). firstLine과 hanging은 둘 중 하나만 0이 아니다. */
 export interface ParagraphIndent {
@@ -69,6 +70,73 @@ const TWIPS_PER_PX = 15;
  * --doc-single-line으로 넘긴다(editor.ts). 못 재면 이 값. */
 const WORD_SINGLE_LINE_HEIGHT = 1.2;
 
+/**
+ * Word의 "1줄" 높이(글자 크기 대비, 동아시아 글꼴) — 글자(런)마다 이 값으로 줄 높이를 정한다(줄 간격 '배수'는 곱한다).
+ * 값 = 1.3 × (OS/2 usWinAscent + usWinDescent) / unitsPerEm(src/docx/fontMetrics.ts — Office 정답 PDF의 맑은 고딕 1.73·d01 바탕 1.30에 맞는 식).
+ * 서버가 깔린 글꼴에서 잰 표를 편집기에 넘기면(setWordLineRatios) 그것을 쓰고, 아래는 서버가 아직 못 잰 때의 기본 표(같은 식으로
+ * Windows 11 글꼴 파일에서 계산: malgun.ttf (2229+495)/2048, batang.ttc·gulim.ttc (879+145)/1024). 나눔고딕·함초롬은 이 PC에 없어 기본 표엔 없다.
+ */
+const DEFAULT_LINE_RATIOS: Readonly<Record<string, number>> = {
+  '맑은 고딕': 1.729,
+  'Malgun Gothic': 1.729,
+  ...Object.fromEntries(['바탕', 'Batang', '바탕체', 'BatangChe', '궁서', 'Gungsuh', '궁서체', 'GungsuhChe', '굴림', 'Gulim', '굴림체', 'GulimChe', '돋움', 'Dotum', '돋움체', 'DotumChe'].map((name) => [name, 1.3])),
+};
+let lineRatios: Readonly<Record<string, number>> = DEFAULT_LINE_RATIOS;
+/** 서버가 잰 글꼴별 1줄 비율로 바꾼다(기본 표 위에 덮어쓴다) */
+export function setWordLineRatios(ratios: Readonly<Record<string, number>> | null | undefined): void {
+  const valid = Object.entries(ratios ?? {}).filter(([name, r]) => name.length <= 64 && r >= 1 && r <= 3);
+  lineRatios = { ...DEFAULT_LINE_RATIOS, ...Object.fromEntries(valid) };
+}
+/** 보존 조각 참조를 담는 문단·표 속성 */
+export const DOCX_REF_ATTRS = ['pPrExtra', 'tcPrExtra', 'trPrExtra', 'tblPrExtra'] as const;
+/** 노드(와 그 안)가 가리키는 보존 조각 참조("태그@해시") — 붙여넣기 지킴이(docxPaste.ts)와 서버 조각 저장소 정리(room.ts)가 함께 쓴다 */
+export function docxRefsIn(node: PMNode, into: Set<string>): void {
+  const add = (ref: unknown) => {
+    if (typeof ref === 'string' && ref.includes('@')) into.add(ref);
+  };
+  const visit = (n: PMNode) => {
+    if (n.type.name === 'ooxml' || n.type.name === 'ooxml_block') add(n.attrs.ref);
+    for (const key of DOCX_REF_ATTRS) if (Array.isArray(n.attrs[key])) (n.attrs[key] as unknown[]).forEach(add);
+    for (const mark of n.marks) {
+      if (mark.type.name === 'runExtra' && Array.isArray(mark.attrs.refs)) (mark.attrs.refs as unknown[]).forEach(add);
+      if (mark.type.name === 'wrap') add(mark.attrs.pr);
+    }
+    n.forEach(visit);
+  };
+  visit(node);
+}
+
+/** 그 글꼴의 Word 1줄 비율(모르면 undefined) */
+export const wordLineRatioOf = (font: string): number | undefined => lineRatios[font];
+
+/**
+ * 문단(또는 문단 스타일·문서 기본) 줄 간격 CSS — 배수(auto)면 --line-mult에 배수를 두고 줄 높이 = 1줄 × 배수, 고정(exact)·최소(atLeast)면 그 px.
+ * 글자 글꼴마다 1줄이 다른 런(.docx-font-lh)은 --run-line-height(고정 px) 또는 자기 1줄 × --line-mult로 줄 높이를 다시 정한다(style.css).
+ */
+export function lineSpacingCss(spacing: { line: number | null; lineRule: string | null }): string[] {
+  if (!spacing.line) return [];
+  if (spacing.lineRule === 'exact' || spacing.lineRule === 'atLeast') {
+    const px = `${spacing.line / TWIPS_PER_PX}px`;
+    return [`--run-line-height: ${px}`, `line-height: ${px}`];
+  }
+  const mult = Number((spacing.line / 240).toFixed(3));
+  return [`--line-mult: ${mult}`, '--run-line-height: initial', `line-height: calc(var(--doc-single-line, ${WORD_SINGLE_LINE_HEIGHT}) * ${mult})`];
+}
+
+/** 문단 글자가 모두 같은 (표에 있는) 글꼴이면 그 글꼴의 1줄 비율 — 문단 줄 높이(빈 줄·줄 바탕)도 그 글꼴로 */
+function paragraphFontRatio(node: PMNode): number | null {
+  let ratio: number | null = null;
+  let mixed = false;
+  node.forEach((child) => {
+    if (!child.isText || mixed) return;
+    const font = child.marks.find((m) => m.type.name === 'fontFamily');
+    const r = font ? wordLineRatioOf(String(font.attrs.eastAsia ?? font.attrs.ascii ?? '')) ?? null : null;
+    if (r === null || (ratio !== null && r !== ratio)) mixed = true;
+    else ratio = r;
+  });
+  return mixed ? null : ratio;
+}
+
 function parseJsonAttr<T>(dom: HTMLElement, name: string): T | null {
   const raw = dom.getAttribute(name);
   if (!raw) return null;
@@ -81,6 +149,26 @@ function parseJsonAttr<T>(dom: HTMLElement, name: string): T | null {
 
 /** paragraph/heading의 공통 문단 속성 — DOM에는 인라인 스타일로 보이게 하고, 붙여넣기·복원용으로
  * data-* 속성에 원래 값을 남긴다. docx로는 w:pPr(shd·spacing·ind·jc)로 나간다. */
+/** 떠 있는(둘러싸기) 그림·글상자가 든 문단(docx-float-host)·그림·글상자가 든 문단(docx-obj-host) 표시 — 편집기가 화면 밖 블록 그리기를 건너뛸 때(content-visibility, 블록을 가둔다) 이 문단은 빼야 다음 문단이 그림을 그대로 둘러싼다 */
+function floatHostAttrs(node: PMNode, attrs: Record<string, string>): Record<string, string> {
+  let float = false;
+  let object = false;
+  node.forEach((child) => {
+    if (child.attrs.float === 'left' || child.attrs.float === 'right') float = true;
+    else if (child.type.name === 'ooxml' && (child.attrs.kind === 'image' || child.attrs.kind === 'textbox')) object = true;
+  });
+  const extra = float ? 'docx-float-host' : object ? 'docx-obj-host' : '';
+  let out = extra ? { ...attrs, class: attrs.class ? `${attrs.class} ${extra}` : extra } : attrs;
+  // 글자가 모두 한 글꼴이면 문단 1줄도 그 글꼴로(맑은 고딕 문서 안 바탕 문단 등) — 문단에 줄 간격이 없으면 문서 배수로
+  const ratio = paragraphFontRatio(node);
+  if (ratio !== null) {
+    const own = (node.attrs.spacing as ParagraphSpacing | null)?.line;
+    const lh = own ? '' : ' line-height: var(--run-line-height, calc(var(--doc-single-line) * var(--line-mult, 1)));';
+    out = { ...out, style: `${out.style ? `${out.style}; ` : ''}--doc-single-line: ${ratio};${lh}` };
+  }
+  return out;
+}
+
 function paragraphDOMAttrs(attrs: Record<string, unknown>): Record<string, string> {
   const styles: string[] = [];
   const out: Record<string, string> = {};
@@ -97,13 +185,7 @@ function paragraphDOMAttrs(attrs: Record<string, unknown>): Record<string, strin
   if (spacing) {
     if (spacing.before !== null) styles.push(`margin-top: ${spacing.before / TWIPS_PER_PX}px`);
     if (spacing.after !== null) styles.push(`margin-bottom: ${spacing.after / TWIPS_PER_PX}px`);
-    if (spacing.line) {
-      styles.push(
-        spacing.lineRule === 'exact' || spacing.lineRule === 'atLeast'
-          ? `line-height: ${spacing.line / TWIPS_PER_PX}px`
-          : `line-height: calc(var(--doc-single-line, ${WORD_SINGLE_LINE_HEIGHT}) * ${Number((spacing.line / 240).toFixed(3))})`,
-      );
-    }
+    styles.push(...lineSpacingCss(spacing));
     out['data-spacing'] = JSON.stringify(spacing);
   }
   if (attrs.shading && safeCssColor(attrs.shading)) {
@@ -111,18 +193,41 @@ function paragraphDOMAttrs(attrs: Record<string, unknown>): Record<string, strin
     out['data-shading'] = attrs.shading as string;
   }
   if (attrs.styleId) out['data-style'] = attrs.styleId as string;
+  // 번호 수준 들여쓰기 CSS 규칙(편집기 docxLayout.ts)이 고르는 표시 — 문단마다 장식을 달지 않으려고
+  const num = attrs.num as { numId?: unknown; ilvl?: unknown } | null;
+  if (num?.numId) out['data-numlvl'] = `${String(num.numId)}:${Number(num.ilvl) || 0}`;
+  if (Array.isArray(attrs.tabs) && attrs.tabs.length > 0) out['data-tabs'] = JSON.stringify(attrs.tabs);
+  // 잘라내기·붙여넣기(클립보드는 HTML로 오간다)에서 번호·보존 조각·구역이 떨어지지 않게 — parseDOM이 되읽는다
+  const keep = Object.fromEntries(PRESERVED_PARAGRAPH_ATTRS.filter((key) => attrs[key]).map((key) => [key, attrs[key]]));
+  if (Object.keys(keep).length > 0) out['data-docx'] = JSON.stringify(keep);
   if (styles.length > 0) out.style = styles.join('; ');
   return out;
 }
 
+const PRESERVED_PARAGRAPH_ATTRS = ['pPrExtra', 'num', 'sect', 'breakBefore', 'tabs'] as const;
+
 function paragraphAttrsFromDOM(dom: HTMLElement): Record<string, unknown> {
   const shading = dom.getAttribute('data-shading');
+  const kept = parseJsonAttr<Record<string, unknown>>(dom, 'data-docx') ?? {};
   return {
     align: dom.style.textAlign || null,
     indent: parseJsonAttr<ParagraphIndent>(dom, 'data-indent'),
     spacing: parseJsonAttr<ParagraphSpacing>(dom, 'data-spacing'),
     shading: shading && /^#[0-9a-fA-F]{6}$/.test(shading) ? shading : null,
+    ...Object.fromEntries(PRESERVED_PARAGRAPH_ATTRS.filter((key) => key in kept).map((key) => [key, kept[key]])),
   };
+}
+
+/** 노드·마크 속성 전부를 data-docx 하나에 JSON으로 — 같은 문서 안 잘라내기·붙여넣기·끌어 옮기기에서 되살린다 */
+function allAttrsFromDOM(dom: HTMLElement): Record<string, unknown> | false {
+  return parseJsonAttr<Record<string, unknown>>(dom, 'data-docx') ?? false;
+}
+
+/** 탭 정지 하나(dxa) — 문단 스타일 것과 문단 자신의 것을 합친 실제 값(화면 배치용, docxLayout.ts). */
+export interface TabStop {
+  readonly pos: number;
+  readonly val: string;
+  readonly leader: string | null;
 }
 
 const PARAGRAPH_FORMAT_ATTRS = {
@@ -130,6 +235,15 @@ const PARAGRAPH_FORMAT_ATTRS = {
   indent: { default: null },
   spacing: { default: null },
   shading: { default: null },
+  /** 우리가 모델링하지 않는 w:pPr 자식(번호 w:numPr·탭·테두리·구역 w:sectPr·keepNext 등) 원본 XML — 저장 때 그대로 되돌린다 */
+  pPrExtra: { default: null },
+  /** 실제로 적용되는 번호 매기기 {numId, ilvl}(직접 또는 스타일) — 화면에 번호를 그리는 데만 쓴다 */
+  num: { default: null },
+  /** 이 문단이 끝내는 구역 번호(w:pPr/w:sectPr) — 화면의 쪽 구분·머리글 계산용 */
+  sect: { default: null },
+  /** w:pageBreakBefore(직접 또는 스타일) — 이 문단 앞에서 쪽이 바뀐다 */
+  breakBefore: { default: false },
+  tabs: { default: null },
 };
 
 const baseNodes: Record<string, NodeSpec> = {
@@ -149,11 +263,12 @@ const baseNodes: Record<string, NodeSpec> = {
         }),
       },
     ],
-    toDOM: (node) => ['p', paragraphDOMAttrs(node.attrs), 0],
+    toDOM: (node) => ['p', floatHostAttrs(node, paragraphDOMAttrs(node.attrs)), 0],
   },
 
   heading: {
-    attrs: { level: { default: 1 }, ...PARAGRAPH_FORMAT_ATTRS },
+    /** styleId: 원본 제목 스타일 id(한국어 Word는 "1" 등) — 저장 때 그대로 쓴다. 없으면 Heading{level} */
+    attrs: { level: { default: 1 }, ...PARAGRAPH_FORMAT_ATTRS, styleId: { default: null } },
     content: 'inline*',
     group: 'block',
     defining: true,
@@ -161,7 +276,7 @@ const baseNodes: Record<string, NodeSpec> = {
       tag: `h${level}`,
       getAttrs: (dom) => ({ level, ...paragraphAttrsFromDOM(dom as HTMLElement) }),
     })),
-    toDOM: (node) => [`h${node.attrs.level as number}`, paragraphDOMAttrs(node.attrs), 0],
+    toDOM: (node) => [`h${node.attrs.level as number}`, floatHostAttrs(node, paragraphDOMAttrs({ ...node.attrs, styleId: null })), 0],
   },
 
   text: { group: 'inline' },
@@ -183,7 +298,132 @@ const baseNodes: Record<string, NodeSpec> = {
     parseDOM: [{ tag: 'span.page-break' }],
     toDOM: () => ['span', { class: 'page-break', contenteditable: 'false' }],
   },
+
+  /** docx의 w:tab — 문단의 탭 정지(attrs.tabs)에 맞춘 폭은 편집기가 그린 뒤 재어 정한다(docxLayout.ts). */
+  tab: {
+    inline: true,
+    group: 'inline',
+    atom: true,
+    leafText: () => '\t',
+    parseDOM: [{ tag: 'span.docx-tab' }],
+    toDOM: () => ['span', { class: 'docx-tab', contenteditable: 'false' }, '\t'],
+  },
+
+  /**
+   * 직접 고치지 않는 원본 조각(그림·글상자·도형·필드·각주 참조·책갈피·수식·변경 내용 삭제분 등) — xml에 원본 XML을
+   * 그대로 담아 저장 때 되돌리고, 화면에는 kind에 맞게 그린다. kind: image | textbox | text | field | note | del | hidden.
+   */
+  ooxml: {
+    inline: true,
+    group: 'inline',
+    atom: true,
+    attrs: {
+      /** 원본 조각 참조("태그@해시", 원본 XML은 서버 조각 저장소에) */
+      ref: { default: '' },
+      kind: { default: 'hidden' },
+      text: { default: null },
+      media: { default: null },
+      widthPx: { default: null },
+      heightPx: { default: null },
+      float: { default: null },
+      content: { default: null },
+      box: { default: null },
+      field: { default: null },
+      noteType: { default: null },
+      noteId: { default: null },
+    },
+    leafText: (node) => (node.attrs.kind === 'hidden' || node.attrs.kind === 'image' ? '' : String(node.attrs.text ?? '')),
+    parseDOM: [{ tag: '[data-docx-node="ooxml"]', priority: 100, getAttrs: (dom) => allAttrsFromDOM(dom as HTMLElement) }],
+    toDOM: (node) => ooxmlToDOM(node),
+  },
+
+  /** 문서 본문 직속의 직접 고치지 않는 원본 조각(w:sdt 목차·표지 등) — 원본 XML 그대로 저장하고 내용은 읽기 전용으로 그린다. */
+  ooxml_block: {
+    group: 'block',
+    atom: true,
+    attrs: { ref: { default: '' }, content: { default: null }, text: { default: null } },
+    leafText: (node) => String(node.attrs.text ?? ''),
+    parseDOM: [{ tag: '[data-docx-node="ooxml_block"]', priority: 100, getAttrs: (dom) => allAttrsFromDOM(dom as HTMLElement) }],
+    toDOM: (node) => {
+      const dom = blocksDOM(node.attrs.content, 'div');
+      dom.className = 'docx-preserved-block';
+      dom.contentEditable = 'false';
+      dom.dataset.docxNode = 'ooxml_block';
+      dom.dataset.docx = JSON.stringify(node.attrs);
+      return dom;
+    },
+  },
+
+  /** 다단 구역(w:sectPr/w:cols num>1) — 그 구역의 블록을 감싸 화면에 여러 단으로 흘린다. 저장 땐 감싸개 없이 안의 블록만 쓴다. */
+  columns: {
+    group: 'block',
+    content: 'block+',
+    attrs: { count: { default: 2 }, spacePx: { default: 48 }, sep: { default: false } },
+    parseDOM: [{ tag: 'div.docx-columns[data-docx]', getAttrs: (dom) => allAttrsFromDOM(dom as HTMLElement) }],
+    toDOM: (node) => {
+      const count = Math.max(1, Math.min(6, Number(node.attrs.count) || 1));
+      const gap = Math.max(0, Number(node.attrs.spacePx) || 0);
+      return ['div', { class: 'docx-columns', 'data-docx': JSON.stringify(node.attrs), style: `column-count: ${count}; column-gap: ${gap}px;${node.attrs.sep ? ' column-rule: 1px solid #000;' : ''}` }, 0];
+    },
+  },
 };
+
+/** 그림 주소를 만드는 함수 — 편집기가 열람 토큰으로 정한다(서버 쪽 가져오기에선 쓰지 않는다). media: word/media/ 그림,
+ * drawing: 브라우저가 못 그리는 조각(EMF·차트·도형)을 서버가 LibreOffice로 그린 그림(src/docx/drawingImage.ts) */
+let mediaUrlOf: (mediaPath: string) => string | null = () => null;
+let drawingUrlOf: (ref: string) => string | null = () => null;
+export function setDocxMediaUrl(media: (mediaPath: string) => string | null, drawing: (ref: string) => string | null): void {
+  mediaUrlOf = media;
+  drawingUrlOf = drawing;
+}
+
+/** PM JSON 블록 목록(글상자 안·보존 블록·머리글 등)을 읽기 전용 DOM으로 — 스키마가 걸러 그리므로 문서 내용이 HTML로 새지 않는다. */
+export function blocksDOM(content: unknown, tag: 'div' | 'span'): HTMLElement {
+  const dom = document.createElement(tag);
+  if (!Array.isArray(content)) return dom;
+  try {
+    const nodes = content.map((json) => docxSchema.nodeFromJSON(json));
+    dom.append(DOMSerializer.fromSchema(docxSchema).serializeFragment(docxSchema.nodes.doc.create(null, nodes).content));
+  } catch {
+    // 잘못된 조각(다른 참여자가 보낸 값 등)은 그리지 않는다
+  }
+  return dom;
+}
+
+const positive = (value: unknown): number | null => (typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null);
+const HEX_COLOR = /^#[0-9a-f]{6}$/i;
+
+function ooxmlToDOM(node: PMNode): DOMOutputSpec {
+  const a = node.attrs;
+  const w = positive(a.widthPx);
+  const h = positive(a.heightPx);
+  const size = `${w ? `width: ${w}px;` : ''}${h ? ` height: ${h}px;` : ''}`;
+  const float = a.float === 'left' || a.float === 'right' ? ` float: ${a.float as string};` : '';
+  const base = { contenteditable: 'false', 'data-kind': String(a.kind), 'data-docx-node': 'ooxml', 'data-docx': JSON.stringify(a) };
+  if (a.kind === 'image') {
+    const src = typeof a.media === 'string' ? mediaUrlOf(a.media) : typeof a.ref === 'string' && a.ref ? drawingUrlOf(a.ref) : null;
+    if (src) return ['img', { ...base, class: 'docx-ooxml docx-img', src, alt: String(a.text ?? ''), style: `${size}${float}` }];
+    return ['span', { ...base, class: 'docx-ooxml docx-img-missing', style: `${size}${float}` }, String(a.text ?? '')];
+  }
+  if (a.kind === 'textbox') {
+    const dom = blocksDOM(a.content, 'span');
+    dom.className = 'docx-ooxml docx-textbox';
+    dom.contentEditable = 'false';
+    dom.dataset.kind = 'textbox';
+    dom.dataset.docxNode = 'ooxml';
+    dom.dataset.docx = JSON.stringify(a);
+    const box = (a.box ?? {}) as { fill?: unknown; line?: unknown; lineW?: unknown };
+    const fill = typeof box.fill === 'string' && HEX_COLOR.test(box.fill) ? ` background: ${box.fill};` : '';
+    const line = typeof box.line === 'string' && HEX_COLOR.test(box.line) ? ` border: ${positive(box.lineW) ?? 1}px solid ${box.line};` : '';
+    dom.setAttribute('style', `${size}${float}${fill}${line}`);
+    return dom;
+  }
+  if (a.kind === 'note') return ['sup', { ...base, class: 'docx-ooxml docx-note-ref' }, String(a.text ?? '')];
+  if (a.kind === 'field') return ['span', { ...base, class: 'docx-ooxml docx-field', 'data-field': String(a.field ?? '') }, String(a.text ?? '')];
+  if (a.kind === 'del') return ['del', { ...base, class: 'docx-ooxml docx-del' }, String(a.text ?? '')];
+  if (a.kind === 'text') return ['span', { ...base, class: 'docx-ooxml docx-preserved' }, String(a.text ?? '')];
+  return ['span', { ...base, class: 'docx-ooxml docx-hidden' }];
+}
 
 /** Word 텍스트 강조색(w:highlight)의 정해진 색 이름 → '#rrggbb'. 이 밖의 색은 w:shd로 저장한다. */
 export const HIGHLIGHT_COLORS: Readonly<Record<string, string>> = {
@@ -212,8 +452,29 @@ export function safeCssColor(value: unknown): boolean {
   return typeof value === 'string' && /^(#[0-9a-f]{3,8}|rgba?\([\d\s.,%]+\)|[a-z]{3,20})$/i.test(value.trim());
 }
 
+/** 글꼴 이름 — 글자·숫자·공백과 몇 가지 기호만 남긴다(64자). 문서(styles.xml)나 다른 참여자가 보낸 값이 CSS 문자열을 끊고
+ * 규칙을 덧붙이지 못하게(줄바꿈·중괄호·따옴표·역슬래시·@ 등은 모두 버린다). */
 export function safeFontName(value: unknown): string {
-  return String(value ?? '').replace(/["';<>\\]/g, '').trim();
+  return String(value ?? '').replace(/[^\p{L}\p{N} _.\-()&+]/gu, '').replace(/\s+/g, ' ').trim().slice(0, 64);
+}
+
+/** 한글 글꼴의 영문 이름(macOS·영문 Windows는 이 이름으로만 찾는다) */
+const KOREAN_FONT_ALIASES: Readonly<Record<string, string>> = {
+  '맑은 고딕': 'Malgun Gothic', 바탕: 'Batang', 바탕체: 'BatangChe', 굴림: 'Gulim', 굴림체: 'GulimChe',
+  돋움: 'Dotum', 돋움체: 'DotumChe', 궁서: 'Gungsuh', 궁서체: 'GungsuhChe',
+};
+const SERIF_FONT = /바탕|궁서|명조|batang|gungsuh|myeongjo|times|georgia|cambria|garamond/i;
+
+/** 글꼴 이름 목록 → CSS font-family 목록: 한글 이름엔 영문 이름을, 끝엔 같은 계열(명조·고딕)의 대체 글꼴을 붙인다(그 글꼴이 없는 기기에서도 비슷하게). */
+export function fontStack(names: ReadonlyArray<string | null | undefined>, fallback = 'var(--doc-font-family, sans-serif)'): string {
+  const clean = names.map((n) => safeFontName(n)).filter(Boolean);
+  const out: string[] = [];
+  for (const name of clean) {
+    out.push(`"${name}"`);
+    if (KOREAN_FONT_ALIASES[name]) out.push(`"${KOREAN_FONT_ALIASES[name]}"`);
+  }
+  const serif = clean.length > 0 && SERIF_FONT.test(clean[0]);
+  return [...new Set(out), serif ? '"AppleMyungjo", serif' : fallback].join(', ');
 }
 
 const marks: Record<string, MarkSpec> = {
@@ -259,8 +520,13 @@ const marks: Record<string, MarkSpec> = {
     toDOM: (mark) => {
       const ascii = mark.attrs.ascii ? safeFontName(mark.attrs.ascii) : '';
       const eastAsia = mark.attrs.eastAsia ? safeFontName(mark.attrs.eastAsia) : '';
-      const names = [eastAsia, ascii].filter(Boolean).map((name) => `"${name}"`);
-      const attrs: Record<string, string> = { style: `font-family: ${[...names, 'var(--doc-font-family, sans-serif)'].join(', ')}` };
+      const attrs: Record<string, string> = { style: `font-family: ${fontStack([eastAsia, ascii])}` };
+      // 글꼴마다 Word "1줄"이 다르다(wordLineRatioOf) — 이 글자의 줄 높이를 그 글꼴 값으로(style.css .docx-font-lh)
+      const ratio = wordLineRatioOf(eastAsia || ascii);
+      if (ratio) {
+        attrs.style += `; --doc-single-line: ${ratio}`;
+        attrs.class = 'docx-font-lh';
+      }
       if (ascii) attrs['data-font-ascii'] = ascii;
       if (eastAsia) attrs['data-font-east-asia'] = eastAsia;
       return ['span', attrs, 0];
@@ -294,6 +560,34 @@ const marks: Record<string, MarkSpec> = {
     excludes: '',
     parseDOM: [{ tag: 'span[data-comment-id]', getAttrs: (dom) => ({ id: (dom as HTMLElement).getAttribute('data-comment-id') }) }],
     toDOM: (mark) => ['span', { class: 'comment-mark', 'data-comment-id': mark.attrs.id as string }, 0],
+  },
+  /** 우리가 모델링하지 않는 w:rPr 자식(문자 스타일 w:rStyle·자간·글자 위치·언어 등) 원본 XML — 저장 때 되돌린다.
+   * 문자 스타일은 data-rstyle로 표시해 편집기가 그 스타일 모양(docxLayout.ts의 스타일 CSS)을 입힌다. */
+  runExtra: {
+    attrs: { refs: { default: null }, rStyle: { default: null } },
+    parseDOM: [{ tag: 'span[data-docx-run]', getAttrs: (dom) => parseJsonAttr<Record<string, unknown>>(dom as HTMLElement, 'data-docx-run') ?? false }],
+    toDOM: (mark) => [
+      'span',
+      { 'data-docx-run': JSON.stringify(mark.attrs), ...(mark.attrs.rStyle ? { 'data-rstyle': String(mark.attrs.rStyle) } : {}) },
+      0,
+    ],
+  },
+  /**
+   * 글자를 감싸는 원본 요소 — 하이퍼링크(w:hyperlink), 변경 내용 삽입·이동(w:ins·w:moveTo), 스마트 태그·사용자 XML. attrs는 원본 요소의
+   * 속성 그대로, pr은 속성 자식(w:smartTagPr 등) 참조, depth는 겹친 순서(바깥이 작다), href는 링크 풍선 도움말용(눌러도 이동하지 않는다).
+   */
+  wrap: {
+    attrs: { tag: {}, attrs: { default: {} }, pr: { default: null }, depth: { default: 0 }, href: { default: null } },
+    inclusive: false,
+    excludes: '',
+    parseDOM: [{ tag: 'span[data-docx-wrap]', getAttrs: (dom) => parseJsonAttr<Record<string, unknown>>(dom as HTMLElement, 'data-docx-wrap') ?? false }],
+    toDOM: (mark) => {
+      const tag = String(mark.attrs.tag);
+      const cls = tag === 'w:hyperlink' ? 'docx-link' : tag === 'w:ins' || tag === 'w:moveTo' ? 'docx-ins' : 'docx-wrap';
+      const author = (mark.attrs.attrs as Record<string, unknown> | null)?.['w:author'];
+      const title = typeof mark.attrs.href === 'string' ? mark.attrs.href : typeof author === 'string' ? `${author} 삽입` : '';
+      return ['span', { class: cls, title, 'data-docx-wrap': JSON.stringify(mark.attrs) }, 0];
+    },
   },
   fontSize: {
     /** 포인트(pt) 단위로 저장 — docx의 w:sz(하프포인트)와는 export/import 시 ×2/÷2 변환한다 */
@@ -331,8 +625,8 @@ export interface RowHeight {
 }
 
 function rowHeightToDOMStyle(height: unknown): Record<string, string> {
-  const h = height as RowHeight | null;
-  return h ? { style: `height: ${h.px}px;` } : {};
+  const px = Number((height as RowHeight | null)?.px);
+  return Number.isFinite(px) && px > 0 ? { style: `height: ${px}px;` } : {};
 }
 
 function rowHeightFromDOM(dom: HTMLElement): RowHeight | null {
@@ -360,12 +654,12 @@ function tableWidthPx(node: PMNode): number | null {
   let total = 0;
   let ok = true;
   firstRow.forEach((cell) => {
-    const colwidth = cell.attrs.colwidth as number[] | null;
-    if (!Array.isArray(colwidth) || colwidth.length === 0) {
+    const colwidth = cell.attrs.colwidth as unknown[] | null;
+    if (!Array.isArray(colwidth) || colwidth.length === 0 || colwidth.some((w) => typeof w !== 'number' || !Number.isFinite(w))) {
       ok = false;
       return;
     }
-    total += colwidth.reduce((sum, w) => sum + w, 0);
+    total += (colwidth as number[]).reduce((sum, w) => sum + w, 0);
   });
   return ok && total > 0 ? total : null;
 }
@@ -388,8 +682,13 @@ export interface CellBorders {
 
 const BORDER_SIDES = ['top', 'right', 'bottom', 'left'] as const;
 
+const CSS_BORDER_STYLES = new Set(['solid', 'double', 'dashed', 'dotted']);
+
 function borderSideToCSS(side: CellBorderSide | null): string {
-  return side ? `${side.widthPx}px ${side.style} ${side.color}` : 'none';
+  // 다른 참여자(Yjs)가 보낸 값일 수 있다 — 숫자·정해진 선 종류·색만
+  if (side && (!Number.isFinite(side.widthPx) || !CSS_BORDER_STYLES.has(side.style) || !safeCssColor(side.color))) return 'none';
+  // 이중선은 3px보다 가늘면 브라우저가 한 줄로 그린다 — Word의 이중선(가는 선 두 줄)처럼 보이게 화면에서만 넓힌다
+  return side ? `${side.style === 'double' ? Math.max(3, side.widthPx) : side.widthPx}px ${side.style} ${side.color}` : 'none';
 }
 
 /** "1.5px solid rgb(255, 0, 0)" 같은 계산된 CSS 값을 다시 CellBorderSide로 되돌린다(HTML 붙여넣기 등 DOM 기반 입력용). */
@@ -481,6 +780,14 @@ const tableNodeSpecs = tableNodes({
         if (value) attrs.style = `${(attrs.style as string | undefined) ?? ''}padding: ${cellPaddingToCSS(value as CellPadding)};`;
       },
     },
+    /** 우리가 모델링하지 않는 w:tcPr 자식 원본 XML(글자 방향·줄 바꿈 안 함 등) — 저장 때 되돌린다 */
+    tcPrExtra: {
+      default: null,
+      getFromDOM: (dom) => parseJsonAttr<string[]>(dom as HTMLElement, 'data-docx-tc'),
+      setDOMAttr: (value, attrs) => {
+        if (Array.isArray(value)) attrs['data-docx-tc'] = JSON.stringify(value);
+      },
+    },
   },
 });
 
@@ -492,20 +799,23 @@ const patchedTableNodeSpecs: Record<string, NodeSpec> = {
   ...tableNodeSpecs,
   table: {
     ...tableNodeSpecs.table,
-    attrs: { align: { default: null } },
+    /** tblPrExtra: 원본 w:tblPr 자식(표 스타일 w:tblStyle·w:tblLook·너비·들여쓰기 등) — 저장 때 되돌린다 */
+    attrs: { align: { default: null }, tblPrExtra: { default: null } },
+    parseDOM: [{ tag: 'table', getAttrs: (dom) => parseJsonAttr<Record<string, unknown>>(dom as HTMLElement, 'data-docx') ?? {} }],
     toDOM: (node) => {
       const widthPx = tableWidthPx(node);
       const alignStyle = tableAlignToDOMStyle(node.attrs.align).style ?? '';
       const widthStyle = widthPx ? `width: ${widthPx}px;` : '';
       const style = `${widthStyle}${alignStyle}`;
-      return ['table', style ? { style } : {}, ['tbody', 0]];
+      return ['table', { ...(style ? { style } : {}), 'data-docx': JSON.stringify(node.attrs) }, ['tbody', 0]];
     },
   },
   table_row: {
     ...tableNodeSpecs.table_row,
-    attrs: { height: { default: null } },
-    parseDOM: [{ tag: 'tr', getAttrs: (dom) => ({ height: rowHeightFromDOM(dom as HTMLElement) }) }],
-    toDOM: (node) => ['tr', rowHeightToDOMStyle(node.attrs.height), 0],
+    /** trPrExtra: 원본 w:trPr 자식(제목 행 반복 w:tblHeader·행 나눔 금지 등) — 저장 때 되돌린다 */
+    attrs: { height: { default: null }, trPrExtra: { default: null } },
+    parseDOM: [{ tag: 'tr', getAttrs: (dom) => ({ height: rowHeightFromDOM(dom as HTMLElement), trPrExtra: parseJsonAttr<string[]>(dom as HTMLElement, 'data-docx-tr') }) }],
+    toDOM: (node) => ['tr', { ...rowHeightToDOMStyle(node.attrs.height), ...(Array.isArray(node.attrs.trPrExtra) ? { 'data-docx-tr': JSON.stringify(node.attrs.trPrExtra) } : {}) }, 0],
   },
 };
 

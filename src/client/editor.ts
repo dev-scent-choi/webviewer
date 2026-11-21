@@ -2,7 +2,7 @@ import { baseKeymap, chainCommands, selectAll, toggleMark } from 'prosemirror-co
 import { keymap } from 'prosemirror-keymap';
 import { EditorState, Plugin, PluginKey, Selection, TextSelection, type Command } from 'prosemirror-state';
 import { Decoration, DecorationSet, EditorView } from 'prosemirror-view';
-import { liftListItem, sinkListItem, splitListItem, wrapInList } from 'prosemirror-schema-list';
+import { liftListItem, sinkListItem, splitListItem } from 'prosemirror-schema-list';
 import {
   addColumnAfter,
   addColumnBefore,
@@ -28,10 +28,15 @@ import {
   DOCX_PAGE_MAP,
   DOCX_PAGE_SETUP_KEY,
   docxSchema,
+  fontStack,
   safeFontName,
+  setDocxMediaUrl,
   type DocxComment,
   type DocxPageSetup,
   type PageSetup,
+  lineSpacingCss,
+  setWordLineRatios,
+  wordLineRatioOf,
 } from '../docx/schema.js';
 import { setupWordReview } from './wordReview.js';
 import { pickPresenceColorForName, renderPresenceAvatars } from './presence.js';
@@ -53,7 +58,11 @@ import {
   insertPageBreak,
   setIndentSide,
   setSpacingSide,
+  splitParagraphKeepFormat,
   multilevelList,
+  numberLevelTab,
+  toggleWordNumbering,
+  currentNumberingKind,
   pasteFormat,
   replaceAll,
   replaceRange,
@@ -68,6 +77,10 @@ import {
 } from './wordCommands.js';
 import { officeAlert } from './officeDialog.js';
 import { guardRoomEpoch } from './roomEpoch.js';
+import { docxLayoutPlugin, docxStyleSheetText } from './docxLayout.js';
+import { docxPastePlugin } from './docxPaste.js';
+import type { DocxRenderExtras } from '../docx/import.js';
+import type { NumberingDefs } from '../docx/numbering.js';
 
 /** 레이아웃 탭 용지 크기(dxa, 세로 기준) */
 const PAPER_SIZES = {
@@ -133,8 +146,11 @@ interface ViewInfo {
   readonly name: string;
   readonly viewer: string;
   readonly permissions: Permissions;
-  readonly editHasUnsupportedContent: boolean;
   readonly pageSetup: PageSetup | null;
+  /** 보기 화면(LibreOffice)이 센 쪽 수 — 바닥글의 전체 쪽 수(NUMPAGES) */
+  readonly pageCount?: number | null;
+  /** 번호 매기기·머리글/바닥글·각주·스타일 — 편집기가 덧그리는 Word 모양(docxLayout.ts) */
+  readonly docxRender?: DocxRenderExtras | null;
   readonly defaultFontSizePt: number | null;
   readonly defaultFontFamily: ScriptFontFamily | null;
   /** 직접 간격이 없는 문단의 간격(twip, line은 lineRule 'auto'면 240 = 1줄) — 서버가 styles.xml에서 계산 */
@@ -161,11 +177,13 @@ const token = params.get('token') ?? '';
  * 깨져도 실제 쓰기가 반영되지는 않는다. */
 let canEdit = true;
 
+/** 문서의 Word 번호 정의(numbering.xml) — 번호 단추가 번호 종류를 알아보고 켤 번호를 고르는 데 쓴다. main()이 채운다. */
+let numberingDefs: NumberingDefs | null = null;
+
 const titleEl = document.getElementById('doc-title') as HTMLElement;
 const statusEl = document.getElementById('conn-status') as HTMLElement;
 const readonlyBadgeEl = document.getElementById('readonly-badge') as HTMLElement;
 const presenceEl = document.getElementById('presence-list') as HTMLElement;
-const warningEl = document.getElementById('unsupported-warning') as HTMLElement;
 const editorHost = document.getElementById('editor') as HTMLElement;
 const errorScreen = document.getElementById('error-screen') as HTMLElement;
 const errorMessage = document.getElementById('error-message') as HTMLElement;
@@ -185,6 +203,10 @@ function applyPageSetup(pageSetup: PageSetup | null): void {
   editorHost.style.maxWidth = `${pageSetup.widthPx}px`;
   editorHost.style.padding =
     `${pageSetup.marginTopPx}px ${pageSetup.marginRightPx}px ${pageSetup.marginBottomPx}px ${pageSetup.marginLeftPx}px`;
+  // 쪽 경계 장식(머리글·바닥글·쪽 간격, docxLayout.ts)이 여백 안으로 나가 그리는 데 쓴다
+  for (const [name, px] of [['--page-mt', pageSetup.marginTopPx], ['--page-mb', pageSetup.marginBottomPx], ['--page-ml', pageSetup.marginLeftPx], ['--page-mr', pageSetup.marginRightPx]] as const) {
+    editorHost.style.setProperty(name, `${px}px`);
+  }
   // .ProseMirror의 임의 max-width:65ch 캡을 풀어서 실제 여백만큼의 콘텐츠 폭을 그대로 쓰게 한다
   editorHost.classList.add('page-sized');
 }
@@ -211,12 +233,11 @@ function applyDefaultParagraphSpacing(spacing: ViewInfo['defaultParagraphSpacing
   if (spacing.before !== null) editorHost.style.setProperty('--doc-p-before', `${spacing.before / twipsPerPx}px`);
   if (spacing.after !== null) editorHost.style.setProperty('--doc-p-after', `${spacing.after / twipsPerPx}px`);
   if (spacing.line) {
-    editorHost.style.setProperty(
-      '--doc-line-height',
-      spacing.lineRule === 'exact' || spacing.lineRule === 'atLeast'
-        ? `${spacing.line / twipsPerPx}px`
-        : `calc(var(--doc-single-line, 1.2) * ${Number((spacing.line / 240).toFixed(3))})`,
-    );
+    // 문단 줄 간격과 같은 규칙(schema.ts lineSpacingCss) — 줄 높이는 --doc-line-height로, 글꼴별 런이 쓰는 배수·고정 값은 변수 그대로
+    for (const declaration of lineSpacingCss(spacing)) {
+      const [name, value] = declaration.split(/:\s*(.*)/s);
+      editorHost.style.setProperty(name === 'line-height' ? '--doc-line-height' : name, value);
+    }
   }
 }
 
@@ -225,7 +246,12 @@ function applyDefaultParagraphSpacing(spacing: ViewInfo['defaultParagraphSpacing
  * 문서 기본 글꼴로 줄 높이를 재어 --doc-single-line에 둔다(줄 간격 '배수'는 전부 이 값을 곱한다). 예전엔 모든 글꼴에
  * 1.2배를 써서 맑은 고딕 문서가 워드보다 촘촘하게 보였다.
  */
-function measureSingleLineRatio(): void {
+function measureSingleLineRatio(defaultFontName: string): void {
+  const known = wordLineRatioOf(defaultFontName);
+  if (known) {
+    editorHost.style.setProperty('--doc-single-line', String(known));
+    return;
+  }
   const probe = document.createElement('span');
   probe.textContent = '가Ag';
   probe.style.cssText = 'position:absolute;visibility:hidden;display:inline-block;font-size:100px;line-height:normal;white-space:nowrap';
@@ -265,12 +291,9 @@ function applyDefaultFontFamily(family: ScriptFontFamily | null): void {
       `@font-face { font-family: "doc-mixed-font"; src: local("${eastAsia}"); unicode-range: ${HANGUL_UNICODE_RANGE}; }` +
       `@font-face { font-family: "doc-mixed-font"; src: local("${ascii}"); }`;
     document.head.appendChild(styleEl);
-    editorHost.style.setProperty(
-      '--doc-font-family',
-      `"doc-mixed-font", "${eastAsia}", "${ascii}", var(--font-sans)`,
-    );
+    editorHost.style.setProperty('--doc-font-family', `"doc-mixed-font", ${fontStack([eastAsia, ascii], 'var(--font-sans)')}`);
   } else {
-    editorHost.style.setProperty('--doc-font-family', `"${eastAsia ?? ascii}", var(--font-sans)`);
+    editorHost.style.setProperty('--doc-font-family', fontStack([eastAsia ?? ascii], 'var(--font-sans)'));
   }
 }
 
@@ -361,9 +384,9 @@ function buildKeymap(defaultSizePt: number): Record<string, Command> {
     'Mod-Alt-3': setHeading(3),
     'Mod-Alt-0': setParagraphStyle(null),
     'Mod-Shift-n': setParagraphStyle(null),
-    Tab: chainCommands(sinkListItem(nodes.list_item), goToNextCell(1)),
-    'Shift-Tab': chainCommands(liftListItem(nodes.list_item), goToNextCell(-1)),
-    Enter: chainCommands(splitListItem(nodes.list_item), baseKeymap.Enter),
+    Tab: chainCommands(numberLevelTab(1), sinkListItem(nodes.list_item), goToNextCell(1)),
+    'Shift-Tab': chainCommands(numberLevelTab(-1), liftListItem(nodes.list_item), goToNextCell(-1)),
+    Enter: chainCommands(splitListItem(nodes.list_item), splitParagraphKeepFormat, baseKeymap.Enter),
   };
 }
 
@@ -476,8 +499,9 @@ function syncToolbarState(state: EditorState, defaultSizePt: number, defaultFont
   setPressed('btn-align-center', align === 'center');
   setPressed('btn-align-right', align === 'right');
   setPressed('btn-align-justify', align === 'justify');
-  setPressed('btn-bullet-list', isBlockActive(state, docxSchema.nodes.paragraph) && inList(state, docxSchema.nodes.bullet_list));
-  setPressed('btn-ordered-list', isBlockActive(state, docxSchema.nodes.paragraph) && inList(state, docxSchema.nodes.ordered_list));
+  const numbering = currentNumberingKind(state, numberingDefs);
+  setPressed('btn-bullet-list', numbering === 'bullet' || (isBlockActive(state, docxSchema.nodes.paragraph) && inList(state, docxSchema.nodes.bullet_list)));
+  setPressed('btn-ordered-list', numbering === 'decimal' || (isBlockActive(state, docxSchema.nodes.paragraph) && inList(state, docxSchema.nodes.ordered_list)));
   const style = currentParagraphStyle(state) ?? 'Normal';
   for (const item of document.querySelectorAll<HTMLElement>('.style-gallery-item[data-style]')) {
     item.setAttribute('aria-pressed', String(item.dataset.style === style));
@@ -579,14 +603,32 @@ async function main(): Promise<void> {
 
   titleEl.textContent = info.name;
   document.title = `${info.name} — DocView 편집`;
-  if (info.editHasUnsupportedContent) {
-    warningEl.hidden = false;
-  }
-  applyPageSetup(info.pageSetup);
+  // 종이 폭은 가장 넓은 구역(가로 쪽 등) — 좁은 구역의 블록은 docxLayout.ts가 그 구역 본문 폭으로 줄인다
+  const sectionPages = (info.docxRender?.sections ?? []).flatMap((s) => (s.page ? [s.page] : []));
+  applyPageSetup(sectionPages.reduce<PageSetup | null>((wide, p) => (!wide || p.widthPx > wide.widthPx ? p : wide), null) ?? info.pageSetup);
   applyDefaultFontSize(info.defaultFontSizePt);
   applyDefaultFontFamily(info.defaultFontFamily);
   applyDefaultParagraphSpacing(info.defaultParagraphSpacing ?? null);
   applyWatermark(info.viewer);
+  // 문서 안 그림은 원본 docx의 word/media/에서 바로 받는다(토큰 확인은 서버가 한다)
+  setDocxMediaUrl(
+    (mediaPath) => `/api/view/slide-media?token=${encodeURIComponent(token)}&path=${encodeURIComponent(mediaPath)}`,
+    (ref) => `/api/view/docx-drawing?token=${encodeURIComponent(token)}&ref=${encodeURIComponent(ref)}`,
+  );
+  setWordLineRatios(info.docxRender?.lineRatios); // 서버가 깔린 글꼴에서 잰 Word 1줄 비율(없으면 기본 표)
+  numberingDefs = info.docxRender?.numbering ?? null;
+  if (info.docxRender) {
+    // 규칙 하나씩 넣는다 — 문서에서 온 값이 규칙을 깨면 그 규칙만 버려진다(값 자체도 docxLayout.ts에서 걸러 쓴다)
+    const styleEl = document.createElement('style');
+    document.head.append(styleEl);
+    for (const rule of docxStyleSheetText(info.docxRender.styles)) {
+      try {
+        styleEl.sheet?.insertRule(rule, styleEl.sheet.cssRules.length);
+      } catch {
+        // 잘못된 규칙은 버린다
+      }
+    }
+  }
 
   const ydoc = new Y.Doc();
   const fragment = ydoc.getXmlFragment('prosemirror');
@@ -643,6 +685,8 @@ async function main(): Promise<void> {
       columnResizing({ View: AlignedTableView }),
       tableEditing(),
       buildSearchPlugin(),
+      ...(info.docxRender ? [docxLayoutPlugin(info.docxRender, info.pageCount ?? null)] : []),
+      docxPastePlugin(info.docId, () => void officeAlert('다른 문서에서 붙여넣은 그림·글상자·번호 같은 Word 요소 일부는 이 문서에 저장할 수 없어 빼고 붙였습니다(글자는 그대로).')),
     ],
   });
 
@@ -658,7 +702,7 @@ async function main(): Promise<void> {
   // 클릭 핸들러)는 우회한다 — 그래서 이 옵션만으로는 부족하고, 툴바(.toolbar-format) 자체를
   // 위에서 이미 숨겨 그 우회로를 원천 차단했다.
   const view = new EditorView(editorHost, { state, editable: () => canEdit });
-  measureSingleLineRatio(); // 문서 기본 글꼴의 "1줄" 높이 — .ProseMirror가 생긴 뒤에 잰다
+  measureSingleLineRatio(defaultFontName); // 문서 기본 글꼴의 "1줄" 높이 — .ProseMirror가 생긴 뒤에 잰다
   let syncLayoutFields: (state: EditorState) => void = () => undefined;
   let syncReview: (state: EditorState) => void = () => undefined;
   const shell = initOfficeShell({
@@ -809,9 +853,10 @@ async function main(): Promise<void> {
   );
 
   // ---------- 홈: 단락 ----------
-  bind('btn-bullet-list', wrapInList(n.bullet_list));
-  bind('btn-ordered-list', wrapInList(n.ordered_list));
-  bind('btn-multilevel-list', multilevelList);
+  // Word 번호(w:numPr) 켜기/끄기 — 저장본에서도 진짜 Word 번호다
+  bind('btn-bullet-list', toggleWordNumbering('bullet', numberingDefs));
+  bind('btn-ordered-list', toggleWordNumbering('decimal', numberingDefs));
+  bind('btn-multilevel-list', multilevelList(numberingDefs));
   bind('btn-indent', changeIndent(1));
   bind('btn-outdent', changeIndent(-1));
   bind('btn-align-left', setAlign('left'));
@@ -977,11 +1022,27 @@ async function main(): Promise<void> {
   const statusChars = document.getElementById('status-chars');
   let statusTimer: ReturnType<typeof setTimeout> | undefined;
   const countWords = (text: string) => (text.trim() ? text.trim().split(/\s+/).length : 0);
+  // 단어·문자 수는 본문 직속 블록마다 한 번만 센다(노드는 바뀌지 않으니 바뀐 블록만 다시) — 예전엔 입력이 멈출 때마다 문서 전체 글자를
+  // 뽑아 800쪽 4배 느리게에서 약 45ms짜리 작업이었다(REVIEW-r3 I-r3-4)
+  const blockCounts = new WeakMap<PMNode, { words: number; chars: number }>();
+  const countsOf = (node: PMNode) => {
+    let counts = blockCounts.get(node);
+    if (!counts) {
+      const text = node.textBetween(0, node.content.size, '\n', ' ');
+      counts = { words: countWords(text), chars: text.replace(/\n/g, '').length };
+      blockCounts.set(node, counts);
+    }
+    return counts;
+  };
   function updateStatus(): void {
     const { doc, selection } = view.state;
-    const all = doc.textBetween(0, doc.content.size, '\n', ' ');
-    const words = countWords(all);
-    const chars = all.replace(/\n/g, '').length;
+    let words = 0;
+    let chars = 0;
+    doc.forEach((node) => {
+      const c = countsOf(node);
+      words += c.words;
+      chars += c.chars;
+    });
     if (!selection.empty) {
       const selected = doc.textBetween(selection.from, selection.to, '\n', ' ');
       if (statusWords) statusWords.textContent = `단어 ${countWords(selected).toLocaleString()}/${words.toLocaleString()}개`;

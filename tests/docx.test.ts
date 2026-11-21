@@ -8,25 +8,23 @@ import { makeSampleDocx } from './helpers.js';
 describe('docx import', () => {
   test('extracts paragraph text in order', () => {
     const bytes = makeSampleDocx(['First paragraph', 'Second paragraph']);
-    const { doc, hasUnsupportedContent } = importDocx(bytes);
-    expect(hasUnsupportedContent).toBe(false);
+    const { doc } = importDocx(bytes);
     expect(doc.childCount).toBe(2);
     expect(doc.child(0).type.name).toBe('paragraph');
     expect(doc.child(0).textContent).toBe('First paragraph');
     expect(doc.child(1).textContent).toBe('Second paragraph');
   });
 
-  test('flags documents containing drawings as having unsupported content', () => {
-    const withDrawing = makeSampleDocx(['plain text']);
-    const entries = unzipSync(withDrawing);
-    const xml = strFromU8(entries['word/document.xml']).replace(
-      '<w:sectPr/>',
-      '<w:p><w:r><w:drawing/></w:r></w:p><w:sectPr/>',
-    );
-    entries['word/document.xml'] = strToU8(xml);
-    const rezipped = Buffer.from(zipSync(entries));
-    const { hasUnsupportedContent } = importDocx(rezipped);
-    expect(hasUnsupportedContent).toBe(true);
+  test('tracked changes keep their markup on save: insertions stay w:ins, deletions stay w:del (REVIEW I2)', () => {
+    const entries = unzipSync(makeSampleDocx(['plain text']));
+    const body = '<w:p><w:r><w:t xml:space="preserve">가격은 </w:t></w:r><w:del w:id="1" w:author="김" w:date="2026-01-01T00:00:00Z"><w:r><w:delText>100원</w:delText></w:r></w:del>' +
+      '<w:ins w:id="2" w:author="김" w:date="2026-01-01T00:00:00Z"><w:r><w:t>200원</w:t></w:r></w:ins><w:r><w:t xml:space="preserve"> 입니다.</w:t></w:r></w:p>';
+    entries['word/document.xml'] = strToU8(strFromU8(entries['word/document.xml']).replace('<w:sectPr/>', `${body}<w:sectPr/>`));
+    const bytes = new Uint8Array(zipSync(entries));
+    const { doc } = importDocx(bytes);
+    const xml = strFromU8(unzipSync(exportDocx(bytes, doc))['word/document.xml']);
+    expect(xml).toContain('<w:del w:id="1" w:author="김" w:date="2026-01-01T00:00:00Z"><w:r><w:delText>100원</w:delText></w:r></w:del>');
+    expect(xml).toContain('<w:ins w:id="2" w:author="김" w:date="2026-01-01T00:00:00Z"><w:r><w:t xml:space="preserve">200원</w:t></w:r></w:ins>');
   });
 });
 
@@ -673,7 +671,9 @@ describe('docx export', () => {
     // 재압축 결과가 여전히 유효한 zip이며 다른 파트(styles.xml)는 그대로 보존됐는지 확인한다
     const entries = unzipSync(exported);
     expect(entries['word/styles.xml']).toBeDefined();
-    expect(strFromU8(entries['word/document.xml'])).toBe(xml);
+    // 여는 태그는 원본 것(네임스페이스 선언 전부)을 그대로 쓴다 — 본문은 같아야 한다
+    const bodyOf = (x: string) => x.slice(x.indexOf('<w:body>'));
+    expect(bodyOf(strFromU8(entries['word/document.xml']))).toBe(bodyOf(xml));
 
     const reimported = importDocx(exported);
     expect(reimported.doc.child(0).type.name).toBe('heading');

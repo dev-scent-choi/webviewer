@@ -1,6 +1,6 @@
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 import { describe, expect, test } from 'vitest';
-import { literalizeDocxThemeFonts } from '../src/converters/libreOffice.js';
+import { docxViewLayoutFixes, literalizeDocxThemeFonts } from '../src/converters/libreOffice.js';
 import { makeSampleDocx } from './helpers.js';
 
 /**
@@ -90,5 +90,30 @@ describe('literalizeDocxThemeFonts', () => {
     const original = docxWith(stylesXml, undefined, false);
     const result = literalizeDocxThemeFonts(original);
     expect(strFromU8(unzipSync(result)['word/styles.xml'])).toBe(strFromU8(unzipSync(original)['word/styles.xml']));
+  });
+  test('보기용 사본: 본문 가장자리에 붙은 떠 있는 개체만 "양쪽으로 글 흐름"을 "넓은 쪽에만"으로(보고서 D-v2, 검토 I5)', () => {
+    const sect = '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1417" w:right="1417" w:bottom="1417" w:left="1417"/></w:sectPr>';
+    const anchor = (posH: string) =>
+      `<w:p><w:r><w:drawing><wp:anchor><wp:positionH relativeFrom="column">${posH}</wp:positionH><wp:extent cx="2286000" cy="1143000"/>` +
+      '<wp:wrapSquare wrapText="bothSides"/></wp:anchor></w:drawing></w:r></w:p>';
+    // 오른쪽 끝 상자(d07: 여백 기준 3200400 + 2286000 ≒ 본문 폭 5760720 - 274320)
+    const edge = docxViewLayoutFixes(`<w:body>${anchor('<wp:posOffset>3200400</wp:posOffset>')}${anchor('<wp:align>right</wp:align>')}${sect}</w:body>`);
+    expect((edge.match(/wrapText="largest"/g) ?? []).length).toBe(2);
+    // 가운데쯤 놓인 그림은 Word도 양쪽으로 흘린다 — 그대로
+    const centred = docxViewLayoutFixes(`<w:body>${anchor('<wp:posOffset>1700000</wp:posOffset>')}${anchor('<wp:align>center</wp:align>')}${sect}</w:body>`);
+    expect(centred).not.toContain('largest');
+  });
+
+  test('보기용 사본: 병합 칸·표 안 표가 없는 표만 tblGrid를 첫 행 칸 너비로(검토 Minor 1)', () => {
+    const row = (a: number, b: number) => `<w:tr><w:tc><w:tcPr><w:tcW w:w="${a}" w:type="dxa"/></w:tcPr><w:p/></w:tc><w:tc><w:tcPr><w:tcW w:w="${b}" w:type="dxa"/></w:tcPr><w:p/></w:tc></w:tr>`;
+    const grid = '<w:tblGrid><w:gridCol w:w="4500"/><w:gridCol w:w="4500"/></w:tblGrid>';
+    const simple = docxViewLayoutFixes(`<w:tbl>${grid}${row(1134, 7866)}</w:tbl>`);
+    expect(simple).toContain('<w:gridCol w:w="1134"/><w:gridCol w:w="7866"/>');
+    const merged = `<w:tbl>${grid}<w:tr><w:tc><w:tcPr><w:tcW w:w="9000" w:type="dxa"/><w:gridSpan w:val="2"/></w:tcPr><w:p/></w:tc></w:tr></w:tbl>`;
+    expect(docxViewLayoutFixes(merged)).toBe(merged);
+    const nested = `<w:tbl>${grid}<w:tr><w:tc><w:tcPr><w:tcW w:w="1000" w:type="dxa"/></w:tcPr><w:tbl>${grid}${row(2000, 2500)}</w:tbl><w:p/></w:tc><w:tc><w:tcPr><w:tcW w:w="8000" w:type="dxa"/></w:tcPr><w:p/></w:tc></w:tr></w:tbl>`;
+    const fixedNested = docxViewLayoutFixes(nested);
+    expect(fixedNested.startsWith(`<w:tbl>${grid}`)).toBe(true); // 바깥 표(안에 표가 있음)는 그대로
+    expect(fixedNested).toContain('<w:gridCol w:w="2000"/><w:gridCol w:w="2500"/>'); // 안쪽 단순한 표는 맞춤
   });
 });

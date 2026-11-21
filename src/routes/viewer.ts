@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import { installedLineRatios } from '../docx/fontMetrics.js';
 import { basePdfForEditor, sha1Of } from '../pdf/pdfModel.js';
 import { addPdfPart, compressRoomPdf, currentPlainBytes, editorSourceOf, signRoomPdf, extractPdfGroups, PdfRoomError, pdfInfoOf, protectPdf, readPdfPart, tokenKey, unlockPdf, type ProtectRequest } from '../pdf/pdfRoomOps.js';
 import { isCompressLevel } from '../pdf/pdfCompress.js';
@@ -30,15 +31,16 @@ import { InvalidTokenError, verifyViewToken } from '../security.js';
 import { extractPdfText, searchPdfText, type PageText } from '../search.js';
 import { detectNearbyTextStyle } from '../textStyle.js';
 import {
-  docxHasUnsupportedContent,
   getDocxDefaultFontFamily,
   getDocxDefaultParagraphSpacing,
   getDocxDefaultFontSizePt,
   getDocxPageSetup,
+  getDocxRenderExtras,
 } from '../docx/import.js';
+import { cachedDocxDrawing, DrawingRateLimited, renderDocxDrawingPng } from '../docx/drawingImage.js';
 import { MarkupValidationError, addMarkup, deleteMarkup, listMarkup, updateMarkup } from '../markup.js';
 import { touchPresence } from '../presence.js';
-import { flushNow, getCfRemoteAnswer, getCurrentBytes, getChangeLog, getFileCharts, getFileExtras, getFileImages } from '../collab/room.js';
+import { docxFragmentsOf, flushNow, getCfRemoteAnswer, getCurrentBytes, getChangeLog, getFileCharts, getFileExtras, getFileImages } from '../collab/room.js';
 import { parseCfRemoteRequest } from '../xlsx/cfRangeValues.js';
 
 /** 편집 화면 조건부 서식 서버 답 — 편집할 때마다(0.3초 묶음) 다시 묻는다 */
@@ -660,9 +662,9 @@ const slideMediaQuerySchema = {
   required: ['path'],
   properties: {
     token: { type: 'string' },
-    // ppt/media/ 바로 아래(하위 폴더 없음) 파일만 — 경로 순회나 zip의 다른 파트(슬라이드 XML 등)
-    // 접근을 막는다. parseSlideVisuals가 만들어내는 mediaPath 형태와 정확히 일치해야 한다.
-    path: { type: 'string', pattern: '^ppt/media/[^/]+$', maxLength: 300 },
+    // ppt/media/·word/media/ 바로 아래(하위 폴더 없음) 파일만 — 경로 순회나 zip의 다른 파트(슬라이드 XML 등)
+    // 접근을 막는다. parseSlideVisuals·docx 가져오기(mediaPathOf)가 만드는 mediaPath 형태와 정확히 일치해야 한다.
+    path: { type: 'string', pattern: '^(ppt|word)/media/[^/]+$', maxLength: 300 },
   },
 } as const;
 
@@ -699,14 +701,7 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
       // catch로 감싼 채 병렬로 돌린다.
       const docxBytes =
         view.meta.ext === 'docx' ? await store.readOriginal(view.meta.id, view.meta.ext).catch(() => null) : null;
-      const [editHasUnsupportedContent, pageSetup, defaultFontSizePt, defaultFontFamily, defaultParagraphSpacing] = await Promise.all([
-        // "저장하면 이미지가 사라집니다" 경고를 띄우기 위한 사전 검사 — canEdit 토큰일 때만 계산한다
-        // (파일은 이미 읽었지만, 이 함수 자체를 돌리는 CPU 비용은 필요할 때만 쓴다).
-        docxBytes && view.claims.perms.canEdit
-          ? Promise.resolve()
-              .then(() => docxHasUnsupportedContent(docxBytes))
-              .catch(() => false)
-          : Promise.resolve(false),
+      const [pageSetup, defaultFontSizePt, defaultFontFamily, defaultParagraphSpacing, docxRender] = await Promise.all([
         // docx 에디터가 실제 Word 페이지 크기·여백 비율로 화면을 그리기 위한 값(src/client/editor.ts).
         docxBytes ? Promise.resolve().then(() => getDocxPageSetup(docxBytes)).catch(() => null) : Promise.resolve(null),
         // 직접 서식도 스타일도 없는 실행문이 상속받는 문서 기본 폰트 크기(w:docDefaults) —
@@ -722,6 +717,8 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
         docxBytes
           ? Promise.resolve().then(() => getDocxDefaultParagraphSpacing(docxBytes)).catch(() => null)
           : Promise.resolve(null),
+        // 번호 매기기 정의·머리글/바닥글·각주·스타일 — 편집기가 Word 모양으로 덧그린다(src/client/docxLayout.ts)
+        docxBytes ? Promise.resolve().then(() => ({ ...getDocxRenderExtras(docxBytes), lineRatios: installedLineRatios() })).catch(() => null) : Promise.resolve(null),
       ]);
       // pptx 편집기가 슬라이드를 실제 크기(4:3 등) 좌표계로 그리기 위한 값. presentation.xml 하나만
       // 압축 해제한다(filter) — 큰 덱이라도 미디어 파트는 풀지 않는다.
@@ -745,11 +742,11 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
           pages,
           permissions: view.claims.perms,
           viewer: view.claims.viewer,
-          editHasUnsupportedContent,
           pageSetup,
           defaultFontSizePt,
           defaultFontFamily,
           defaultParagraphSpacing,
+          docxRender,
           slideSize,
           // 통합 보기 껍데기(view.html)의 편집 단추와 편집기의 "보기로"가 쓴다 — 토큰 하나로 오가므로 새 토큰을 만들지 않는다
           editorUrl: editorUrlFor(
@@ -1018,7 +1015,7 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
-  /** pptx 슬라이드 안 이미지(p:pic) 원본 바이트를 그대로 내려준다 — editor-slides.ts가
+  /** pptx 슬라이드 안 이미지(p:pic)와 docx 본문·머리글 그림(word/media/) 원본 바이트를 그대로 내려준다 — editor-slides.ts·docx 편집기(schema.ts ooxml 그림)가
    * slideVisuals의 mediaPath로 이 라우트를 <img src>에 직접 건다. 수 MB짜리 이미지를 base64로
    * Yjs 문서에 인라인하던 예전 방식은 그 크기 그대로 WebSocket 업데이트에 실려 텍스트박스보다
    * 몇 초씩 늦게 나타나는 원인이었다 — 평범한 HTTP 이미지 요청으로 바꿔 브라우저가 캐시·병렬
@@ -1029,17 +1026,19 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
     async (request, reply) => {
       const view = await resolveEditorDataView(request.query.token, reply);
       if (!view) return reply;
-      if (view.meta.ext !== 'pptx') {
-        return reply.code(400).send({ success: false, error: 'pptx 문서가 아닙니다.' });
-      }
       const mediaPath = request.query.path;
+      // pptx는 ppt/media/, docx는 word/media/ — 문서 종류와 경로가 맞아야 한다
+      const kind = view.meta.ext === 'pptx' ? 'ppt' : view.meta.ext === 'docx' ? 'word' : null;
+      if (!kind || !mediaPath.startsWith(`${kind}/media/`)) {
+        return reply.code(400).send({ success: false, error: 'pptx·docx 문서의 그림이 아닙니다.' });
+      }
       const ext = mediaPath.split('.').pop()?.toLowerCase() ?? '';
       const mime = IMAGE_MIME_BY_EXT[ext];
       if (!mime) {
         return reply.code(400).send({ success: false, error: '지원하지 않는 이미지 형식입니다.' });
       }
       try {
-        const bytes = await store.readOriginal(view.meta.id, 'pptx');
+        const bytes = await store.readOriginal(view.meta.id, view.meta.ext);
         // 요청한 그림 하나만 푼다 — 예전엔 그림 하나마다 파일 전체(실측 21MB pptx)를 풀어, 그동안 서버가
         // 다른 요청을 못 받았다(그림당 약 0.1초, 동기 처리)
         const zipEntries = guardedUnzipSync(bytes, 'slide-media', { filter: (file) => file.name === mediaPath });
@@ -1053,6 +1052,39 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
       } catch (error) {
         request.log.error(error, 'slide media fetch failed');
         return reply.code(500).send({ success: false, error: '이미지를 불러오지 못했습니다.' });
+      }
+    },
+  );
+
+  /**
+   * docx 편집기의 브라우저가 못 그리는 그림 조각(EMF/WMF·차트·도형) — 이 문서(열린 방이면 그 저장소까지)에 있는 조각만 LibreOffice로 그려 PNG로.
+   * 문서 판마다 그런 조각을 한 번에 그려 두므로, 그린 그림·묶음이 있으면 바로 돌려주고 무거운 첫 그리기에만 분당 상한을 센다.
+   */
+  const drawingLimit = app.createRateLimit(HEAVY_RATE_LIMIT);
+  app.get<{ Querystring: { token?: string; ref: string } }>(
+    '/api/view/docx-drawing',
+    { schema: { querystring: { type: 'object', required: ['ref'], properties: { token: { type: 'string' }, ref: { type: 'string', pattern: '^[A-Za-z0-9:._-]{1,64}@[A-Za-z0-9_-]{20}(#[0-9]+)?$' } } } } },
+    async (request, reply) => {
+      const view = await resolveEditorDataView(request.query.token, reply);
+      if (!view) return reply;
+      if (view.meta.ext !== 'docx') return reply.code(400).send({ success: false, error: 'docx 문서가 아닙니다.' });
+      const docId = view.meta.id;
+      // LibreOffice로 새 묶음을 그릴 때만 센다(저장으로 문서 판이 바뀐 뒤의 다시 그리기 포함) — 그려 둔 쪽·그림은 세지 않는다
+      // isAllowed는 허용 목록일 때만 true — 넘었는지는 isExceeded
+      const allowNewBatch = async () => {
+        const limit = await drawingLimit(request);
+        return limit.isAllowed || !limit.isExceeded;
+      };
+      try {
+        const png = cachedDocxDrawing(docId, request.query.ref)
+          ? await cachedDocxDrawing(docId, request.query.ref)!
+          : await renderDocxDrawingPng(() => store.readOriginal(docId, 'docx'), docId, request.query.ref, docxFragmentsOf(docId), allowNewBatch);
+        if (!png) return reply.code(404).send({ success: false, error: '그림을 찾을 수 없습니다.' });
+        return await reply.type('image/png').header('cache-control', 'private, max-age=3600').header('content-security-policy', SANDBOX_CSP).send(png);
+      } catch (error) {
+        if (error instanceof DrawingRateLimited) return reply.code(429).send({ success: false, error: '잠시 뒤 다시 시도하세요.' });
+        request.log.error(error, 'docx drawing render failed');
+        return reply.code(500).send({ success: false, error: '그림을 그리지 못했습니다.' });
       }
     },
   );

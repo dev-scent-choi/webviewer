@@ -1,7 +1,9 @@
 import { strFromU8, strToU8, zipSync } from 'fflate';
 import { guardedUnzipSync } from '../zipGuard.js';
 import type { Mark, Node as PMNode } from 'prosemirror-model';
-import { extractSectPrXml } from './import.js';
+import { extractSectPrXml, importDocx } from './import.js';
+import { fragmentHash, prXml, refHashOf, refTagOf, TRACKED_WRAP_TAGS, trackedWrapKey, wrapAttrsXml, type FragmentStore } from './ooxml.js';
+import { BUILTIN_LISTS, builtinAbstractNumXml, isBuiltinNumId } from './numbering.js';
 import {
   GALLERY_PARAGRAPH_STYLES,
   GALLERY_STYLE_NAMES,
@@ -32,8 +34,28 @@ function hexOf(color: unknown): string | null {
 
 const HIGHLIGHT_NAME_BY_HEX = new Map(Object.entries(HIGHLIGHT_COLORS).map(([name, hex]) => [hex.slice(1).toUpperCase(), name]));
 
-/** w:rPr 자식은 스키마가 정한 순서를 지켜야 한다(rFonts, b, i, strike, color, sz, highlight, u, shd, vertAlign). */
+/**
+ * 보존 조각 참조("태그@해시") → 원본 XML. 저장소(방이 열려 있는 동안 유지, room.ts)에 있는 것만 — Yjs로 들어온 값은 서버가 검사하지 않으므로
+ * 다른 참여자가 임의 XML을 보낼 수 없고(저장소에 없는 해시는 버린다), 지웠다가 되돌린 그림·구역도 저장소에 남아 다시 저장된다.
+ */
+let activeStore: FragmentStore = new Map();
+const resolveRef = (ref: string): string | undefined => (typeof ref === 'string' && ref.includes('@') ? activeStore.get(refHashOf(ref)) : undefined);
+
+/** 문서에 한 번만 있어야 하는 조각(책갈피·각주 참조 등) — 같은 문서 안에서 복사해 둘이 되면 두 번째부터는 쓰지 않는다 */
+const ONCE_TAGS = new Set(['w:bookmarkStart', 'w:bookmarkEnd', 'w:footnoteReference', 'w:endnoteReference', 'w:permStart', 'w:permEnd',
+  'w:moveFromRangeStart', 'w:moveFromRangeEnd', 'w:moveToRangeStart', 'w:moveToRangeEnd']);
+let emittedOnce = new Set<string>();
+/** 문서 관계 파일에 있는 r:id — 하이퍼링크 감싸개가 없는 관계를 가리키면(다른 참여자가 바꾼 값 등) 감싸개를 빼고 글자만 쓴다 */
+let activeRelIds: ReadonlySet<string> | null = null;
+/** 편집기가 새로 켠 번호(docview:decimal 등) → 이 문서의 실제 numId */
+let activeBuiltinNumIds = new Map<string, string>();
+
+/** 실행문 하나 — 모델링한 서식(rFonts·b·i·strike·color·sz·highlight·u·shd·vertAlign)과 보존한 나머지 w:rPr 자식을 스키마 순서로 합친다. */
 function renderRun(text: string, marks: readonly Mark[]): string {
+  return renderRunXml(`<w:t xml:space="preserve">${escapeXml(text)}</w:t>`, marks);
+}
+
+function renderRunXml(contentXml: string, marks: readonly Mark[]): string {
   const markOf = (name: string) => marks.find((mark) => mark.type.name === name);
   const rPrParts: string[] = [];
   const font = markOf('fontFamily');
@@ -63,14 +85,17 @@ function renderRun(text: string, marks: readonly Mark[]): string {
   if (highlightHex && !highlightName) rPrParts.push(`<w:shd w:val="clear" w:color="auto" w:fill="${highlightHex}"/>`);
   if (markOf('subscript')) rPrParts.push('<w:vertAlign w:val="subscript"/>');
   else if (markOf('superscript')) rPrParts.push('<w:vertAlign w:val="superscript"/>');
-  const rPr = rPrParts.length > 0 ? `<w:rPr>${rPrParts.join('')}</w:rPr>` : '';
-  return `<w:r>${rPr}<w:t xml:space="preserve">${escapeXml(text)}</w:t></w:r>`;
+  const rPr = prXml('w:rPr', rPrParts, markOf('runExtra')?.attrs.refs, resolveRef);
+  return `<w:r>${rPr}${contentXml}</w:r>`;
 }
 
 const ALIGN_TO_JC: Record<string, string> = { center: 'center', right: 'right', justify: 'both' };
 
-/** w:pPr 자식 순서: pStyle, shd, spacing, ind, jc (CT_PPr 스키마 순서). */
-function pPrXml(styleXml: string, attrs: Record<string, unknown>): string {
+/** 구역 참조(구역마다 번호가 붙어 내용이 같아도 다르다)를 지닌 문단 — 붙여넣기 등으로 같은 참조가 둘이 되면 마지막 문단에만 쓴다. */
+let sectionHolders = new Map<string, PMNode>();
+
+/** w:pPr — 모델링한 값(pStyle·shd·spacing·ind·jc)과 보존한 나머지 자식(번호·탭·테두리·구역 등)을 스키마 순서로. */
+function pPrXml(styleXml: string, attrs: Record<string, unknown>, node?: PMNode): string {
   const parts: string[] = [styleXml];
   const shading = hexOf(attrs.shading);
   if (shading) parts.push(`<w:shd w:val="clear" w:color="auto" w:fill="${shading}"/>`);
@@ -96,8 +121,20 @@ function pPrXml(styleXml: string, attrs: Record<string, unknown>): string {
   }
   const jc = typeof attrs.align === 'string' ? ALIGN_TO_JC[attrs.align] : undefined;
   if (jc) parts.push(`<w:jc w:val="${jc}"/>`);
-  const inner = parts.filter(Boolean).join('');
-  return inner ? `<w:pPr>${inner}</w:pPr>` : '';
+  parts.push(numPrXml(attrs.num));
+  const extras = Array.isArray(attrs.pPrExtra)
+    ? (attrs.pPrExtra as unknown[]).filter((x) => typeof x !== 'string' || refTagOf(x) !== 'w:sectPr' || sectionHolders.get(x) === node)
+    : null;
+  return prXml('w:pPr', parts, extras, resolveRef);
+}
+
+/** 직접 번호(num, 스타일에서 온 것이 아님) → w:numPr. 편집기가 새로 켠 번호(docview:…)는 저장 때 numbering.xml에 정의를 더한 numId로. */
+function numPrXml(num: unknown): string {
+  const n = num as { numId?: unknown; ilvl?: unknown; fromStyle?: unknown } | null;
+  if (!n || n.fromStyle || typeof n.numId !== 'string') return '';
+  const numId = isBuiltinNumId(n.numId) ? activeBuiltinNumIds.get(n.numId) : n.numId;
+  const ilvl = Math.max(0, Math.min(8, Math.round(Number(n.ilvl) || 0)));
+  return numId && /^\d+$/.test(numId) ? `<w:numPr><w:ilvl w:val="${ilvl}"/><w:numId w:val="${numId}"/></w:numPr>` : '';
 }
 
 /**
@@ -205,19 +242,117 @@ function addDocumentRelationship(entries: Record<string, Uint8Array>, relationsh
   entries['word/_rels/document.xml.rels'] = strToU8(xml.replace('</Relationships>', `${relationship}</Relationships>`));
 }
 
+const WRAP_TAGS = new Set(['w:hyperlink', 'w:ins', 'w:moveTo', 'w:smartTag', 'w:customXml']);
+
+/** 감싸는 요소 여는 태그 — 원본 속성 이름 그대로(이름은 XML 이름 모양만, 값은 이스케이프)와 원본 속성 자식(w:smartTagPr 등) */
+function wrapOpenXml(mark: Mark): string {
+  const list = wrapAttrsXml(mark.attrs.attrs as Record<string, unknown> | null);
+  return `<${String(mark.attrs.tag)}${list}>${typeof mark.attrs.pr === 'string' ? (resolveRef(mark.attrs.pr) ?? '') : ''}`;
+}
+
+/** 이 글자를 감싸는 요소들(바깥부터) — 알 수 없는 태그·없는 관계를 가리키는 하이퍼링크는 뺀다(글자는 남긴다) */
+function wrapsOf(marks: readonly Mark[]): Mark[] {
+  return marks
+    .filter((mark) => mark.type.name === 'wrap' && WRAP_TAGS.has(String(mark.attrs.tag)))
+    // 변경 추적 삽입은 원본에 있던 감싸개(작성자·날짜 그대로)만 — 지어낸 작성자는 빼고 글자만 쓴다(m4)
+    .filter((mark) => !TRACKED_WRAP_TAGS.has(String(mark.attrs.tag)) || activeStore.has(fragmentHash(trackedWrapKey(String(mark.attrs.tag), mark.attrs.attrs as Record<string, unknown> | null))))
+    .filter((mark) => {
+      const rid = (mark.attrs.attrs as Record<string, unknown> | null)?.['r:id'];
+      return mark.attrs.tag !== 'w:hyperlink' || rid === undefined || (typeof rid === 'string' && (activeRelIds?.has(rid) ?? true));
+    })
+    .sort((a, b) => Number(a.attrs.depth) - Number(b.attrs.depth));
+}
+
 function renderInline(node: PMNode): string {
   let xml = '';
+  let open: Mark[] = [];
+  const closeTo = (keep: number) => {
+    while (open.length > keep) xml += `</${String(open.pop()!.attrs.tag)}>`;
+  };
   node.forEach((child) => {
+    const wanted = wrapsOf(child.marks);
+    let common = 0;
+    while (common < open.length && common < wanted.length && open[common].eq(wanted[common])) common += 1;
+    closeTo(common);
+    for (const mark of wanted.slice(common)) {
+      xml += wrapOpenXml(mark);
+      open.push(mark);
+    }
     if (child.isText) {
       xml += commentTransitionXml(child.marks);
       xml += renderRun(child.text ?? '', child.marks);
     } else if (child.type.name === 'hard_break') {
-      xml += '<w:r><w:br/></w:r>';
+      xml += renderRunXml('<w:br/>', child.marks);
     } else if (child.type.name === 'page_break') {
       xml += '<w:r><w:br w:type="page"/></w:r>';
+    } else if (child.type.name === 'tab') {
+      xml += renderRunXml('<w:tab/>', child.marks);
+    } else if (child.type.name === 'ooxml') {
+      xml += onceRaw(String(child.attrs.ref ?? ''));
     }
   });
+  closeTo(0);
   return xml;
+}
+
+/** 보존 조각 하나 — 한 번만 있어야 하는 조각(책갈피·각주 참조)이 복사로 둘이 되면 두 번째부터는 쓰지 않는다 */
+function onceRaw(ref: string): string {
+  const raw = resolveRef(ref);
+  if (raw === undefined) return '';
+  const tag = refTagOf(ref);
+  if (ONCE_TAGS.has(tag)) {
+    if (emittedOnce.has(ref)) {
+      // 같은 문서 안에서 복사한 각주·미주 참조 — Word처럼 각주를 복제해 새 번호로(책갈피 등은 이름이 겹치므로 버린다)
+      if (tag === 'w:footnoteReference' || tag === 'w:endnoteReference') {
+        const k = (noteCopies.get(ref) ?? 0) + 1;
+        noteCopies.set(ref, k);
+        return cloneNoteReference(tag === 'w:footnoteReference' ? 'footnote' : 'endnote', raw, k);
+      }
+      return '';
+    }
+    emittedOnce.add(ref);
+  }
+  return raw;
+}
+
+/** 각주·미주 파트(저장 중 복제본을 더한다) — exportDocx가 채우고 다시 쓴다 */
+let noteParts: Record<'footnote' | 'endnote', string | null> = { footnote: null, endnote: null };
+let noteCopies = new Map<string, number>();
+const CLONE_MARK = '_docviewNote_';
+
+/**
+ * 복사로 생긴 k번째 각주 참조 → 원래 각주 본문을 새 id로 복제한 각주를 가리키게 한다. 복제본엔 숨은 책갈피 표지(_docviewNote_원id_k)를 넣어
+ * 다음 저장 때 같은 복제본을 다시 쓴다(저장마다 늘지 않게). 본문 어디서도 가리키지 않는 복제본은 저장 끝에 지운다.
+ */
+function cloneNoteReference(type: 'footnote' | 'endnote', raw: string, k: number): string {
+  const part = noteParts[type];
+  const id = /\bw:id="(-?\d+)"/.exec(raw)?.[1];
+  if (!part || !id) return '';
+  const marker = `${CLONE_MARK}${id}_${k}`;
+  let cloneId = new RegExp(`<w:${type}\\b[^>]*\\bw:id="(-?\\d+)"[^>]*>(?:(?!</w:${type}>)[\\s\\S])*w:name="${marker}"`).exec(part)?.[1];
+  if (!cloneId) {
+    const body = new RegExp(`<w:${type}\\b[^>]*\\bw:id="${id}"[^>]*>[\\s\\S]*?</w:${type}>`).exec(part)?.[0];
+    if (!body) return '';
+    cloneId = String(Math.max(0, ...[...part.matchAll(new RegExp(`<w:${type}\\b[^>]*\\bw:id="(-?\\d+)"`, 'g'))].map((m) => Number(m[1]))) + 1);
+    const bookmark = `<w:bookmarkStart w:id="${900000 + Number(cloneId)}" w:name="${marker}"/><w:bookmarkEnd w:id="${900000 + Number(cloneId)}"/>`;
+    const clone = body
+      .replace(new RegExp(`(<w:${type}\\b[^>]*\\bw:id=")${id}"`), `$1${cloneId}"`)
+      .replace(/(<w:p\b[^>]*>(?:<w:pPr>[\s\S]*?<\/w:pPr>)?)/, `$1${bookmark}`);
+    noteParts[type] = part.replace(`</w:${type}s>`, `${clone}</w:${type}s>`);
+  }
+  return raw.replace(/(<w:(?:footnote|endnote)Reference\b[^>]*\bw:id=")-?\d+"/, `$1${cloneId}"`);
+}
+
+/**
+ * 최종 본문(documentXml)의 참조가 가리키지 않는 복제 각주(표지가 있는 것)만 지운다 — 다시 연 방에서는 복사본 참조가 이미 복제 id를
+ * 바로 가리켜 복제 경로를 타지 않으므로, "이번 저장에서 복제했나"로 고르면 쓰이는 각주를 지운다(C-r3-1).
+ */
+function dropUnusedNoteClones(type: 'footnote' | 'endnote', documentXml: string): void {
+  const part = noteParts[type];
+  if (!part) return;
+  const referenced = new Set([...documentXml.matchAll(new RegExp(`<w:${type}Reference\\b[^>]*\\bw:id="(-?\\d+)"`, 'g'))].map((m) => m[1]));
+  noteParts[type] = part.replace(new RegExp(`<w:${type}\\b[^>]*\\bw:id="(-?\\d+)"[^>]*>(?:(?!</w:${type}>)[\\s\\S])*w:name="${CLONE_MARK}[\\d_-]+"[\\s\\S]*?</w:${type}>`, 'g'),
+    (whole, id: string) => (referenced.has(id) ? whole : ''));
 }
 
 /** 갤러리 스타일 id → 이 문서에서 실제로 쓸 w:styleId (exportDocx가 styles.xml을 보고 정한다). */
@@ -296,13 +431,14 @@ function renderParagraph(node: PMNode, prefix = '', styleIds: StyleIdMap = activ
   const prefixRun = prefix ? renderRun(prefix, []) : '';
   const styleId = node.attrs.styleId as string | null;
   const resolved = styleId ? (styleIds.get(styleId) ?? styleId) : null;
-  const pPr = pPrXml(resolved ? `<w:pStyle w:val="${escapeAttr(resolved)}"/>` : '', node.attrs);
+  const pPr = pPrXml(resolved ? `<w:pStyle w:val="${escapeAttr(resolved)}"/>` : '', node.attrs, node);
   return `<w:p>${pPr}${prefixRun}${renderInline(node)}</w:p>`;
 }
 
 function renderHeading(node: PMNode): string {
   const level = node.attrs.level as number;
-  const pPr = pPrXml(`<w:pStyle w:val="Heading${level}"/>`, node.attrs);
+  const styleId = typeof node.attrs.styleId === 'string' && node.attrs.styleId ? node.attrs.styleId : `Heading${level}`;
+  const pPr = pPrXml(`<w:pStyle w:val="${escapeAttr(styleId)}"/>`, node.attrs, node);
   return `<w:p>${pPr}${renderInline(node)}</w:p>`;
 }
 
@@ -397,11 +533,10 @@ interface PendingVMerge {
  * 없었을 것이다) 열 번호를 따로 계산할 필요 없이 앞에서부터 순서대로 배치하면 된다.
  */
 /** table_row의 height 속성(atLeast/exact, px)을 <w:trPr><w:trHeight .../></w:trPr>로 직렬화한다. 없으면 빈 문자열(자동 높이). */
-function renderRowHeightXml(height: unknown): string {
-  if (!height || typeof height !== 'object') return '';
-  const h = height as RowHeight;
-  const hRule = h.rule === 'exact' ? 'exact' : 'atLeast';
-  return `<w:trPr><w:trHeight w:val="${pxToDxa(h.px)}" w:hRule="${hRule}"/></w:trPr>`;
+function renderTrPrXml(row: PMNode): string {
+  const h = row.attrs.height as RowHeight | null;
+  const height = h && typeof h === 'object' ? `<w:trHeight w:val="${pxToDxa(h.px)}" w:hRule="${h.rule === 'exact' ? 'exact' : 'atLeast'}"/>` : '';
+  return prXml('w:trPr', [height], row.attrs.trPrExtra, resolveRef);
 }
 
 function renderTableRow(
@@ -412,7 +547,7 @@ function renderTableRow(
   const cells: PMNode[] = [];
   row.forEach((cell) => cells.push(cell));
 
-  const trPrXml = renderRowHeightXml(row.attrs.height);
+  const trPrXml = renderTrPrXml(row);
   let cellsXml = '';
   let col = 0;
   let cellIndex = 0;
@@ -463,9 +598,13 @@ function renderTableRow(
           ? `<w:vAlign w:val="${verticalAlign}"/>`
           : '';
     const cellMarginXml = renderCellMarginXml(cell.attrs.cellPadding);
-    cellsXml +=
-      `<w:tc><w:tcPr><w:tcW w:w="${totalWidthDxa}" w:type="dxa"/>` +
-      `${gridSpanXml}${vMergeXml}${bordersXml}${shdXml}${vAlignXml}${cellMarginXml}</w:tcPr>${cellBody}</w:tc>`;
+    const tcPr = prXml(
+      'w:tcPr',
+      [`<w:tcW w:w="${totalWidthDxa}" w:type="dxa"/>`, gridSpanXml, vMergeXml, bordersXml, shdXml, vAlignXml, cellMarginXml],
+      cell.attrs.tcPrExtra,
+      resolveRef,
+    );
+    cellsXml += `<w:tc>${tcPr}${cellBody}</w:tc>`;
     if (rowspan > 1) pendingVMerge.set(col, { remaining: rowspan - 1, colspan, widthDxa: totalWidthDxa });
     col += colspan;
   }
@@ -500,10 +639,12 @@ function renderTable(node: PMNode): string {
   const align = node.attrs.align;
   const jcXml = align === 'center' || align === 'right' ? `<w:jc w:val="${align}"/>` : '';
 
-  return (
-    `<w:tbl><w:tblPr><w:tblW w:w="0" w:type="auto"/>${jcXml}<w:tblBorders>${BORDER}</w:tblBorders></w:tblPr>` +
-    `<w:tblGrid>${gridCols}</w:tblGrid>${rowsXml}</w:tbl>`
-  );
+  // 가져온 표는 원본 w:tblPr(표 스타일·너비 등)를 그대로, 편집기에서 새로 만든 표는 기본 너비·테두리
+  const extras = Array.isArray(node.attrs.tblPrExtra) ? node.attrs.tblPrExtra : null;
+  const tblPr = extras
+    ? prXml('w:tblPr', [jcXml], extras, resolveRef) || '<w:tblPr/>'
+    : `<w:tblPr><w:tblW w:w="0" w:type="auto"/>${jcXml}<w:tblBorders>${BORDER}</w:tblBorders></w:tblPr>`;
+  return `<w:tbl>${tblPr}<w:tblGrid>${gridCols}</w:tblGrid>${rowsXml}</w:tbl>`;
 }
 
 function renderBlock(node: PMNode): string {
@@ -518,6 +659,15 @@ function renderBlock(node: PMNode): string {
       return renderList(node, true);
     case 'table':
       return renderTable(node);
+    case 'columns': {
+      let xml = '';
+      node.forEach((child) => {
+        xml += renderBlock(child);
+      });
+      return xml;
+    }
+    case 'ooxml_block':
+      return onceRaw(String(node.attrs.ref ?? ''));
     default:
       return '';
   }
@@ -536,9 +686,21 @@ export function renderDocumentXml(
   sectPrXml: string = '<w:sectPr/>',
   styleIds: StyleIdMap = new Map(),
   commentNumbers: Map<string, number> = new Map(),
+  fragments: FragmentStore = new Map(),
+  documentOpenTag: string = `<w:document xmlns:w="${NS_W}" xmlns:r="${NS_R}">`,
+  relIds: ReadonlySet<string> | null = null,
+  builtinNumIds: ReadonlyMap<string, string> = new Map(),
 ): string {
   let body = '';
   activeStyleIds = styleIds;
+  activeStore = fragments;
+  activeRelIds = relIds;
+  activeBuiltinNumIds = new Map(builtinNumIds);
+  emittedOnce = new Set();
+  sectionHolders = new Map();
+  doc.descendants((node) => {
+    if (Array.isArray(node.attrs.pPrExtra)) for (const x of node.attrs.pPrExtra) if (typeof x === 'string' && refTagOf(x) === 'w:sectPr') sectionHolders.set(x, node);
+  });
   commentState = { numbers: commentNumbers, open: new Set() };
   try {
     doc.forEach((node) => {
@@ -549,12 +711,96 @@ export function renderDocumentXml(
     if (state.open.size > 0) body += `<w:p>${[...state.open].map((id) => closeCommentXml(state, id)).join('')}</w:p>`;
   } finally {
     activeStyleIds = new Map();
+    activeStore = new Map();
+    activeRelIds = null;
+    activeBuiltinNumIds = new Map();
+    emittedOnce = new Set();
+    sectionHolders = new Map();
     commentState = null;
   }
-  // 원본 sectPr를 그대로 쓰므로 그 안의 머리글/바닥글 참조(r:id)를 위해 r 네임스페이스도 선언한다
-  return (
-    `${DOCUMENT_XML_HEADER}<w:document xmlns:w="${NS_W}" xmlns:r="${NS_R}"><w:body>${body}${sectPrXml}</w:body></w:document>`
-  );
+  // 원본 w:document 여는 태그(네임스페이스 선언 전부)를 그대로 쓴다 — 보존 조각(그림 wp:·a:, 글상자 wps:, VML v: 등)과
+  // 원본 sectPr의 머리글/바닥글 참조(r:id)가 그 선언을 쓴다
+  return `${DOCUMENT_XML_HEADER}${documentOpenTag}<w:body>${uniqueDrawingIds(body)}${sectPrXml}</w:body></w:document>`;
+}
+
+/** 그림을 같은 문서 안에서 복사하면 그림 번호(wp:docPr id)가 겹친다 — Word가 "읽을 수 없는 내용"으로 고치지 않게 두 번째부터 새 번호로 */
+function uniqueDrawingIds(body: string): string {
+  const pattern = /(<wp:docPr\b[^>]*?\bid=")(\d+)(")/g;
+  let max = 0;
+  for (const m of body.matchAll(pattern)) max = Math.max(max, Number(m[2]));
+  const seen = new Set<string>();
+  return body.replace(pattern, (whole, head: string, id: string, tail: string) => {
+    if (!seen.has(id)) {
+      seen.add(id);
+      return whole;
+    }
+    max += 1;
+    return `${head}${max}${tail}`;
+  });
+}
+
+/** 편집기가 새로 켠 번호(docview:decimal·docview:bullet)를 numbering.xml에 정의로 더하고, 그 실제 numId를 돌려준다(없으면 파트를 만든다). */
+function ensureBuiltinLists(doc: PMNode, entries: Record<string, Uint8Array>): Map<string, string> {
+  const used = new Set<string>();
+  doc.descendants((node) => {
+    const id = (node.attrs.num as { numId?: unknown } | null)?.numId;
+    if (typeof id === 'string' && isBuiltinNumId(id)) used.add(id);
+  });
+  const ids = new Map<string, string>();
+  if (used.size === 0) return ids;
+  const existing = entries['word/numbering.xml'];
+  let xml = existing ? strFromU8(existing) : `${DOCUMENT_XML_HEADER}<w:numbering xmlns:w="${NS_W}"></w:numbering>`;
+  const before = xml;
+  const maxOf = (attr: string) => Math.max(0, ...[...xml.matchAll(new RegExp(`${attr}="(\\d+)"`, 'g'))].map((m) => Number(m[1])));
+  for (const id of BUILTIN_LISTS.filter((l) => used.has(l.id)).map((l) => l.id)) {
+    // 앞선 저장이 더한 정의(w:name 표지)가 있으면 그 번호를 다시 쓴다 — 저장마다 정의가 늘거나 numId가 바뀌지 않게
+    const abstractId = new RegExp(`<w:abstractNum\\b[^>]*w:abstractNumId="(\\d+)"[^>]*>(?:(?!</w:abstractNum>)[\\s\\S])*<w:name w:val="${id}"/>`).exec(xml)?.[1]
+      ?? String(maxOf('w:abstractNumId') + 1);
+    if (!new RegExp(`w:abstractNumId="${abstractId}"`).test(xml)) xml = insertAbstractNum(xml, builtinAbstractNumXml(id, Number(abstractId)));
+    let numId = new RegExp(`<w:num w:numId="(\\d+)"><w:abstractNumId w:val="${abstractId}"/></w:num>`).exec(xml)?.[1];
+    if (!numId) {
+      numId = String(maxOf('w:numId') + 1);
+      xml = insertNum(xml, `<w:num w:numId="${numId}"><w:abstractNumId w:val="${abstractId}"/></w:num>`);
+    }
+    ids.set(id, numId);
+  }
+  if (xml === before) return ids;
+  entries['word/numbering.xml'] = strToU8(xml);
+  if (!existing) {
+    registerPart(entries, '/word/numbering.xml', 'application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml',
+      'http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering', 'numbering.xml', 'rIdDocviewNumbering');
+  }
+  return ids;
+}
+
+/** CT_Numbering 순서(numPicBullet* → abstractNum* → num* → numIdMacAtCleanup): 새 abstractNum은 첫 num 앞(없으면 numIdMacAtCleanup 앞, 없으면 끝) */
+function insertAbstractNum(xml: string, abstractNum: string): string {
+  const at = [/<w:num\b/, /<w:numIdMacAtCleanup\b/, /<\/w:numbering>/].map((re) => re.exec(xml)?.index ?? -1).find((i) => i >= 0)!;
+  return xml.slice(0, at) + abstractNum + xml.slice(at);
+}
+
+/** 새 num은 마지막 num 뒤(없으면 numIdMacAtCleanup 앞, 없으면 끝) */
+function insertNum(xml: string, num: string): string {
+  const nums = [...xml.matchAll(/<w:num\b[^>]*\/>|<w:num\b[^>]*>[\s\S]*?<\/w:num>/g)];
+  const last = nums[nums.length - 1];
+  const at = last ? last.index! + last[0].length : [/<w:numIdMacAtCleanup\b/, /<\/w:numbering>/].map((re) => re.exec(xml)?.index ?? -1).find((i) => i >= 0)!;
+  return xml.slice(0, at) + num + xml.slice(at);
+}
+
+/** 새로 만든 파트를 콘텐츠 형식과 문서 관계에 등록한다 */
+function registerPart(entries: Record<string, Uint8Array>, partName: string, contentType: string, relType: string, target: string, relId: string): void {
+  const types = entries['[Content_Types].xml'];
+  if (types && !strFromU8(types).includes(partName)) {
+    entries['[Content_Types].xml'] = strToU8(strFromU8(types).replace('</Types>', `<Override PartName="${partName}" ContentType="${contentType}"/></Types>`));
+  }
+  addDocumentRelationship(entries, `<Relationship Id="${relId}" Type="${relType}" Target="${target}"/>`);
+}
+
+/** 원본 document.xml의 w:document 여는 태그 — r 네임스페이스가 없으면(손으로 만든 파일) 덧붙인다 */
+function documentOpenTagOf(documentXml: string | null): string | undefined {
+  const tag = documentXml ? /<w:document\b[^>]*>/.exec(documentXml)?.[0] : undefined;
+  if (!tag) return undefined;
+  return tag.includes('xmlns:r=') ? tag : tag.replace('<w:document', `<w:document xmlns:r="${NS_R}"`);
 }
 
 /**
@@ -628,11 +874,16 @@ export function applyPageSetupToSectPr(sectPrXml: string, page: DocxPageSetup): 
   return leading + pgSz + newPgMar + xml.slice(leading.length);
 }
 
+/**
+ * fragments: 보존 조각 저장소 — 방(room.ts)은 처음 연 원본에서 만든 것을 방이 열려 있는 동안 계속 넘긴다(지웠다 되돌린 조각도 저장되게).
+ * 넘기지 않으면 지금 원본에서 만든다(시험·한 번 저장).
+ */
 export function exportDocx(
   originalDocxBytes: Uint8Array,
   doc: PMNode,
   page: DocxPageSetup | null = null,
   comments: readonly DocxComment[] = [],
+  fragments: FragmentStore = importDocx(originalDocxBytes).fragments,
 ): Uint8Array {
   const entries = guardedUnzipSync(originalDocxBytes, 'exportDocx');
   const originalDocumentXml = entries['word/document.xml'];
@@ -646,7 +897,27 @@ export function exportDocx(
     if (!stylesEntry) registerStylesPart(entries);
   }
   const commentNumbers = new Map<string, number>();
-  entries['word/document.xml'] = strToU8(renderDocumentXml(doc, sectPrXml, styles.ids, commentNumbers));
+  const originalXml = originalDocumentXml ? strFromU8(originalDocumentXml) : null;
+  const relsBytes = entries['word/_rels/document.xml.rels'];
+  const relIds = new Set([...(relsBytes ? strFromU8(relsBytes) : '').matchAll(/<Relationship\b[^>]*\bId="([^"]+)"/g)].map((m) => m[1]));
+  const builtinNumIds = ensureBuiltinLists(doc, entries);
+  noteParts = {
+    footnote: entries['word/footnotes.xml'] ? strFromU8(entries['word/footnotes.xml']) : null,
+    endnote: entries['word/endnotes.xml'] ? strFromU8(entries['word/endnotes.xml']) : null,
+  };
+  noteCopies = new Map();
+  try {
+    const documentXml = renderDocumentXml(doc, sectPrXml, styles.ids, commentNumbers, fragments, documentOpenTagOf(originalXml), relIds, builtinNumIds);
+    entries['word/document.xml'] = strToU8(documentXml);
+    for (const type of ['footnote', 'endnote'] as const) {
+      dropUnusedNoteClones(type, documentXml);
+      const part = noteParts[type];
+      const name = `word/${type}s.xml`;
+      if (part !== null && part !== strFromU8(entries[name])) entries[name] = strToU8(part);
+    }
+  } finally {
+    noteParts = { footnote: null, endnote: null };
+  }
   // 메모가 있거나, 원본에 있던 메모를 모두 지운 경우에만 comments.xml을 새로 쓴다
   if (commentNumbers.size > 0 || entries['word/comments.xml']) {
     entries['word/comments.xml'] = strToU8(renderCommentsXml(commentNumbers, new Map(comments.map((c) => [c.id, c]))));

@@ -4,9 +4,11 @@
  */
 
 import type { Mark, MarkType, Node as PMNode } from 'prosemirror-model';
-import { liftListItem, sinkListItem, wrapInList } from 'prosemirror-schema-list';
+import { splitBlockAs } from 'prosemirror-commands';
+import { liftListItem, sinkListItem } from 'prosemirror-schema-list';
 import { TextSelection, type Command, type EditorState, type Transaction } from 'prosemirror-state';
 import { docxSchema, type ParagraphIndent, type ParagraphSpacing } from '../docx/schema.js';
+import { numberingLevelsOf, type NumberingDefs } from '../docx/numbering.js';
 
 const { marks, nodes } = docxSchema;
 
@@ -38,11 +40,16 @@ export function clearMark(type: MarkType): Command {
 }
 
 /** 선택 영역(또는 커서)의 문단·제목에 같은 변경을 적용한다. 선택은 그대로 둔다. */
-function updateParagraphs(state: EditorState, dispatch: ((tr: Transaction) => void) | undefined, patch: (node: PMNode) => Record<string, unknown> | null): boolean {
+function updateParagraphs(
+  state: EditorState,
+  dispatch: ((tr: Transaction) => void) | undefined,
+  patch: (node: PMNode) => Record<string, unknown> | null,
+  applies: (node: PMNode) => boolean = () => true,
+): boolean {
   const { from, to } = state.selection;
   const targets: Array<{ node: PMNode; pos: number }> = [];
   state.doc.nodesBetween(from, to, (node, pos) => {
-    if (FORMATTABLE.has(node.type.name)) targets.push({ node, pos });
+    if (FORMATTABLE.has(node.type.name) && applies(node)) targets.push({ node, pos });
   });
   if (targets.length === 0) return false;
   if (dispatch) {
@@ -74,11 +81,90 @@ export function setLineSpacing(multiple: number): Command {
     });
 }
 
-/** 커서가 목록 안이면 목록 수준을, 아니면 왼쪽 들여쓰기를 한 단계 바꾼다(Word와 같다). */
+/** 문단의 Word 번호 {numId, ilvl, fromStyle} — numId "0"(번호 끔)은 번호 없음으로 본다 */
+interface WordNum {
+  readonly numId: string;
+  readonly ilvl: number;
+  readonly fromStyle?: boolean;
+}
+const activeNumOf = (node: PMNode): WordNum | null => {
+  const num = node.attrs.num as WordNum | null;
+  return num && num.numId !== '0' ? num : null;
+};
+/** 번호를 끈 값 — 직접 번호면 없앤다, 스타일이 주는 번호면 numId 0으로 덮는다(Word와 같다) */
+const numOff = (num: WordNum): WordNum | null => (num.fromStyle ? { numId: '0', ilvl: 0, fromStyle: false } : null);
+
+export type NumberingKind = 'decimal' | 'bullet';
+function kindOf(defs: NumberingDefs | null, num: WordNum): NumberingKind {
+  return numberingLevelsOf(defs, num.numId)?.[num.ilvl]?.numFmt === 'bullet' ? 'bullet' : 'decimal';
+}
+
+/** 지금 위치 문단의 Word 번호 종류(도구 모음 단추 눌림 표시용) */
+export function currentNumberingKind(state: EditorState, defs: NumberingDefs | null): NumberingKind | null {
+  const num = activeNumOf(state.selection.$from.parent);
+  return num ? kindOf(defs, num) : null;
+}
+
+/**
+ * 번호·글머리 단추 — Word 번호(w:numPr)를 켜고 끈다. 고른 문단이 모두 그 종류 번호면 끄고, 아니면 켠다: 바로 앞의 같은 종류 번호 문단을
+ * 이어 받고, 없으면 편집기 기본 번호(docview:…, 저장 때 numbering.xml에 정의를 더한다). 예전엔 ProseMirror 목록으로 감싸 저장본에
+ * "1. " 글자가 Word 번호와 겹쳐 "1. 1."이 됐고, 가져온 번호를 끌 방법이 없었다.
+ */
+export function toggleWordNumbering(kind: NumberingKind, defs: NumberingDefs | null): Command {
+  return (state, dispatch) => {
+    const { from, to } = state.selection;
+    const targets: Array<{ node: PMNode; pos: number }> = [];
+    state.doc.nodesBetween(from, to, (node, pos) => {
+      if (FORMATTABLE.has(node.type.name)) targets.push({ node, pos });
+    });
+    if (targets.length === 0) return false;
+    const allOn = targets.every(({ node }) => {
+      const num = activeNumOf(node);
+      return num !== null && kindOf(defs, num) === kind;
+    });
+    let continueFrom: WordNum | null = null;
+    if (!allOn) {
+      state.doc.nodesBetween(0, targets[0].pos, (node) => {
+        const num = activeNumOf(node);
+        if (node.isTextblock && num && kindOf(defs, num) === kind) continueFrom = num;
+        return !node.isTextblock;
+      });
+    }
+    const on: WordNum = continueFrom ? { numId: (continueFrom as WordNum).numId, ilvl: (continueFrom as WordNum).ilvl, fromStyle: false } : { numId: `docview:${kind}`, ilvl: 0, fromStyle: false };
+    if (dispatch) {
+      const tr = state.tr;
+      for (const { node, pos } of targets) {
+        const num = activeNumOf(node);
+        tr.setNodeMarkup(pos, undefined, { ...node.attrs, num: allOn ? (num ? numOff(num) : null) : on });
+      }
+      dispatch(tr);
+    }
+    return true;
+  };
+}
+
+/** Word 번호 수준을 한 단계 내리거나 올린다(Tab·Shift+Tab·들여쓰기 단추). 번호 문단이 없으면 false. */
+export function changeNumberLevel(direction: 1 | -1): Command {
+  return (state, dispatch) =>
+    updateParagraphs(state, dispatch, (node) => {
+      const num = activeNumOf(node);
+      return num ? { num: { ...num, ilvl: Math.max(0, Math.min(8, num.ilvl + direction)), fromStyle: false } } : null;
+    }, (node) => activeNumOf(node) !== null);
+}
+
+/** Tab: 번호 문단의 맨 앞이면 번호 수준을 내린다(Word와 같다) — 그 밖엔 다음 명령으로 넘긴다 */
+export const numberLevelTab = (direction: 1 | -1): Command => (state, dispatch, view) => {
+  const { $from, empty } = state.selection;
+  if (!activeNumOf($from.parent) || (empty && $from.parentOffset !== 0)) return false;
+  return changeNumberLevel(direction)(state, dispatch, view);
+};
+
+/** 커서가 목록 안이면 목록 수준을, Word 번호 문단이면 번호 수준을, 아니면 왼쪽 들여쓰기를 한 단계 바꾼다(Word와 같다). */
 export function changeIndent(direction: 1 | -1): Command {
   return (state, dispatch, view) => {
     const listCommand = direction > 0 ? sinkListItem(nodes.list_item) : liftListItem(nodes.list_item);
     if (listCommand(state, dispatch, view)) return true;
+    if (changeNumberLevel(direction)(state, dispatch, view)) return true;
     return updateParagraphs(state, dispatch, (node) => {
       const prev = (node.attrs.indent as ParagraphIndent | null) ?? { left: 0, firstLine: 0, hanging: 0 };
       const left = Math.max(0, prev.left + direction * INDENT_STEP_DXA);
@@ -88,9 +174,10 @@ export function changeIndent(direction: 1 | -1): Command {
   };
 }
 
-/** 다단계 목록: 목록 안이면 한 수준 내리고, 아니면 번호 목록을 시작한다. */
-export const multilevelList: Command = (state, dispatch, view) =>
-  sinkListItem(nodes.list_item)(state, dispatch, view) || wrapInList(nodes.ordered_list)(state, dispatch, view);
+/** 다단계 목록: 번호 문단이면 한 수준 내리고, 아니면 Word 번호를 켠다. */
+export function multilevelList(defs: NumberingDefs | null): Command {
+  return (state, dispatch, view) => changeNumberLevel(1)(state, dispatch, view) || toggleWordNumbering('decimal', defs)(state, dispatch, view);
+}
 
 /** 스타일 갤러리의 문단 스타일 — null이면 "표준". 제목 1/2는 heading 노드로 따로 처리한다. */
 export function setParagraphStyle(styleId: string | null): Command {
@@ -336,6 +423,43 @@ export function replaceAll(state: EditorState, dispatch: (tr: Transaction) => vo
 /** 페이지 나누기(Ctrl+Enter) — 지금 위치에 w:br type=page를 넣는다. */
 export const insertPageBreak: Command = (state, dispatch) => {
   if (dispatch) dispatch(state.tr.replaceSelectionWith(nodes.page_break.create()).scrollIntoView());
+  return true;
+};
+
+/** 보존 조각 참조("w:sectPr@해시#번호")의 태그가 tag인지 */
+const isRefOf = (tag: string) => (x: unknown) => typeof x === 'string' && x.startsWith(`${tag}@`);
+
+/**
+ * Enter — Word처럼:
+ *  - 새 문단이 번호·들여쓰기·간격·스타일을 이어받는다(기본 동작은 서식 없는 문단을 만들어 번호 목록이 끊겼다). 제목 뒤는 보통 문단.
+ *  - 구역 나눔(w:sectPr)은 구역의 **마지막** 문단 표시에 붙어 있으므로 뒤 문단으로 옮긴다 — 둘 다 같은 구역에 남는다.
+ *  - 빈 번호 문단: 수준이 있으면 한 수준 올리고, 맨 위 수준이면 번호를 끝낸다(스타일 번호는 numId 0으로 덮는다).
+ */
+export const splitParagraphKeepFormat: Command = (state, dispatch) => {
+  const { $from } = state.selection;
+  const node = $from.parent;
+  if (!(state.selection instanceof TextSelection) || (node.type !== nodes.paragraph && node.type !== nodes.heading)) return false;
+  const num = activeNumOf(node);
+  if (num && node.content.size === 0 && state.selection.empty) {
+    const next = num.ilvl > 0 ? { ...num, ilvl: num.ilvl - 1, fromStyle: false } : numOff(num);
+    if (dispatch) dispatch(state.tr.setNodeMarkup($from.before(), undefined, { ...node.attrs, num: next }));
+    return true;
+  }
+  const extras = Array.isArray(node.attrs.pPrExtra) ? (node.attrs.pPrExtra as unknown[]) : [];
+  const sectRefs = extras.filter(isRefOf('w:sectPr'));
+  const withoutSect = extras.filter((x) => !isRefOf('w:sectPr')(x));
+  // 제목 끝에서 Enter면 다음은 보통 문단(Word의 "다음 스타일"), 제목 가운데·앞이면 뒤쪽도 제목
+  const atEnd = $from.parentOffset === node.content.size;
+  const second = node.type === nodes.heading && atEnd
+    ? { type: nodes.paragraph, attrs: { sect: node.attrs.sect, pPrExtra: sectRefs.length > 0 ? sectRefs : null } }
+    : { type: node.type, attrs: { ...node.attrs, breakBefore: false } };
+  let tr: Transaction | null = null;
+  if (!splitBlockAs(() => second)(state, (t) => (tr = t))) return false;
+  const split = tr as unknown as Transaction;
+  if (sectRefs.length > 0 || node.attrs.sect !== null) {
+    split.setNodeMarkup($from.before(), undefined, { ...node.attrs, sect: null, pPrExtra: withoutSect.length > 0 ? withoutSect : null });
+  }
+  if (dispatch) dispatch(split.scrollIntoView());
   return true;
 };
 
