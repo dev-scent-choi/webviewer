@@ -15,7 +15,7 @@
 import {
   cfRangeAnswer,
   cfRangeTableAdjust,
-  cfRangeTableFromRaw,
+  cfRangeTableFromRawChunked,
   cfRuleRanges,
   compactStats,
   computeStatsFromCounts,
@@ -41,6 +41,12 @@ export const CF_MAX_STATS = 64;
 export const CF_MAX_DUP_KEYS = 50_000;
 /** 서버 전체에서 동시에 세는 방 수 */
 export const CF_GLOBAL_BUILDS = 2;
+/** 열린 모든 방이 들고 있는 서로 다른 값 수 상한 — 넘으면 가장 오래 안 쓴 방의 표부터 버린다(다음에 물으면 다시 센다) */
+export const CF_GLOBAL_DISTINCT_CAP = 600_000;
+/** 칸 편집 묶음 하나가 범위에서 이만큼 넘게 바꾸면(또는 바꾼 칸 수 × 범위 칸 수가 CF_INCREMENTAL_WORK_CAP을 넘으면) 표를 하나씩
+ * 고치지 않고 버렸다가 다음 물음 때 나눠 다시 만든다(정렬 배열 splice가 범위 크기에 비례 — 큰 붙여넣기가 서버를 붙잡지 않게) */
+export const CF_INCREMENTAL_MAX_CHANGES = 10_000;
+const CF_INCREMENTAL_WORK_CAP = 20_000_000;
 const CF_YIELD_MS = 15;
 const ROW_BATCH = 500;
 
@@ -52,6 +58,8 @@ interface RectTally {
   /** 수식 칸이 바뀌어 다시 세야 함 */
   dirty: boolean;
   table?: CfRangeTable;
+  /** 센 칸 가운데 수식 칸 수 — 보지 않는 페이지의 수식은 다시 계산되지 않아 값이 낡았을 수 있다(편집 뒤 알림) */
+  formulaCells: number;
 }
 interface SheetTally {
   readonly entries: readonly CondFormatEntry[];
@@ -68,35 +76,85 @@ export interface CfRoomTally {
   chain: Promise<unknown>;
   /** 반영 중인 칸 편집(웹소켓으로 막 들어온 것) — 답하기 전에 기다린다 */
   applying: Promise<void>;
+  /** 칸 편집이 있었는지(수식 칸 값이 낡았을 수 있다) */
+  edited: boolean;
+  /** 마지막으로 쓴 때(전역 상한 — 오래 안 쓴 방부터 버린다) */
+  lastUsed: number;
 }
-export const newCfRoomTally = (): CfRoomTally => ({ rev: 0, sheets: new Map(), chain: Promise.resolve(), applying: Promise.resolve() });
+/** 열린 방들의 표(전역 상한용) — 방이 닫히면 cfTallyRelease */
+const liveTallies = new Set<CfRoomTally>();
+export const newCfRoomTally = (): CfRoomTally => {
+  const t: CfRoomTally = { rev: 0, sheets: new Map(), chain: Promise.resolve(), applying: Promise.resolve(), edited: false, lastUsed: Date.now() };
+  liveTallies.add(t);
+  return t;
+};
+/** 방이 닫혔다 */
+export function cfTallyRelease(t: CfRoomTally): void {
+  t.sheets.clear();
+  liveTallies.delete(t);
+}
+const distinctOf = (t: CfRoomTally) => [...t.sheets.values()].reduce((a, s) => a + [...s.rects.values()].reduce((b, r) => b + (r.raw?.size ?? 0), 0), 0);
+/** 전역 상한 — 넘으면 keep(지금 쓰는 방)이 아닌 방 가운데 가장 오래 안 쓴 방의 표부터 버린다 */
+export function cfEnforceGlobalCap(keep: CfRoomTally, cap = CF_GLOBAL_DISTINCT_CAP): void {
+  let total = [...liveTallies].reduce((a, t) => a + distinctOf(t), 0);
+  if (total <= cap) return;
+  for (const t of [...liveTallies].filter((x) => x !== keep).sort((a, b) => a.lastUsed - b.lastUsed)) {
+    if (total <= cap) break;
+    total -= distinctOf(t);
+    t.sheets.clear();
+  }
+}
 
 const keyOf = (r: CfRect) => `${r.r0}:${r.c0}:${r.r1}:${r.c1}`;
 
-/** 칸 하나가 바뀌었다(값 글자 before → after) — 그 칸이 든 범위의 개수 표를 −1/+1 */
-export function cfTallyApply(t: CfRoomTally, sheet: number, row: number, col: number, before: string, after: string): void {
+/** 칸 편집 하나(값 글자 before → after) */
+export interface CfCellChange {
+  readonly row: number;
+  readonly col: number;
+  readonly before: string;
+  readonly after: string;
+}
+
+/**
+ * 칸 편집 묶음 하나(웹소켓 업데이트 하나)를 범위 개수 표에 반영한다 — 값 개수는 칸마다 −1/+1(가볍다). 정렬된 수 배열이 든 범위 값 표는
+ * 바뀐 칸이 적을 때만 하나씩 고치고, 많으면(큰 붙여넣기) 버렸다가 다음 물음 때 나눠 다시 만든다. 수식 칸이 바뀌면 그 범위만 다시 센다.
+ */
+export function cfTallyApplyBatch(t: CfRoomTally, sheet: number, changes: readonly CfCellChange[]): void {
+  if (changes.length === 0) return;
   t.rev += 1;
+  t.edited = true;
   const s = t.sheets.get(sheet);
-  if (!s || before === after) return;
+  if (!s) return;
   let changed = false;
   for (const r of s.rects.values()) {
     const { rect } = r;
-    if (row < rect.r0 || row > rect.r1 || col < rect.c0 || col > rect.c1 || !r.raw) continue;
+    const inside = changes.filter((c) => c.row >= rect.r0 && c.row <= rect.r1 && c.col >= rect.c0 && c.col <= rect.c1 && c.before !== c.after);
+    if (inside.length === 0 || !r.raw) continue;
     changed = true;
-    if (before.startsWith('=') || after.startsWith('=')) {
+    if (inside.some((c) => c.before.startsWith('=') || c.after.startsWith('='))) {
       r.dirty = true; // 수식 칸의 계산값은 아직 모른다 — 이 범위만 다시 센다
       r.table = undefined;
       continue;
     }
-    if (before !== '') {
-      const n = (r.raw.get(before) ?? 0) - 1;
-      if (n > 0) r.raw.set(before, n);
-      else r.raw.delete(before);
-      if (r.table) cfRangeTableAdjust(r.table, before, -1);
+    const raw = r.raw;
+    const bump = (v: string, d: 1 | -1) => {
+      if (v === '') return;
+      const n = (raw.get(v) ?? 0) + d;
+      if (n > 0) raw.set(v, n);
+      else raw.delete(v);
+    };
+    for (const c of inside) {
+      bump(c.before, -1);
+      bump(c.after, 1);
     }
-    if (after !== '') {
-      r.raw.set(after, (r.raw.get(after) ?? 0) + 1);
-      if (r.table) cfRangeTableAdjust(r.table, after, 1);
+    if (!r.table) continue;
+    if (inside.length > CF_INCREMENTAL_MAX_CHANGES || inside.length * r.cells > CF_INCREMENTAL_WORK_CAP) {
+      r.table = undefined; // 큰 묶음 — 다음 물음 때 나눠 다시 만든다
+      continue;
+    }
+    for (const c of inside) {
+      if (c.before !== '') cfRangeTableAdjust(r.table, c.before, -1);
+      if (c.after !== '') cfRangeTableAdjust(r.table, c.after, 1);
     }
   }
   if (changed) s.stats.clear();
@@ -131,7 +189,10 @@ async function countRects(
   distinctLeft: number,
 ): Promise<void> {
   if (rects.length === 0) return;
-  for (const r of rects) r.raw = new Map();
+  for (const r of rects) {
+    r.raw = new Map();
+    r.formulaCells = 0;
+  }
   const rowFrom = Math.min(...rects.map((r) => r.rect.r0));
   const rowTo = Math.max(...rects.map((r) => r.rect.r1));
   const colTo = Math.max(...rects.map((r) => r.rect.c1)) + 1;
@@ -150,7 +211,10 @@ async function countRects(
           const cell = line[c];
           if (!cell) continue;
           let v = gridCellValue(cell);
-          if (v.startsWith('=')) v = computedAt(row, c) ?? '';
+          if (v.startsWith('=')) {
+            r.formulaCells += 1;
+            v = computedAt(row, c) ?? '';
+          }
           if (v === '') continue;
           const n = raw.get(v);
           if (n === undefined) {
@@ -193,7 +257,7 @@ function ensureSheetTally(
         const clamped = { r0: rect.r0, c0: rect.c0, r1: Math.min(rect.r1, rows - 1), c1: Math.min(rect.c1, cols - 1) };
         if (clamped.r1 < clamped.r0 || clamped.c1 < clamped.c0 || rects.size >= 256) return;
         const cells = (clamped.r1 - clamped.r0 + 1) * (clamped.c1 - clamped.c0 + 1);
-        rects.set(keyOf(clamped), { rect: clamped, cells, raw: null, dirty: true });
+        rects.set(keyOf(clamped), { rect: clamped, cells, raw: null, dirty: true, formulaCells: 0 });
       };
       for (const rect of cfRuleRanges(entries, rows, cols)) add(rect);
       for (const e of entries) if (needsStats(e.rule)) e.ranges.forEach(add);
@@ -217,7 +281,13 @@ function ensureSheetTally(
       const distinctLeft = CF_ROOM_DISTINCT_CAP - [...s.rects.values()].filter((r) => !r.dirty && r.raw).reduce((a, r) => a + (r.raw?.size ?? 0), 0);
       await withGlobalSlot(() => countRects(store, sheet, counted, computedAt, distinctLeft));
       s.stats.clear();
+      cfEnforceGlobalCap(t);
     }
+    // 범위 값 표(정렬된 수 포함) — 없으면 나눠 만든다(20만 항목 표를 한 번에 만들며 멈추지 않게)
+    for (const r of s.rects.values()) {
+      if (r.raw && !r.table) r.table = await cfRangeTableFromRawChunked(r.cells, r.raw, yieldToEventLoop);
+    }
+    t.lastUsed = Date.now();
     return s;
   });
   t.chain = run.catch(() => undefined);
@@ -232,6 +302,8 @@ export interface CfRemoteRequest {
 export type CfRemoteRangeAnswer = CfRect & ({ readonly cells: number; readonly agg: CfRangeAgg; readonly crit: Array<[string, number]> } | { readonly skipped: true });
 export interface CfRemoteAnswer {
   readonly rev: number;
+  /** 답한 범위에 수식 칸이 있고 편집이 있었다 — 보지 않는 페이지의 수식은 다시 계산되지 않아 결과가 낡았을 수 있다(편집 화면 알림) */
+  readonly stale?: true;
   readonly ranges: CfRemoteRangeAnswer[];
   /** 규칙 id → 압축 통계(중복은 [값, 개수][]로 — JSON) 또는 skipped */
   readonly stats: Record<string, (Omit<CfStats, 'counts'> & { counts?: Array<[string, number]> }) | 'skipped'>;
@@ -270,11 +342,12 @@ export async function answerCfRemote(
   computedAt: (row: number, col: number) => string | undefined,
 ): Promise<CfRemoteAnswer> {
   const s = await ensureSheetTally(t, store, req.sheet, entries, computedAt);
+  let stale = false;
   const ranges: CfRemoteRangeAnswer[] = req.ranges.map((q) => {
     const r = s.rects.get(keyOf(q));
     const rect = { r0: q.r0, c0: q.c0, r1: q.r1, c1: q.c1 };
-    if (!r?.raw) return { ...rect, skipped: true as const };
-    r.table ??= cfRangeTableFromRaw(r.cells, r.raw);
+    if (!r?.raw || !r.table) return { ...rect, skipped: true as const };
+    if (r.formulaCells > 0 && t.edited) stale = true;
     return { ...rect, cells: r.cells, ...cfRangeAnswer(r.table, q.crit ?? [], q.eq ?? []) };
   });
   const stats: CfRemoteAnswer['stats'] = {};
@@ -285,6 +358,8 @@ export async function answerCfRemote(
       stats[id] = 'skipped';
       continue;
     }
+    // 범위에 수식 칸이 있고 편집이 있었으면 결과가 낡았을 수 있다
+    if (t.edited && e.ranges.some((rect) => (s.rects.get(keyOf({ r0: rect.r0, c0: rect.c0, r1: Math.min(rect.r1, s.rows - 1), c1: Math.min(rect.c1, s.cols - 1) }))?.formulaCells ?? 0) > 0)) stale = true;
     let st = s.stats.get(id);
     if (st === undefined) {
       const parts = e.ranges.map((rect) => s.rects.get(keyOf({ r0: rect.r0, c0: rect.c0, r1: Math.min(rect.r1, s.rows - 1), c1: Math.min(rect.c1, s.cols - 1) })));
@@ -304,5 +379,6 @@ export async function answerCfRemote(
     const { counts, ...rest } = st;
     stats[id] = { ...rest, ...(counts ? { counts: [...counts] } : {}) };
   }
-  return { rev: t.rev, ranges, stats };
+  t.lastUsed = Date.now();
+  return { rev: t.rev, ranges, stats, ...(stale ? { stale: true as const } : {}) };
 }

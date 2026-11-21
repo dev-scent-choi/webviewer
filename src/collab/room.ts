@@ -95,7 +95,7 @@ import {
   type LazyGridSheetMeta,
   type LazyGridStore,
 } from '../xlsx/lazyGridStore.js';
-import { answerCfRemote, cfTallyApply, cfTallyDropSheet, newCfRoomTally, type CfRemoteAnswer, type CfRemoteRequest, type CfRoomTally } from '../xlsx/cfRangeValues.js';
+import { answerCfRemote, cfTallyApplyBatch, cfTallyDropSheet, cfTallyRelease, newCfRoomTally, type CfCellChange, type CfRemoteAnswer, type CfRemoteRequest, type CfRoomTally } from '../xlsx/cfRangeValues.js';
 import { shiftTables } from '../xlsx/tableStyles.js';
 import {
   duplicateSlideContent,
@@ -589,6 +589,12 @@ async function applyCellsChangeToCanonical(
     changes.map((c) => getCell(store, c.sheetIdx, c.row, c.col)),
   );
 
+  const tallyChanges = new Map<number, CfCellChange[]>();
+  const tallyChange = (sheet: number, change: CfCellChange) => {
+    const list = tallyChanges.get(sheet) ?? [];
+    list.push(change);
+    tallyChanges.set(sheet, list);
+  };
   for (let i = 0; i < changes.length; i += 1) {
     const c = changes[i];
     const before = currentCells[i];
@@ -597,7 +603,7 @@ async function applyCellsChangeToCanonical(
       if (c.row >= meta.rowCount || c.col >= meta.colCount) continue; // 원래 있던 칸이 아니면 할 일 없음
       setDirtyCell(store, c.sheetIdx, c.row, c.col, 0);
       recordCellChange(room, c.sheetIdx, c.row, c.col, before, 0, viewer);
-      cfTallyApply(room.cfRanges, c.sheetIdx, c.row, c.col, before ? gridCellValue(before) : '', '');
+      tallyChange(c.sheetIdx, { row: c.row, col: c.col, before: before ? gridCellValue(before) : '', after: '' });
       continue;
     }
     const value = cells.get(c.key) ?? '';
@@ -611,8 +617,10 @@ async function applyCellsChangeToCanonical(
     const after: GridCell | 0 = value === '' ? 0 : { v: value, ...(keptStyle !== undefined ? { s: keptStyle } : {}) };
     setDirtyCell(store, c.sheetIdx, c.row, c.col, after);
     recordCellChange(room, c.sheetIdx, c.row, c.col, before, after, viewer);
-    cfTallyApply(room.cfRanges, c.sheetIdx, c.row, c.col, before ? gridCellValue(before) : '', after ? gridCellValue(after) : '');
+    tallyChange(c.sheetIdx, { row: c.row, col: c.col, before: before ? gridCellValue(before) : '', after: after ? gridCellValue(after) : '' });
   }
+  // 조건부 서식 서버 답의 값 개수 표 — 묶음 하나로 반영한다(큰 붙여넣기는 표를 하나씩 고치지 않고 다시 만든다)
+  for (const [sheet, list] of tallyChanges) cfTallyApplyBatch(room.cfRanges, sheet, list);
 }
 
 /**
@@ -2305,6 +2313,7 @@ function closeConn(room: Room, conn: WebSocket): void {
       cancelPendingUnseeds(room.docId);
       rooms.delete(room.docId);
       largeRoomDocIds.delete(room.docId);
+      cfTallyRelease(room.cfRanges);
       // 이 룸의 메모리 전용 변경 이력(cellChangeLog/docxChangeTracker/pptxChangeTracker)이 사라지기
       // 전 마지막 기회 — ydoc.destroy() 전에 지금 상태를 그대로 캡처해 디스크에 남긴다
       // (changeLogPersistence.ts 문서 주석의 "왜"). rooms.delete 이후에도 room 참조는 그대로

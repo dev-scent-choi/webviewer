@@ -370,3 +370,98 @@ describe('collab/room.ts: getCfRemoteAnswer (편집 화면 조건부 서식 서�
     expect(parseCfRemoteRequest({ sheet: 0, ranges: [{ r0: '0', c0: 0, r1: 1, c1: 0 }] })).toBeNull();
   });
 });
+
+/** 한 업데이트로 여러 칸(붙여넣기) */
+function pasteViaClient(socket: FakeSocket, entries: Array<[string, string]>): void {
+  let captured: Uint8Array | null = null;
+  const onUpdate = (update: Uint8Array) => {
+    captured = update;
+  };
+  socket.mirror.on('update', onUpdate);
+  socket.mirror.transact(() => {
+    const cells = socket.mirror.getMap<string>('cells');
+    for (const [k, v] of entries) cells.set(k, v);
+  });
+  socket.mirror.off('update', onUpdate);
+  const encoder = encoding.createEncoder();
+  encoding.writeVarUint(encoder, MESSAGE_SYNC);
+  writeUpdate(encoder, captured!);
+  socket.emit('message', encoding.toUint8Array(encoder));
+}
+
+describe('검토 r5 — 큰 붙여넣기(F2)·전역 상한·낡은 수식 알림', () => {
+  let tmpDir: string;
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'docview-room-cfranges5-'));
+    vi.resetModules();
+    vi.stubEnv('DOCVIEW_DATA_DIR', tmpDir);
+    vi.stubEnv('DOCVIEW_STORAGE', 'memory');
+    vi.doMock('../src/converters/index.js', () => ({ findConverter: () => null }));
+    vi.doMock('../src/audit.js', () => ({ recordAudit: async () => undefined }));
+  });
+  afterEach(async () => {
+    vi.doUnmock('../src/converters/index.js');
+    vi.doUnmock('../src/audit.js');
+    vi.unstubAllEnvs();
+    vi.resetModules();
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  test('F2: 20만 칸 범위에 2만 칸 붙여넣기 — 다른 요청이 100ms 넘게 기다리지 않고, 답이 맞다', async () => {
+    const { getCfRemoteAnswer } = await import('../src/collab/room.js');
+    const { gridCellKey } = await import('../src/collab/gridShared.js');
+    const { cfCritKey } = await import('../src/collab/condFormatShared.js');
+    const { docId, socket } = await openRoom(await makeSheetXlsx(20_000, 10, [{ ref: 'A1:J20000', formula: 'COUNTIF($A:$J,A1)>1' }]));
+    const range = { r0: 0, c0: 0, r1: 19_999, c1: 9 };
+    await getCfRemoteAnswer(docId, { sheet: 0, ranges: [{ ...range, crit: ['K1'] }] });
+    syncMirrorWithRoom(socket);
+    const gc = forceGc();
+    gc();
+    // B열 2만 칸에 수(500000…) 붙여넣기 — 정렬된 수 배열을 칸마다 고치면 범위 크기에 비례해 오래 걸렸다.
+    // 붙여넣기 반영(웹소켓 업데이트 풀기·칸 쓰기)은 조건부 서식과 무관하게 원래 100ms 안팎 걸리므로 따로 재고(기록만),
+    // 조건부 서식 몫(묶음 반영 + 다음 물음 때 표 다시 만들기)을 상한과 비교한다
+    const applyMeter = stallMeter();
+    pasteViaClient(socket, Array.from({ length: 20_000 }, (_, r): [string, string] => [gridCellKey(0, r, 1), String(500_000 + r)]));
+    await flushEventLoop(5);
+    const applyStall = applyMeter.stop();
+    const meter = stallMeter();
+    const a = await getCfRemoteAnswer(docId, { sheet: 0, ranges: [{ ...range, crit: ['500000', 'K1'] }] });
+    const stall = meter.stop();
+    const r = a!.ranges[0] as { agg: { count: number; min: number; max: number }; crit: Array<[string, number]> };
+    console.log(`F2: 붙여넣기 반영 중 가장 긴 멈춤 ${Math.round(applyStall)}ms(조건부 서식 없이도 비슷), 다음 물음(표 다시 만들기) 중 ${Math.round(stall)}ms`);
+    expect(r.agg).toMatchObject({ count: 20_000, min: 500_000, max: 519_999 });
+    expect(new Map(r.crit).get(cfCritKey('K1'))).toBe(2);
+    expect(stall).toBeLessThan(100);
+  }, 300_000);
+
+  test('전역 상한: 열린 방들의 값 수가 넘으면 가장 오래 안 쓴 방의 표부터 버린다', async () => {
+    const { newCfRoomTally, cfEnforceGlobalCap, cfTallyRelease } = await import('../src/xlsx/cfRangeValues.js');
+    const fake = (n: number, lastUsed: number) => {
+      const t = newCfRoomTally();
+      t.lastUsed = lastUsed;
+      const raw = new Map(Array.from({ length: n }, (_, i) => [`v${i}`, 1] as [string, number]));
+      t.sheets.set(0, { entries: [], rows: n, cols: 1, rects: new Map([['k', { rect: { r0: 0, c0: 0, r1: n - 1, c1: 0 }, cells: n, raw, dirty: false, formulaCells: 0 }]]), stats: new Map() } as never);
+      return t;
+    };
+    const old = fake(400, 1);
+    const mid = fake(400, 2);
+    const now = fake(400, 3);
+    cfEnforceGlobalCap(now, 900);
+    expect(old.sheets.size).toBe(0); // 가장 오래 안 쓴 방
+    expect(mid.sheets.size).toBe(1);
+    expect(now.sheets.size).toBe(1);
+    [old, mid, now].forEach(cfTallyRelease);
+  });
+
+  test('범위에 이 세션에서 넣은 수식 칸이 있으면(보지 않는 페이지는 다시 계산되지 않는다) 답에 stale(편집 화면 알림)', async () => {
+    const { getCfRemoteAnswer } = await import('../src/collab/room.js');
+    const { gridCellKey } = await import('../src/collab/gridShared.js');
+    // 파일의 수식 칸은 저장된 계산값으로 들어온다(수식 아님) — 이 세션에서 넣은 수식만 낡을 수 있다
+    const { docId, socket } = await openRoom(await makeSheetXlsx(1_500, 1, [{ ref: 'A1:A1500', formula: 'COUNTIF($A:$A,$A1)>1' }]));
+    const ask = () => getCfRemoteAnswer(docId, { sheet: 0, ranges: [{ r0: 0, c0: 0, r1: 1_499, c1: 0, crit: ['K1'] }] });
+    expect((await ask())!.stale).toBeUndefined();
+    editCellViaClient(socket, gridCellKey(0, 1_200, 0), '=A1'); // 받지 않은 페이지(3번째)에 수식
+    await flushEventLoop(5);
+    expect((await ask())!.stale).toBe(true);
+  }, 120_000);
+});

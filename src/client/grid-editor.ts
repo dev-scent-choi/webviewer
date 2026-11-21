@@ -3478,6 +3478,7 @@ async function main(): Promise<void> {
   // 문턱값만 받는다. 서버는 방의 규칙에서 뽑은 범위만 답한다(아니면 skipped → "일부 생략"). 칸 값이 바뀌면 아는 것을 다시 묻는다.
   type CfRemoteAnswerJson = {
     rev: number;
+    stale?: true;
     ranges: Array<CfRect & ({ cells: number; agg: CfRangeAgg; crit: Array<[string, number]> } | { skipped: true })>;
     stats: Record<string, (Omit<CfStats, 'counts'> & { counts?: Array<[string, number]> }) | 'skipped'>;
   };
@@ -3607,6 +3608,8 @@ async function main(): Promise<void> {
         for (const { st } of ranges) st.skipped = true;
         for (const id of stats) cfRemote.stats.set(id, 'skipped');
       } else {
+        // 범위에 수식 칸이 있고 편집이 있었다 — 보지 않는 페이지의 수식은 다시 계산되지 않아 결과가 낡았을 수 있다
+        if (json.data.stale) showCfSkipNotice();
         const sameRev = json.data.rev === cfRemote.rev;
         cfRemote.rev = json.data.rev;
         let learned = false;

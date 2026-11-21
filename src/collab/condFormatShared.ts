@@ -1012,6 +1012,24 @@ function exactCount(t: CfRangeTable, v: CfVal): number {
   return countsOf(t).get(countKey(v)) ?? 0;
 }
 
+/** cfRangeTableFromRaw를 chunk 항목마다 tick()으로 양보하며 만든다(서버 — 큰 표를 만드는 동안 다른 요청이 멈추지 않게) */
+export async function cfRangeTableFromRawChunked(cells: number, raw: ReadonlyMap<string, number>, tick: () => Promise<void>, chunk = 20_000): Promise<CfRangeTable> {
+  const counts = new Map<string, number>();
+  const sorted: number[] = [];
+  let i = 0;
+  for (const [v, n] of raw) {
+    const cv = cellVal(v);
+    if (cv !== null && n > 0) {
+      counts.set(countKey(cv), (counts.get(countKey(cv)) ?? 0) + n);
+      if (typeof cv === 'number') for (let k = 0; k < n; k += 1) sorted.push(cv);
+    }
+    i += 1;
+    if (i % chunk === 0) await tick();
+  }
+  sorted.sort((a, b) => a - b);
+  return { cells, counts, sorted };
+}
+
 /** 값 글자 → 개수 표(빈 칸 제외)와 칸 수 → 범위 값 표(서버) */
 export function cfRangeTableFromRaw(cells: number, raw: ReadonlyMap<string, number>): CfRangeTable {
   const counts = new Map<string, number>();
