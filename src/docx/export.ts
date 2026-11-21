@@ -318,19 +318,17 @@ function onceRaw(ref: string): string {
 /** 각주·미주 파트(저장 중 복제본을 더한다) — exportDocx가 채우고 다시 쓴다 */
 let noteParts: Record<'footnote' | 'endnote', string | null> = { footnote: null, endnote: null };
 let noteCopies = new Map<string, number>();
-let usedNoteClones = new Set<string>();
 const CLONE_MARK = '_docviewNote_';
 
 /**
  * 복사로 생긴 k번째 각주 참조 → 원래 각주 본문을 새 id로 복제한 각주를 가리키게 한다. 복제본엔 숨은 책갈피 표지(_docviewNote_원id_k)를 넣어
- * 다음 저장 때 같은 복제본을 다시 쓴다(저장마다 늘지 않게). 쓰이지 않게 된 복제본은 저장 끝에 지운다.
+ * 다음 저장 때 같은 복제본을 다시 쓴다(저장마다 늘지 않게). 본문 어디서도 가리키지 않는 복제본은 저장 끝에 지운다.
  */
 function cloneNoteReference(type: 'footnote' | 'endnote', raw: string, k: number): string {
   const part = noteParts[type];
   const id = /\bw:id="(-?\d+)"/.exec(raw)?.[1];
   if (!part || !id) return '';
   const marker = `${CLONE_MARK}${id}_${k}`;
-  usedNoteClones.add(marker);
   let cloneId = new RegExp(`<w:${type}\\b[^>]*\\bw:id="(-?\\d+)"[^>]*>(?:(?!</w:${type}>)[\\s\\S])*w:name="${marker}"`).exec(part)?.[1];
   if (!cloneId) {
     const body = new RegExp(`<w:${type}\\b[^>]*\\bw:id="${id}"[^>]*>[\\s\\S]*?</w:${type}>`).exec(part)?.[0];
@@ -345,12 +343,16 @@ function cloneNoteReference(type: 'footnote' | 'endnote', raw: string, k: number
   return raw.replace(/(<w:(?:footnote|endnote)Reference\b[^>]*\bw:id=")-?\d+"/, `$1${cloneId}"`);
 }
 
-/** 이번 저장에서 쓰이지 않은 복제 각주(표지가 있는 것)를 지운다 */
-function dropUnusedNoteClones(type: 'footnote' | 'endnote'): void {
+/**
+ * 최종 본문(documentXml)의 참조가 가리키지 않는 복제 각주(표지가 있는 것)만 지운다 — 다시 연 방에서는 복사본 참조가 이미 복제 id를
+ * 바로 가리켜 복제 경로를 타지 않으므로, "이번 저장에서 복제했나"로 고르면 쓰이는 각주를 지운다(C-r3-1).
+ */
+function dropUnusedNoteClones(type: 'footnote' | 'endnote', documentXml: string): void {
   const part = noteParts[type];
   if (!part) return;
-  noteParts[type] = part.replace(new RegExp(`<w:${type}\\b[^>]*>(?:(?!</w:${type}>)[\\s\\S])*w:name="(${CLONE_MARK}[\\d_-]+)"[\\s\\S]*?</w:${type}>`, 'g'),
-    (whole, marker: string) => (usedNoteClones.has(marker) ? whole : ''));
+  const referenced = new Set([...documentXml.matchAll(new RegExp(`<w:${type}Reference\\b[^>]*\\bw:id="(-?\\d+)"`, 'g'))].map((m) => m[1]));
+  noteParts[type] = part.replace(new RegExp(`<w:${type}\\b[^>]*\\bw:id="(-?\\d+)"[^>]*>(?:(?!</w:${type}>)[\\s\\S])*w:name="${CLONE_MARK}[\\d_-]+"[\\s\\S]*?</w:${type}>`, 'g'),
+    (whole, id: string) => (referenced.has(id) ? whole : ''));
 }
 
 /** 갤러리 스타일 id → 이 문서에서 실제로 쓸 w:styleId (exportDocx가 styles.xml을 보고 정한다). */
@@ -904,13 +906,11 @@ export function exportDocx(
     endnote: entries['word/endnotes.xml'] ? strFromU8(entries['word/endnotes.xml']) : null,
   };
   noteCopies = new Map();
-  usedNoteClones = new Set();
   try {
-    entries['word/document.xml'] = strToU8(
-      renderDocumentXml(doc, sectPrXml, styles.ids, commentNumbers, fragments, documentOpenTagOf(originalXml), relIds, builtinNumIds),
-    );
+    const documentXml = renderDocumentXml(doc, sectPrXml, styles.ids, commentNumbers, fragments, documentOpenTagOf(originalXml), relIds, builtinNumIds);
+    entries['word/document.xml'] = strToU8(documentXml);
     for (const type of ['footnote', 'endnote'] as const) {
-      dropUnusedNoteClones(type);
+      dropUnusedNoteClones(type, documentXml);
       const part = noteParts[type];
       const name = `word/${type}s.xml`;
       if (part !== null && part !== strFromU8(entries[name])) entries[name] = strToU8(part);
