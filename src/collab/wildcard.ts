@@ -57,13 +57,53 @@ export interface WildcardMatcher {
   [Symbol.search](value: string): number;
 }
 
+/**
+ * 와일드카드 작업량 상한(재검토 C1) — 맞추기 한 번은 칸 길이 × 조건 길이라 지수는 아니지만, 32k자 칸 수백 개 × 긴 조건 수천 개면
+ * 요청 하나가 몇 시간 걸린다. 일한 만큼(칸 길이 + 1) × (조건 길이 + 1)을 예산에서 빼고, 모자라면 WildcardBudgetError를 던진다.
+ * 예산은 범위(withWildcardBudget — 요청 하나·굽기 하나·업로드 계산 하나)마다 하나, 범위 밖이면 매처 하나(엑셀 함수 호출 하나)마다 하나다.
+ */
+export const WILDCARD_WORK_BUDGET = 5e7;
+export class WildcardBudgetError extends Error {
+  constructor() {
+    super('wildcard work budget exceeded');
+  }
+}
+export interface WildcardBudget {
+  left: number;
+}
+let scoped: WildcardBudget | null = null;
+/** fn(동기) 안의 모든 와일드카드 맞추기가 budget 하나를 나눠 쓴다 */
+export function withWildcardBudget<T>(budget: WildcardBudget, fn: () => T): T {
+  const outer = scoped;
+  scoped = budget;
+  try {
+    return fn();
+  } finally {
+    scoped = outer;
+  }
+}
+/** 남은 예산이 cost보다 적으면 던진다 — 일을 하기 전에 본다 */
+export function chargeWildcardWork(cost: number, own: WildcardBudget): void {
+  const budget = scoped ?? own;
+  if (budget.left < cost) {
+    budget.left = 0;
+    throw new WildcardBudgetError();
+  }
+  budget.left -= cost;
+}
+
 export function wildcardMatcher(pattern: string, ignoreCase = true): WildcardMatcher {
   const segs = compile(pattern, ignoreCase);
   const norm = (v: unknown) => (ignoreCase ? String(v).toLowerCase() : String(v));
   const last = segs.length - 1;
+  const own: WildcardBudget = { left: WILDCARD_WORK_BUDGET };
+  // 실제로 하는 일만큼: 앞·뒤 조각은 한 번 비교, 가운데 조각은 칸 위를 훑는다(칸 길이 × 가운데 조각 길이)
+  const middle = segs.slice(1, -1).reduce((a, seg) => a + seg.length, 0);
+  const charge = (s: string, all = false) => chargeWildcardWork(all ? (s.length + 1) * (pattern.length + 1) : last >= 2 ? (s.length + 1) * (middle + 1) : pattern.length + 1, own);
   return {
     test(value: unknown): boolean {
       const s = norm(value);
+      charge(s);
       if (last === 0) return s.length === segs[0].length && segAt(s, 0, segs[0]);
       if (!segAt(s, 0, segs[0])) return false;
       const tail = s.length - segs[last].length;
@@ -73,6 +113,7 @@ export function wildcardMatcher(pattern: string, ignoreCase = true): WildcardMat
     },
     [Symbol.search](value: string): number {
       const s = norm(value);
+      charge(s, true); // 찾기는 모든 조각이 칸 위를 훑는다
       // 첫 조각 뒤에 나머지 조각을 놓을 수 있는 가장 늦은 자리(오른쪽부터 가장 오른쪽에 놓아 본다)
       let latest = s.length;
       for (let k = last; k >= 1; k -= 1) {

@@ -28,6 +28,7 @@ import {
   type CondFormatEntry,
 } from '../collab/condFormatShared.js';
 import { gridCellValue, yieldToEventLoop } from '../spreadsheet.js';
+import { WILDCARD_WORK_BUDGET, WildcardBudgetError, withWildcardBudget, type WildcardBudget } from '../collab/wildcard.js';
 import { getRowCells, type LazyGridStore } from './lazyGridStore.js';
 
 /** 방 하나가 세는 칸 수 상한(모든 범위 합) */
@@ -304,6 +305,8 @@ export interface CfRemoteAnswer {
   readonly rev: number;
   /** 답한 범위에 수식 칸이 있고 편집이 있었다 — 보지 않는 페이지의 수식은 다시 계산되지 않아 결과가 낡았을 수 있다(편집 화면 알림) */
   readonly stale?: true;
+  /** 와일드카드 작업 예산(요청 하나에 WILDCARD_WORK_BUDGET)을 넘어 생략한 범위가 있다(그 범위는 skipped) */
+  readonly overBudget?: true;
   readonly ranges: CfRemoteRangeAnswer[];
   /** 규칙 id → 압축 통계(중복은 [값, 개수][]로 — JSON) 또는 skipped */
   readonly stats: Record<string, (Omit<CfStats, 'counts'> & { counts?: Array<[string, number]> }) | 'skipped'>;
@@ -343,12 +346,20 @@ export async function answerCfRemote(
 ): Promise<CfRemoteAnswer> {
   const s = await ensureSheetTally(t, store, req.sheet, entries, computedAt);
   let stale = false;
+  let overBudget = false;
+  const wildcard: WildcardBudget = { left: WILDCARD_WORK_BUDGET };
   const ranges: CfRemoteRangeAnswer[] = req.ranges.map((q) => {
     const r = s.rects.get(keyOf(q));
     const rect = { r0: q.r0, c0: q.c0, r1: q.r1, c1: q.c1 };
     if (!r?.raw || !r.table) return { ...rect, skipped: true as const };
     if (r.formulaCells > 0 && t.edited) stale = true;
-    return { ...rect, cells: r.cells, ...cfRangeAnswer(r.table, q.crit ?? [], q.eq ?? []) };
+    try {
+      return { ...rect, cells: r.cells, ...withWildcardBudget(wildcard, () => cfRangeAnswer(r.table!, q.crit ?? [], q.eq ?? [])) };
+    } catch (error) {
+      if (!(error instanceof WildcardBudgetError)) throw error;
+      overBudget = true;
+      return { ...rect, skipped: true as const };
+    }
   });
   const stats: CfRemoteAnswer['stats'] = {};
   let dupKeys = 0;
@@ -380,5 +391,5 @@ export async function answerCfRemote(
     stats[id] = { ...rest, ...(counts ? { counts: [...counts] } : {}) };
   }
   t.lastUsed = Date.now();
-  return { rev: t.rev, ranges, stats, ...(stale ? { stale: true as const } : {}) };
+  return { rev: t.rev, ranges, stats, ...(stale ? { stale: true as const } : {}), ...(overBudget ? { overBudget: true as const } : {}) };
 }

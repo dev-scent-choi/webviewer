@@ -31,6 +31,7 @@ import { gridCellValue, parseThemeColors, yieldToEventLoop, type GridCell, type 
 import { createCfFormulaFallback } from './cfFormulaEngine.js';
 import { parseCondFormats, parseDxfs } from './condFormatParse.js';
 import { sheetPathsByName } from './drawingPassthrough.js';
+import { WILDCARD_WORK_BUDGET, withWildcardBudget, type WildcardBudget } from '../collab/wildcard.js';
 
 /** 그리드 하나에 조건부 서식을 굽는 시간 예산(ms) */
 export const CF_BAKE_BUDGET_MS = 2_000;
@@ -47,6 +48,8 @@ export class CfBakeBudget {
   private readonly deadline: number;
   private lastYield = performance.now();
   skipped = false;
+  /** 와일드카드 작업 예산 — 굽기 하나에 하나(재검토 C1: 긴 칸 × 거의 맞는 조건이 칸 하나 칠하는 데 몇 초씩 막았다) */
+  readonly wildcard: WildcardBudget = { left: WILDCARD_WORK_BUDGET };
   constructor(budgetMs = CF_BAKE_BUDGET_MS) {
     this.deadline = performance.now() + budgetMs;
   }
@@ -231,7 +234,7 @@ export async function bakeSheetCondFormats(
         if (!cell) continue;
         const here = (byCol[c] ??= rowEntries.filter((e) => e.ranges.some((rect) => r >= rect.r0 && r <= rect.r1 && c >= rect.c0 && c <= rect.c1)));
         if (here.length === 0) continue;
-        const paint = paintCell(here, r, c, gridCellValue(cell), stats, valueAt, env);
+        const paint = withWildcardBudget(budget.wildcard, () => paintCell(here, r, c, gridCellValue(cell), stats, valueAt, env));
         if (!paint) continue;
         out ??= line.slice();
         out[c] = { ...cell, s: registry.register(paintedStyle(registry.styleOf(cell.s), paint)) };

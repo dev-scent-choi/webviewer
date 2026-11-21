@@ -8,7 +8,7 @@
  * 다시 찾아 그대로 쓴다(그래서 화면에 못 그리는 종류(`t: 'other'`, 수식·아이콘 집합 등)도 잃지 않는다).
  */
 
-import { wildcardMatcher } from './wildcard.js';
+import { WildcardBudgetError, wildcardMatcher } from './wildcard.js';
 import { dateTextToSerial } from './cellValueShared.js';
 
 export const GRID_COND_FORMATS_MAP = 'condFormats';
@@ -698,6 +698,10 @@ export function evalCfValue(
     return evalSmall(src, dr, dc, row, col, valueAt, env);
   } catch (error) {
     if (error === CF_PENDING) return undefined; // 서버 범위 값 답을 기다리는 중 — 오면 다시 칠한다
+    if (error instanceof WildcardBudgetError) {
+      env?.unsupported?.(); // 와일드카드 작업 예산을 넘었다 — 칠하지 않고 "일부 생략"
+      return undefined;
+    }
     // 작은 계산기가 모르는 것(다른 시트·모르는 함수·못 읽는 문법)만 수식 엔진으로 — 계산 오류(#VALUE! 등)는 안 맞음
     const unsupported = error === UNSUPPORTED || (error instanceof Error && error.message === 'cf formula');
     if (!unsupported || !env?.fallback) return undefined;

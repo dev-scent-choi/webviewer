@@ -89,3 +89,101 @@
 - `npx tsc` and vitest were not re-run (reported green). No end-to-end server repro of C1/C2; the regex and function were measured directly in isolation.
 - cad/dwg paths (no src diff for them). PDF editor behaviour under the grace period beyond reading the flush code.
 - The structured-reference rewrite logic in the xlsx table rules (lane-reviewed).
+
+---
+
+## 재검토 (9ffd696..fe23856, read-only)
+
+How I checked: read the diffs. Ran direct timing probes and a 200,000-case differential fuzz (old vs new `docxViewLayoutFixes`). Ran the six new test files: 46/46 pass. The full suite was not re-run.
+
+| Item | Status | Notes |
+|---|---|---|
+| C1 | **부분 반영** | The exponential case is gone, but one request can still take hours (see below). |
+| C2 | 반영 | |
+| I1 | 반영 | |
+| I2 | 반영 (one gap, Minor) | |
+| M1 | 반영 | |
+| M2 | 반영 | |
+| M3 | 반영 (one sibling left, Minor) | |
+
+### C1 — 부분 반영 (`src/collab/wildcard.ts`, `condFormatShared.ts:1124`)
+
+What is fixed:
+- **No more exponential blow-up.** `*a`×8+`*b` against 32,767 chars now takes about 0 ms. `*a`×150 takes 0.5 ms.
+- **Excel semantics hold.** 26 hand cases pass:
+  - `~*` `~?` `~~` are literals; a lone `~` is a literal.
+  - `?` matches exactly one character; `*` matches the empty string.
+  - Case is ignored on the CF path.
+  - The `Symbol.search` position matches what SEARCH expects.
+- **The library override covers every call site in fast-formula-parser 1.0.19:**
+  - `helpers.js:360,370`: Criteria `wc`, used by COUNTIF, SUMIF and AVERAGEIF through `.test`.
+  - `reference.js:142,355`: MATCH, VLOOKUP and HLOOKUP through `.test`.
+  - `text.js:284`: SEARCH through `String.search`.
+  - The patch replaces the property on the shared `WildCard` object, so every module that destructured it sees the new function.
+  - Server paths get the patch too: `cfFormulaEngine.ts` and `formulaParserPool.ts` (used by `formulas.ts`) import `formulaOverrides`.
+  - The version stays at 1.0.19 through package-lock (package.json still says `^`). `finalReviewC1Wildcard.test.ts` exercises the library path, so a library change would show up there.
+
+**Still open (Important; Critical if edit tokens reach untrusted users).** The matcher is O(key length × pattern length) per key, and nothing caps the total work per request.
+- A near-miss pattern (`*` + `a`×290 + `b*`) against 32k-char keys costs about 14 ms per key.
+- Measured: 10 criteria × 200 distinct 32k-char keys took **28 s**. The route allows 2,000 criteria per request, which extrapolates to about **5,600 s** in one `POST /api/view/xlsx-cf-ranges`.
+- The crafted file is small: 200 cells × 32 KB compresses to a few KB.
+- The bake path is mostly bounded by its per-call budget, but one COUNTIF over 1,000 such keys still blocks for about 14 s.
+- Suggested fix:
+  - Keep a work budget in `countIf`'s key loop (Σ key length × operand length, e.g. 5·10⁷ per request). When it runs out, answer skipped or stale.
+  - Or cap wildcard criteria per request (e.g. 32).
+  - Optionally use `indexOf` for literal segments.
+
+Two side effects of the library override (informational):
+- The library's original regex was unanchored, so `COUNTIF(...,"a*")` also counted "ba". It now does a full match, which is Excel-correct.
+- Criteria without the `i` flag stay case-sensitive, as before. Excel is case-insensitive; this was already the case and is unchanged.
+
+### C2 — 반영 (`src/converters/libreOffice.ts:255-310`)
+
+- The attack inputs that took 27 s now take 0–1 ms. The anchor scan also takes 0 ms.
+- Differential fuzz over 200,000 random token sequences found **0 differences**. The tokens covered no sectPr, self-closing `<w:sectPr/>`, `<w:sectPrChange>`, unclosed tags, nested `<wp:anchor>`, and `<wp:anchorX>`.
+- The `\b` handling in `tagAt` matches the regex, including end of string.
+- One divergence remains, and it cannot occur in a valid file. With two `<wp:positionH>` in one anchor, where the first has no `relativeFrom`, the old regex used the second and the new code returns null. The schema allows exactly one positionH with `relativeFrom` required.
+
+### I1 — 반영 (`src/routes/viewer.ts:499-517, 736-742`; `src/docx/import.ts:1686`)
+
+- The unzip is filtered to `word/*.xml` and `*.rels`. I checked that nothing in the docx parse reads media bytes; `mediaPathOf` only builds paths.
+- The cache key is `docId:sha1(bytes)`, so a save changes the key and no stale value is served. Old versions age out of the LRU (32 MB, 64 entries).
+- Only the Word editor (`editor.ts:341`) uses `docxRender`, and it sends `editor=1`. The hwp, pdf, slides and grid editors and viewer.js do not need it.
+- Minor: a docx editor tab opened before the deploy (old bundle, no `editor=1`) gets no `docxRender` until it reloads.
+
+### I2 — 반영, with one gap (`src/collab/room.ts:3057-3116`)
+
+- The size estimate counts `originalPdfBytes`, `pdfEncryptedFile` and `originalXlsxBytes` plus the encoded Y.Doc. A 500 MB PDF room (more than 16 MB) closes at once, as before the grace period.
+- `lingeringBytes` stays consistent on all three paths: timer, eviction and wake.
+- **New Minor gap.** `lingerBytesOf` runs when the last user leaves. For an unencrypted PDF, `originalPdfBytes` is only set after `await seedPdfModel` (`room.ts:~1866`).
+  - If the user closes the tab while a huge PDF is still loading (likely, because huge PDFs load slowly), the estimate is near 0.
+  - The room then lingers 45 s, keeps seeding, and holds the whole file.
+  - The same applies to a pptx or docx that is still seeding. `pdfParts` is never counted.
+  - Fix: do not linger until `room.ready` has settled, or check the size again when seeding ends.
+
+### M1 — 반영 (`room.ts:2522-2524`)
+
+- A no-op `runSerialized` step makes the cleanup wait for any save in progress.
+- No deadlock: teardown never awaits from inside a serialized task, and the no-op only joins the end of the chain. A failed save still advances the chain (`previous.then(task, task)`).
+- If a new room for the same document queues saves, cleanup is only delayed, and the `!rooms.has` guard still protects that room.
+- Unchanged and already present in base: `closeLazyGridStore` (which deletes the row-store file) and `persistChangeLog` still run before that save finishes. The base code had the same order, and the fix did not touch it.
+
+### M2 — 반영 (`room.ts:650-657`)
+
+- Room identity is re-checked after the wait and after counting. An error after close becomes null (409).
+
+### M3 — 반영 (`src/docx/export.ts:329-409, 807-812`)
+
+- Footnote and endnote clone lookup now uses an index built in one indexOf pass. The spread is replaced by a loop. The results match the old regexes for well-formed parts.
+- One sibling remains (Minor, not measured, ~70%). `ensureBuiltinLists` (`export.ts:~815`) still uses the tempered regex `(?:(?!</w:abstractNum>)[\s\S])*<w:name w:val=…>`. A numbering.xml with many unclosed `<w:abstractNum>` tags makes saves slow, but only after the user applies a built-in list.
+
+### New defects introduced by the fixes
+
+- None of their own beyond the I2 seeding gap above.
+- The C1 residual is not new: it is the original issue reduced from exponential to polynomial.
+
+### Verdict
+
+- C2, I1, M1, M2 and M3 are done.
+- C1 is not fully closed: one edit-token request can still block the server for minutes to hours. Before merge, add the per-request work budget (or a cap on wildcard criteria).
+- The I2 seeding gap is Minor and can follow later.
