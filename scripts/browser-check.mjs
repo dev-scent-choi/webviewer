@@ -230,7 +230,6 @@ async function main() {
     { timeout: 20000 },
   );
   const uploadedItem = page.locator('.doc-item', { hasText: 'sample.xlsx' }).first();
-  await uploadedItem.locator('details.open-more > summary').click(); // 2026-11-21부터 예전 단추는 "▾ 다른 방식" 메뉴 안
   const quickEditBtn = uploadedItem.getByRole('button', { name: '동시편집 열기' });
   await quickEditBtn.waitFor({ state: 'visible', timeout: 10000 });
   const [gridPage] = await Promise.all([
@@ -262,7 +261,6 @@ async function main() {
     { timeout: 20000 },
   );
   const uploadedDocxItem = page.locator('.doc-item', { hasText: 'sample-real-upload.docx' }).first();
-  await uploadedDocxItem.locator('details.open-more > summary').click(); // 2026-11-21부터 예전 단추는 "▾ 다른 방식" 메뉴 안
   const quickEditDocxBtn = uploadedDocxItem.getByRole('button', { name: '동시편집 열기' });
   await quickEditDocxBtn.waitFor({ state: 'visible', timeout: 10000 });
   const [docxEditorPage] = await Promise.all([

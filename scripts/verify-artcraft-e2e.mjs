@@ -420,17 +420,10 @@ try {
     const docRow = page.locator('li.doc-item', { hasText: 'a1-korean-report.docx' });
     const pptRow = page.locator('li.doc-item', { hasText: 'SimpleMacro.ppt' });
     await docRow.waitFor({ timeout: 30000 });
-    // 여는 단추들은 "▾ 다른 방식" 메뉴 안으로 옮겨졌다(readonly-editor-look §3.3) — 닫힌 메뉴 안은 접근성 트리에 없어 먼저 연다
-    const openMore = (row, open = true) => row.locator('details.open-more').evaluate((d, o) => { d.open = o; }, open);
-    await openMore(docRow);
-    await openMore(pptRow);
     const pptButton = pptRow.getByRole('button', { name: '아트크래프트로 열기' });
     const pptTitle = await pptButton.locator('xpath=..').getAttribute('title');
     rec('메인: .ppt 줄의 "아트크래프트로 열기"는 흐림 + 이유', (await pptButton.isDisabled()) && pptTitle === '이 형식은 브라우저 엔진이 지원하지 않습니다', pptTitle ?? '');
     rec('메인: docx 줄에 "리브레오피스로 열기"', await docRow.getByRole('button', { name: '리브레오피스로 열기' }).isVisible());
-    // 펼친 메뉴가 아래 공유 폼을 덮으니 닫는다
-    await openMore(docRow, false);
-    await openMore(pptRow, false);
     const form = docRow.locator('form.token-form');
     await form.locator('input[name=viewer]').fill('공유받는 사람');
     await form.locator('input[name=canDownload]').check();
@@ -441,7 +434,6 @@ try {
     const shared = await openPage(context, await link.getAttribute('href'));
     rec('메인: 공유 폼 아트크래프트 링크 → 표지 보임', await shared.page.locator('#engine-badge').isVisible());
     await shared.page.close();
-    await openMore(docRow);
     await docRow.getByRole('button', { name: '아트크래프트로 열기' }).click();
     await page.waitForURL(/\/view\.html\?token=/, { timeout: 15000 });
     await page.waitForSelector('.page-frame[data-page="1"].page-ready', { timeout: 90000 });

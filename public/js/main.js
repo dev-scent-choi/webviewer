@@ -99,28 +99,6 @@ async function openReadonlyEditor(docId, viewer) {
   location.href = issued.viewerUrl;
 }
 
-// "▾ 다른 방식" 메뉴는 밖을 누르거나 초점이 밖으로 나가거나 Esc 면 닫는다 — 펼친 채 두면 아래 공유 폼을 덮는다
-document.addEventListener('click', (event) => {
-  for (const menu of document.querySelectorAll('details.open-more[open]')) if (!menu.contains(event.target)) menu.open = false;
-});
-document.addEventListener('keydown', (event) => {
-  if (event.key !== 'Escape') return;
-  for (const menu of document.querySelectorAll('details.open-more[open]')) {
-    menu.open = false;
-    menu.querySelector('summary')?.focus();
-  }
-});
-document.addEventListener('focusin', (event) => {
-  for (const menu of document.querySelectorAll('details.open-more[open]')) if (!menu.contains(event.target)) menu.open = false;
-});
-/** 펼칠 때 화면 오른쪽을 넘으면 오른쪽 끝에 맞춰 왼쪽으로 편다(좁은 화면 360–600px) */
-function placeMoreMenu(menu) {
-  const panel = menu.querySelector('.open-more-menu');
-  if (!menu.open || !panel) return;
-  panel.classList.remove('flip');
-  if (panel.getBoundingClientRect().right > document.documentElement.clientWidth - 8) panel.classList.add('flip');
-}
-
 /** 업로더 본인 편집용 — 전체 권한 + canEdit 토큰을 발급해 동시편집기로 이동한다(docx/xlsx). */
 async function openEditor(docId, viewer) {
   const issued = await issueToken(docId, viewer, true, true, true, true);
@@ -342,7 +320,7 @@ function renderDocItem(doc) {
   }
 
   // 기본 "열기" — docx/xlsx/pptx 는 읽기 전용 편집기 화면, 그 밖은 지금 바로 보기와 같다(pdf 는 PDF 편집기).
-  // 예전 단추들은 글자·동작 그대로 "▾ 다른 방식" 메뉴 안으로 옮긴다(e2e 가 글자로 찾는다).
+  // 다른 여는 방식은 그 옆에 한 줄로(리브레오피스·아트크래프트·동시편집/PDF 편집·삭제) — 글자는 e2e 가 찾는다.
   const editorLook = supportsEdit(doc);
   const openBtn = document.createElement('button');
   openBtn.type = 'button';
@@ -361,16 +339,7 @@ function renderDocItem(doc) {
       setStatus(error.message, 'error');
     });
   });
-  const more = document.createElement('details');
-  more.className = 'open-more';
-  const moreSummary = document.createElement('summary');
-  moreSummary.className = 'btn';
-  moreSummary.textContent = '▾ 다른 방식';
-  const moreMenu = document.createElement('div');
-  moreMenu.className = 'open-more-menu';
-  more.append(moreSummary, moreMenu);
-  more.addEventListener('toggle', () => placeMoreMenu(more));
-  info.append(openBtn, more);
+  info.append(openBtn);
 
   const quickView = document.createElement('button');
   quickView.type = 'button';
@@ -386,7 +355,7 @@ function renderDocItem(doc) {
   const artOk = supportsArtcraft(doc);
   if (artOk || editorLook) quickView.textContent = '리브레오피스로 열기';
   if (artOk || editorLook) quickView.title = '서버 변환';
-  moreMenu.append(quickView);
+  info.append(quickView);
 
   // 아트크래프트(브라우저 엔진)로 열기 — 안 되는 형식은 흐리게 + 이유 말풍선(흐린 단추는 마우스를 받지 않아 감싼 span에 title)
   const artWrap = document.createElement('span');
@@ -409,7 +378,7 @@ function renderDocItem(doc) {
     artView.style.pointerEvents = 'none';
   }
   artWrap.append(artView);
-  moreMenu.append(artWrap);
+  info.append(artWrap);
 
   if (supportsEdit(doc)) {
     const quickEdit = document.createElement('button');
@@ -423,7 +392,7 @@ function renderDocItem(doc) {
         setStatus(error.message, 'error');
       });
     });
-    moreMenu.append(quickEdit);
+    info.append(quickEdit);
   } else if (doc.ext === 'pdf') {
     // PDF 는 동시편집 대신 PDF 편집기(주석·쪽 정리·서명·글자 고치기 등) — 바로 보기와 같은 화면이지만 찾기 쉽게 따로 둔다
     const pdfEdit = document.createElement('button');
@@ -437,7 +406,7 @@ function renderDocItem(doc) {
         setStatus(error.message, 'error');
       });
     });
-    moreMenu.append(pdfEdit);
+    info.append(pdfEdit);
   }
 
   info.append(makeDeleteButton());
