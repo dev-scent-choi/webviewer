@@ -1,0 +1,114 @@
+# 오피스 품질 세 갈래 통합 (office-quality-all)
+
+기준 커밋 94ab62b에서 세 갈래를 차례로 `--no-ff`로 합쳤다. 합칠 때마다 검증했고, 통합 때 고친 것은 그 병합 바로 뒤에 따로 커밋했다.
+master에는 합치지 않았다. push·배포도 하지 않았다. 운영 폴더(`webviewer`, 8000·8010)는 건드리지 않았다.
+시험 서버는 이 작업 폴더에서 8146(검증용)과 8147(audit·verify:reconnect가 스스로 띄움)에 띄웠다. 데이터·임시·LibreOffice 프로필은 `.audit-run/` 아래에 따로 뒀다.
+정답 PDF는 `webviewer-quality/docs/quality-audit/out`에서 복사했다. Office로 다시 만들지 않았다(`--no-office`).
+
+| 순서 | 커밋 | 내용 |
+|---|---|---|
+| 1 | 516c9e1 | 병합: office-quality-xlsx @9389052 (충돌 없음) |
+| 2 | 2c0219a | 병합: office-quality-pptx @2c2678a (충돌 2개, 아래) |
+| 2a | e3e906c | 통합 시험: 방 닫기 유예·세대 × 엑셀 값 개수 표·표 규칙·전역 상한 (`tests/integrationRoomGraceXlsx.test.ts`) |
+| 3 | dd4cc0e | 병합: office-quality-docx @ddd4304 (충돌 3개, 아래) |
+| 3a | 6142bae | 통합: 방이 닫히면 워드 보존 조각의 문서별 기록을 놓음 + 유예·세대 × 조각 저장소 시험 (`tests/integrationRoomGraceDocx.test.ts`) |
+
+## 충돌과 해결
+
+| 병합 | 파일 | 충돌 | 해결 |
+|---|---|---|---|
+| pptx | `src/collab/room.ts` closeConn "마지막 참여자 퇴장" 분기 | xlsx 갈래가 바로 닫는 코드 안에 `cfTallyRelease(room.cfRanges)`를 넣었다. pptx 갈래는 같은 코드를 `teardownRoom()`으로 옮기고 그 자리를 `lingerRoom ? 저장만 : teardownRoom`으로 바꿨다 | pptx 쪽 분기를 쓰고, `cfTallyRelease`는 `teardownRoom` 안(`largeRoomDocIds.delete` 다음)으로 옮겼다. 그래서 유예가 끝날 때, 유예 상한을 넘어 밀려날 때, `forceCloseRoom`으로 닫을 때 모두 표를 놓는다. 유예 중에는 놓지 않는다(같은 세대로 다시 붙으면 쓴다) |
+| pptx | `audit/office/run.mjs` | 두 갈래가 따로 `--no-office`를 넣었다. xlsx는 정답이 없으면 알리고 계속, pptx는 멈춘다. xlsx는 `--only` 형식만 정답을 확인한다 | xlsx의 `NO_OFFICE` 상수와 `--only` 범위 확인을 쓰고, 정답이 없을 때는 pptx·docx처럼 **멈춘다**(조용히 틀린 점수를 내지 않게). pptx의 서버 로그 파일 직접 쓰기(파이프 교착 해결)는 자동으로 합쳐졌다. xlsx의 "캡처 실패면 멈춤"(`capture ${ext} 실패`)도 그대로다 |
+| docx | `audit/office/run.mjs` | 같은 `--no-office`의 세 번째 사본(설명·오류 문구만 다름) | 동작이 같아서 HEAD 문구를 두고, docx 쪽 이유 설명을 한 줄 덧붙였다 |
+| docx | `src/client/editor.ts` import | pptx `guardRoomEpoch` import와 docx `docxLayout`·`docxPaste`·타입 import | 둘 다 둔다. `guardRoomEpoch(provider, ydoc)` 호출 한 줄은 자동으로 합쳐졌다(639행) |
+| docx | `src/routes/viewer.ts` room.js import | xlsx `getCfRemoteAnswer` + `parseCfRemoteRequest` + `CF_REMOTE_RATE_LIMIT`와 docx `docxFragmentsOf` | 이름 목록을 하나로 합치고 xlsx 쪽 두 줄은 그대로 둔다 |
+
+자동으로 합쳐진 공유 파일(`public/css/style.css`, `public/js/viewer.js`, `package.json`, `capture.mjs`, `compare.py`, 점검표, `src/converters/libreOffice.ts`, `vitest.config.ts`, `src/storage.ts`, `public/editor.html`, `src/client/grid-editor.ts`)은 tsc·시험·audit로 확인했다.
+`libreOffice.ts`의 전처리 선택은 `ext === '.docx' ? literalizeDocxThemeFonts : ext === '.pptx' ? boldPptxTableHeaders : undefined`이다. docx 쪽은 동기 함수로 가장자리 글상자 처리를 하고, pptx 쪽은 비동기 함수다. 타입이 `Uint8Array | Promise<Uint8Array>`라서 둘이 함께 돈다.
+
+## 상호작용 점검
+
+### 1. 방 세대·닫기 유예·teardownRoom × xlsx 방 추가물
+
+`vitest.config.ts`는 유예를 끄고(`DOCVIEW_ROOM_CLOSE_GRACE_MS=0`) 돌린다. 그래서 두 갈래 시험 어디에서도 이 조합을 보지 않았다. 새 시험은 유예를 400ms로 켜서 본다(`tests/integrationRoomGraceXlsx.test.ts`, 4개).
+
+- **값 개수 표(cfRanges)**
+  - 유예 중에도 `getCfRemoteAnswer`가 답한다(재접속 직전에 온 xlsx-cf-ranges).
+  - 같은 세대로 다시 붙으면 **같은 표 객체, 같은 rev**를 쓴다. 그래서 편집 화면의 rev 캐시(`sameRev`)가 맞다.
+  - 유예가 끝나면 `tally.sheets.size === 0`이고, 방이 없어 경로는 409를 낸다.
+  - 지난 세대 탭은 메시지 8로 거절되고, 방을 새로 만들지 않는다.
+  - 새로 불러온 탭은 새 방과 새 표로 답을 받는다.
+  - **변이 확인**: teardownRoom의 `cfTallyRelease` 줄을 주석 처리하면 이 시험과 다음 시험이 실패한다.
+- **강제 닫기**: 유예 중인 방을 `forceCloseRoom`으로 닫으면 표를 바로 놓는다.
+- **전역 LRU 상한**: 유예 중인 방은 `lastUsed`가 가장 오래돼 먼저 버려진다. 그 방에 다시 물으면 다시 세어 맞게 답한다(600칸, K1 2개).
+- **표 규칙**
+  - 유예 뒤 같은 세대로 다시 붙어도 머리 줄만 지우는 행 삭제는 거절된다.
+  - 데이터 행을 모두 지우면 한 행이 남는다(r0 0 → r1 2, totalsRows 1).
+  - `roomTablesCache`는 방을 키로 하는 WeakMap이라 방과 함께 사라진다.
+  - 큰 엑셀 방(`largeRoomDocIds`)은 유예하지 않는다. 메모리를 그대로 지킨다.
+- **차트 맵 검사, 리비전**: 둘 다 방(Y.Doc) 수명 안의 관찰자다. 유예 중에도 같은 방이 살아 있어서 바뀌는 것이 없다. 방을 다시 만들면 seedRoom이 다시 건다.
+- **실제 브라우저**(`.audit-run/probe/reconnect-cf.mjs`, 8146, Chromium, 1,500행 COUNTIF + 하이퍼링크): **7/7**. 머지 2 뒤와 머지 3 뒤 두 번 돌렸다.
+  - 편집 화면이 연 웹소켓을 페이지 안에서 닫았다. 그러자 `epoch=`를 실은 새 연결이 열렸고, 옛 세대 안내는 뜨지 않았다.
+  - 그 뒤 다른 참여자가 편집하자 중복이 생기고 없어지는 것이 칠해졌다. 이때 xlsx-cf-ranges 응답은 모두 200이었다. xlsx-extras도 답했다.
+- 서버를 다시 켠 뒤 옛 세대 거절(엑셀 새 번들·옛 번들)은 `verify:reconnect`의 엑셀 항목이 본다. 거절 뒤에는 새로 불러오므로, 처음 여는 흐름과 같다.
+
+### 2. 감사 도구(run.mjs 하나)
+
+- `--only`, `--no-office`(정답이 없으면 멈춤), 서버 로그 파일 직접 쓰기, 캡처 실패면 멈춤이 한 파일에 다 있다.
+- **증거**: 머지 1 뒤(xlsx 갈래만, run.mjs는 아직 파이프 방식) 전체 audit를 돌리자 pptx 캡처에서 서버가 멈췄다. 로그는 1.6KB에서 멈췄고 서버는 응답하지 않았다. pptx 갈래가 고친 그 파이프 교착이다. 내가 띄운 audit 프로세스만 PID로 끄고 `--only xlsx`로 다시 쟀다(27/27·27/27).
+- 머지 2 뒤부터는 전체 audit가 끝까지 돈다.
+
+### 3. package.json 스크립트
+
+`verify:xlsx`, `verify:xlsx:browser`(xlsx), `verify:pptx`, `verify:reconnect`(pptx), `verify:docx`, `perf:docx`(docx), `audit:office`가 모두 있다. 기존 `verify:pdf*`·`verify:view-*`·`verify:legacy-edit`도 그대로다.
+
+### 4. 방 세대·유예 × docx 보존 조각 저장소(docxfrag.json)
+
+`tests/integrationRoomGraceDocx.test.ts`(d04-images.docx, 유예 400ms):
+
+- 그림 문단을 지우고 나가도, 유예 중에는 `docxFragmentsOf`가 **같은 저장소**를 돌려준다. 지운 그림 조각도 그대로 남는다.
+- 같은 세대로 다시 붙으면 거절되지 않고 같은 저장소를 쓴다.
+- 유예가 끝나 방이 닫히면 `docxfrag.json`에 지운 그림 조각이 남는다. 지난 세대 탭은 거절된다.
+- 새로 연 방은 파일의 조각을 모두 이어받는다.
+- 워드 편집기의 재접속 안내와 복구 화면은 `verify:reconnect`의 워드 항목이 본다(유예·반쯤 열림·재시작·옛 번들, 모두 통과).
+
+**통합 수정(6142bae)**: docx 갈래의 문서별 모듈 맵 `inheritedFragments`·`writtenFragments`는 방이 닫혀도 지워지지 않았다. writtenFragments에는 문서마다 최대 4MB JSON이 든다. 서버가 켜져 있는 동안 저장한 워드 문서 수만큼 쌓였다.
+지금은 teardownRoom의 마지막 단계(저장과 `ydoc.destroy` 뒤)에서 그 문서의 방이 없으면 두 맵을 지운다. 새 방은 `loadSavedDocxFragments`가 파일에서 다시 채우므로 "한 세대만" 동작은 그대로다.
+저장보다 먼저 지우면 마지막 저장이 지난 세대 조각을 다시 써 버린다. 그래서 `.finally` 안에서 지운다. 시험은 테스트 전용 훅 `hasDocxFragmentRecordsForTest`로 이를 확인한다.
+
+### 5. editor.ts의 roomEpoch 한 줄 × docx 변경
+
+import 충돌만 났고 둘 다 남겼다. `guardRoomEpoch(provider, ydoc)`는 WebsocketProvider를 만든 바로 다음 줄에 그대로 있다. `verify:docx` 32/32, `verify:reconnect` 워드 항목 모두 통과.
+
+### 6. docx 경로의 접근 확인
+
+`/api/view/slide-media`(word/media)와 `/api/view/docx-drawing`은 각자 `resolveEditorDataView(token)`를 부르고 문서 종류를 확인한다. xlsx 쪽 `/api/view/xlsx-cf-ranges`(편집 토큰, 분당 240회)와 `/api/view/xlsx-extras`는 따로 등록된 경로라 서로 바꾸는 것이 없다. 시험 `cfRemoteRoute.test.ts`(xlsx)와 docx 경로 시험은 전체 vitest에서 통과했다.
+
+## 검증 결과
+
+| 시점 | tsc | vitest | verify:xlsx | verify:xlsx:browser | verify:pptx | verify:docx | verify:reconnect | 브라우저 재접속×cf |
+|---|---|---|---|---|---|---|---|---|
+| 머지 1 뒤(xlsx) | 통과 | 1036/1037(122파일). 실패 1개는 부하 탓 — `cfRangeValues.test.ts` C1 메모리·멈춤 시험이고, 그 파일만 다시 돌리면 10/10 | 34/34 | 39/39 | 9/9(기준) | — | — | — |
+| 머지 2 뒤(+pptx) | 통과 | **1093/1093**(126파일) | 34/34 | 39/39 | 24/24 | — | 39/39 | 7/7 |
+| 머지 3 뒤(+docx, 최종) | 통과 | **1158/1158**(130파일) | 34/34 | 39/39 | 24/24 | **32/32** | **39/39** | 7/7 |
+
+docx 왕복(`npx tsx audit/office/roundtrip-docx.ts`, 말뭉치 10 + 검토 재현 10)은 최종에서 **20/20**이다.
+
+### audit:office 점수(`--no-office`, 8147)
+
+| 시점 | docx 보기 | docx 편집 점검표 | xlsx 보기/편집 | pptx 편집 점검표 | pptx 편집 모양 |
+|---|---|---|---|---|---|
+| 머지 1 뒤 | (전체 실행은 파이프 교착으로 멈춤, 위 2절) | — | 27/27 · 27/27(`--only xlsx`) | — | — |
+| 머지 2 뒤 | 8/8, 모양 0.807 | 0/11(예상대로) | 27/27 · 27/27 | **52/52** | **0.975** |
+| 최종 | **8/8**, 모양 0.816 | **11/11** | **27/27 · 27/27** | **52/52** | **0.975** |
+
+최종 점검표 실패 항목은 0개이고, 30개 문서 모두 캡처됐다. docx 보기 모양 0.816과 편집 점검표 11/11은 FIX-DOCX.md 4차 수치와 같다.
+
+## 이상한 점·남는 위험
+
+- **`--no-office`에서 정답이 없을 때 이제 멈춘다.** xlsx 갈래 혼자일 때는 알리고 계속했다. 정답이 다 있는 지금은 차이가 없다.
+- **유예 중인 방은 값 개수 표 메모리를 최대 45초 더 쥔다.** 전역 상한이 그 방부터 버리고(시험으로 확인), 큰 엑셀 방은 유예하지 않으며, 유예하는 방은 한꺼번에 20개까지라 위험은 작다고 봤다.
+- **편집 화면의 cf rev 캐시와 방 재생성**: 방이 새로 만들어지면 rev가 0부터 다시 오른다. 그래서 이미 "새로 불러오기" 안내를 받은 옛 탭이 계속 물으면, 우연히 rev가 같아 범위 개수를 섞을 수 있다. 그 탭은 편집이 막힌 상태라 표시만 틀린다. 손대지 않았다.
+- **docx 조각 저장 경합(기존부터 있던 것)**: 닫히는 방의 마지막 저장과, 같은 문서로 막 새로 만든 방의 `loadSavedDocxFragments`가 겹치면 문서별 맵을 서로 덮을 수 있다. 세대 거절 덕분에 새 방은 새로 불러온 탭에서만 생긴다. 이번 통합으로 생긴 문제가 아니라서 고치지 않았다.
+- **세대 알림(메시지 7)과 Node 쪽 참여자**: `guardRoomEpoch`가 없는 y-websocket 참여자(시험 스크립트의 Node 참여자 등)는 메시지 7을 받으면 콘솔에 "Unable to compute message"를 남긴다. 해는 없다. 옛 번들도 같고, pptx 갈래 보고서가 다룬 범위다.
+- 머지 1 뒤 vitest의 실패 1개는 부하 탓이었다(단독 10/10). 머지 2·3 뒤에는 실패가 없다.
