@@ -1114,6 +1114,11 @@ const gridState = {
   // 참조될 수 있으니 빈 Set으로 초기화해 둔다.
   degradedMerges: new Set(),
   selected: null, // { row, col } — 1-based, 실제 시트 좌표(병합에 덮인 칸이면 앵커 좌표로 맞춰 둔다)
+  /** 범위 링크(자료!B3:H3)로 고른 범위 — { r1, c1, r2, c2 } 1-based. 칸을 누르면 풀린다 */
+  selRange: null,
+  /** 하이퍼링크 — /api/view/xlsx-links(src/xlsx/sheetExtras.ts SheetLink, 칸 좌표 0부터). sheetLinks는 지금 시트 것만 */
+  links: [],
+  sheetLinks: [],
 };
 
 function colLetter(index) {
@@ -1270,6 +1275,164 @@ function escapeHtml(text) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+/* ---------- 하이퍼링크(바로가기) — 편집 화면(src/client/gridLinks.ts)과 같은 규칙. 이 파일은 번들 없이 로드돼 따로 들고 있다 ---------- */
+
+/** 바깥 주소로 열어도 되는 것만(웹·메일·전화) — javascript:·file:·네트워크 경로는 열지 않는다 */
+const LINK_SAFE_URL = /^(https?:|mailto:|tel:)/i;
+const linkColNumber = (letters) => [...letters.toUpperCase()].reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0) - 1;
+
+/** gridLinks.ts parseLocation과 같다 — "'자료'!A1", "#요약!$C$5", "자료!B3:H3" → 시트 이름(없으면 null)·칸(0부터, 범위면 row2·col2) */
+function parseLinkLocation(location) {
+  const text = location.trim().replace(/^#/, '');
+  const bang = text.lastIndexOf('!');
+  const sheetName = bang >= 0 ? text.slice(0, bang).replace(/^'(.*)'$/, '$1').replace(/''/g, "'") : null;
+  const m = /^\$?([A-Za-z]{1,3})\$?(\d+)(?::\$?([A-Za-z]{1,3})\$?(\d+))?$/.exec(bang >= 0 ? text.slice(bang + 1) : text);
+  if (!m) return null;
+  const row = Number(m[2]) - 1;
+  const col = linkColNumber(m[1]);
+  const row2 = m[4] ? Number(m[4]) - 1 : row;
+  const col2 = m[3] ? linkColNumber(m[3]) : col;
+  return { sheetName, row: Math.min(row, row2), col: Math.min(col, col2), row2: Math.max(row, row2), col2: Math.max(col, col2) };
+}
+
+/** gridLinks.ts evalLinkExpr과 같다 — HYPERLINK 첫 인자("글자"와 칸 참조를 &로 이은 것만)를 누른 칸 기준으로 푼다 */
+function evalLinkExpr(expr, anchor, at, valueAt) {
+  const token = /\s*(?:"((?:[^"]|"")*)"|(\$?)([A-Za-z]{1,3})(\$?)(\d+))\s*/y;
+  let out = '';
+  let pos = 0;
+  for (;;) {
+    token.lastIndex = pos;
+    const m = token.exec(expr);
+    if (!m) return null;
+    if (m[1] !== undefined) out += m[1].replace(/""/g, '"');
+    else {
+      const col = linkColNumber(m[3]) + (m[2] ? 0 : at.col - anchor.col);
+      const row = Number(m[5]) - 1 + (m[4] ? 0 : at.row - anchor.row);
+      if (row < 0 || col < 0) return null;
+      out += valueAt(row, col);
+    }
+    pos = token.lastIndex;
+    if (pos >= expr.length) return out;
+    if (expr[pos] !== '&') return null;
+    pos += 1;
+  }
+}
+
+/** 지금 시트 칸(0부터)의 보이는 값 */
+function linkCellText(r0, c0) {
+  const cell = cellAt(gridState.active, r0 + 1, c0);
+  return cell && cell !== 0 ? cell.v : '';
+}
+
+/** 칸(1부터)에 걸린 링크 — 수식 링크가 빈 값을 보이는 칸(IFERROR(…,""))이면 링크로 치지 않는다 */
+function linkAt(r, c) {
+  const link = gridState.sheetLinks.find((l) => r - 1 >= l.r1 && r - 1 <= l.r2 && c - 1 >= l.c1 && c - 1 <= l.c2);
+  if (link && link.expr && linkCellText(r - 1, c - 1) === '') return undefined;
+  return link;
+}
+
+function linkTargetOf(link, r, c) {
+  if (!link.expr || !link.anchor) return link;
+  const text = (evalLinkExpr(link.expr, link.anchor, { row: r - 1, col: c - 1 }, linkCellText) ?? '').trim();
+  if (!text) return {};
+  if (text.startsWith('#')) return { location: text.slice(1) };
+  return LINK_SAFE_URL.test(text) ? { url: text } : {};
+}
+
+function linkTitleOf(link, r, c) {
+  if (link.blocked) return `${link.tooltip ? `${link.tooltip}\n` : ''}이 주소는 웹 화면에서 열 수 없습니다(파일·네트워크 경로): ${link.blocked}`;
+  const target = linkTargetOf(link, r, c);
+  return link.tooltip || (target.url ? `${target.url}\n클릭하면 열립니다 (Ctrl+클릭: 칸 선택)` : `클릭하면 ${target.location ?? '연결된 곳'}(으)로 이동합니다 (Ctrl+클릭: 칸 선택)`);
+}
+
+/** 편집 화면 officeAlert와 같은 모양의 알림(.office-dialog) — 글은 textContent로만 넣는다 */
+function showGridNotice(message) {
+  const back = document.createElement('div');
+  back.className = 'office-dialog office-dialog-runtime';
+  back.setAttribute('role', 'alertdialog');
+  back.setAttribute('aria-modal', 'true');
+  const card = document.createElement('div');
+  card.className = 'office-dialog-card';
+  const title = document.createElement('h2');
+  title.textContent = '알림';
+  const body = document.createElement('p');
+  body.className = 'office-dialog-message';
+  body.textContent = message;
+  const actions = document.createElement('div');
+  actions.className = 'office-dialog-actions';
+  const ok = document.createElement('button');
+  ok.type = 'button';
+  ok.className = 'btn-mini btn-mini-primary';
+  ok.textContent = '확인';
+  actions.append(ok);
+  card.append(title, body, actions);
+  back.append(card);
+  const close = () => {
+    back.remove();
+    document.getElementById('grid-scroll')?.focus({ preventScroll: true });
+  };
+  ok.addEventListener('click', close);
+  back.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' || event.key === 'Enter') {
+      event.preventDefault();
+      close();
+    }
+  });
+  document.body.append(back);
+  ok.focus();
+}
+
+/** 문서 안 위치로 — 그 시트로 바꾸고 칸(범위면 범위 전체)을 고른 뒤 보이게 스크롤한다. 없는 시트면 false */
+function goToLinkTarget(t) {
+  const want = t.sheetName === null ? null : t.sheetName.toLowerCase();
+  const idx = want === null ? gridState.active : gridState.sheets.findIndex((s) => s.name.toLowerCase() === want);
+  if (idx < 0) return false;
+  if (idx !== gridState.active) activateSheet(idx);
+  // 병합에 덮인 칸이면 병합의 왼쪽 위 칸(자기 <td>가 있는 칸)을 고른다
+  const m = gridState.mergeCovered.get(`${t.row + 1}:${t.col + 1}`);
+  gridState.selected = m ? { row: m.r, col: m.c } : { row: t.row + 1, col: t.col + 1 };
+  gridState.selRange = t.row2 !== t.row || t.col2 !== t.col ? { r1: t.row + 1, c1: t.col + 1, r2: t.row2 + 1, c2: t.col2 + 1 } : null;
+  updateSelectionDisplays();
+  // 화면 밖 목적지는 가운데쯤으로 옮긴다(편집 화면 tdForEnsureRendered와 같다) — 가장자리에 붙이면 머리글·스크롤 막대에 가린다
+  const scroll = document.getElementById('grid-scroll');
+  const sheet = gridState.sheets[gridState.active];
+  const { row, col } = gridState.selected;
+  const top = gridState.layout.top(row - 1);
+  const bottom = gridState.layout.top(row);
+  // 틀 고정 행은 위를 덮고 있다 — 그 아래 칸만 보이는 자리로 친다. shortcut: 틀 고정 열은 따지지 않는다(드묾), 생기면 같은 식으로
+  const freezeRows = Math.min(sheet.freezeRows || 0, sheet.rowCount);
+  const frozenH = row > freezeRows ? gridState.layout.top(freezeRows) : 0;
+  if (row > freezeRows && (top < scroll.scrollTop + frozenH + 30 || bottom > scroll.scrollTop + scroll.clientHeight - 20)) {
+    scroll.scrollTop = Math.max(0, top - frozenH - (scroll.clientHeight - frozenH) / 2);
+  }
+  let left = GRID_ROWNUM_W;
+  for (let c = 1; c < col; c += 1) left += colWidthAt(sheet, c);
+  const right = left + colWidthAt(sheet, col);
+  if (left < scroll.scrollLeft + GRID_ROWNUM_W || right > scroll.scrollLeft + scroll.clientWidth - 20) scroll.scrollLeft = Math.max(0, left - GRID_ROWNUM_W - 40);
+  renderGridViewport();
+  syncGridHead();
+  return true;
+}
+
+function followLink(link, r, c) {
+  const { url, location } = linkTargetOf(link, r, c);
+  if (url && LINK_SAFE_URL.test(url.trim())) {
+    window.open(url, '_blank', 'noopener,noreferrer');
+    return;
+  }
+  const target = location ? parseLinkLocation(location) : null;
+  if (target) {
+    if (!goToLinkTarget(target)) showGridNotice(`참조가 올바르지 않습니다.\n'${target.sheetName}' 시트를 찾을 수 없습니다.`);
+    return;
+  }
+  if (location) {
+    showGridNotice(`참조가 올바르지 않습니다.\n'${location}' 위치를 찾을 수 없습니다.`);
+    return;
+  }
+  const shown = link.blocked ?? url;
+  if (shown) showGridNotice(`이 바로가기는 웹 화면에서 열 수 없습니다.\n${shown}\n(엑셀이 설치된 PC에서 파일을 내려받아 여세요.)`);
 }
 
 /** 셀 값 중 검색어와 일치하는 부분만 <mark>로 감싼다 (대소문자 무시) */
@@ -1449,6 +1612,11 @@ function renderGridViewport() {
       if (isHit) classes.push('g-hit');
       if (hitKey === gridCurrentHit) classes.push('g-hit-current');
       if (gridState.selected && gridState.selected.row === r && gridState.selected.col === c) classes.push('g-selected');
+      const sr = gridState.selRange;
+      if (sr && r >= sr.r1 && r <= sr.r2 && c >= sr.c1 && c <= sr.c2) classes.push('g-range-selected');
+      const link = gridState.sheetLinks.length ? linkAt(r, c) : undefined;
+      if (link) classes.push('g-link');
+      const linkTitle = link ? ` title="${escapeHtml(linkTitleOf(link, r, c))}"` : '';
       const cellStyleObj = isEmpty || cell.s === undefined ? undefined : gridState.styles[cell.s];
       // 표시 글자는 서버가 칸 서식(numberFormat.ts — 편집 화면과 같은 서식기)대로 이미 만들어 둔다
       const shown = isEmpty ? '' : cell.v;
@@ -1512,7 +1680,7 @@ function renderGridViewport() {
       const stick = frozenRow ? (colStick ? `${rowStick};left:${frozenColLeft[c]}px;z-index:6` : rowStick) : colStick;
       if (stick) classes.push('g-frozen');
       const clsSticky = classes.length > 0 ? ` class="${classes.join(' ')}"` : '';
-      cells.push(`<td data-r="${r}" data-c="${c}"${clsSticky}${span}${stick ? ` style="${stick}"` : ''}>${content}</td>`);
+      cells.push(`<td data-r="${r}" data-c="${c}"${clsSticky}${span}${linkTitle}${stick ? ` style="${stick}"` : ''}>${content}</td>`);
     }
     // 기본보다 낮은 행(g-row-short) — 행 번호 글자 높이 때문에 행이 커지지 않게(CSS)
     rowsHtml.push(`<tr${rowH === 0 ? ' class="g-hidden-row"' : rowH < 20 ? ' class="g-row-short"' : ''} style="height:${rowH}px">${cells.join('')}</tr>`);
@@ -1693,9 +1861,13 @@ function activateSheet(index) {
   scroll.scrollLeft = 0;
   for (const [i, tab] of [...document.querySelectorAll('.grid-sheet-tab')].entries()) {
     tab.classList.toggle('active', i === index);
+    // 링크로 먼 시트에 왔을 때도 탭 줄이 그 탭을 보여 주게(엑셀과 같다)
+    if (i === index) tab.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }
   renderGridHead();
   renderGridImages();
+  gridState.sheetLinks = gridState.links.filter((l) => l.sheetName === sheet.name);
+  gridState.selRange = null;
   gridState.selected = { row: 1, col: 1 };
   renderGridViewport();
   updateSelectionDisplays();
@@ -1751,6 +1923,7 @@ function scrollSelectedIntoView() {
 
 function setSelected(row, col) {
   gridState.selected = { row, col };
+  gridState.selRange = null;
   updateSelectionDisplays();
   renderGridViewport();
   scrollSelectedIntoView();
@@ -1868,6 +2041,15 @@ async function initGridView() {
       })
       .catch(() => undefined);
   }
+  // 하이퍼링크도 늦게 와도 된다 — 도착하면 지금 시트 칸에 표시
+  void fetchJsonView(`/api/view/xlsx-links?${tokenQuery}`)
+    .then((data) => {
+      gridState.links = (data && data.links) || [];
+      const sheet = gridState.sheets[gridState.active];
+      gridState.sheetLinks = sheet ? gridState.links.filter((l) => l.sheetName === sheet.name) : [];
+      renderGridViewport();
+    })
+    .catch(() => undefined);
   gridState.styles = meta.styles;
   injectGridStyles(meta.styles);
   // 서버가 시간 예산·비용 상한 때문에 조건부 서식 일부를 굽지 않았으면 알린다
@@ -1908,8 +2090,14 @@ async function initGridView() {
   document.getElementById('grid-table').addEventListener('click', (event) => {
     const td = event.target.closest('td[data-r]');
     if (!td) return;
-    setSelected(Number(td.dataset.r), Number(td.dataset.c));
+    const r = Number(td.dataset.r);
+    const c = Number(td.dataset.c);
+    setSelected(r, c);
     scroll.focus({ preventScroll: true });
+    // 하이퍼링크 칸은 엑셀처럼 한 번 누르면 이동한다 — Ctrl·Shift·Alt를 누른 채면 칸만 고른다
+    if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+    const link = gridState.sheetLinks.length ? linkAt(r, c) : undefined;
+    if (link) followLink(link, r, c);
   });
 
   // 방향키 이동 + Ctrl(⌘)+방향키로 데이터 끝까지 이동(엑셀 End 모드). 가상 스크롤이라 개별 셀이

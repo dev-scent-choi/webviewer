@@ -162,16 +162,40 @@ export function readSheetExtras(xlsx: Uint8Array): SheetExtras {
   return readSheetExtrasFromEntries(unzipSync(xlsx));
 }
 
+/**
+ * 링크 위치가 정의된 이름(이름 관리자의 "목표")이면 그 이름이 가리키는 칸 주소로 바꾼다 — 시트 범위 이름(localSheetId)이
+ * 통합 문서 이름보다 먼저(엑셀과 같다). 칸 주소가 아닌 이름(수식·상수)이나 없는 이름은 그대로 두어 화면이 "참조가
+ * 올바르지 않습니다"로 알린다. 여러 영역(A1,C3)이면 첫 영역.
+ */
+export function resolveDefinedNameLocation(location: string, sheetName: string, workbookXml: string): string {
+  if (/^(?:(?:'(?:[^']|'')+'|[^!]+)!)?\$?[A-Za-z]{1,3}\$?\d+(?::\$?[A-Za-z]{1,3}\$?\d+)?$/.test(location.trim())) return location;
+  const want = location.trim().toLowerCase();
+  const sheets = [...workbookXml.matchAll(/<sheet\b[^>]*\bname="([^"]*)"/g)].map((m) => decodeXmlAttr(m[1]));
+  let global: string | undefined;
+  for (const m of workbookXml.matchAll(/<definedName\b([^>]*)>([^<]*)<\/definedName>/g)) {
+    if (decodeXmlAttr(/\bname="([^"]*)"/.exec(m[1])?.[1] ?? '').toLowerCase() !== want) continue;
+    const target = decodeXmlAttr(m[2]).split(',')[0].trim();
+    const local = /\blocalSheetId="(\d+)"/.exec(m[1])?.[1];
+    if (local === undefined) global = target;
+    else if (sheets[Number(local)] === sheetName) return target;
+  }
+  return global ?? location;
+}
+
 /** 이미 푼 파트 모음에서 — 큰 파일은 데이터를 뺀 뼈대(zipSkeleton.ts readXlsxSkeleton)를 넘긴다 */
 export function readSheetExtrasFromEntries(entries: Readonly<Record<string, Uint8Array>>): SheetExtras {
   const theme = entries['xl/theme/theme1.xml'];
   const out: SheetExtras = { links: [], lists: [], tables: [], themeColors: parseThemeColors(theme ? strFromU8(theme) : undefined) };
+  const workbook = entries['xl/workbook.xml'];
+  const workbookXml = workbook && /<definedName\b/.test(strFromU8(workbook)) ? strFromU8(workbook) : '';
   for (const [sheetName, sheetPath] of sheetPathsByName(entries)) {
     const sheet = entries[sheetPath];
     if (!sheet) continue;
     const rels = entries[relsPathOf(sheetPath)];
     const extras = parseSheetExtras(sheetName, strFromU8(sheet), rels ? strFromU8(rels) : undefined);
-    out.links.push(...extras.links);
+    out.links.push(...(workbookXml
+      ? extras.links.map((l) => (l.location ? { ...l, location: resolveDefinedNameLocation(l.location, sheetName, workbookXml) } : l))
+      : extras.links));
     out.lists.push(...extras.lists);
     for (const table of sheetTablesOf(entries, sheetPath)) out.tables.push({ ...table, sheetName });
   }

@@ -1346,6 +1346,9 @@ h2 {
    하이라이트다. 검색 히트(.g-hit-current, 주황/노랑)와 색이 겹치지 않게 문서 종류별
    --v-accent(엑셀은 초록)를 쓴다. */
 .grid-table td.g-selected { outline: 2px solid var(--v-accent); outline-offset: -1px; }
+/* 범위 링크(자료!B3:H3)로 고른 범위 · 하이퍼링크 칸(엑셀처럼 손가락 커서, 누르면 이동) */
+.grid-table td.g-range-selected { background: #e0e0e0 !important; }
+.grid-table td.g-link { cursor: pointer; }
 
 .grid-noselect { user-select: none; -webkit-user-select: none; }
 

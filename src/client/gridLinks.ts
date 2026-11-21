@@ -39,8 +39,8 @@ export interface GridLinksHost {
   readonly scrollHost: HTMLElement;
   /** 지금 보고 있는 시트 이름 */
   currentSheetName(): string;
-  /** 시트 이름으로 그 시트·칸으로 옮겨 고른다. 없는 시트면 false */
-  goTo(sheetName: string | null, row: number, col: number): boolean;
+  /** 시트 이름으로 그 시트·칸(범위면 row2·col2까지)으로 옮겨 고른다. 없는 시트면 false */
+  goTo(sheetName: string | null, row: number, col: number, row2: number, col2: number): boolean;
   /** 칸에 보이는 값(목록이 칸 범위를 가리킬 때 항목을 푼다) */
   valueText(sheetName: string, row: number, col: number): string;
   /** 지금 시트의 칸에 값을 넣는다(편집 권한·잠금은 호출부가 판단) */
@@ -55,19 +55,22 @@ export interface GridLinks {
 
 const inRange = (r: CellRange, row: number, col: number) => row >= r.r1 && row <= r.r2 && col >= r.c1 && col <= r.c2;
 
-/** "'자료'!A1", "요약!$C$5", "B3" → 시트 이름(없으면 null)과 칸(0부터) */
-export function parseLocation(location: string): { sheetName: string | null; row: number; col: number } | null {
+const colNumber = (letters: string) => [...letters.toUpperCase()].reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0) - 1;
+
+/** "'자료'!A1", "요약!$C$5", "B3", "자료!B3:H3" → 시트 이름(없으면 null)과 칸(0부터) — 범위면 끝 칸(row2·col2)까지.
+ * 보기 화면(public/js/viewer.js parseLinkLocation)이 같은 규칙을 따로 들고 있다 — 고치면 둘 다 */
+export function parseLocation(location: string): { sheetName: string | null; row: number; col: number; row2: number; col2: number } | null {
   const text = location.trim().replace(/^#/, '');
   const bang = text.lastIndexOf('!');
   const sheetName = bang >= 0 ? text.slice(0, bang).replace(/^'(.*)'$/, '$1').replace(/''/g, "'") : null;
-  const m = /^\$?([A-Za-z]{1,3})\$?(\d+)/.exec(bang >= 0 ? text.slice(bang + 1) : text);
+  const m = /^\$?([A-Za-z]{1,3})\$?(\d+)(?::\$?([A-Za-z]{1,3})\$?(\d+))?$/.exec(bang >= 0 ? text.slice(bang + 1) : text);
   if (!m) return null;
-  let col = 0;
-  for (const ch of m[1].toUpperCase()) col = col * 26 + (ch.charCodeAt(0) - 64);
-  return { sheetName, row: Number(m[2]) - 1, col: col - 1 };
+  const row = Number(m[2]) - 1;
+  const col = colNumber(m[1]);
+  const row2 = m[4] ? Number(m[4]) - 1 : row;
+  const col2 = m[3] ? colNumber(m[3]) : col;
+  return { sheetName, row: Math.min(row, row2), col: Math.min(col, col2), row2: Math.max(row, row2), col2: Math.max(col, col2) };
 }
-
-const colNumber = (letters: string) => [...letters.toUpperCase()].reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0) - 1;
 
 /**
  * HYPERLINK 첫 인자 수식을 푼다 — "글자"와 칸 참조를 &로 이은 것만(그 밖의 함수가 섞이면 null).
@@ -161,7 +164,14 @@ export function setupGridLinks(host: GridLinksHost): GridLinks {
     }
     const target = location ? parseLocation(location) : null;
     if (target) {
-      host.goTo(target.sheetName, target.row, target.col);
+      if (!host.goTo(target.sheetName, target.row, target.col, target.row2, target.col2)) void officeAlert(`참조가 올바르지 않습니다.
+'${target.sheetName}' 시트를 찾을 수 없습니다.`);
+      return;
+    }
+    // 정의된 이름은 서버가 칸 주소로 바꿔 준다(sheetExtras.ts) — 그래도 못 푼 위치는 엑셀처럼 "참조가 올바르지 않습니다"
+    if (location) {
+      void officeAlert(`참조가 올바르지 않습니다.
+'${location}' 위치를 찾을 수 없습니다.`);
       return;
     }
     // 열지 않는 주소(파일·네트워크 경로, 스크립트 주소) — 아무 반응 없이 끝나지 않게 알린다

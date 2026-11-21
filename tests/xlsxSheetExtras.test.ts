@@ -1,6 +1,6 @@
 import { strToU8 } from 'fflate';
 import { describe, expect, test } from 'vitest';
-import { parseSheetExtras, tableFilterOf } from '../src/xlsx/sheetExtras.js';
+import { parseSheetExtras, resolveDefinedNameLocation, tableFilterOf } from '../src/xlsx/sheetExtras.js';
 import { evalLinkExpr, parseLocation } from '../src/client/gridLinks.js';
 
 const RELS = (items: string) => `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${items}</Relationships>`;
@@ -37,10 +37,38 @@ describe('하이퍼링크(바로가기) 읽기', () => {
   });
 
   test('편집 화면의 위치 해석', () => {
-    expect(parseLocation("'자료 목록'!$B$3")).toEqual({ sheetName: '자료 목록', row: 2, col: 1 });
-    expect(parseLocation('#요약!C5')).toEqual({ sheetName: '요약', row: 4, col: 2 });
-    expect(parseLocation('AA10')).toEqual({ sheetName: null, row: 9, col: 26 });
+    expect(parseLocation("'자료 목록'!$B$3")).toEqual({ sheetName: '자료 목록', row: 2, col: 1, row2: 2, col2: 1 });
+    expect(parseLocation('#요약!C5')).toEqual({ sheetName: '요약', row: 4, col: 2, row2: 4, col2: 2 });
+    expect(parseLocation('AA10')).toEqual({ sheetName: null, row: 9, col: 26, row2: 9, col2: 26 });
     expect(parseLocation('이름있는범위')).toBeNull();
+    // 칸 주소로 시작하는 이름(정의된 이름 AB12x)은 칸이 아니다
+    expect(parseLocation('AB12x')).toBeNull();
+  });
+
+  test('범위 위치 — 범위 전체(뒤집혀 적혀도 왼쪽 위부터)', () => {
+    expect(parseLocation('CS!B3:H3')).toEqual({ sheetName: 'CS', row: 2, col: 1, row2: 2, col2: 7 });
+    expect(parseLocation("'통신 규약'!$D$9:$B$2")).toEqual({ sheetName: '통신 규약', row: 1, col: 1, row2: 8, col2: 3 });
+  });
+});
+
+describe('정의된 이름으로 가는 링크', () => {
+  const wb =
+    '<workbook><sheets><sheet name="요약" sheetId="1" r:id="rId1"/><sheet name="자료" sheetId="2" r:id="rId2"/></sheets>' +
+    '<definedNames><definedName name="목표">&apos;자료&apos;!$E$3000</definedName>' +
+    '<definedName name="목표" localSheetId="1">자료!$A$1</definedName>' +
+    '<definedName name="여럿">자료!$A$1:$B$2,자료!$D$4</definedName>' +
+    '<definedName name="세율">0.1</definedName></definedNames></workbook>';
+
+  test('이름을 칸 주소로 — 시트 범위 이름이 먼저, 여러 영역이면 첫 영역', () => {
+    expect(resolveDefinedNameLocation('목표', '요약', wb)).toBe("'자료'!$E$3000");
+    expect(resolveDefinedNameLocation('목표', '자료', wb)).toBe('자료!$A$1');
+    expect(resolveDefinedNameLocation('여럿', '요약', wb)).toBe('자료!$A$1:$B$2');
+  });
+
+  test('칸 주소·없는 이름은 그대로(화면이 "참조가 올바르지 않습니다"로 알린다)', () => {
+    expect(resolveDefinedNameLocation("'통신 규약'!B3", '요약', wb)).toBe("'통신 규약'!B3");
+    expect(resolveDefinedNameLocation('없는이름', '요약', wb)).toBe('없는이름');
+    expect(parseLocation(resolveDefinedNameLocation('세율', '요약', wb))).toBeNull();
   });
 });
 
@@ -66,7 +94,7 @@ describe('주소를 칸 값으로 만드는 HYPERLINK 수식 — =IFERROR(HYPERL
     const expr = `"#'"&$A2&"'!a1"`;
     expect(evalLinkExpr(expr, { row: 1, col: 1 }, { row: 1, col: 1 }, valueAt)).toBe("#'1월 실적'!a1");
     expect(evalLinkExpr(expr, { row: 1, col: 1 }, { row: 2, col: 1 }, valueAt)).toBe("#'김's 시트'!a1");
-    expect(parseLocation("'1월 실적'!a1")).toEqual({ sheetName: '1월 실적', row: 0, col: 0 });
+    expect(parseLocation("'1월 실적'!a1")).toEqual({ sheetName: '1월 실적', row: 0, col: 0, row2: 0, col2: 0 });
     // 칸 참조·글자·& 말고 다른 것이 섞이면 풀지 않는다
     expect(evalLinkExpr('"#"&TEXT(A1,"0")', { row: 0, col: 0 }, { row: 0, col: 0 }, valueAt)).toBeNull();
   });

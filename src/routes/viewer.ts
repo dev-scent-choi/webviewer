@@ -925,6 +925,33 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
+  // 보기 화면(viewer.js)의 하이퍼링크 — 열람만 토큰도 받는다(엑셀에서도 보이는 바로가기다). 목록 상자 값·표 정보는 주지 않고,
+  // 열람만 토큰에는 숨긴 행·열 칸에 걸린 링크와, 주소를 칸 값으로 만드는 수식 링크(expr — 수식 글이다)를 뺀다
+  // (열람만에는 숨긴 칸 값·수식을 보내지 않는 것과 같다 — maskHiddenCells)
+  app.get<{ Querystring: TokenQuery }>(
+    '/api/view/xlsx-links',
+    { schema: { querystring: tokenQuerySchema } },
+    async (request, reply) => {
+      const view = await resolveView(request.query.token, reply);
+      if (!view) return reply;
+      if (view.meta.ext !== 'xlsx' || (view.meta.viewKind ?? 'pages') !== 'grid') return { success: true, data: { links: [] } };
+      try {
+        let { links } = await getFileExtras(view.meta.id);
+        if (isViewOnly(view.claims.perms)) {
+          const sheets = new Map((await loadGrid(view.meta.id)).header.sheets.map((s) => [s.name, hiddenLookup(s)]));
+          links = links.filter((l) => {
+            const hidden = sheets.get(l.sheetName);
+            return hidden && !l.expr && !hidden.row(l.r1) && !hidden.col(l.c1);
+          });
+        }
+        return { success: true, data: { links } };
+      } catch (error) {
+        request.log.warn(error, 'xlsx links read failed');
+        return { success: true, data: { links: [] } };
+      }
+    },
+  );
+
   // 파일의 하이퍼링크(바로가기)·목록 상자(데이터 유효성 "목록") — 편집 화면이 링크 이동·목록 고르기에 쓴다.
   app.get<{ Querystring: TokenQuery }>(
     '/api/view/xlsx-extras',

@@ -2031,10 +2031,11 @@ async function main(): Promise<void> {
     const rownumWidth = tableEl.querySelector<HTMLElement>('.g-edit-rownum')?.getBoundingClientRect().width ?? 0;
     const visibleTop = hostRect.top + theadHeight;
     const visibleLeft = hostRect.left + rownumWidth;
+    // 화면보다 큰 칸(아주 넓은 열·병합)은 오른쪽·아래 끝을 맞추느라 왼쪽·위 끝(글이 시작하는 곳)을 머리글 밑으로 밀지 않는다(엑셀과 같다)
     if (cellRect.top < visibleTop) scrollHostEl.scrollTop -= visibleTop - cellRect.top;
-    else if (cellRect.bottom > hostRect.bottom) scrollHostEl.scrollTop += cellRect.bottom - hostRect.bottom;
+    else if (cellRect.bottom > hostRect.bottom) scrollHostEl.scrollTop += Math.min(cellRect.bottom - hostRect.bottom, cellRect.top - visibleTop);
     if (cellRect.left < visibleLeft) scrollHostEl.scrollLeft -= visibleLeft - cellRect.left;
-    else if (cellRect.right > hostRect.right) scrollHostEl.scrollLeft += cellRect.right - hostRect.right;
+    else if (cellRect.right > hostRect.right) scrollHostEl.scrollLeft += Math.min(cellRect.right - hostRect.right, cellRect.left - visibleLeft);
   }
 
   /** 지금 칸에서 (dRow,dCol)만큼 떨어진 칸으로 선택을 옮긴다. 병합에 덮여 실제 <td>가 없는
@@ -3985,8 +3986,9 @@ async function main(): Promise<void> {
     tableEl,
     scrollHost: scrollHostEl,
     currentSheetName: () => structure.get(String(activeSheet))?.name ?? '',
-    goTo: (sheetName, row, col) => {
-      const target = sheetName === null ? activeSheet : [...structure.entries()].find(([, s]) => s.name === sheetName)?.[0];
+    goTo: (sheetName, row, col, row2, col2) => {
+      // 시트 이름은 엑셀처럼 대소문자를 가리지 않는다
+      const target = sheetName === null ? activeSheet : [...structure.entries()].find(([, s]) => s.name.toLowerCase() === sheetName.toLowerCase())?.[0];
       if (target === undefined) return false;
       const idx = Number(target);
       if (idx !== activeSheet) {
@@ -3999,6 +4001,12 @@ async function main(): Promise<void> {
       if (td) {
         td.focus();
         scrollCellIntoView(td);
+        // 범위 링크(자료!B3:H3)는 엑셀처럼 범위 전체를 고른다 — 지금 칸(이름 상자)은 왼쪽 위
+        if (row2 !== row || col2 !== col) {
+          selFocusRow = row2;
+          selFocusCol = col2;
+          renderRangeHighlight();
+        }
       }
       return true;
     },
