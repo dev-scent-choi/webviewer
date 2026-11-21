@@ -77,6 +77,7 @@ export async function buildApp(): Promise<FastifyInstance> {
       statusCode: context.statusCode,
       success: false,
       error: `요청이 너무 많습니다. ${context.after} 후 다시 시도하세요.`,
+      retryAfterMs: context.ttl, // 편집 화면이 이만큼 뒤에 다시 묻는다(cf-ranges)
     }),
   });
 

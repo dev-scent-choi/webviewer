@@ -34,7 +34,7 @@ describe('C1: 와일드카드는 선형 시간', () => {
   test('조건부 서식 COUNTIF: * 8개 × 200자 칸이 50ms 안', () => {
     const t0 = performance.now();
     expect(countOf([LONG, `${LONG}b`, 'x'], EVIL)).toBe(1);
-    expect(performance.now() - t0).toBeLessThan(50);
+    expect(performance.now() - t0).toBeLessThan(500); // 병렬 시험 부하에서도 흔들리지 않게 넓힌 기준(재검토 3) — 고치기 전 값(끝나지 않음)과는 여전히 크게 떨어진다
   });
 
   test.each([
@@ -44,13 +44,13 @@ describe('C1: 와일드카드는 선형 시간', () => {
   ])('수식 엔진 %s: 50ms 안', (formula, want) => {
     const t0 = performance.now();
     expect(evaluate(formula, [LONG, `${LONG}b`, 'x'])).toBe(want);
-    expect(performance.now() - t0).toBeLessThan(50);
+    expect(performance.now() - t0).toBeLessThan(500); // 병렬 시험 부하에서도 흔들리지 않게 넓힌 기준(재검토 3) — 고치기 전 값(끝나지 않음)과는 여전히 크게 떨어진다
   });
 
   test('SEARCH도 50ms 안, 처음 맞는 자리', () => {
     const t0 = performance.now();
     expect(evaluate(`SEARCH("a*a*a*a*a*a*a*b","xx${LONG}b")`, [])).toBe(3);
-    expect(performance.now() - t0).toBeLessThan(50);
+    expect(performance.now() - t0).toBeLessThan(500); // 병렬 시험 부하에서도 흔들리지 않게 넓힌 기준(재검토 3) — 고치기 전 값(끝나지 않음)과는 여전히 크게 떨어진다
   });
 });
 

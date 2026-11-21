@@ -87,7 +87,7 @@ describe('[통합] 방 닫기 유예·세대 × 워드 보존 조각 저장소',
     vi.resetModules();
     vi.stubEnv('DOCVIEW_DATA_DIR', tmpDir);
     vi.stubEnv('DOCVIEW_STORAGE', 'memory');
-    vi.stubEnv('DOCVIEW_ROOM_CLOSE_GRACE_MS', '400');
+    vi.stubEnv('DOCVIEW_ROOM_CLOSE_GRACE_MS', '3000'); // 병렬 시험 부하에서도 "유예 중" 확인이 유예보다 먼저 끝나게(재검토 3 — 400ms는 부하 때 흔들렸다)
     vi.doMock('../src/converters/index.js', () => ({ findConverter: () => null }));
     vi.doMock('../src/audit.js', () => ({ recordAudit: async () => undefined }));
   });
@@ -127,7 +127,7 @@ describe('[통합] 방 닫기 유예·세대 × 워드 보존 조각 저장소',
     expect(b.types).not.toContain(MESSAGE_ROOM_STALE);
     expect(docxFragmentsOf(docId)).toBe(frags);
     b.emit('close');
-    await sleep(700);
+    await sleep(3_600);
     await flushEventLoop();
     expect(isRoomOpen(docId)).toBe(false);
     expect(hasDocxFragmentRecordsForTest(docId)).toBe(false); // 닫힌 방의 문서별 기록은 놓는다

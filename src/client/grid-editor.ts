@@ -3482,8 +3482,10 @@ async function main(): Promise<void> {
   type CfRemoteAnswerJson = {
     rev: number;
     stale?: true;
-    ranges: Array<CfRect & ({ cells: number; agg: CfRangeAgg; crit: Array<[string, number]> } | { skipped: true })>;
+    ranges: Array<CfRect & ({ cells: number; agg: CfRangeAgg; crit: Array<[string, number]> } | { skipped: true; retry?: true })>;
     stats: Record<string, (Omit<CfStats, 'counts'> & { counts?: Array<[string, number]> }) | 'skipped'>;
+    overBudget?: true;
+    retryAfterMs?: number;
   };
   interface CfRemoteState {
     agg?: CfRangeAgg;
@@ -3491,7 +3493,12 @@ async function main(): Promise<void> {
     crit: Map<string, number>;
     asked: Map<string, CfVal>;
     askedEq: Map<string, CfVal>;
+    /** 서버가 답하지 않는 범위(규칙 밖·상한) — 이 시트에서는 다시 묻지 않는다 */
     skipped?: boolean;
+    /** 잠시 뒤 다시(409 바쁨·429 요청 제한·예산 초과) — 이때까지는 묻지 않고 지난 답으로 칠한다(재검토 3) */
+    waitUntil?: number;
+    /** 이 범위의 답을 받은 판 — 판이 바뀐 답이면 조건 개수를 통째로 바꾼다(범위마다: 예산 초과로 빠진 답의 판을 따라가지 않게) */
+    rev?: number;
   }
   const cfRemote = {
     sheet: -1,
@@ -3501,6 +3508,8 @@ async function main(): Promise<void> {
     wantStats: new Set<string>(),
     timer: 0,
     busy: false,
+    /** "잠시 뒤 다시"가 이어질 때마다 늘리는 간격(1초 → 최대 1분), 답을 받으면 0 */
+    backoff: 0,
   };
   const cfRectKey = (r: CfRect) => `${r.r0}:${r.c0}:${r.r1}:${r.c1}`;
   function rowsArrived(r0: number, r1: number): boolean {
@@ -3568,8 +3577,14 @@ async function main(): Promise<void> {
       return;
     }
     const sheet = cfRemote.sheet;
-    // 물을 것: 새로 물은 조건 + 이미 아는 조건(값이 바뀌었을 수 있다), 범위마다 집계
-    const ranges = [...cfRemote.ranges.values()].filter(({ st }) => !st.skipped).slice(0, 64);
+    // 물을 것: 새로 물은 조건 + 이미 아는 조건(값이 바뀌었을 수 있다), 범위마다 집계 — "잠시 뒤 다시"인 범위는 그때까지 빼 둔다
+    const now = Date.now();
+    const waiting = [...cfRemote.ranges.values()].filter(({ st }) => !st.skipped && (st.waitUntil ?? 0) > now);
+    const ranges = [...cfRemote.ranges.values()].filter(({ st }) => !st.skipped && (st.waitUntil ?? 0) <= now).slice(0, 64);
+    if (ranges.length === 0 && cfRemote.wantStats.size === 0 && waiting.length > 0) {
+      scheduleCfRemoteFetch(Math.min(...waiting.map(({ st }) => st.waitUntil!)) - now);
+      return;
+    }
     const stats = [...new Set([...cfRemote.wantStats, ...[...cfRemote.stats.keys()]])].slice(0, 64);
     if (ranges.length === 0 && stats.length === 0) return;
     let budget = 2_000;
@@ -3598,33 +3613,50 @@ async function main(): Promise<void> {
     }
     cfRemote.wantStats.clear();
     cfRemote.busy = true;
+    /** 잠시 뒤 다시 — 보낸 조건을 되돌려 두고(답을 못 받은 조건을 잃지 않게) 늘려 가는 간격 뒤에 다시 묻는다. 그사이엔 지난 답으로 칠한다 */
+    const retryLater = (targets: typeof ranges, serverMs: number | undefined, retryStats: readonly string[]) => {
+      cfRemote.backoff = Math.min(60_000, Math.max(1_000, cfRemote.backoff * 2));
+      const delay = Math.min(60_000, Math.max(serverMs ?? 0, cfRemote.backoff));
+      for (const hit of targets) {
+        hit.st.waitUntil = Date.now() + delay;
+        const sent = body.ranges[ranges.indexOf(hit)];
+        for (const c of sent?.crit ?? []) hit.st.asked.set(cfCritKey(c), c);
+        for (const c of sent?.eq ?? []) hit.st.askedEq.set(cfExactKey(c), c);
+      }
+      for (const id of retryStats) cfRemote.wantStats.add(id);
+      scheduleCfRemoteFetch(delay);
+    };
     try {
       const res = await fetch(`/api/view/xlsx-cf-ranges?token=${encodeURIComponent(token)}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
       });
-      const json = (await res.json()) as { data?: CfRemoteAnswerJson };
+      const json = (await res.json()) as { data?: CfRemoteAnswerJson; retryAfterMs?: number };
       if (sheet !== cfRemote.sheet) return;
       if (!json.data) {
-        // 물을 수 없으면(편집 방이 없음·요청 제한 등) 그 범위는 칠하지 않고 "일부 생략"을 알린다
-        for (const { st } of ranges) st.skipped = true;
-        for (const id of stats) cfRemote.stats.set(id, 'skipped');
+        // 지금은 답을 못 받았다(바쁨 409·요청 제한 429·편집 방 없음) — 영구 생략이 아니라 잠시 뒤 다시(429는 Retry-After 초)
+        const header = Number(res.headers.get('retry-after'));
+        retryLater(ranges, json.retryAfterMs ?? (Number.isFinite(header) && header > 0 ? header * 1_000 : undefined), stats);
+        return;
       } else {
         // 범위에 수식 칸이 있고 편집이 있었다 — 보지 않는 페이지의 수식은 다시 계산되지 않아 결과가 낡았을 수 있다
         if (json.data.stale) showCfSkipNotice();
-        const sameRev = json.data.rev === cfRemote.rev;
         cfRemote.rev = json.data.rev;
         let learned = false;
+        const later: typeof ranges = [];
         for (const a of json.data.ranges) {
           const hit = cfRemote.ranges.get(cfRectKey(a));
           if (!hit) continue;
-          if ('skipped' in a) hit.st.skipped = true;
+          if ('skipped' in a && a.retry) later.push(hit); // 예산 초과 — 지난 답은 그대로 두고 잠시 뒤 다시
+          else if ('skipped' in a) hit.st.skipped = true;
           else {
+            hit.st.waitUntil = undefined;
             hit.st.cells = a.cells;
             hit.st.agg = a.agg;
-            if (!sameRev) hit.st.crit = new Map(a.crit);
+            if (hit.st.rev !== json.data.rev) hit.st.crit = new Map(a.crit);
             else for (const [k, n] of a.crit) if (!hit.st.crit.has(k)) hit.st.crit.set(k, n);
+            hit.st.rev = json.data.rev;
           }
           learned = true;
         }
@@ -3632,6 +3664,8 @@ async function main(): Promise<void> {
           cfRemote.stats.set(id, st === 'skipped' ? 'skipped' : { ...st, counts: st.counts ? new Map(st.counts) : undefined });
           learned = true;
         }
+        if (later.length > 0) retryLater(later, json.data.retryAfterMs, []);
+        else cfRemote.backoff = 0;
         if (!learned) return;
       }
       cfStats = null;
@@ -3641,6 +3675,9 @@ async function main(): Promise<void> {
       scheduleCfRemoteFetch(5_000);
     } finally {
       cfRemote.busy = false;
+      // 아직 "잠시 뒤 다시"인 범위가 있으면 그때 다시 묻는다(다른 범위의 답만 받고 끝나도 잊지 않게)
+      const pending = [...cfRemote.ranges.values()].filter(({ st }) => !st.skipped && st.waitUntil !== undefined && st.waitUntil > Date.now());
+      if (pending.length > 0) scheduleCfRemoteFetch(Math.min(...pending.map(({ st }) => st.waitUntil!)) - Date.now());
     }
   }
   function showCfSkipNotice(): void {

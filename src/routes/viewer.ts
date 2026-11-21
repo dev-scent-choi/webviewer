@@ -42,7 +42,8 @@ import { cachedDocxDrawing, DrawingRateLimited, renderDocxDrawingPng } from '../
 import { MarkupValidationError, addMarkup, deleteMarkup, listMarkup, updateMarkup } from '../markup.js';
 import { touchPresence } from '../presence.js';
 import { docxFragmentsOf, flushNow, getCfRemoteAnswer, getCurrentBytes, getChangeLog, getFileCharts, getFileExtras, getFileImages } from '../collab/room.js';
-import { CfBusyError, cfTokenBudget, cfTokenSpend, parseCfRemoteRequest } from '../xlsx/cfRangeValues.js';
+import { CfBusyError, cfTokenBudget, cfTokenRetryAfterMs, cfTokenSpend, parseCfRemoteRequest } from '../xlsx/cfRangeValues.js';
+import type { WildcardBudget } from '../collab/wildcard.js';
 
 /** 편집 화면 조건부 서식 서버 답 — 편집할 때마다(0.3초 묶음) 다시 묻는다 */
 // 토큰(편집 화면)마다 분당 40회 — verify:xlsx:browser(편집·스크롤·1,500·2만 행 COUNTIF 등 39항목)에서 한 화면이 1분에 부른 최대가 18회라
@@ -986,19 +987,27 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
         return reply.code(400).send({ success: false, error: '잘못된 요청입니다.' });
       }
       const token = request.query.token!;
-      const pass = cfTokenBudget(token);
-      const startLeft = pass.left;
+      // 토큰의 1분 예산은 답을 만들기 시작할 때 빌리고 끝날 때 적는다(슬롯에서 기다린 요청도 앞 요청이 쓴 뒤의 남은 양을 받는다)
+      let pass: WildcardBudget = { left: 0 };
+      let startLeft = 0;
+      const lease = {
+        begin: () => {
+          pass = cfTokenBudget(token);
+          startLeft = pass.left;
+          return pass;
+        },
+        end: () => cfTokenSpend(token, pass, startLeft),
+      };
       let data;
       try {
-        data = await getCfRemoteAnswer(view.meta.id, req, pass);
+        data = await getCfRemoteAnswer(view.meta.id, req, lease);
       } catch (error) {
         if (!(error instanceof CfBusyError)) throw error;
-        return reply.code(409).send({ success: false, error: '조건부 서식 계산이 이미 진행 중입니다. 잠시 뒤 다시 시도하세요.' });
-      } finally {
-        cfTokenSpend(token, pass, startLeft);
+        // 편집 화면은 retryAfterMs 뒤에 다시 묻는다(그 사이 범위는 지난 답 그대로)
+        return reply.code(409).send({ success: false, error: '조건부 서식 계산이 이미 진행 중입니다. 잠시 뒤 다시 시도하세요.', retryAfterMs: 1_000 });
       }
       if (!data) return reply.code(409).send({ success: false, error: '편집 방이 열려 있지 않습니다.' });
-      return { success: true, data };
+      return { success: true, data: data.overBudget ? { ...data, retryAfterMs: cfTokenRetryAfterMs(token) } : data };
     },
   );
 

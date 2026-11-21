@@ -640,7 +640,14 @@ async function applyCellsChangeToCanonical(
  * 편집 화면 조건부 서식용 서버 답(/api/view/xlsx-cf-ranges, src/xlsx/cfRangeValues.ts). 범위는 이 방의 규칙에서만 뽑는다.
  * 열린 xlsx 편집 방이 없으면 null.
  */
-export async function getCfRemoteAnswer(docId: string, req: CfRemoteRequest, pass?: WildcardBudget): Promise<CfRemoteAnswer | null> {
+/** 요청 예산 빌리기 — 답을 만들기 시작할 때 begin, 끝나면(슬롯을 놓기 전에) end. 기다리던 요청은 앞 요청이 쓴 뒤의 남은 양을 받는다(재검토 3) */
+export interface CfBudgetLease {
+  begin(): WildcardBudget;
+  end(): void;
+}
+
+/** pass: 이 요청의 와일드카드 예산(고정 값 또는 빌리기) */
+export async function getCfRemoteAnswer(docId: string, req: CfRemoteRequest, pass?: WildcardBudget | CfBudgetLease): Promise<CfRemoteAnswer | null> {
   const room = rooms.get(docId);
   if (!room?.lazyGrid) return null;
   await room.ready;
@@ -653,7 +660,15 @@ export async function getCfRemoteAnswer(docId: string, req: CfRemoteRequest, pas
   if (rooms.get(docId) !== room) return null; // 기다리는 사이 방이 닫혔다(닫힌 lazyGrid를 읽지 않는다 — 최종 검토 M2)
   const entries = room.ydoc.getMap<readonly CondFormatEntry[]>(GRID_COND_FORMATS_MAP).get(String(req.sheet)) ?? [];
   const computed = room.ydoc.getMap<string>(GRID_COMPUTED_MAP);
-  const answer = await cfAnswerSlot(room.cfRanges, () => answerCfRemote(room.cfRanges, store, req, entries, (r, c) => computed.get(gridCellKey(req.sheet, r, c)), pass)).catch((error: unknown) => {
+  const lease = pass && 'begin' in pass ? pass : null;
+  const answer = await cfAnswerSlot(room.cfRanges, async () => {
+    const budget = lease ? lease.begin() : (pass as WildcardBudget | undefined);
+    try {
+      return await answerCfRemote(room.cfRanges, store, req, entries, (r, c) => computed.get(gridCellKey(req.sheet, r, c)), budget);
+    } finally {
+      lease?.end();
+    }
+  }).catch((error: unknown) => {
     if (rooms.get(docId) !== room) return null; // 세는 사이 방이 닫혀 저장소가 닫혔다 — 409
     throw error;
   });

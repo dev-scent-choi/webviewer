@@ -6,6 +6,7 @@
 //   4) 편집 화면 COUNTIF($A:$A,$A1)>1(1,500행·2만 행): 받지 않은 페이지의 중복도 칠하고, 편집으로 중복이 생기고
 //      없어지면 따라 바뀐다. 보기 화면과 같은 결과(검토 r3 E2)
 //   5) x06 차트(축 숨김 c:delete·tickLblPos none 포함) 보기·편집 화면이 그려진다(스크린샷)
+//   6) 409·429·예산 초과를 받은 범위도 잠시 뒤 다시 물어 결국 칠한다(재검토 3)
 //   6) 서버 답 경로(검토 r4 C1): 내려받기만 되는 토큰 403, 규칙에 없는 범위 skipped, 64범위 × 동시 4요청 뒤에도 서버가 산다
 //   7) 엑셀 표 경계(검토 r4 I2): 머리 줄 삭제는 막고, 데이터 행을 모두 지우면 첫 데이터 행을 비워 남기며(실행 취소·다시 실행
 //      버튼), 요약 행을 지우면 요약 행이 꺼진다
@@ -473,6 +474,107 @@ try {
     check('x06 차트: 보기·편집 화면에 차트가 그려진다', viewCharts > 0 && editCharts > 0, `보기 ${viewCharts}, 편집 ${editCharts}`);
     await page.screenshot({ path: `${OUT}/5-x06-edit.png` });
     await page.close();
+  }
+
+  // 6) 재검토 3 — 409(바쁨)·429(요청 제한)·예산 초과를 받은 범위도 "잠시 뒤 다시" 물어 결국 칠한다(예전엔 시트를 바꿀 때까지 영영 안 칠했다)
+  {
+    const tokenFor = async (id, viewer) => {
+      const t = (await (await fetch(`${BASE}/api/documents/${id}/tokens`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ viewer, canPrint: true, canDownload: true, canCopy: true, canEdit: true }) })).json()).data;
+      return { tok: t, token: new URL(BASE + t.editorUrl).searchParams.get('token') };
+    };
+    /** A열 rows행: [코드]+채움, 코드는 r % half(그래서 각 코드가 A에 두 번), B열은 그 행의 [코드] — 규칙 COUNTIF($A:$A,"*"&$B1&"*")>1 */
+    const codeBook = async (rows, fill, uniqueFrom = Infinity) => {
+      const wb = new ExcelJS.Workbook();
+      const ws = wb.addWorksheet('s');
+      const half = rows / 2;
+      for (let r = 1; r <= rows; r += 1) {
+        const code = r >= uniqueFrom ? `u${r}` : String(r % half).padStart(3, '0');
+        ws.getCell(r, 1).value = `[${code}]${'가'.repeat(fill)}`;
+        ws.getCell(r, 2).value = `[${r % half === 0 ? '000' : String(r % half).padStart(3, '0')}]`;
+      }
+      ws.addConditionalFormatting({ ref: `B1:B${rows}`, rules: [{ type: 'expression', priority: 1, formulae: ['COUNTIF($A:$A,"*"&$B1&"*")>1'], style: { fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: 'FFFFC7CE' } } } }] });
+      return Buffer.from(await wb.xlsx.writeBuffer());
+    };
+    const statusCounter = (page, counts) => page.on('response', (res) => {
+      if (res.url().includes('/api/view/xlsx-cf-ranges')) counts[res.status()] = (counts[res.status()] ?? 0) + 1;
+    });
+    const allPink = async (page, rows) => (await Promise.all(rows.map((r) => editBg(page, r, 1)))).every((bg) => bg === PINK);
+    const waitPink = async (pages, rows, ms) => {
+      const t0 = Date.now();
+      while (Date.now() - t0 < ms) {
+        if ((await Promise.all(pages.map((p) => allPink(p, rows)))).every(Boolean)) return Date.now() - t0;
+        await wait(1000);
+      }
+      return -1;
+    };
+    const visible = Array.from({ length: 15 }, (_, i) => i);
+
+    // 6a) 예산 초과: 칸 1,000개(2천 자) × 화면 조건 — 열 A를 1분에 8번 고쳐도(그때마다 표가 바뀌어 다시 센다) 결국 모두 칠한다
+    {
+      const { id, tok, token } = await upload('budget.xlsx', await codeBook(1000, 2000));
+      const page = await browser.newPage({ viewport: { width: 1200, height: 700 } });
+      const counts = {};
+      let overBudget = 0;
+      page.on('response', async (res) => {
+        if (!res.url().includes('/api/view/xlsx-cf-ranges') || res.status() !== 200) return;
+        if ((await res.json().catch(() => ({}))).data?.overBudget) overBudget += 1;
+      });
+      statusCounter(page, counts);
+      await openEditor(page, tok);
+      const { ydoc, provider } = await connect(id, token);
+      const t0 = Date.now();
+      for (let i = 0; i < 8; i += 1) {
+        ydoc.getMap('cells').set('0:999:0', `[000]${'나'.repeat(2000 + i)}`); // 코드는 그대로 — 결과는 같고 표만 바뀐다
+        await wait(7_000);
+      }
+      // 예산을 넘긴 뒤 아래로 굴려 새 조건(처음 보는 행)을 묻게 한다 — 예전엔 그 범위를 영영 묻지 않아 새 행이 칠해지지 않았다
+      await page.evaluate(() => { document.querySelector('.grid-editor-scroll').scrollTop = 4_000; });
+      await wait(1_500);
+      const shown = await page.evaluate(() => {
+        const box = document.querySelector('.grid-editor-scroll').getBoundingClientRect();
+        return [...document.querySelectorAll('#grid-edit-table td[data-col="1"][data-row]')]
+          .filter((td) => { const r = td.getBoundingClientRect(); return r.top >= box.top + 30 && r.bottom <= box.bottom; })
+          .map((td) => Number(td.dataset.row)).filter((r) => r < 499).slice(0, 12);
+      });
+      const took = await waitPink([page], shown, 150_000);
+      check('잠시 뒤 다시(예산 초과): 열을 1분에 8번 고친 뒤 새로 보이는 행도 결국 칠한다', took >= 0 && shown.length >= 5, `행 ${shown[0]}~${shown.at(-1)}, ${took}ms, 예산 초과 답 ${overBudget}회, 응답 ${JSON.stringify(counts)}, 전체 ${Date.now() - t0}ms`);
+      provider.destroy();
+      await page.close();
+    }
+
+    // 6b) 409: 같은 문서 탭 3개(토큰 셋) — 편집 하나에 셋이 한꺼번에 물어 하나는 409를 받아도 결국 셋 다 새 결과로 칠한다
+    // 6c) 429: 한 토큰을 세 사람이 같이 쓰고 빠르게 20번 고쳐 분당 40회를 넘겨도 결국 셋 다 칠한다
+    for (const [label, shared] of [['409(탭 3개)', false], ['429(한 토큰 3명)', true]]) {
+      const rows = 1000;
+      // 모두 다른 코드 — 처음엔 칠하지 않음. 탭 3개는 칸을 길게(600자) 해 세 화면의 물음이 서버에서 겹치게 한다(편집마다 표가 바뀌어 다시 센다)
+      const { id, tok, token } = await upload(`retry-${shared ? 'shared' : 'tabs'}.xlsx`, await codeBook(rows, shared ? 20 : 600, 1));
+      const pages = [];
+      const counts = {};
+      for (let i = 0; i < 3; i += 1) {
+        const page = await browser.newPage({ viewport: { width: 1200, height: 700 } });
+        statusCounter(page, counts);
+        await openEditor(page, shared ? tok : (await tokenFor(id, `t${i}`)).tok);
+        pages.push(page);
+      }
+      await wait(2_000);
+      const { ydoc, provider } = await connect(id, token);
+      const edits = shared ? 20 : 3;
+      // A의 뒤쪽 행(받지 않은 페이지) 두 곳에 B1~B15의 코드를 넣는다 → 그 칸들이 중복(칠함)이 된다
+      const put = (i) => {
+        const code = `[${String((i % 15) + 1).padStart(3, '0')}]`;
+        ydoc.getMap('cells').set(`0:${900 + (i % 15)}:0`, `${code}a${i}`);
+        ydoc.getMap('cells').set(`0:${950 + (i % 15)}:0`, `${code}b${i}`);
+      };
+      for (let i = 0; i < edits; i += 1) {
+        put(i);
+        await wait(shared ? 1_000 : 300);
+      }
+      for (let i = edits; i < 15; i += 1) put(i);
+      const took = await waitPink(pages, visible, 150_000); // 토큰의 1분 예산을 다 쓰면 다음 창까지 기다린다
+      check(`잠시 뒤 다시 ${label}: 결국 세 화면 모두 새 결과로 칠한다`, took >= 0, `${took}ms, 응답 ${JSON.stringify(counts)}`);
+      provider.destroy();
+      for (const p of pages) await p.close();
+    }
   }
 } finally {
   await browser.close();

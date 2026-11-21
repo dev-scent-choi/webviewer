@@ -14,6 +14,7 @@
  */
 import {
   cfCritEntry,
+  cfCritKey,
   cfRangeAnswer,
   cfRangeTableAdjust,
   cfRangeTableFromRawChunked,
@@ -62,7 +63,14 @@ interface RectTally {
   table?: CfRangeTable;
   /** 센 칸 가운데 수식 칸 수 — 보지 않는 페이지의 수식은 다시 계산되지 않아 값이 낡았을 수 있다(편집 뒤 알림) */
   formulaCells: number;
+  /**
+   * 이 표로 이미 센 조건의 답(조건 키 → 개수) — 같은 조건을 다시 물어도 예산을 쓰지 않는다(재검토 3). 표(table)가 바뀌거나 이 범위 칸이
+   * 편집되면 버린다. 범위가 예산 때문에 생략돼도 그 전에 센 조건은 남겨, 다시 물을 때 이어서 센다(결국 모두 답한다).
+   */
+  critCache?: { readonly table: CfRangeTable; readonly map: Map<string, number> };
 }
+/** 범위 하나에 기억하는 조건 답 상한 — 넘으면 비우고 다시 쌓는다 */
+const CF_CRIT_CACHE_MAX = 4_096;
 interface SheetTally {
   readonly entries: readonly CondFormatEntry[];
   readonly rows: number;
@@ -137,6 +145,7 @@ export function cfTallyApplyBatch(t: CfRoomTally, sheet: number, changes: readon
     const inside = changes.filter((c) => c.row >= rect.r0 && c.row <= rect.r1 && c.col >= rect.c0 && c.col <= rect.c1 && c.before !== c.after);
     if (inside.length === 0 || !r.raw) continue;
     changed = true;
+    r.critCache = undefined; // 이 범위 칸이 바뀌었다 — 센 조건 답은 낡았다
     if (inside.some((c) => c.before.startsWith('=') || c.after.startsWith('='))) {
       r.dirty = true; // 수식 칸의 계산값은 아직 모른다 — 이 범위만 다시 센다
       r.table = undefined;
@@ -305,13 +314,15 @@ export interface CfRemoteRequest {
   readonly ranges: ReadonlyArray<CfRect & { readonly crit?: readonly CfVal[]; readonly eq?: readonly CfVal[] }>;
   readonly stats?: readonly string[];
 }
-export type CfRemoteRangeAnswer = CfRect & ({ readonly cells: number; readonly agg: CfRangeAgg; readonly crit: Array<[string, number]> } | { readonly skipped: true });
+export type CfRemoteRangeAnswer = CfRect & ({ readonly cells: number; readonly agg: CfRangeAgg; readonly crit: Array<[string, number]> } | { readonly skipped: true; readonly retry?: true });
 export interface CfRemoteAnswer {
   readonly rev: number;
   /** 답한 범위에 수식 칸이 있고 편집이 있었다 — 보지 않는 페이지의 수식은 다시 계산되지 않아 결과가 낡았을 수 있다(편집 화면 알림) */
   readonly stale?: true;
-  /** 와일드카드 작업 예산(요청 하나에 WILDCARD_WORK_BUDGET)을 넘어 생략한 범위가 있다(그 범위는 skipped) */
+  /** 와일드카드 작업 예산(요청 하나에 WILDCARD_WORK_BUDGET)을 넘어 생략한 범위가 있다(그 범위는 skipped, retry) */
   readonly overBudget?: true;
+  /** 편집 화면이 이만큼 뒤에 다시 물으면 된다(토큰의 1분 창이 남은 시간 — 경로가 채운다) */
+  retryAfterMs?: number;
   readonly ranges: CfRemoteRangeAnswer[];
   /** 규칙 id → 압축 통계(중복은 [값, 개수][]로 — JSON) 또는 skipped */
   readonly stats: Record<string, (Omit<CfStats, 'counts'> & { counts?: Array<[string, number]> }) | 'skipped'>;
@@ -360,6 +371,12 @@ export function cfTokenSpend(token: string, budget: WildcardBudget, startLeft: n
   const w = tokenWork.get(token);
   if (w) w.used += Math.max(0, startLeft - budget.left);
 }
+/** 이 토큰의 1분 예산이 다 떨어졌으면 창이 끝날 때까지 남은 ms, 아니면 0 */
+export function cfTokenRetryAfterMs(token: string, now = Date.now()): number {
+  const w = tokenWork.get(token);
+  if (!w || now - w.start >= CF_TOKEN_WINDOW_MS || w.used < CF_TOKEN_WORK_PER_WINDOW) return 0;
+  return CF_TOKEN_WINDOW_MS - (now - w.start);
+}
 
 /**
  * 문서(방)마다 답 만들기는 동시에 하나 — 진행 중이면 하나만 뒤에서 기다리고(그 뒤에 이어 계산), 더 오면 CfBusyError(경로 409, 편집 화면은
@@ -400,6 +417,8 @@ export async function answerCfRemote(
   pass: WildcardBudget = { left: WILDCARD_WORK_BUDGET },
 ): Promise<CfRemoteAnswer> {
   const s = await ensureSheetTally(t, store, req.sheet, entries, computedAt);
+  // 답의 판(rev)은 세기 시작할 때 것 — 세는 사이(양보 중) 편집이 들어오면 답이 섞일 수 있어, 편집 화면이 다음 답을 새 판으로 받아 통째로 바꾸게 한다
+  const rev = t.rev;
   let stale = false;
   let overBudget = false;
   // 와일드카드 예산 — 요청 하나에 WILDCARD_WORK_BUDGET, 조건 하나마다 단계 하나(WILDCARD_STEP_BUDGET)씩 떼어 쓰고 20ms마다 양보한다
@@ -417,9 +436,19 @@ export async function answerCfRemote(
     const base = cfRangeAnswer(table, [], q.eq ?? []);
     const crit: Array<[string, number]> = [];
     let skipped = false;
+    if (r.critCache?.table !== table || r.critCache.map.size > CF_CRIT_CACHE_MAX) r.critCache = { table, map: new Map() };
+    const cache = r.critCache.map;
     for (const c of q.crit ?? []) {
+      const key = cfCritKey(c);
+      const known = cache.get(key);
+      if (known !== undefined) {
+        crit.push([key, known]); // 이미 센 조건 — 예산을 쓰지 않는다
+        continue;
+      }
       try {
-        crit.push(runWildcardStep(pass, (step) => withWildcardBudget(step, () => cfCritEntry(table, c))));
+        const entry = runWildcardStep(pass, (step) => withWildcardBudget(step, () => cfCritEntry(table, c)));
+        cache.set(entry[0], entry[1]);
+        crit.push(entry);
       } catch (error) {
         if (!(error instanceof WildcardBudgetError)) throw error;
         skipped = true; // 이 범위는 칠하지 않는다(편집 화면 "일부 생략")
@@ -432,7 +461,7 @@ export async function answerCfRemote(
     }
     if (skipped) {
       overBudget = true;
-      ranges.push({ ...rect, skipped: true as const });
+      ranges.push({ ...rect, skipped: true as const, retry: true as const }); // 예산 때문 — 편집 화면은 잠시 뒤 다시 묻는다
     } else ranges.push({ ...rect, cells: r.cells, agg: base.agg, crit: [...crit, ...base.crit] });
   }
   const stats: CfRemoteAnswer['stats'] = {};
@@ -465,5 +494,5 @@ export async function answerCfRemote(
     stats[id] = { ...rest, ...(counts ? { counts: [...counts] } : {}) };
   }
   t.lastUsed = Date.now();
-  return { rev: t.rev, ranges, stats, ...(stale ? { stale: true as const } : {}), ...(overBudget ? { overBudget: true as const } : {}) };
+  return { rev, ranges, stats, ...(stale ? { stale: true as const } : {}), ...(overBudget ? { overBudget: true as const } : {}) };
 }

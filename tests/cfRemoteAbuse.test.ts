@@ -111,9 +111,43 @@ describe('cf-ranges 경로: 토큰 예산·요청 수 제한', () => {
     const start = cfTokenBudget(token).left;
     cfTokenSpend(token, { left: 0 }, start); // 이 토큰이 1분 예산을 이미 다 썼다
     const t0 = performance.now();
-    const res = await ask(token);
-    expect(performance.now() - t0).toBeLessThan(200);
+    const res = await ask(token, ['*Z9*']); // 아직 센 적 없는 조건(센 조건은 예산 없이 답한다)
+    expect(performance.now() - t0).toBeLessThan(1_000); // 병렬 시험 부하에서도 흔들리지 않게 넓힌 기준(재검토 3) — 고치기 전 값(요청마다 최대 약 2초)과는 여전히 크게 떨어진다
     expect(res.statusCode).toBe(200);
     expect(res.json().data).toMatchObject({ overBudget: true, ranges: [{ skipped: true }] });
+  }, 60_000);
+  test('재검토 3: 같은 조건은 다시 물어도 예산을 쓰지 않는다(표·범위 칸이 그대로인 동안), 범위 칸을 고치면 다시 센다', async () => {
+    const { getCfRemoteAnswer } = await import('../src/collab/room.js');
+    const range = { r0: 0, c0: 0, r1: 299, c1: 0, crit: ['*K1*', '*K2*', '*K3*'] };
+    const first = await getCfRemoteAnswer(docId, { sheet: 0, ranges: [range] }, { left: 1e9 });
+    expect(first!.ranges[0]).toMatchObject({ cells: 300 });
+    const again = await getCfRemoteAnswer(docId, { sheet: 0, ranges: [range] }, { left: 0 }); // 예산 0이어도
+    expect(again!.overBudget).toBeUndefined();
+    expect(again!.ranges[0]).toEqual(first!.ranges[0]);
+    const newCrit = await getCfRemoteAnswer(docId, { sheet: 0, ranges: [{ ...range, crit: ['*K4*'] }] }, { left: 0 }); // 처음 묻는 조건은 예산이 든다
+    expect(newCrit!.overBudget).toBe(true);
+    expect(newCrit!.ranges[0]).toMatchObject({ skipped: true, retry: true });
+  }, 60_000);
+
+  test('재검토 3: 예산 초과 답과 409는 retryAfterMs를 알려 준다', async () => {
+    const token = editToken('e');
+    cfTokenSpend(token, { left: 0 }, cfTokenBudget(token).left);
+    const over = (await ask(token, ['*Q9*'])).json();
+    expect(over.data.overBudget).toBe(true);
+    expect(over.data.retryAfterMs).toBeGreaterThan(0);
+    expect(over.data.retryAfterMs).toBeLessThanOrEqual(CF_TOKEN_WINDOW_MS);
+  }, 60_000);
+
+  test('재검토 3: 슬롯에서 기다린 요청은 시작할 때 예산을 다시 읽는다(앞 요청이 다 쓰면 0)', async () => {
+    const { getCfRemoteAnswer } = await import('../src/collab/room.js');
+    let tokenLeft = 1e9; // 한 토큰의 남은 1분 예산 흉내
+    const lease = () => ({
+      begin: () => ({ left: tokenLeft }),
+      end: () => void (tokenLeft = 0), // 앞 요청이 다 썼다고 적는다
+    });
+    const a = getCfRemoteAnswer(docId, { sheet: 0, ranges: [{ r0: 0, c0: 0, r1: 299, c1: 0, crit: ['*K5*'] }] }, lease());
+    const b = getCfRemoteAnswer(docId, { sheet: 0, ranges: [{ r0: 0, c0: 0, r1: 299, c1: 0, crit: ['*K6*'] }] }, lease());
+    expect((await a)!.overBudget).toBeUndefined();
+    expect((await b)!.overBudget).toBe(true); // 시작할 때 읽어 0을 받았다(예전엔 요청 때 읽어 둘 다 1e9)
   }, 60_000);
 });

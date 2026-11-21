@@ -265,3 +265,69 @@ C1 is not finished. Before merge:
 3. Make the budget large enough that legit workbooks do not get `#ERROR!`, and leave the formula text, not `#ERROR!`, when it runs out.
 
 I2, M3 and the teardown order are done.
+
+---
+
+## 재검토 3 (f612d0b..d458f85 without 2b5e134, read-only)
+
+How I checked:
+- Read the diffs: `wildcard.ts`, `cfRangeValues.ts`, `room.ts`, `formulas.ts`, `spreadsheet.ts`, `viewerCondFormat.ts`, and `viewer.ts` (the route).
+- Re-timed the three worst cases directly.
+- Simulated a legit sheet against the per-token budget.
+
+### 1. The three worst cases, re-timed
+
+| Case | Before | Now |
+|---|---|---|
+| Cheap criteria (`q123*z`) × 2,000, against 200 keys of 32k chars | 11 s per request | Stops at the token-minute budget (5e8) in about 140 ms. A later request in the same minute uses 0 ms (overBudget). The longest block without a yield is 24 ms. |
+| Near-miss criterion, same keys | (already bounded) | One step of 75 ms, then skipped. |
+| Edit-room heavy column, 500 rows (`finalReviewC1Budget2` test 2, run alone) | ~57 s per page | Passes: event-loop delay under 200 ms. Cells over budget keep the formula text. |
+| Legit 1,000-row `COUNTIF(...,"*"&B1&"*")` upload (my probe) | 787 numbers / 213 `#ERROR!` | **1,000/1,000 numbers**. |
+
+### 2. The two catches that re-throw the budget error (`formulas.ts:201,321`)
+
+- They re-throw only when `isWildcardBudgetError` is true. That check follows `details`/`cause` up to 5 levels; FormulaError keeps the wrapped error in `details`.
+- Every other error keeps the old result (`#REF!`, the FormulaError name, or `#ERROR!`).
+- The memo is not written for a cell that ran out, and `finally` still clears `evalGuard`.
+- Upload: the `catch {}` in `spreadsheet.ts:590` turns the error into `null`, so the formula text stays. The upload does not fail.
+- Room recompute: only budget errors become `OVER_WILDCARD_BUDGET`. Other errors propagate exactly as they did with the old `Promise.all`; the sync evaluator never throws them anyway.
+- Bake: the fallback engine's `catch` turns the error into `CF_CANNOT`, and `evalCfValue` catches the direct case. Both mark the cell unsupported, so it is left unpainted and the skip notice is shown.
+
+### 3. 409 / 429 / overBudget in the editor
+
+- **No infinite retry.** A non-data answer marks the range `skipped`, and only a network exception retries, after 5 s (`grid-editor.ts:3608-3641`).
+- **Problem (Important, ~75% confidence): the skip is permanent, and it is reached in legit use.**
+  - `st.skipped` is cleared only on a sheet switch (`grid-editor.ts:3513-3518`). The server comment says the range is asked again on the next edit, but the client never asks again.
+  - **Per-token minute budget.** Simulated legit case: 1,000 keys of 20 chars and 1,000 criteria `*xxx*` (one per row of a `COUNTIF($A:$A,"*"&$B1&"*")` rule). Whole-column ranges always go to the server.
+    - The client re-asks every known criterion on every edit, so each request costs 1.1e8.
+    - Edits 1–4 in a minute are answered. **Edit 5 is overBudget**, and from then on that range stays unpainted for the rest of the session ("일부 생략").
+  - **409 busy.** Three or more tabs on one document, all fetching after a broadcast edit: one runs, one waits, and the third gets 409 and is skipped permanently.
+  - **429.** 40 requests per minute per token. If a shared edit link is handed to many users, they share both limits.
+  - Fix:
+    - Treat 409, 429 and overBudget as "retry later" (clear `skipped` after a back-off or on the next rev) instead of permanent.
+    - Server side, cache criterion answers per tally rev, so unchanged criteria cost nothing when they are asked again.
+
+### 4. Global state on the async budget paths
+
+- The module-global `scoped` is set only by `withWildcardBudget`, around synchronous work:
+  - each crit (`cfCritEntry`)
+  - each `paintCell`
+  - each `computeGridCellDisplay` attempt
+- It is restored in `finally`. Async boundaries pass the budget object as an argument (`runWildcardStep`, `computeGridCellDisplayAsync(..., budget)`), so nothing leaks across an await.
+- `cfAnswerSlot` sets `answering` and `answerWaiting` without an await in between, so they cannot race.
+- Minor: `cfTokenBudget` is read when the request starts, so the running request and the one waiting in the slot can both spend the remaining minute budget, up to 2× per minute. `tokenWork` is pruned only after it passes 10,000 entries, which is acceptable.
+
+### Tests
+
+- New files, each run alone: `finalReviewC1Budget2` 3/3, `finalReviewC1Budget` 3/3, `cfRangeValues` 10/10, `cfRemoteAbuse` 4/4.
+- **Run together they failed 4 tests**, all wall-clock assertions ("1초 안", "지연 200ms 미만"). They passed again alone.
+- So the timing assertions flake under parallel load (Minor). Widen them, or move them to a serial project, before relying on full-suite runs.
+
+### Verdict: mergeable after one fix
+
+Remaining:
+1. **(Important)** In the editor, 409, 429 and overBudget skip a range permanently. A legit whole-column wildcard COUNTIF stops painting after the fourth edit in a minute. Make these retry later, and ideally cache criterion answers per rev.
+2. (Minor) Wall-clock assertions in the new test files flake in a parallel run.
+3. (Minor) Up to 2× token-minute spend through the slot's waiting request.
+
+Security-wise C1 is closed: every server path is bounded per request, per page, per bake and per upload, with yields between steps.

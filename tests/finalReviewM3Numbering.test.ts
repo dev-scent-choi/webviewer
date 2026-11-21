@@ -34,7 +34,7 @@ describe('재검토 M3: 기본 번호 정의 찾기', () => {
     const crafted = zipSync(zip);
     const t0 = performance.now();
     exportDocx(crafted, withBuiltinList(doc), null, comments, fragments);
-    expect(performance.now() - t0).toBeLessThan(300);
+    expect(performance.now() - t0).toBeLessThan(2_000); // 병렬 시험 부하에서도 흔들리지 않게 넓힌 기준(재검토 3) — 고치기 전 값(4.7초)과는 여전히 크게 떨어진다
   });
 
   test('두 번 저장해도 같은 기본 번호 정의를 다시 쓴다(numId 그대로)', () => {

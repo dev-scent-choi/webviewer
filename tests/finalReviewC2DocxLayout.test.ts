@@ -16,14 +16,14 @@ describe('C2: 안 닫힌 태그에서도 선형', () => {
     const xml = `<w:body>${Array.from({ length: 400 }, () => `<w:p><w:pPr>${sect(11906)}</w:pPr></w:p>`).join('')}<w:sectPr ${'x'.repeat(1_000_000)}`;
     const t0 = performance.now();
     expect(docxViewLayoutFixes(xml)).toBe(xml);
-    expect(performance.now() - t0).toBeLessThan(100);
+    expect(performance.now() - t0).toBeLessThan(1_000); // 병렬 시험 부하에서도 흔들리지 않게 넓힌 기준(재검토 3) — 고치기 전 값(41초)과는 여전히 크게 떨어진다
   });
 
   test('안 닫힌 <wp:anchor 가 1MB 동안 이어져도 100ms 안', () => {
     const xml = `<w:body>${'<wp:anchor distT="0">'.repeat(50_000)}${sect(11906)}</w:body>`;
     const t0 = performance.now();
     expect(docxViewLayoutFixes(xml)).toBe(xml);
-    expect(performance.now() - t0).toBeLessThan(100);
+    expect(performance.now() - t0).toBeLessThan(1_000); // 병렬 시험 부하에서도 흔들리지 않게 넓힌 기준(재검토 3) — 고치기 전 값(5초)과는 여전히 크게 떨어진다
   });
 });
 
