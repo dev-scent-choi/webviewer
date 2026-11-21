@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { installedLineRatios } from '../docx/fontMetrics.js';
 import { basePdfForEditor, sha1Of } from '../pdf/pdfModel.js';
 import { addPdfPart, compressRoomPdf, currentPlainBytes, editorSourceOf, signRoomPdf, extractPdfGroups, PdfRoomError, pdfInfoOf, protectPdf, readPdfPart, tokenKey, unlockPdf, type ProtectRequest } from '../pdf/pdfRoomOps.js';
@@ -498,6 +499,23 @@ const tokenQuerySchema = {
   properties: { token: { type: 'string' } },
 } as const;
 
+/** /api/view/info — 워드 편집기만 editor=1을 붙여 편집기 화면 정보(docxRender)를 받는다 */
+const infoQuerySchema = {
+  type: 'object',
+  properties: { token: { type: 'string' }, editor: { type: 'string' } },
+} as const;
+
+/** 워드 편집기 화면 정보 — 문서 판(원본 바이트 sha1)마다 한 번만 만든다(FINAL-REVIEW I1). 크기는 JSON 길이로 어림한다 */
+const docxRenderCache = new SizedLruCache<ReturnType<typeof getDocxRenderExtras>>({
+  maxBytes: 32 * 1024 * 1024,
+  maxEntries: 64,
+  sizeOf: (value) => JSON.stringify(value).length * 2,
+});
+function docxRenderOf(docId: string, docxBytes: Uint8Array): Promise<ReturnType<typeof getDocxRenderExtras>> {
+  const version = `${docId}:${createHash('sha1').update(docxBytes).digest('base64url')}`;
+  return docxRenderCache.getOrLoad(version, async () => getDocxRenderExtras(docxBytes));
+}
+
 const presenceBodySchema = {
   type: 'object',
   required: ['sessionId'],
@@ -677,9 +695,9 @@ const HEAVY_RATE_LIMIT = { max: 20, timeWindow: '1 minute' } as const;
 
 export async function viewerRoutes(app: FastifyInstance): Promise<void> {
   const legacyConvertLimit = app.createRateLimit(HEAVY_RATE_LIMIT);
-  app.get<{ Querystring: TokenQuery }>(
+  app.get<{ Querystring: TokenQuery & { editor?: string } }>(
     '/api/view/info',
-    { schema: { querystring: tokenQuerySchema } },
+    { schema: { querystring: infoQuerySchema } },
     async (request, reply) => {
       const view = await resolveView(request.query.token, reply);
       if (!view) return reply;
@@ -718,7 +736,10 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
           ? Promise.resolve().then(() => getDocxDefaultParagraphSpacing(docxBytes)).catch(() => null)
           : Promise.resolve(null),
         // 번호 매기기 정의·머리글/바닥글·각주·스타일 — 편집기가 Word 모양으로 덧그린다(src/client/docxLayout.ts)
-        docxBytes ? Promise.resolve().then(() => ({ ...getDocxRenderExtras(docxBytes), lineRatios: installedLineRatios() })).catch(() => null) : Promise.resolve(null),
+        // 편집기 요청(editor=1)에만 — 읽기 전용 보기(view.html·viewer.js)도 이 경로를 불러, 예전엔 docx를 열 때마다 원본 전체를 풀고 파싱했다
+        docxBytes && request.query.editor === '1'
+          ? docxRenderOf(view.meta.id, docxBytes).then((extras) => ({ ...extras, lineRatios: installedLineRatios() })).catch(() => null)
+          : Promise.resolve(null),
       ]);
       // pptx 편집기가 슬라이드를 실제 크기(4:3 등) 좌표계로 그리기 위한 값. presentation.xml 하나만
       // 압축 해제한다(filter) — 큰 덱이라도 미디어 파트는 풀지 않는다.

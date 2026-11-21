@@ -1683,7 +1683,8 @@ function partRootChildrenOf(entries: Record<string, Uint8Array>, partPath: strin
 
 /** 압축을 푼 docx → 편집기 화면용 부가 정보. 원본 파트는 건드리지 않는다(머리글·각주는 저장 때 그대로 남는다). */
 export function getDocxRenderExtras(docxBytes: Uint8Array): DocxRenderExtras {
-  const entries = guardedUnzipSync(docxBytes, 'getDocxRenderExtras');
+  // word/ 아래 XML·관계만 푼다 — 그림·포함 개체는 쓰지 않는다(FINAL-REVIEW I1: 예전엔 미디어까지 모두 풀었다)
+  const entries = guardedUnzipSync(docxBytes, 'getDocxRenderExtras', { filter: (f) => f.name.startsWith('word/') && /\.(xml|rels)$/i.test(f.name) });
   const documentXml = entries['word/document.xml'] ? strFromU8(entries['word/document.xml']) : '';
   const pageSetup = getDocxPageSetup(docxBytes);
   const contentWidthPx = pageSetup ? pageSetup.widthPx - pageSetup.marginLeftPx - pageSetup.marginRightPx : null;

@@ -338,7 +338,7 @@ function showFatalError(message: string): void {
 }
 
 async function fetchViewInfo(): Promise<ViewInfo> {
-  const res = await fetch(`/api/view/info?token=${encodeURIComponent(token)}`);
+  const res = await fetch(`/api/view/info?token=${encodeURIComponent(token)}&editor=1`); // editor=1: 편집기 화면 정보(docxRender)도 받는다
   const json = (await res.json()) as { success: boolean; data?: ViewInfo; error?: string };
   if (!res.ok || !json.success || !json.data) {
     throw new Error(json.error || '문서 정보를 불러오지 못했습니다.');
