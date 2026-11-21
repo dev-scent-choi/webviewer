@@ -13,5 +13,8 @@ export const MESSAGE_ROOM_EPOCH = 7;
 export const MESSAGE_ROOM_STALE = 8;
 /** 웹소켓 주소 매개변수 이름 */
 export const ROOM_EPOCH_PARAM = 'epoch';
-/** 이전 세대로 다시 접속한 연결을 닫는 코드 */
+/** 세대 값 없이 다른 세대의 상태로 다시 접속한 연결(배포 전 옛 번들)을 닫는 코드 — 4400대라 옛 편집기도 다시 접속을 멈추고
+ * 이유(ROOM_STALE_REASON)를 보여 준다. 세대 값을 든 새 번들은 메시지 8로 알리고 보통 닫기(1000)로 닫는다. */
 export const ROOM_STALE_CLOSE_CODE = 4409;
+/** 위 닫기의 이유 글(웹소켓 닫기 이유는 123바이트 이하) */
+export const ROOM_STALE_REASON = '문서가 서버에서 다시 열렸습니다. 새로 고침해 주세요.';
