@@ -544,6 +544,15 @@ describe('2차 검토 R2-I2·R2-m1: 글자 속성은 바이트 신뢰 대신 구
     const xml = serializeTxBodyXml(docOf(run('<a:rPr lang="ko-KR" sz="12a" foo="1"><p:sp/><a:cs typeface="X"/></a:rPr>')), new Set(), { relTypes: new Map() });
     expect(xml).toContain('<a:rPr lang="ko-KR" b="1"><a:cs typeface="X"/></a:rPr>');
   });
+  test('3차 R3-m1: rPr의 이름공간 선언은 extLst가 그 접두어를 쓰므로 남기고, 모르는 속성을 버리면 알린다', () => {
+    const notices = new Set<string>();
+    const raw = '<a:rPr lang="ko-KR" xmlns:x="urn:custom" x:tag="v"><a:extLst><a:ext uri="{X}"><x:foo/></a:ext></a:extLst></a:rPr>';
+    const xml = serializeTxBodyXml(docOf(run(raw)), new Set(), { relTypes: new Map(), notices });
+    expect(xml).toContain('<a:rPr lang="ko-KR" xmlns:x="urn:custom" b="1"><a:extLst><a:ext uri="{X}"><x:foo/></a:ext></a:extLst></a:rPr>');
+    expect([...notices]).toEqual(['알 수 없는 글자 속성을 빼고 저장했습니다.']);
+    const bad = serializeTxBodyXml(docOf(run('<a:rPr xmlns:x="a b"/>')), new Set(), { relTypes: new Map() });
+    expect(bad).not.toContain('xmlns:x');
+  });
   test('믿는 필드라도 이 슬라이드에 없는 관계를 가리키면 글자로 저장하고 알린다', () => {
     const notices = new Set<string>();
     const raw = '<a:fld id="{X}" type="slidenum"><a:rPr><a:hlinkClick r:id="rId5"/></a:rPr><a:t>3</a:t></a:fld>';

@@ -513,10 +513,15 @@ function sanitizeRunProps(raw: string, ctx: SerializeContext): XmlNode {
   if (!parsed || typeof parsed !== 'object') return out;
   for (const [key, value] of Object.entries(parsed as XmlNode)) {
     if (key.startsWith('@_')) {
-      if (RPR_ATTRS[key]?.test(String(value))) out[key] = value;
+      // 이름공간 선언은 extLst 등 자식이 그 접두어를 쓸 수 있어 남긴다(3차 검토 R3-m1) — 값은 URI 글자만
+      if (RPR_ATTRS[key]?.test(String(value)) || (/^@_xmlns(:[A-Za-z_][\w.-]{0,63})?$/.test(key) && /^[^\u0000-\u0020"'<>]{1,512}$/.test(String(value)))) out[key] = value;
+      else ctx.notices?.add('알 수 없는 글자 속성을 빼고 저장했습니다.');
       continue;
     }
-    if (!RPR_CHILD_ORDER.includes(key)) continue;
+    if (!RPR_CHILD_ORDER.includes(key)) {
+      if (key !== '#text') ctx.notices?.add('알 수 없는 글자 속성을 빼고 저장했습니다.');
+      continue;
+    }
     if (!relRefsOk(rawXml(key, value), ctx.relTypes)) {
       ctx.notices?.add(key.startsWith('a:hlink') ? '연결 대상이 없는 하이퍼링크를 링크 없이 저장했습니다.' : '연결 대상이 없는 글자 꾸밈(그림 채우기 등)을 빼고 저장했습니다.');
       continue;
