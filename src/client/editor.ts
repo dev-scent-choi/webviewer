@@ -749,19 +749,20 @@ async function main(): Promise<void> {
     const commentsMap = ydoc.getMap<DocxComment>(DOCX_COMMENTS_MAP);
     const memoBtn = document.createElement('button');
     memoBtn.type = 'button';
-    memoBtn.className = 'icon-btn';
+    memoBtn.className = 'icon-btn view-strip-text';
     memoBtn.dataset.act = 'memo';
-    memoBtn.style.width = 'auto'; // 얇은 줄 .icon-btn은 30px 정사각 — 글자 단추라 넓힌다
-    memoBtn.style.padding = '0 0.5rem';
     memoBtn.textContent = '메모';
     memoBtn.title = '메모 창 열기/닫기';
-    memoBtn.addEventListener('click', () => {
-      const ribbonBtn = document.getElementById('btn-show-comments');
-      ribbonBtn?.click();
-      memoBtn.setAttribute('aria-pressed', ribbonBtn?.getAttribute('aria-pressed') ?? 'false');
-    });
-    // 단추 클래스의 display가 [hidden]을 이길 수 있어 style로 감춘다
-    const syncMemo = () => (memoBtn.style.display = commentsMap.size > 0 ? '' : 'none');
+    memoBtn.setAttribute('aria-pressed', 'false');
+    const ribbonBtn = document.getElementById('btn-show-comments');
+    memoBtn.addEventListener('click', () => ribbonBtn?.click());
+    // 눌림 상태는 리본 단추를 따른다(메모 창을 다른 길로 닫아도 맞게)
+    if (ribbonBtn) {
+      const syncPressed = () => memoBtn.setAttribute('aria-pressed', ribbonBtn.getAttribute('aria-pressed') ?? 'false');
+      syncPressed();
+      new MutationObserver(syncPressed).observe(ribbonBtn, { attributes: true, attributeFilter: ['aria-pressed'] });
+    }
+    const syncMemo = () => (memoBtn.hidden = commentsMap.size === 0);
     syncMemo();
     commentsMap.observe(syncMemo);
     stripTools.insertBefore(memoBtn, stripTools.querySelector('[data-act="print"], [data-act="download"], [data-act="edit"]'));

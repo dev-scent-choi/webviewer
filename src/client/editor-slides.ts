@@ -911,6 +911,7 @@ function setupCardActions(): void {
     // cardFor()에서 이미 DOM에서 제거돼 있어 아래 분기로는 내려오지 않는다.
     if (!target.closest('.slide-card-duplicate') && !target.closest('.slide-card-delete')) {
       selectSlide(card.dataset.id!);
+      card.scrollIntoView({ block: 'nearest' }); // 반쯤 가린 섬네일을 눌러도 다 보이게(이전/다음 단추와 같다)
       return;
     }
     if (!canEdit) return;

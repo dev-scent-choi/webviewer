@@ -410,6 +410,8 @@ export function initOfficeShell(options: OfficeShellOptions): OfficeShell {
     setViewNav(nav) {
       const tools = stripTools;
       if (!tools) return;
+      // 두 번 불러도 단추가 겹치지 않게 — 이전 것을 바꾼다
+      for (const old of tools.querySelectorAll('[data-act="prev"], [data-act="next"]')) old.remove();
       const before = tools.querySelector('[data-act="print"], [data-act="download"], [data-act="edit"]');
       const pairs: Array<['prev' | 'next', string, () => void]> = [
         ['prev', nav.prevLabel, () => nav.prev()],
