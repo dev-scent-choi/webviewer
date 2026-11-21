@@ -1112,6 +1112,12 @@ let extrasSourceSeq = 0;
 /** 저장·원본 교체로 원본이 바뀌었을 때 — invalidateViewCaches가 부른다 */
 export function invalidateFileExtras(docId: string): void {
   fileExtrasCache.invalidatePrefix(`${docId}#`);
+  // 30초 압축 해제 캐시도 같이 — 방이 닫힌 뒤 저장이 끝나기 전에 들어온 보기 요청이 옛 원본을 넣어 두었을 수 있다(재검토 5)
+  const skel = skeletonByDoc.get(docId);
+  if (skel) {
+    clearTimeout(skel.timer);
+    skeletonByDoc.delete(docId);
+  }
 }
 
 /** 파일의 하이퍼링크(바로가기)·목록 상자 — 편집 화면이 링크 이동·목록 고르기에 쓴다. 열린 룸이 있으면 그 원본 기준. */

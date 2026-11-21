@@ -946,8 +946,9 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
   // (열람만에는 숨긴 칸 값·수식을 보내지 않는 것과 같다 — maskHiddenCells)
   app.get<{ Querystring: TokenQuery }>(
     '/api/view/xlsx-links',
-    // 열람만 토큰도 닿는다 — 보기 화면을 열 때 한 번 부르므로 IP마다 분당 60회면 넉넉하다(캐시를 비켜 가는 남용 막기)
-    { schema: { querystring: tokenQuerySchema }, config: { rateLimit: { max: 60, timeWindow: '1 minute' } } },
+    // 열람만 토큰도 닿는다 — 보기 화면을 열 때 한 번 부르므로 토큰마다 분당 60회면 넉넉하다(캐시를 비켜 가는 남용 막기).
+    // IP 기준이면 터널 뒤(TRUST_PROXY 없음)에서 모든 사용자가 한 IP로 보여 서로 한도를 나눠 쓴다 → cf-ranges처럼 토큰 기준
+    { schema: { querystring: tokenQuerySchema }, config: { rateLimit: { max: 60, timeWindow: '1 minute', keyGenerator: (request: { query?: unknown; ip: string }) => `links:${(request.query as { token?: string } | undefined)?.token ?? request.ip}` } } },
     async (request, reply) => {
       const view = await resolveView(request.query.token, reply);
       if (!view) return reply;

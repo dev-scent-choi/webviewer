@@ -412,3 +412,77 @@ After that, mergeable. Minor items that can follow:
 - cache memory not counted in the global cap
 - the per-link scan in `hiddenLookup`
 - per-cell `linkAt` lookup in the viewer
+
+---
+
+## 재검토 5 (edd1314..7b5bb41, read-only)
+
+How I checked:
+- Read the diff.
+- Timed the defined-name resolution directly.
+- Checked the semantics with 9 hand cases.
+- Ran `fileExtrasCache` and `xlsxSheetExtras`: 16/16 pass.
+
+### The Critical is fixed
+
+- 8,000 links × 8,000 names: **56 ms** (was 23.6 s).
+- 50,000 links × 20,000 names: 223 ms.
+- 60,000 × 30,000: 234 ms. The caps apply: links are cut at 50,000, names after 20,000, and a warning is logged once each.
+
+### Map lookup gives the same results
+
+All 9 cases match the old function:
+- A sheet-scoped name wins over a workbook-scoped one, even when the workbook-scoped one comes later in the file.
+- A sheet name with a quote and `&amp;` is matched after decoding.
+- Workbook-scoped name: first area only, case ignored.
+- A name scoped to another sheet only is left unchanged.
+- Constant names, missing names, cell addresses and `'Bob''s & Co'!C5` behave as before.
+
+One difference only for files Excel rejects: two definitions of the same name on the same sheet. The old function used the first, the new one uses the last.
+
+### getFileExtras cache (`room.ts:1100-1130`)
+
+- Key: `docId#<id of the room's original bytes>` while a room is open, `docId#0` for the stored file.
+- Every save clears all of that document's entries (`invalidateViewCaches` → `invalidateFileExtras`).
+- While a room is open, the links come from the room's original bytes. That was already true before the cache (`fileSkeletonOf`), so it is not new.
+
+**Important (new): stale links can stay without limit.** `invalidateFileExtras` does not clear `skeletonByDoc`, the 30-second cache of the unzipped file (`room.ts:1033`).
+- This needs a room that closes without the grace period: a large xlsx, grace 0, or a forced close.
+- Sequence:
+  1. The editor's last user leaves.
+  2. `teardownRoom` removes the room, then the save starts.
+  3. A viewer request arrives before the save finishes, for example the "보기로" navigation right after the WebSocket closes.
+  4. That request reads the old stored file into `skeletonByDoc` (30 s) and stores old extras under `#0`.
+  5. The save ends and clears `#0`.
+  6. Another viewer load within 30 s rebuilds `#0` from the old skeleton.
+- From then on, `#0` keeps the pre-save links (a deleted link included) until the next save or LRU eviction. Before this change the staleness lasted at most 30 s.
+- Confidence ~75%; reasoned from the code, not reproduced.
+- Fix (one line): `invalidateFileExtras` also clears `skeletonByDoc` for that document.
+
+### `/api/view/xlsx-links` limit: 60 per minute per IP
+
+- Enough for one viewer: the page asks once per open.
+- **Important if the server does not trust the proxy (~60% confidence).**
+  - The production checkout's launch scripts (`run-webviewer.bat`, `start.bat`, `start.local.bat`) do not set `DOCVIEW_TRUST_PROXY`.
+  - Behind the tunnel, `request.ip` is then the local tunnel address, so all users share one bucket: 60 viewer opens per minute for the whole server.
+  - Past that, links silently do not appear (`fetchJsonView` → `catch`).
+  - I did not check scheduled-task or system environment variables.
+- Since the cache now makes repeat calls cheap, fix by keying the limit by token (as cf-ranges does), raising it, or dropping it.
+
+### hiddenLookup binary search (`viewer.ts:400-417`)
+
+- The runs come from `encodeRowHeights` over row-ascending entries (`spreadsheet.ts:859`, `lazyGridStore.ts:533`), so they do not overlap.
+- Even with duplicate rows in a crafted file, a later run starts inside the earlier one and ends no earlier, so the last run whose start is ≤ r0 still covers r0. The premise holds.
+
+### viewer.js 64-row buckets (`viewer.js:1332-1358`)
+
+- A link spanning more than 256 buckets (more than 16k rows) goes into `sheetLinksWide`, which every lookup also checks, so long range links are not missed.
+- 0-based and 1-based rows are converted consistently.
+- Minor: on a crafted file, up to 50,000 links × 256 bucket entries are built in the viewer's own tab.
+
+### Verdict: mergeable after two one-line fixes
+
+1. **Important:** clear `skeletonByDoc` in `invalidateFileExtras`, otherwise stale links can stay without limit.
+2. **Important (conditional):** key the `xlsx-links` limit by token, or check whether production sets `DOCVIEW_TRUST_PROXY`; if not, all users share 60 per minute.
+
+The rest is clean: equivalence, caps, bucket index, binary-search premise, and the measured performance.
