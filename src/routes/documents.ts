@@ -18,7 +18,7 @@ import { buildGridFromOriginal, saveGridDerived, type GridDocument } from '../sp
 import { newDocumentId, store } from '../storage.js';
 import type { DocumentMeta, LegacyExt, ViewKind } from '../types.js';
 import { invalidateViewCaches } from './viewer.js';
-import { engineFor, sourceExtOf, type Engine } from '../artcraftEngine.js';
+import { engineFor, type Engine } from '../artcraftEngine.js';
 import { readArtcraftManifest } from '../artcraftManifest.js';
 import { isOpenable, trackInitialConversion } from '../conversionGate.js';
 import { assertZipNotTooLarge, ZipTooLargeError } from '../zipGuard.js';
@@ -540,7 +540,7 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
       // WebSocket(src/routes/edit.ts)은 docx/xlsx가 아니면 canEdit 값과 무관하게 접속 자체를 거부해
       // canEdit이 마크업 용도로 켜진 문서가 잘못 동시편집 룸에 들어가 원본을 덮어쓰는 일을 막는다.
       const effectiveCanEdit = canEdit && (!isEditableExt || findConverter(meta.ext) !== null);
-      const decision = engineFor(sourceExtOf(meta), { canDownload }, engine, readArtcraftManifest() !== null);
+      const decision = engineFor(meta.ext, { canDownload }, engine, readArtcraftManifest() !== null);
       const token = issueViewToken(
         {
           docId: meta.id,

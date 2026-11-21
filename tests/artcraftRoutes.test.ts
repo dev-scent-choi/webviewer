@@ -188,20 +188,38 @@ describe('아트크래프트 엔진 — 토큰 발급·/api/view/info', () => {
     expect((await source('bad.token.x')).statusCode).toBe(401);
   });
 
-  test('engine-source: 옛 형식(legacy .doc)은 고치지 않았으면 올린 바이트, 고쳤으면 409(LibreOffice를 띄우지 않음)', async () => {
-    const { createHash } = await import('node:crypto');
+  /** 향기랩 옛 형식 편집 업로드처럼 meta.ext는 실제 바이트 종류, legacy.ext는 올린 이름 */
+  async function addLegacy(name: string, ext: string, legacyExt: 'doc' | 'xls' | 'ppt', bytes: Buffer) {
     const id = newDocumentId();
-    const ooxml = Buffer.from('바꾼-docx');
-    await store.saveOriginal(id, 'docx', ooxml);
-    await store.saveDerived(id, 'legacy', Buffer.from('올린-doc'));
-    const meta = { id, name: '옛.doc', ext: 'docx', status: 'ready' as const, pageCount: 1, createdAt: new Date().toISOString(), legacy: { ext: 'doc' as const, sha256: createHash('sha256').update(ooxml).digest('hex'), hasMacros: false } };
-    await store.writeMeta(meta);
+    await store.saveOriginal(id, ext, bytes);
+    await store.saveDerived(id, 'legacy', Buffer.from('올린-옛형식'));
+    await store.writeMeta({ id, name, ext, status: 'ready', pageCount: 1, createdAt: new Date().toISOString(), legacy: { ext: legacyExt, sha256: 'x', hasMacros: false } });
+    return id;
+  }
+  const ZIP = Buffer.from('PK\u0003\u0004고친-docx', 'latin1');
+
+  test('engine-source: 고친 옛 형식 .doc → 저장된 docx(ZIP)를 200으로, info도 docx·실험 아님(바이트와 형식 일치)', async () => {
+    const id = await addLegacy('옛.doc', 'docx', 'doc', ZIP);
     const t = tok(id, { canDownload: true }, 'artcraft');
-    expect((await info(t)).artcraft).toMatchObject({ kind: 'word', ext: 'doc', experimental: true });
+    expect((await info(t)).artcraft).toMatchObject({ kind: 'word', ext: 'docx', experimental: false });
     const res = await source(t);
     expect(res.statusCode).toBe(200);
-    expect(res.rawPayload.toString('utf8')).toBe('올린-doc');
-    await store.saveOriginal(id, 'docx', Buffer.from('고친-docx'));
-    expect((await source(t)).statusCode).toBe(409);
+    expect(res.rawPayload.equals(ZIP)).toBe(true);
+    expect(res.rawPayload.subarray(0, 2).toString('latin1')).toBe('PK');
+  });
+
+  test('이름만 옛 형식: .doc 이름의 xlsx는 libreoffice + 지원하지 않음, .ppt 이름의 pptx는 deck', async () => {
+    const xlsx = await info(tok(await addLegacy('표.doc', 'xlsx', 'doc', ZIP), { canDownload: true }, 'artcraft'));
+    expect(xlsx).toMatchObject({ ext: 'xlsx', engine: 'libreoffice', engineReason: '이 형식은 브라우저 엔진이 지원하지 않습니다' });
+    expect(xlsx.artcraft).toBeUndefined();
+    const pptx = await info(tok(await addLegacy('발표.ppt', 'pptx', 'ppt', ZIP), { canDownload: true }, 'artcraft'));
+    expect(pptx.engine).toBe('artcraft');
+    expect(pptx.artcraft).toMatchObject({ kind: 'deck', ext: 'pptx', experimental: false });
+  });
+
+  test('engine-source: 거절은 engine_denied로 감사', async () => {
+    const id = await addDoc('docx');
+    expect((await source(tok(id, {}, 'artcraft'))).statusCode).toBe(403);
+    expect(auditTypes(id)).toContain('engine_denied');
   });
 });

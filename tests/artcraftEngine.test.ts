@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { ENGINE_REASONS, artcraftInfo, engineFor, sourceExtOf, type Engine } from '../src/artcraftEngine.js';
+import { ENGINE_REASONS, artcraftInfo, engineFor, type Engine } from '../src/artcraftEngine.js';
 
 const M = { word: '/artcraft/artcraft_word-0123456789.wasm', deck: '/artcraft/artcraft_deck-0123456789.wasm', fonts: ['/artcraft/fonts/SCDream4-0123456789.otf', '/artcraft/fonts/SCDream6-0123456789.otf'] };
 
@@ -19,6 +19,8 @@ describe('engineFor — 형식 × 권한 × 요청 × 설치', () => {
     ['docx', true, 'libreoffice', true, 'libreoffice', undefined],
     ['docx', true, undefined, true, 'libreoffice', undefined],
     ['xlsx', false, undefined, false, 'libreoffice', undefined],
+    // 설치 안 됨이 먼저 — manifest가 없으면 형식과 무관하게 '설치되지 않았습니다'
+    ['xlsx', true, 'artcraft', false, 'libreoffice', R.notInstalled],
   ];
   test.each(table)('%s · 내려받기 %s · 요청 %s · 설치 %s → %s', (ext, canDownload, requested, installed, engine, reason) => {
     expect(engineFor(ext, { canDownload }, requested, installed)).toEqual(reason ? { engine, reason } : { engine });
@@ -34,14 +36,6 @@ describe('engineFor — 형식 × 권한 × 요청 × 설치', () => {
 
   test('constructor 같은 이름도 형식으로 보지 않는다', () => {
     expect(engineFor('constructor', { canDownload: true }, 'artcraft', true).engine).toBe('libreoffice');
-  });
-});
-
-describe('sourceExtOf — 내려받기로 실제 내려가는 바이트의 형식', () => {
-  test('보통 문서는 ext, 향기랩 옛 형식(legacy)은 올린 형식', () => {
-    expect(sourceExtOf({ ext: 'docx' })).toBe('docx');
-    expect(sourceExtOf({ ext: 'docx', legacy: { ext: 'doc', sha256: 'x', hasMacros: false } })).toBe('doc');
-    expect(sourceExtOf({ ext: 'pptx', legacy: { ext: 'ppt', sha256: 'x', hasMacros: false } })).toBe('ppt');
   });
 });
 

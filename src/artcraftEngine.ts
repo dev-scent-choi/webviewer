@@ -4,7 +4,6 @@
  * 원본 바이트가 브라우저로 내려가므로 내려받기 권한(canDownload)과 같은 뜻이다.
  */
 import type { ArtcraftManifest } from './artcraftManifest.js';
-import type { DocumentMeta } from './types.js';
 
 export type Engine = 'libreoffice' | 'artcraft';
 
@@ -31,11 +30,7 @@ export interface ArtcraftInfo {
   readonly assets: { readonly wasm: string; readonly fonts: readonly string[] };
 }
 
-/** 내려받기·engine-source가 실제로 내주는 바이트의 형식 — 향기랩 옛 형식(legacy)은 OOXML로 바꿔 두었어도 올린 .doc·.ppt를 내준다 */
-export function sourceExtOf(meta: Pick<DocumentMeta, 'ext' | 'legacy'>): string {
-  return meta.legacy?.ext ?? meta.ext;
-}
-
+/** ext는 meta.ext(저장된 바이트의 실제 종류) — 옛 형식 편집 업로드도 engine-source가 내주는 바이트와 형식이 맞는다 */
 export function engineFor(
   ext: string,
   perms: { readonly canDownload: boolean },
@@ -43,8 +38,8 @@ export function engineFor(
   installed: boolean,
 ): { engine: Engine; reason?: string } {
   if (requested !== 'artcraft') return { engine: 'libreoffice' };
-  if (!ARTCRAFT_FORMATS.has(ext)) return { engine: 'libreoffice', reason: ENGINE_REASONS.unsupported };
   if (!installed) return { engine: 'libreoffice', reason: ENGINE_REASONS.notInstalled };
+  if (!ARTCRAFT_FORMATS.has(ext)) return { engine: 'libreoffice', reason: ENGINE_REASONS.unsupported };
   if (!perms.canDownload) return { engine: 'libreoffice', reason: ENGINE_REASONS.noDownload };
   return { engine: 'artcraft' };
 }
