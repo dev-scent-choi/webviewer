@@ -33,6 +33,8 @@ export interface ArtcraftInfo {
   /** 엔진 전용 원본 경로(토큰 포함, canDownload 검사 그대로) — 사용자 내려받기로 감사하지 않는다(/api/view/engine-source) */
   readonly originalUrl: string;
   readonly assets: { readonly wasm: string; readonly fonts: readonly string[] };
+  /** Worker 주소(?v= 포함) — engineFor는 비워 두고 /api/view/info 경로가 채운다(클라이언트 types.ts에서는 필수) */
+  readonly workerUrl?: string;
 }
 
 /** ext는 meta.ext(저장된 바이트의 실제 종류) — 옛 형식 편집 업로드도 engine-source가 내주는 바이트와 형식이 맞는다 */

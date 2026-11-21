@@ -230,4 +230,14 @@ describe('아트크래프트 엔진 — 토큰 발급·/api/view/info', () => {
     expect((await source(tok(id, {}, 'artcraft'))).statusCode).toBe(403);
     expect(auditTypes(id)).toContain('engine_denied');
   });
+
+  test('engine-source: 엔진 없는 형식(만든 토큰으로 pdf)의 400도 engine_denied(detail unsupported)로 감사', async () => {
+    const id = await addDoc('pdf');
+    expect((await source(tok(id, { canDownload: true }, 'artcraft'))).statusCode).toBe(400);
+    const events = readdirSync(path.join(dataDir, 'audit'))
+      .flatMap((f) => readFileSync(path.join(dataDir, 'audit', f), 'utf8').trim().split('\n'))
+      .map((l) => JSON.parse(l) as { type: string; docId: string; detail?: string })
+      .filter((e) => e.docId === id);
+    expect(events).toContainEqual(expect.objectContaining({ type: 'engine_denied', detail: 'unsupported' }));
+  });
 });

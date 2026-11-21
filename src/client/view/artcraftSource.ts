@@ -164,6 +164,9 @@ export class ArtcraftSource implements PageSource {
   /** 선명하게 그리기가 실패한 쪽 — qualityKey를 1 올려 PagesBody가 다음 ensureDrawn에서 다시 그리게 한다 */
   private readonly sharpFailed = new Set<number>();
   private readonly failures = new PageFailures();
+  /** 선명하게 그리기의 비치명 실패 — 같은 쪽 연속 두 번이면 그 쪽은 1배 그림으로 두고 더 시도하지 않는다(서버 변환으로 넘기지는 않는다) */
+  private readonly sharpFailures = new PageFailures();
+  private readonly sharpGaveUp = new Set<number>();
   /** 선명하게 그리기 중 Worker가 죽었다 — view.ts가 draw 실패와 같은 전환을 건다(그 오류는 PagesBody를 거치지 않는다) */
   onDead: ((error: Error) => void) | null = null;
   /** Worker 안에서 잰 열기 시간(ms) — e2e가 CPU×4를 환산한다(CDP 스로틀은 Worker를 늦추지 않는다) */
@@ -213,6 +216,10 @@ export class ArtcraftSource implements PageSource {
     const px = targetPixelWidth(opts.cssWidth, opts.dpr, size);
     this.sharpening.get(page)?.abort();
     this.sharpening.delete(page);
+    if (this.sharpGaveUp.has(page)) {
+      paint(canvas, await this.render(page, Math.min(px, quickPixelWidth(size)), true, signal));
+      return;
+    }
     if (drawPlan(this.pixelWidthsOf(page), px, size.w) !== 'two-stage') {
       paint(canvas, await this.render(page, px, true, signal));
       this.sharpFailed.delete(page); // 선명한 그림이 붙었다
@@ -226,6 +233,7 @@ export class ArtcraftSource implements PageSource {
       (img) => {
         if (canvas.width > 0) paint(canvas, img);
         this.sharpFailed.delete(page);
+        this.sharpFailures.ok(page);
       },
       (error: unknown) => {
         if (isAbort(error)) return;
@@ -234,8 +242,10 @@ export class ArtcraftSource implements PageSource {
           this.onDead?.(error as Error);
           return;
         }
-        // 실패하면 1배 그림이 남는다 — qualityKey가 달라져 다음 스크롤·확대 때 다시 그린다
+        // 실패하면 1배 그림이 남는다 — qualityKey가 달라져 다음 스크롤·확대 때 다시 그린다. 연속 두 번째면 그만둔다
+        // (sharpFailed는 남겨 qualityKey를 그대로 둔다 — 같은 크기로 다시 그리지 않게)
         this.sharpFailed.add(page);
+        if (this.sharpFailures.fail(page)) this.sharpGaveUp.add(page);
       },
     ).catch(() => undefined) // paint가 던져도 처리 안 된 거부로 새지 않게(1배 그림이 남는다)
       .finally(() => {

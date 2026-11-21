@@ -5,9 +5,12 @@ node_modules/
 data/
 
 # 외부 변환 도구 바이너리 (README의 설치 안내 참조) — 단 아트크래프트 껍데기 크레이트(소스)는 저장소에 둔다
-tools/*
-!tools/artcraft-shell/
-tools/artcraft-shell/.build/
+# (어느 깊이의 tools/든 무시 — 단 맨 위 tools/는 열어 두고 그 안에서 artcraft-shell만, 그 아래 하위 폴더는 통째로 포함)
+**/tools/
+!/tools/
+/tools/*
+!/tools/artcraft-shell/
+/tools/artcraft-shell/.build/
 
 # 로그·임시 파일
 *.log

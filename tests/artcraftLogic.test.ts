@@ -32,6 +32,10 @@ describe('배율', () => {
   test('1배 그림 화소 폭 = 쪽 폭 pt', () => {
     expect(quickPixelWidth(LETTER)).toBe(612);
     expect(quickPixelWidth({ w: 0.2, h: 1 })).toBe(1);
+    // 아주 큰 쪽(6000 pt 정사각 등)도 캔버스 한 장 상한을 넘지 않는다(최종 검토 M6)
+    const huge = { w: 6000, h: 6000 };
+    expect(quickPixelWidth(huge)).toBe(targetPixelWidth(huge.w, 1, huge));
+    expect(quickPixelWidth(huge)).toBeLessThanOrEqual(4096);
   });
 });
 

@@ -32,7 +32,11 @@ function fail(message: string): never {
 // --no-optional-locks: status가 엔진 저장소의 .git/index를 새로 쓰지 않게(저장소는 건드리지 않는다)
 const git = (dir: string, ...args: string[]) => execFileSync('git', ['--no-optional-locks', '-C', dir, ...args], { encoding: 'utf8' });
 
-const lock = JSON.parse(fs.readFileSync(path.join(SHELL, 'ARTCRAFT.lock'), 'utf8')) as { repos: Record<string, { url: string; commit: string }> };
+const lock = JSON.parse(fs.readFileSync(path.join(SHELL, 'ARTCRAFT.lock'), 'utf8')) as { rustc?: string; repos: Record<string, { url: string; commit: string }> };
+// rustc도 고정 — 다른 판으로 빌드하면 wasm 바이트·해시가 달라져 모든 사용자가 다시 받는다(최종 검토 M8)
+const TOOLCHAIN = '+stable-x86_64-pc-windows-gnu';
+const rustc = execFileSync('rustc', [TOOLCHAIN, '--version'], { encoding: 'utf8' }).trim();
+if (!lock.rustc || !rustc.startsWith(`rustc ${lock.rustc} `)) fail(`rustc 판이 ARTCRAFT.lock(${lock.rustc ?? '없음'})과 다릅니다: ${rustc} — 판을 올리면 lock을 바꾸고 다시 빌드·검사하세요`);
 for (const { repo } of CRATES) {
   const want = lock.repos[repo]?.commit;
   if (!want) fail(`ARTCRAFT.lock에 ${repo} 커밋이 없습니다`);
@@ -59,7 +63,7 @@ for (const c of CRATES) {
   fs.copyFileSync(path.join(SHELL, c.id, 'Cargo.lock'), path.join(dir, 'Cargo.lock'));
   console.log(`[${c.id}] cargo build (몇 분 걸린다)…`);
   // wasm32 대상은 GNU 도구 묶음에만 설치돼 있다(MSVC로 하면 "can't find crate for core" — spike §4)
-  execFileSync('cargo', ['+stable-x86_64-pc-windows-gnu', 'build', '--release', '--locked', '--target', 'wasm32-unknown-unknown'], {
+  execFileSync('cargo', [TOOLCHAIN, 'build', '--release', '--locked', '--target', 'wasm32-unknown-unknown'], {
     cwd: dir,
     stdio: 'inherit',
     env: {

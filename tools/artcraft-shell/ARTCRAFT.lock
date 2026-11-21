@@ -1,5 +1,6 @@
 {
   "note": "ArtCraft 저장소는 ARTCRAFT_DIR(기본 C:/Users/OpenMinds/projects/artcraft-eval) 아래에 두고 이 커밋에서만 빌드한다. 판을 올리면 커밋을 바꾸고 npm run build:artcraft + npm run verify:artcraft를 다시 돌린다.",
+  "rustc": "1.99.0",
   "repos": {
     "wordcraft": { "url": "https://github.com/storytold/wordcraft.git", "commit": "f8ec3cc0fa884369c4f3ebbd9ca3085398f5ec31" },
     "gridcraft": { "url": "https://github.com/storytold/gridcraft.git", "commit": "61ebc0e3df5ead3289b3d5a986956b19e18b45d9" },

@@ -43,9 +43,9 @@ export function targetPixelWidth(cssWidth: number, dpr: number, size: PageSize):
   return Math.max(1, Math.ceil(cssWidth * canvasPixelRatio(cssWidth, cssHeight, dpr)));
 }
 
-/** 1배(scale = 1, 쪽 폭 pt = 화소) 그림의 화소 폭 */
+/** 1배(scale = 1, 쪽 폭 pt = 화소) 그림의 화소 폭 — 아주 큰 쪽은 캔버스 한 장 상한까지만 */
 export function quickPixelWidth(size: PageSize): number {
-  return Math.max(1, Math.round(size.w));
+  return Math.max(1, Math.min(Math.round(size.w), targetPixelWidth(size.w, 1, size)));
 }
 
 /**
@@ -99,7 +99,6 @@ export function pageCountSuspicious(experimental: boolean, engineCount: number, 
   return experimental && serverCount > 0 && Math.abs(engineCount - serverCount) > 2;
 }
 
-/** 바이트 상한 LRU — 쪽 그림(ImageData)을 보관한다. 방금 넣은 것은 상한보다 커도 남긴다 */
 /** 쪽마다 연달아 실패한 횟수 — 한 번은 다음 그리기에 다시, 같은 쪽 두 번째면 엔진을 버린다(설계 §4.2, 최종 검토 I2) */
 export class PageFailures {
   private readonly counts = new Map<number, number>();
@@ -114,6 +113,7 @@ export class PageFailures {
   }
 }
 
+/** 바이트 상한 LRU — 쪽 그림(ImageData)을 보관한다. 방금 넣은 것은 상한보다 커도 남긴다 */
 export class ByteLru<V> {
   private readonly map = new Map<string, V>();
   private total = 0;
@@ -206,12 +206,12 @@ export function stubImports(descriptors: readonly WebAssembly.ModuleImportDescri
   return imports;
 }
 
-/** 엔진에 넘길 원본 상한 — wasm 메모리 상한이 512 MB(--max-memory)이고 엔진이 입력을 두 번 복사하므로 약 150 MB */
 /** 글꼴 하나를 넣은 결과(sp_add_font = 들어간 글꼴 수) — 0개면 한글이 빠진 채 그려지므로 열기 실패(→ 서버 변환, 설계 §4.2) */
 export function fontProblem(faces: number): string | null {
   return faces < 1 ? '글꼴을 넣지 못했습니다' : null;
 }
 
+/** 엔진에 넘길 원본 상한 — wasm 메모리 상한이 512 MB(--max-memory)이고 엔진이 입력을 두 번 복사하므로 약 150 MB */
 export const MAX_ORIGINAL_BYTES = 150 * 1024 * 1024;
 const ZIP = [0x50, 0x4b, 0x03, 0x04];
 const OLE = [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1];

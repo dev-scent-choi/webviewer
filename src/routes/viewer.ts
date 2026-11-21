@@ -1770,10 +1770,11 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
       if (!view) return reply;
       const meta = view.meta;
       if (!view.claims.perms.canDownload || view.claims.engine !== 'artcraft') {
-        await recordAudit({ type: 'engine_denied', docId: meta.id, viewer: view.claims.viewer });
+        await recordAudit({ type: 'engine_denied', docId: meta.id, viewer: view.claims.viewer, detail: 'permission' });
         return reply.code(403).send({ success: false, error: '브라우저 엔진으로 열 권한이 없습니다.' });
       }
       if (!ARTCRAFT_FORMATS.has(meta.ext)) {
+        await recordAudit({ type: 'engine_denied', docId: meta.id, viewer: view.claims.viewer, detail: 'unsupported' });
         return reply.code(400).send({ success: false, error: ENGINE_REASONS.unsupported });
       }
       // 내려받기와 같은 원천 — 편집 방이 떠 있으면 저장 전 최신 바이트
