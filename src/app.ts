@@ -105,6 +105,15 @@ export async function buildApp(): Promise<FastifyInstance> {
   });
   // 편집 메시지(Yjs 갱신 등) 한 개 상한 — 기본값(100MB)은 인증 전에도 받아 쌓을 수 있어 너무 크다
   await app.register(fastifyWebsocket, { options: { maxPayload: config.wsMaxPayload } });
+  // 화면 HTML 은 조건부 요청에 304 로 답하지 않는다 — 번들만 새로 배포하면 HTML 파일은 그대로라 304 가 나가고, 그 안의
+  // 옛 ?v= 주소(immutable)가 계속 쓰인다. 정적 플러그인은 onSend 전에 304 를 정하므로 요청 쪽 조건부 헤더를 뗀다.
+  app.addHook('onRequest', async (request) => {
+    const p = request.url.split('?')[0];
+    if (p === '/' || p.endsWith('.html')) {
+      delete request.headers['if-modified-since'];
+      delete request.headers['if-none-match'];
+    }
+  });
   // 화면 HTML의 JS·CSS 주소에 내용 해시를 붙여 내보낸다(assetVersion.ts 참고 — 앞단 캐시가 예전 파일을 내주지 않게)
   app.addHook('onSend', async (_request, reply, payload) => {
     if (reply.statusCode !== 200 || !String(reply.getHeader('content-type') ?? '').startsWith('text/html')) return payload;
@@ -119,6 +128,7 @@ export async function buildApp(): Promise<FastifyInstance> {
     const next = versionAssetUrls(html, publicDir);
     reply.removeHeader('content-length');
     reply.removeHeader('etag');
+    reply.removeHeader('last-modified');
     return next;
   });
   // 아트크래프트 브라우저 엔진 자산(.br·immutable) — 아래 public 전체 서빙보다 구체적인 /artcraft/* 경로가 먼저 걸린다

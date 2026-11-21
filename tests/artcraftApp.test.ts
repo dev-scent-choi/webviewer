@@ -43,5 +43,13 @@ describe('buildApp 정적 서빙', () => {
       expect(res.statusCode, url).toBe(200);
       expect(res.headers['cache-control'], url).toBe('no-cache');
     }
+    // HTML 은 조건부 요청으로 304 가 나가면 안 된다(옛 ?v= 주소가 immutable 로 남는다)
+    for (const url of ['/', '/index.html', '/view.html']) {
+      const res = await app.inject({ method: 'GET', url });
+      expect(res.headers['last-modified'], url).toBeUndefined();
+      expect(res.headers['etag'], url).toBeUndefined();
+      const again = await app.inject({ method: 'GET', url, headers: { 'if-modified-since': new Date().toUTCString() } });
+      expect(again.statusCode, url).toBe(200);
+    }
   });
 });
