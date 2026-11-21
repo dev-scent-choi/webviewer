@@ -226,7 +226,7 @@ function ensureSheetTally(
 
 export interface CfRemoteRequest {
   readonly sheet: number;
-  readonly ranges: ReadonlyArray<CfRect & { readonly crit?: readonly CfVal[] }>;
+  readonly ranges: ReadonlyArray<CfRect & { readonly crit?: readonly CfVal[]; readonly eq?: readonly CfVal[] }>;
   readonly stats?: readonly string[];
 }
 export type CfRemoteRangeAnswer = CfRect & ({ readonly cells: number; readonly agg: CfRangeAgg; readonly crit: Array<[string, number]> } | { readonly skipped: true });
@@ -246,14 +246,15 @@ export function parseCfRemoteRequest(body: unknown): CfRemoteRequest | null {
   const { sheet, ranges, stats } = body as Record<string, unknown>;
   if (!isIndex(sheet) || !Array.isArray(ranges) || ranges.length > CF_MAX_RANGES) return null;
   let crits = 0;
-  const out: Array<CfRect & { crit?: CfVal[] }> = [];
+  const out: Array<CfRect & { crit?: CfVal[]; eq?: CfVal[] }> = [];
   for (const r of ranges) {
     if (!r || typeof r !== 'object') return null;
-    const { r0, c0, r1, c1, crit } = r as Record<string, unknown>;
+    const { r0, c0, r1, c1, crit, eq } = r as Record<string, unknown>;
     if (![r0, c0, r1, c1].every(isIndex) || (r1 as number) < (r0 as number) || (c1 as number) < (c0 as number)) return null;
     if (crit !== undefined && (!Array.isArray(crit) || !crit.every(isCrit))) return null;
-    crits += Array.isArray(crit) ? crit.length : 0;
-    out.push({ r0: r0 as number, c0: c0 as number, r1: r1 as number, c1: c1 as number, ...(Array.isArray(crit) ? { crit: crit as CfVal[] } : {}) });
+    if (eq !== undefined && (!Array.isArray(eq) || !eq.every(isCrit))) return null;
+    crits += (Array.isArray(crit) ? crit.length : 0) + (Array.isArray(eq) ? eq.length : 0);
+    out.push({ r0: r0 as number, c0: c0 as number, r1: r1 as number, c1: c1 as number, ...(Array.isArray(crit) ? { crit: crit as CfVal[] } : {}), ...(Array.isArray(eq) ? { eq: eq as CfVal[] } : {}) });
   }
   if (crits > CF_MAX_CRITS) return null;
   if (stats !== undefined && (!Array.isArray(stats) || stats.length > CF_MAX_STATS || !stats.every((id) => typeof id === 'string' && id.length <= 100))) return null;
@@ -274,7 +275,7 @@ export async function answerCfRemote(
     const rect = { r0: q.r0, c0: q.c0, r1: q.r1, c1: q.c1 };
     if (!r?.raw) return { ...rect, skipped: true as const };
     r.table ??= cfRangeTableFromRaw(r.cells, r.raw);
-    return { ...rect, cells: r.cells, ...cfRangeAnswer(r.table, q.crit ?? []) };
+    return { ...rect, cells: r.cells, ...cfRangeAnswer(r.table, q.crit ?? [], q.eq ?? []) };
   });
   const stats: CfRemoteAnswer['stats'] = {};
   let dupKeys = 0;

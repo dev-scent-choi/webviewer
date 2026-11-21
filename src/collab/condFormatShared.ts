@@ -691,7 +691,8 @@ export function evalCfValue(
   // 상수(숫자·글자·논리값)는 수식마다 한 번만 읽는다 — 칸마다 같은 "10"을 다시 해석하지 않게
   const constant = constantOperand(formula);
   if (constant !== NOT_CONSTANT) return constant;
-  const src = rewriteSumproduct(formula.trim().replace(/^=/, ''));
+  const original = formula.trim().replace(/^=/, '');
+  const src = rewriteSumproduct(original);
   try {
     return evalSmall(src, dr, dc, row, col, valueAt, env);
   } catch (error) {
@@ -699,7 +700,7 @@ export function evalCfValue(
     // 작은 계산기가 모르는 것(다른 시트·모르는 함수·못 읽는 문법)만 수식 엔진으로 — 계산 오류(#VALUE! 등)는 안 맞음
     const unsupported = error === UNSUPPORTED || (error instanceof Error && error.message === 'cf formula');
     if (!unsupported || !env?.fallback) return undefined;
-    const v = env.fallback(shiftFormulaRefs(`=${src}`, dr, dc).slice(1), row, col);
+    const v = env.fallback(shiftFormulaRefs(`=${original}`, dr, dc).slice(1), row, col);
     if (v === CF_CANNOT) {
       env.unsupported?.(); // 엔진도 계산하지 못하는 규칙 — 칠하지 않고 "일부 생략"을 알린다
       return undefined;
@@ -720,16 +721,19 @@ const SP_PATTERN = new RegExp(
   String.raw`SUMPRODUCT\(\s*(?:--|1\s*\*\s*)?\(\s*(?:(${SP_RANGE})\s*=\s*(${SP_ARG})|(${SP_ARG})\s*=\s*(${SP_RANGE}))\s*\)\s*(?:\*\s*1\s*)?\)`,
   'gi',
 );
+/** 바꿔 쓴 SUMPRODUCT가 쓰는 내부 함수 — 범위에서 값과 **정확히 같은** 칸 수(조건·와일드카드로 읽지 않는다) */
+const CF_EXACT_FN = 'CFEXACTCOUNT';
 /**
- * SUMPRODUCT((범위=값)*1)·SUMPRODUCT(--(범위=값))는 "범위에서 값과 같은 칸 수"다 — COUNTIF(범위,값)으로 바꿔 범위 값 표(서버 표 포함)로
- * 계산한다(수식 엔진은 이 배열 비교를 못 한다).
- * shortcut: 값이 "<5"·"a*"처럼 비교 기호·와일드카드로 시작하는 글자면 COUNTIF는 조건으로 읽는다(SUMPRODUCT는 글자 그대로) — 그런 값이 실제로 나오면 정확 비교 함수를 따로 둔다.
+ * SUMPRODUCT((범위=값)*1)·SUMPRODUCT(--(범위=값))는 "범위에서 값과 정확히 같은 칸 수"다 — 내부 함수 CFEXACTCOUNT(범위,값)으로 바꿔
+ * 범위 값 개수 표(서버 답 포함)의 정확 키로 센다(수식 엔진은 이 배열 비교를 못 한다). COUNTIF로 바꾸면 "a*"·"<5"·"문의?"가 조건으로
+ * 읽혀 다른 값과 맞았다(검토 r5 F1). 엑셀의 = 비교처럼 글자는 대소문자를 가리지 않고, 수와 글자는 다르다.
+ * shortcut: 칸 값은 글자로만 들고 있어(그리드 모델에 "숫자처럼 보이는 글자" 표시가 없다) 글자 "1"과 숫자 1은 같은 값으로 센다 — 칸 모델에 글자 표시를 더할 때 고친다.
  */
 export function rewriteSumproduct(src: string): string {
   if (!/SUMPRODUCT/i.test(src)) return src;
   let out = sumproductMemo.get(src);
   if (out === undefined) {
-    out = src.replace(SP_PATTERN, (_m, r1: string | undefined, a1: string | undefined, a2: string | undefined, r2: string | undefined) => `COUNTIF(${r1 ?? r2},${a1 ?? a2})`);
+    out = src.replace(SP_PATTERN, (_m, r1: string | undefined, a1: string | undefined, a2: string | undefined, r2: string | undefined) => `${CF_EXACT_FN}(${r1 ?? r2},${a1 ?? a2})`);
     if (sumproductMemo.size > 1_000) sumproductMemo.clear();
     sumproductMemo.set(src, out);
   }
@@ -987,17 +991,25 @@ export interface CfRangeAgg {
 /** 서버 답 — 아직 없는 조건은 ask로 물어 두고 CF_PENDING(나중에 다시 칠한다) */
 export interface CfRemoteRange {
   readonly agg?: CfRangeAgg;
+  /** cfCritKey(조건) / cfExactKey(값) → 개수 */
   readonly crit: ReadonlyMap<string, number>;
-  ask(crit: CfVal): void;
+  ask(crit: CfVal, exact?: boolean): void;
 }
-/** COUNTIF 조건 하나의 키(서버·편집 화면 공용) */
+/** COUNTIF 조건 하나의 키, 정확히 같은 값 개수의 키(서버·편집 화면 공용) */
 export const cfCritKey = (crit: CfVal): string => JSON.stringify(crit);
+export const cfExactKey = (value: CfVal): string => `=${JSON.stringify(value)}`;
 
 /** 서버 — 범위 값 표에서 집계와 물어본 조건들의 개수만 답한다 */
-export function cfRangeAnswer(t: CfRangeTable, crits: readonly CfVal[]): { agg: CfRangeAgg; crit: Array<[string, number]> } {
+export function cfRangeAnswer(t: CfRangeTable, crits: readonly CfVal[], exact: readonly CfVal[] = []): { agg: CfRangeAgg; crit: Array<[string, number]> } {
   const s = sortedOf(t);
   const agg = { count: s.length, counta: [...countsOf(t).values()].reduce((a, b) => a + b, 0), sum: s.reduce((x, y) => x + y, 0), min: s[0] ?? 0, max: s[s.length - 1] ?? 0 };
-  return { agg, crit: crits.map((c) => [cfCritKey(c), countIf(t, c)]) };
+  return { agg, crit: [...crits.map((c): [string, number] => [cfCritKey(c), countIf(t, c)]), ...exact.map((v): [string, number] => [cfExactKey(v), exactCount(t, v)])] };
+}
+
+/** 범위에서 값과 정확히 같은 칸 수 — 빈 값은 빈 칸 수, 글자는 대소문자 무시, 수와 글자는 다르다(엑셀 = 비교) */
+function exactCount(t: CfRangeTable, v: CfVal): number {
+  if (v === null || v === '') return t.cells - [...countsOf(t).values()].reduce((a, b) => a + b, 0);
+  return countsOf(t).get(countKey(v)) ?? 0;
 }
 
 /** 값 글자 → 개수 표(빈 칸 제외)와 칸 수 → 범위 값 표(서버) */
@@ -1115,6 +1127,13 @@ function remoteAgg(t: CfRangeTable): CfRangeAgg | null {
   return t.remote.agg;
 }
 const CF_RANGE_FUNCS: Readonly<Record<string, (t: CfRangeTable, args: CfVal[]) => CfVal>> = {
+  [CF_EXACT_FN]: (t, a) => {
+    if (!t.remote) return exactCount(t, a[0] ?? null);
+    const n = t.remote.crit.get(cfExactKey(a[0] ?? null));
+    if (n !== undefined) return n;
+    t.remote.ask(a[0] ?? null, true);
+    throw CF_PENDING;
+  },
   COUNTIF: (t, a) => {
     if (!t.remote) return countIf(t, a[0] ?? null);
     const n = t.remote.crit.get(cfCritKey(a[0] ?? null));
@@ -1181,7 +1200,7 @@ export function cfEngineRanges(e: CondFormatEntry, rows: number, cols: number): 
   const out: Array<{ r0: number; r1: number; cols: number }> = [];
   for (const f0 of formulas) {
     const f = rewriteSumproduct(f0);
-    const engineOnly = /\b(?!(?:COUNTIF|SUM|AVERAGE|MIN|MAX|COUNT|COUNTA)\s*\()[A-Z][A-Z0-9.]*\s*\(/i.test(f.replace(/\b(AND|OR|NOT|IF|ISBLANK|ISNUMBER|ISTEXT|LEN|ABS|INT|ROUND|MOD|ROW|COLUMN|LEFT|RIGHT|UPPER|LOWER|TRIM|TODAY|NOW|DATE)\s*\(/gi, '')) || f.includes('!');
+    const engineOnly = /\b(?!(?:COUNTIF|SUM|AVERAGE|MIN|MAX|COUNT|COUNTA|CFEXACTCOUNT)\s*\()[A-Z][A-Z0-9.]*\s*\(/i.test(f.replace(/\b(AND|OR|NOT|IF|ISBLANK|ISNUMBER|ISTEXT|LEN|ABS|INT|ROUND|MOD|ROW|COLUMN|LEFT|RIGHT|UPPER|LOWER|TRIM|TODAY|NOW|DATE)\s*\(/gi, '')) || f.includes('!');
     if (!engineOnly) continue;
     for (const m of f.matchAll(/\$?([A-Z]{1,3})\$?(\d*):\$?([A-Z]{1,3})\$?(\d*)/gi)) {
       const full = !(m[2] && m[4]);

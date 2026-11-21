@@ -32,6 +32,7 @@ import {
   CF_PRESETS,
   cfCritKey,
   cfEngineRanges,
+  cfExactKey,
   cfRuleTooCostly,
   computeStats,
   GRID_COND_FORMATS_MAP,
@@ -3485,6 +3486,7 @@ async function main(): Promise<void> {
     cells: number;
     crit: Map<string, number>;
     asked: Map<string, CfVal>;
+    askedEq: Map<string, CfVal>;
     skipped?: boolean;
   }
   const cfRemote = {
@@ -3520,7 +3522,7 @@ async function main(): Promise<void> {
     const remote = cfRemoteForSheet();
     let hit = remote.ranges.get(cfRectKey(rect));
     if (!hit) {
-      hit = { rect, st: { cells: 0, crit: new Map(), asked: new Map() } };
+      hit = { rect, st: { cells: 0, crit: new Map(), asked: new Map(), askedEq: new Map() } };
       remote.ranges.set(cfRectKey(rect), hit);
     }
     const st = hit.st;
@@ -3530,9 +3532,10 @@ async function main(): Promise<void> {
       remote: {
         agg: st.agg,
         crit: st.crit,
-        ask: (crit) => {
-          if (st.skipped || st.asked.size >= 2_000) return;
-          st.asked.set(cfCritKey(crit), crit);
+        ask: (crit, exact) => {
+          if (st.skipped || st.asked.size + st.askedEq.size >= 2_000) return;
+          if (exact) st.askedEq.set(cfExactKey(crit), crit);
+          else st.asked.set(cfCritKey(crit), crit);
           scheduleCfRemoteFetch(0);
         },
       },
@@ -3571,17 +3574,24 @@ async function main(): Promise<void> {
       sheet,
       ranges: ranges.map(({ rect, st }) => {
         const crit: CfVal[] = [];
-        for (const [k, c] of [...st.asked, ...[...st.crit.keys()].filter((k) => !st.asked.has(k)).map((k): [string, CfVal] => [k, JSON.parse(k) as CfVal])]) {
+        const eq: CfVal[] = [];
+        // 새로 물은 것 + 이미 아는 것(값이 바뀌었을 수 있다). 정확 개수 키는 "="로 시작한다(cfExactKey)
+        const known = [...st.crit.keys()].filter((k) => !st.asked.has(k) && !st.askedEq.has(k));
+        const all: Array<[string, CfVal]> = [...st.asked, ...st.askedEq, ...known.map((k): [string, CfVal] => [k, JSON.parse(k.startsWith('=') ? k.slice(1) : k) as CfVal])];
+        for (const [k, c] of all) {
           if (budget <= 0 || chars + k.length > 100_000) break;
-          crit.push(c);
+          (k.startsWith('=') ? eq : crit).push(c);
           budget -= 1;
           chars += k.length;
         }
-        return { ...rect, crit };
+        return { ...rect, crit, eq };
       }),
       stats,
     };
-    for (const { st } of ranges) st.asked.clear();
+    for (const { st } of ranges) {
+      st.asked.clear();
+      st.askedEq.clear();
+    }
     cfRemote.wantStats.clear();
     cfRemote.busy = true;
     try {

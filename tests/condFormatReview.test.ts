@@ -253,10 +253,10 @@ describe('검토 r4 — 엔진이 못 하는 규칙은 알리고, SUMPRODUCT 배
     const env = { fallback: createCfFormulaFallback(valueAt, ext), tables: new Map(), extent: ext, unsupported: () => (unsupported += 1) };
     return { bg: paintCell(rule(f), row, 0, valueAt(row, 0), new Map(), valueAt, env)?.style?.bg, unsupported };
   };
-  test('SUMPRODUCT((범위=값)*1)·SUMPRODUCT(--(범위=값))는 COUNTIF로 바꿔 칠한다', async () => {
+  test('SUMPRODUCT((범위=값)*1)·SUMPRODUCT(--(범위=값))는 정확 개수로 바꿔 칠한다', async () => {
     const { rewriteSumproduct } = await import('../src/collab/condFormatShared.js');
-    expect(rewriteSumproduct('SUMPRODUCT(($A$1:$A$5=$A1)*1)>1')).toBe('COUNTIF($A$1:$A$5,$A1)>1');
-    expect(rewriteSumproduct('SUMPRODUCT(--($A1=$A$1:$A$5))>1')).toBe('COUNTIF($A$1:$A$5,$A1)>1');
+    expect(rewriteSumproduct('SUMPRODUCT(($A$1:$A$5=$A1)*1)>1')).toBe('CFEXACTCOUNT($A$1:$A$5,$A1)>1');
+    expect(rewriteSumproduct('SUMPRODUCT(--($A1=$A$1:$A$5))>1')).toBe('CFEXACTCOUNT($A$1:$A$5,$A1)>1');
     expect(paintWith('SUMPRODUCT(($A$1:$A$5=$A1)*1)>1', 0)).toEqual({ bg: '#FF0000', unsupported: 0 });
     expect(paintWith('SUMPRODUCT(--($A$1:$A$5=$A1))>1', 1)).toEqual({ bg: undefined, unsupported: 0 });
   });
@@ -276,5 +276,34 @@ describe('검토 r4 — 엔진이 못 하는 규칙은 알리고, SUMPRODUCT 배
     const lines = vals.map((v, r) => [{ v }, { v: String(r + 1) }] as const);
     await bakeSheetCondFormats(rule('NOSUCHFUNC($A1)>0'), { rows: 5, cols: 2 }, async (onRow) => lines.forEach((l, r) => onRow(r, l)), valueAt, styleRegistry([]), budget, () => undefined);
     expect(budget.skipped).toBe(true);
+  });
+});
+
+describe('검토 r5 F1 — SUMPRODUCT((범위=값)*1)는 정확히 같은 값만 센다(조건·와일드카드로 읽지 않는다)', () => {
+  const vals = ['a*', 'abc', '<5', '3', '1', '문의?', '문의1', 'x', 'ABC', 'abc'];
+  const valueAt = (r: number, c: number) => (c === 0 ? (vals[r] ?? '') : '');
+  const ext = () => ({ rows: 10, cols: 1 });
+  const rule: CondFormatEntry[] = [{ id: 'x', ranges: [{ r0: 0, c0: 0, r1: 9, c1: 0 }], rule: { t: 'expr', f: 'SUMPRODUCT(($A$1:$A$10=$A1)*1)>1', s: { bg: '#FF0000' } } }];
+  const painted = (row: number) => paintCell(rule, row, 0, valueAt(row, 0), new Map(), valueAt, { fallback: createCfFormulaFallback(valueAt, ext), tables: new Map(), extent: ext })?.style?.bg;
+  test('a*·<5·문의?는 다른 값과 맞지 않는다(엑셀은 칠하지 않는다)', () => {
+    expect(painted(0)).toBeUndefined(); // a* — COUNTIF였으면 abc와 맞았다
+    expect(painted(2)).toBeUndefined(); // <5 — COUNTIF였으면 3·1과 맞았다
+    expect(painted(5)).toBeUndefined(); // 문의? — COUNTIF였으면 문의1과 맞았다
+    expect(painted(3)).toBeUndefined();
+  });
+  test('같은 글자는 대소문자 없이 맞는다(엑셀 = 비교)', () => {
+    expect(painted(1)).toBe('#FF0000'); // abc·ABC·abc
+    expect(painted(8)).toBe('#FF0000');
+  });
+  test('진짜 COUNTIF 규칙은 엑셀처럼 조건으로 읽는다(그대로)', () => {
+    const countif: CondFormatEntry[] = [{ id: 'y', ranges: [{ r0: 0, c0: 0, r1: 9, c1: 0 }], rule: { t: 'expr', f: 'COUNTIF($A$1:$A$10,$A1)>1', s: { bg: '#FF0000' } } }];
+    expect(paintCell(countif, 0, 0, 'a*', new Map(), valueAt, { tables: new Map(), extent: ext })?.style?.bg).toBe('#FF0000');
+  });
+  test('서버 답(편집 화면)도 정확 개수 키로 답한다', async () => {
+    const { cfRangeAnswer, cfRangeTableFromRaw, cfExactKey, cfCritKey } = await import('../src/collab/condFormatShared.js');
+    const raw = new Map<string, number>();
+    for (const v of vals) raw.set(v, (raw.get(v) ?? 0) + 1);
+    const a = cfRangeAnswer(cfRangeTableFromRaw(10, raw), ['a*'], ['a*', '<5', '문의?', 'ABC']);
+    expect(new Map(a.crit)).toEqual(new Map([[cfCritKey('a*'), 4], [cfExactKey('a*'), 1], [cfExactKey('<5'), 1], [cfExactKey('문의?'), 1], [cfExactKey('ABC'), 3]]));
   });
 });
