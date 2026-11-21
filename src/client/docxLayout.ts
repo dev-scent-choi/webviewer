@@ -1,7 +1,7 @@
 import { Plugin, PluginKey, type EditorState, type Transaction } from 'prosemirror-state';
-import { ReplaceStep } from 'prosemirror-transform';
+import { ReplaceAroundStep, ReplaceStep } from 'prosemirror-transform';
 import { Decoration, DecorationSet, type EditorView } from 'prosemirror-view';
-import type { Node as PMNode } from 'prosemirror-model';
+import { DOMSerializer, type Node as PMNode } from 'prosemirror-model';
 import { blocksDOM, fontStack, lineSpacingCss, type ParagraphIndent, type ParagraphSpacing, type TabStop } from '../docx/schema.js';
 import { NumberingCounter, type NumberingDefs } from '../docx/numbering.js';
 import type { DocxRenderExtras, DocxSectionInfo, DocxStyleRule } from '../docx/import.js';
@@ -319,6 +319,44 @@ function isLocalTextEdit(tr: Transaction): boolean {
     });
     return ok;
   });
+}
+
+/** 쪽 모양을 바꾸는 노드 — 쪽 나누기·각주 참조·구역 나눔·문단 앞 쪽 나눔·다단 상자 */
+const pageShaping = (n: PMNode) =>
+  n.type.name === 'page_break' || n.type.name === 'columns' || (n.type.name === 'ooxml' && n.attrs.kind === 'note') || typeof n.attrs.sect === 'number' || Boolean(n.attrs.breakBefore);
+
+/**
+ * 쪽 장식은 그대로 두고(옮기기만) 번호만 다시 맞추면 되는 편집인가 — Enter·문단 붙여넣기·문단 지우기처럼 블록이 생기고 없어지지만
+ * 쪽 나누기·구역·각주는 건드리지 않은 것(REVIEW-r3 I-r3-3: 예전엔 이때마다 장식 전체를 다시 만들어 800쪽 4배 느리게 Enter 300ms대).
+ */
+function isBlockEditKeepingPages(tr: Transaction): boolean {
+  return tr.steps.every((step, i) => {
+    if (!(step instanceof ReplaceStep || step instanceof ReplaceAroundStep)) return false;
+    const { from, to, slice } = step as unknown as { from: number; to: number; slice: import('prosemirror-model').Slice };
+    let ok = true;
+    slice.content.descendants((n) => {
+      if (pageShaping(n)) ok = false;
+      return ok;
+    });
+    if (ok) tr.docs[i].nodesBetween(from, to, (n) => {
+      if (pageShaping(n)) ok = false;
+      return ok;
+    });
+    return ok;
+  });
+}
+
+/** 장식 묶음의 번호 글자 장식만 새 문서 기준으로 바꾼다(다른 장식은 옮긴 그대로) — 바뀐 번호만 빼고 넣는다 */
+function refreshNumbering(set: DecorationSet, doc: PMNode, defs: NumberingDefs | null): DecorationSet {
+  const fresh: Decoration[] = [];
+  numberingDecorations(doc, defs, fresh, numberingRules);
+  const idOf = (d: Decoration) => `${d.from}|${(d.spec as { key?: string }).key}`;
+  const old = set.find(undefined, undefined, (spec) => typeof spec.key === 'string' && spec.key.startsWith('num-'));
+  const oldIds = new Set(old.map(idOf));
+  const freshIds = new Set(fresh.map(idOf));
+  const gone = old.filter((d) => !freshIds.has(idOf(d)));
+  const added = fresh.filter((d) => !oldIds.has(idOf(d)));
+  return gone.length === 0 && added.length === 0 ? set : set.remove(gone).add(doc, added);
 }
 
 /** 거래가 바꾼 범위(새 문서 위치) */
@@ -733,6 +771,16 @@ export function docxStyleSheetText(rules: readonly DocxStyleRule[]): string[] {
 const PAGINATION_META = 'docxPagination';
 /** 화면 밖 블록 그리기 건너뛰기(content-visibility) 켜기 — 첫 쪽 나눔을 잰 뒤(그때까지 모든 블록 높이를 한 번 적어 둔다) */
 const CONTENT_SKIP_META = 'docxContentSkip';
+/** 화면에서 멀면 그리기를 건너뛸 본문 직속 요소 — 문단·제목(farAwareView)과 쪽 경계 장식(ProseMirror가 장식 안 변화는 보지 않는다).
+ * 표는 열 너비 조절 표 보기(editor.ts)가 속성 변화를 문서 변경으로 읽어 넣지 않는다. 떠 있는 그림이 든 문단은 가두면 둘러싸기가 바뀌어 뺀다. */
+const SKIPPABLE = ':is(p, h1, h2, h3, h4, h5, h6, .docx-page-boundary):not(.docx-float-host)';
+
+/** 문단·제목 보기 — 스키마 toDOM 그대로 그리고, 화면 밖 표시(data-far)를 바꾼 것은 문서 변경으로 읽지 않는다 */
+function farAwareView(node: PMNode) {
+  const { dom, contentDOM } = DOMSerializer.renderSpec(document, node.type.spec.toDOM!(node));
+  return { dom, contentDOM, ignoreMutation: (m: { type: string; attributeName?: string | null }) => m.type === 'attributes' && m.attributeName === 'data-far' };
+}
+
 /** 화면에 보이는 블록 앞뒤로 그려 둘 본문 직속 블록(쪽 장식 포함) 수 */
 const SKIP_MARGIN = 60;
 
@@ -777,8 +825,11 @@ function indexedOf(set: DecorationSet): DecorationSet {
 /** 편집기에 Word 문서 모양 장식을 붙이는 플러그인 — 번호·쪽 경계·구역 폭 장식, 탭 폭, 넘침 쪽 나눔(성능은 파일 위 설명). */
 export function docxLayoutPlugin(extras: DocxRenderExtras, totalPages: number | null): Plugin<LayoutState> {
   const defaultTabPx = extras.defaultTabStopDxa / TWIPS_PER_PX;
-  /** 화면 밖 블록 그리기 건너뛰기(CSS .docx-skip — content-visibility: auto)가 켜졌나 */
+  /** 화면 밖 블록 그리기 건너뛰기(CSS .docx-skip — content-visibility: hidden)가 켜졌나 */
   let skipOn = false;
+  // 구역마다 본문 폭이 다르면 블록마다 폭 장식이 붙는다(pageDecorations)
+  const widths = extras.sections.map((sec) => contentWidthOf(sec) ?? 0);
+  const narrowSections = widths.some((w) => w > 0 && w < Math.max(0, ...widths) - 0.5);
   return new Plugin<LayoutState>({
     key: layoutKey,
     state: {
@@ -789,6 +840,8 @@ export function docxLayoutPlugin(extras: DocxRenderExtras, totalPages: number | 
         if (!tr.docChanged) return prev.dirty === 'all' || prev.dirty.length > 0 ? { ...prev, dirty: [] } : prev;
         const autoBreaks = prev.autoBreaks.map((p) => tr.mapping.map(p));
         if (isLocalTextEdit(tr)) return { deco: prev.deco.map(tr.mapping, tr.doc), autoBreaks, dirty: changedRanges(tr) };
+        // 블록이 생기고 없어지기만 한 편집: 쪽 장식은 옮기고 번호만 맞춘다(구역마다 본문 폭이 다른 문서는 새 블록 폭 장식이 필요해 전체)
+        if (!narrowSections && isBlockEditKeepingPages(tr)) return { deco: refreshNumbering(prev.deco.map(tr.mapping, tr.doc), state.doc, extras.numbering), autoBreaks, dirty: changedRanges(tr) };
         return { deco: buildDecorations(state.doc, extras, totalPages, autoBreaks), autoBreaks, dirty: 'all' };
       },
     },
@@ -797,6 +850,7 @@ export function docxLayoutPlugin(extras: DocxRenderExtras, totalPages: number | 
         const deco = layoutKey.getState(state)?.deco;
         return deco ? indexedOf(deco) : null;
       },
+      nodeViews: { paragraph: farAwareView, heading: farAwareView },
       attributes: (): Record<string, string> => (extras.sections.length > 0 ? { class: skipOn ? 'docx-paged docx-skip' : 'docx-paged' } : {}),
     },
     view: (view: EditorView) => {
@@ -910,11 +964,10 @@ export function docxLayoutPlugin(extras: DocxRenderExtras, totalPages: number | 
         if (!frame) frame = requestAnimationFrame(flush);
       };
       /**
-       * 화면 밖 블록 그리기 건너뛰기: 화면 근처(앞뒤 SKIP_MARGIN개) 밖의 본문 직속 블록은 content-visibility: hidden — 순서 번호
-       * (nth-child) 범위 규칙 하나로 둔다. content-visibility: auto는 브라우저가 블록마다 화면 안인지 그림마다 재어(400쪽 2400블록,
+       * 화면 밖 블록 그리기 건너뛰기: 화면 근처(앞뒤 SKIP_MARGIN개) 밖의 본문 직속 블록은 content-visibility: hidden(data-far 표시).
+       * content-visibility: auto는 브라우저가 블록마다 화면 안인지 그림마다 재어(400쪽 2400블록,
        * 글자당 약 20ms) 쓰지 않는다. 건너뛴 블록 크기는 마지막으로 그렸을 때 크기(contain-intrinsic-size: auto)라 스크롤 위치는 그대로다.
        */
-      const skipStyle = document.head.appendChild(document.createElement('style'));
       let shownRange: [number, number] | null = null;
       const updateSkip = () => {
         if (!skipOn) return;
@@ -940,13 +993,25 @@ export function docxLayoutPlugin(extras: DocxRenderExtras, totalPages: number | 
         const lo = Math.max(0, first - SKIP_MARGIN);
         const hi = Math.min(children.length - 1, last + SKIP_MARGIN);
         shownRange = [lo, hi];
-        const ranges = [lo > 0 ? `:nth-child(-n+${lo})` : '', `:nth-child(n+${hi + 2})`].filter(Boolean).join(', ');
-        skipStyle.textContent = `.editor-surface .ProseMirror.docx-skip > :is(p, h1, h2, h3, h4, h5, h6, table, .tableWrapper, ul, ol, blockquote, .docx-page-boundary):not(.docx-float-host):is(${ranges}) { content-visibility: hidden; }`;
+        // 블록마다 data-far 표시(바뀐 것만 쓴다) — 순서 번호 선택자(nth-child)는 Enter로 블록 하나가 끼면 뒤 블록 전부의 스타일을 다시
+        // 계산하게 해(800쪽 4배 느리게 Enter마다 약 250ms) 쓰지 않는다. 문단·제목은 farAwareView가 이 속성 변화를 ProseMirror에 숨긴다.
+        for (let i = 0; i < children.length; i += 1) {
+          const child = children[i];
+          const want = (i < lo || i > hi) && child.matches(SKIPPABLE);
+          if (want !== child.hasAttribute('data-far')) {
+            if (want) child.setAttribute('data-far', '');
+            else child.removeAttribute('data-far');
+          }
+        }
       };
       let skipFrame = 0;
       // 굴리면 건너뛰기 범위를 옮기고, 새로 들어온 문단의 탭 폭을 잰다(다시 잴 것이 있을 때만)
+      let lastSkipY = Number.NaN;
       const onScroll = () => {
-        if (skipOn && !skipFrame)
+        const y = scrollerOf()?.scrollTop ?? window.scrollY;
+        const moved = !(Math.abs(y - lastSkipY) < window.innerHeight / 3);
+        if (moved) lastSkipY = y;
+        if (skipOn && moved && !skipFrame)
           skipFrame = requestAnimationFrame(() => {
             skipFrame = 0;
             updateSkip();
@@ -1046,7 +1111,6 @@ export function docxLayoutPlugin(extras: DocxRenderExtras, totalPages: number | 
           window.clearTimeout(paginateTimer);
           window.removeEventListener('scroll', onScroll, { capture: true });
           cancelAnimationFrame(skipFrame);
-          skipStyle.remove();
           ro?.disconnect();
           mo.disconnect();
         },

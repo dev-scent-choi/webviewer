@@ -3645,6 +3645,8 @@ body[data-app] { --v-accent: var(--app-accent); --v-accent-ink: #ffffff; }
 /* 본문 문단은 칠하기·배치를 자기 상자 안에 가둔다 — 한 문단을 고칠 때 다시 칠하고 배치할 범위가 그 문단으로 줄어든다.
    떠 있는 그림(.docx-float-host)·그림·글상자가 든 문단(.docx-obj-host)은 상자 밖으로 나가거나 둘러싸기가 바뀌어 뺀다. */
 .editor-surface .ProseMirror.docx-paged > :is(p, h1, h2, h3, h4, h5, h6):not(.docx-float-host):not(.docx-obj-host) { contain: layout paint style; }
+/* 화면에서 먼 블록(docxLayout.ts가 data-far를 단다)은 그리기를 건너뛴다 */
+.editor-surface .ProseMirror.docx-skip > [data-far] { content-visibility: hidden; }
 /* 쪽 경계(바닥글·간격·머리글)도 화면에서 멀면 건너뛴다 — 처음 그리기 전 크기는 대략 쪽 위·아래 여백 + 간격 */
 .editor-surface .ProseMirror.docx-paged > .docx-page-boundary { contain-intrinsic-block-size: auto 200px; }
 /* 쪽 경계: 바닥글(쪽 아래 여백) · 회색 쪽 간격 · 다음 쪽 머리글(쪽 위 여백) — 종이 폭 전체로 */
