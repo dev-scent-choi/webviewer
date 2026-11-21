@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { closeSync, cpSync, mkdirSync, openSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { closeSync, cpSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { build } from 'esbuild';
 
 /**
@@ -58,7 +58,8 @@ async function retry(fn) {
  * entryNames를 '[name].bundle'로 지정해 기존 outfile 이름 그대로(editor.bundle.js 등) 유지한다 —
  * public/*.html이 그 경로를 하드코딩하고 있어 바꾸면 전부 고쳐야 한다.
  */
-await retry(() => build({
+const built = await retry(() => build({
+  metafile: true,
   bundle: true,
   splitting: true,
   format: 'esm',
@@ -88,6 +89,9 @@ await retry(() => build({
   // pdf.worker 주소에 내용 해시(?v=) — 번들은 ?v=로 새로 받는데 worker만 앞단 캐시의 옛 것이면 pdf.js 판이 어긋난다
   define: { __PDF_WORKER_V__: JSON.stringify(createHash('sha256').update(readFileSync('node_modules/pdfjs-dist/build/pdf.worker.min.mjs')).digest('hex').slice(0, 10)) },
 }));
+// 이번 빌드가 쓰지 않은 옛 청크(내용 해시 이름이라 쌓인다)를 지운다 — 다 쓴 뒤에 지워 빌드 중 열린 화면이 404를 받지 않게
+const fresh = new Set(Object.keys(built.metafile.outputs).map((file) => file.replaceAll('\\', '/')));
+for (const name of readdirSync('public/js/chunks')) if (!fresh.has(`public/js/chunks/${name}`)) rmSync(`public/js/chunks/${name}`);
 
 // PDF 편집기(editor-pdf.ts)가 쓰는 pdf.js 부속 — worker(별도 스레드에서 PDF 해석), cMap(글꼴이 안 들어 있는 한글·중국어·
 // 일본어 PDF), 표준 글꼴. 외부 CDN 없이 자체 호스팅한다.
