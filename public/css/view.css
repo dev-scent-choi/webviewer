@@ -98,3 +98,7 @@ body.thumbs-open .pages-container { padding-left: calc(1rem + 152px); }
   body.thumbs-open .pages-container { padding-left: 1rem; }
   .thumbs-panel { box-shadow: 4px 0 18px rgba(0, 0, 0, 0.18); }
 }
+
+/* 아트크래프트(브라우저 엔진)로 그릴 때만 — 쪽 수가 Word와 다를 수 있음을 알린다(설계 §4.2) */
+.engine-badge { margin-left: 8px; padding: 2px 8px; border-radius: 999px; background: #e6f4f1; color: #1f4d47; font-size: 12px; line-height: 18px; white-space: nowrap; }
+.engine-badge[hidden] { display: none; }

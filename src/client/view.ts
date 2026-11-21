@@ -106,6 +106,32 @@ function setupDeterrents(ctx: ShellCtx, runEscape: () => boolean): void {
 const FALLBACK_NOTICE = 'PDF를 바로 그리지 못해 서버 그림으로 보여 줍니다 — 글자 선택은 되지 않습니다.';
 /** 암호 PDF — 이 토큰으로는 브라우저에서 풀 수 없다(비밀번호 풀기는 PDF 편집기 권한) */
 const LOCKED_NOTICE = '암호가 걸린 PDF라 서버 그림으로 보여 줍니다 — 글자 선택은 되지 않습니다.';
+/** 아트크래프트(브라우저 엔진)가 열지 못했거나 그리다 멈췄다(설계 §4.2) */
+const ARTCRAFT_FALLBACK_NOTICE = '브라우저 엔진이 이 문서를 열지 못해 서버 변환으로 보여 줍니다';
+
+function showEngineBadge(info: ViewInfo, on: boolean): void {
+  const badge = document.getElementById('engine-badge') as HTMLElement;
+  badge.hidden = !on;
+  if (on) badge.textContent = info.artcraft?.experimental ? '브라우저 엔진(아트크래프트) · 실험' : '브라우저 엔진(아트크래프트)';
+}
+
+/** 처음 원천 — 아트크래프트 토큰이면 브라우저 엔진(동적 import), 실패하면 안내하고 서버 변환. 서버가 거절 이유를 줬으면 그 안내 */
+async function firstSource(info: ViewInfo, libreSource: () => Promise<PageSource>): Promise<PageSource> {
+  if (info.engine === 'artcraft' && info.artcraft) {
+    try {
+      const { openArtcraftSource } = await import('./view/artcraftSource.js');
+      const source = await openArtcraftSource(info);
+      showEngineBadge(info, true);
+      return source;
+    } catch (error) {
+      console.warn('브라우저 엔진으로 열지 못해 서버 변환으로 보여 줍니다:', error);
+      notice(ARTCRAFT_FALLBACK_NOTICE);
+    }
+  } else if (info.engineReason) {
+    notice(info.engineReason);
+  }
+  return libreSource();
+}
 
 /** 권한에 맞는 원천 — 내려받기 권한이 있으면 pdf.js(동적 import), 받지 못하면 PNG와 한 줄 안내 */
 async function openSource(info: ViewInfo, png: () => PageSource): Promise<PageSource> {
@@ -142,28 +168,45 @@ async function boot(): Promise<void> {
   applyWatermark(info.viewer);
   startPresence();
   setupEditButton({ info });
-  if (info.processing) {
-    postReady();
-    try {
+  const png = () => new PngSource(tokenQuery, info.pageCount, info.pages);
+  /** 서버 변환 원천 — 첫 변환 중(editReady)이면 "쪽을 준비하는 중"을 기다린다. 아트크래프트는 이것을 부르지 않으므로 변환을 기다리지 않는다 */
+  const libreSource = async (): Promise<PageSource> => {
+    if (info.processing) {
+      postReady();
       await waitUntilPrepared(tokenQuery);
       info = await fetchInfo();
-    } catch (error) {
-      showError(error instanceof Error ? error.message : '문서를 열 수 없습니다.', info.editorUrl);
-      return;
     }
+    return openSource(info, png);
+  };
+  let first: PageSource;
+  try {
+    first = await firstSource(info, libreSource);
+  } catch (error) {
+    showError(error instanceof Error ? error.message : '문서를 열 수 없습니다.', info.editorUrl);
+    return;
   }
-
-  const png = () => new PngSource(tokenQuery, info.pageCount, info.pages);
-  const body = new PagesBody(await openSource(info, png), info.pages);
+  const body = new PagesBody(first, info.pages);
   const escape = createEscapeChain();
   const ctx: ShellCtx = { token, tokenQuery, info, body, onEscape: escape.add, notice };
   setupDeterrents(ctx, escape.run);
   body.onDraw(() => postReady());
-  // pdf.js로 그리다 실패하면(깨진 파일·휴대폰 메모리) 같은 자리에 서버 PNG로(설계 §4·§7)
+  // pdf.js로 그리다 실패하면(깨진 파일·휴대폰 메모리) 같은 자리에 서버 PNG로(설계 §4·§7).
+  // 아트크래프트가 그리다 실패·멈추면(Worker 오류·20초 초과) 서버 변환 원천으로(설계 2026-11-21 §4.2) — 여러 쪽이 함께 실패해도 한 번만
+  let leavingArtcraft = false;
   body.onDrawError(() => {
-    if (body.kind !== 'pages-pdfjs') return;
-    notice(FALLBACK_NOTICE);
-    body.replaceSource(png());
+    if (body.kind === 'pages-pdfjs') {
+      notice(FALLBACK_NOTICE);
+      body.replaceSource(png());
+      return;
+    }
+    if (body.kind !== 'pages-artcraft' || leavingArtcraft) return;
+    leavingArtcraft = true;
+    notice(ARTCRAFT_FALLBACK_NOTICE);
+    showEngineBadge(info, false);
+    libreSource().then(
+      (next) => body.replaceSource(next),
+      (error) => showError(error instanceof Error ? error.message : '문서를 열 수 없습니다.', info.editorUrl),
+    );
   });
   await body.mount(document.getElementById('pages') as HTMLElement);
   // 떠날 때 pdf.js 문서·워커를 돌려준다(bfcache 복귀 때는 쓰지 않으므로 persisted면 둔다)

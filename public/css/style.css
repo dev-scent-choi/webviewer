@@ -4047,3 +4047,8 @@ body.review-pane-open #editor-zoom-host { margin-right: 320px; }
 .office-titlebar .back-to-view { color: #ffffff; border-color: rgba(255, 255, 255, 0.6); }
 .office-titlebar .back-to-view:hover:not(:disabled) { background: rgba(255, 255, 255, 0.16); }
 .pdf-titlebar .back-to-view { align-self: center; background: #ffffff; }
+
+/* 메인 화면 공유 폼 — 여는 엔진 고르기(리브레오피스/아트크래프트) */
+.engine-choice { display: inline-flex; gap: 10px; align-items: center; }
+.engine-choice label[title] { cursor: help; }
+.engine-reason { margin-left: 8px; color: #8a5a00; font-size: 0.85rem; }

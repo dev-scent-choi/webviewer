@@ -33,12 +33,21 @@ async function loadFormats() {
   }
 }
 
-async function issueToken(docId, viewer, canPrint, canDownload, canCopy, canEdit, pdfEditor = false) {
+async function issueToken(docId, viewer, canPrint, canDownload, canCopy, canEdit, pdfEditor = false, engine = 'libreoffice') {
   return fetchJson(`/api/documents/${docId}/tokens`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     // pdfEditor: PDF 를 PDF 편집기(editor-pdf.html)로 열기 — 내려받기 권한이 있을 때만 editorUrl 이 온다(서버 editorUrlFor)
-    body: JSON.stringify({ viewer, canPrint, canDownload, canCopy, canEdit: canEdit === true, ...(pdfEditor ? { pdfEditor: true } : {}) }),
+    // engine: 'artcraft' = 브라우저 엔진으로 열기 — 안 되면 서버가 거절하지 않고 libreoffice + engineReason(보기 화면이 안내)
+    body: JSON.stringify({
+      viewer,
+      canPrint,
+      canDownload,
+      canCopy,
+      canEdit: canEdit === true,
+      ...(pdfEditor ? { pdfEditor: true } : {}),
+      ...(engine === 'artcraft' ? { engine } : {}),
+    }),
   });
 }
 
@@ -58,11 +67,11 @@ async function deleteDocument(docId) {
  * 동시편집이 실제로 필요한 경우는 여전히 "동시편집 열기" 버튼(openEditor)의 몫이다.
  * docx/xlsx/pptx가 아닌 문서(PDF 등 pages 뷰)는 동시편집 대상이 아니므로 canEdit이 곧 마크업
  * (리뷰 코멘트) 추가/삭제 권한이 된다 — 업로더 본인이 보는 화면이니 기본으로 켜서 발급한다. */
-async function openViewer(docId, viewer, ext) {
+async function openViewer(docId, viewer, ext, engine = 'libreoffice') {
   const canEdit = !supportsEdit({ ext });
   // PDF 는 향기랩처럼 PDF 편집기로 연다 — 보기·찾기·주석·쪽 정리·서명이 한 화면에 있다(올린 사람 본인 화면이라 전체 권한)
-  const pdf = ext === 'pdf';
-  const issued = await issueToken(docId, viewer, true, true, true, canEdit, pdf);
+  const pdf = ext === 'pdf' && engine !== 'artcraft';
+  const issued = await issueToken(docId, viewer, true, true, true, canEdit, pdf, engine);
   location.href = (pdf && issued.editorUrl) || issued.viewerUrl;
 }
 
@@ -212,6 +221,13 @@ function supportsMarkup(doc) {
   return !supportsEdit(doc) && (doc.viewKind ?? 'pages') === 'pages';
 }
 
+/** 브라우저 엔진(아트크래프트)이 그리는 형식 — 서버 src/artcraftEngine.ts ARTCRAFT_FORMATS와 같다(향기랩 옛 형식은 올린 형식 기준) */
+const ARTCRAFT_EXTS = new Set(['docx', 'pptx', 'doc']);
+const ARTCRAFT_UNSUPPORTED = '이 형식은 브라우저 엔진이 지원하지 않습니다';
+function supportsArtcraft(doc) {
+  return ARTCRAFT_EXTS.has(doc.legacy?.ext ?? doc.ext);
+}
+
 function renderDocItem(doc) {
   const li = document.createElement('li');
   li.className = 'doc-item';
@@ -290,7 +306,32 @@ function renderDocItem(doc) {
       setStatus(error.message, 'error');
     });
   });
+  const artOk = supportsArtcraft(doc);
+  if (artOk) quickView.textContent = '리브레오피스로 열기';
   info.append(quickView);
+
+  // 아트크래프트(브라우저 엔진)로 열기 — 안 되는 형식은 흐리게 + 이유 말풍선(흐린 단추는 마우스를 받지 않아 감싼 span에 title)
+  const artWrap = document.createElement('span');
+  const artView = document.createElement('button');
+  artView.type = 'button';
+  artView.className = 'btn';
+  artView.textContent = '아트크래프트로 열기';
+  if (artOk) {
+    artWrap.title = '브라우저 안에서 그립니다 — 서버 변환 없이 열리며, 쪽 수가 Word와 다를 수 있습니다';
+    artView.addEventListener('click', () => {
+      artView.disabled = true;
+      openViewer(doc.id, '업로더', doc.ext, 'artcraft').catch((error) => {
+        artView.disabled = false;
+        setStatus(error.message, 'error');
+      });
+    });
+  } else {
+    artWrap.title = ARTCRAFT_UNSUPPORTED;
+    artView.disabled = true;
+    artView.style.pointerEvents = 'none';
+  }
+  artWrap.append(artView);
+  info.append(artWrap);
 
   if (supportsEdit(doc)) {
     const quickEdit = document.createElement('button');
@@ -333,6 +374,10 @@ function renderDocItem(doc) {
     ${supportsEdit(doc) ? '<label><input type="checkbox" name="canEdit" /> 동시편집</label>' : ''}
     ${supportsMarkup(doc) ? '<label><input type="checkbox" name="canEdit" /> 마크업 편집(코멘트 추가/삭제)</label>' : ''}
     ${doc.ext === 'pdf' ? '<label title="저장 권한이 있어야 PDF 편집기로 열립니다"><input type="checkbox" name="pdfEditor" /> PDF 편집기로 열기</label>' : ''}
+    <span class="engine-choice" role="radiogroup" aria-label="여는 엔진">
+      <label><input type="radio" name="engine" value="libreoffice" checked /> 리브레오피스</label>
+      <label title="${artOk ? '브라우저 안에서 그립니다 — 저장 권한이 있어야 합니다' : ARTCRAFT_UNSUPPORTED}"><input type="radio" name="engine" value="artcraft" ${artOk ? '' : 'disabled'} /> 아트크래프트</label>
+    </span>
     <button type="submit" class="btn btn-primary">열람 링크 발급</button>
   `;
   const result = document.createElement('p');
@@ -350,15 +395,22 @@ function renderDocItem(doc) {
         data.get('canCopy') === 'on',
         data.get('canEdit') === 'on',
         data.get('pdfEditor') === 'on',
+        data.get('engine') === 'artcraft' ? 'artcraft' : 'libreoffice',
       );
       result.replaceChildren();
       const open = document.createElement('a');
       open.href = issued.viewerUrl;
       open.target = '_blank';
       open.rel = 'noopener';
-      open.textContent = '뷰어 열기';
+      open.textContent = issued.engine === 'artcraft' ? '아트크래프트로 열기' : artOk ? '리브레오피스로 열기' : '뷰어 열기';
       open.className = 'btn';
       result.append(open);
+      if (issued.engineReason) {
+        const reason = document.createElement('span');
+        reason.className = 'engine-reason';
+        reason.textContent = issued.engineReason;
+        result.append(reason);
+      }
       if (issued.editorUrl) {
         const openEdit = document.createElement('a');
         openEdit.href = issued.editorUrl;
