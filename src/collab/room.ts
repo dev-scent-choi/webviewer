@@ -1,4 +1,5 @@
 import type { IncomingMessage } from 'node:http';
+import { WILDCARD_WORK_BUDGET, isWildcardBudgetError, runWildcardStep, type WildcardBudget } from './wildcard.js';
 import type { WebSocket } from 'ws';
 import { unzipXmlParts } from '../zipGuard.js';
 import { sanitizeAwarenessUpdate } from './awarenessGuard.js';
@@ -1166,6 +1167,9 @@ async function exportXlsxWithFallback(room: Room, originalXlsxBytes: Uint8Array)
  */
 const RECOMPUTE_YIELD_EVERY_N_ROWS = Math.max(1, Math.min(YIELD_EVERY_N_ROWS, Math.ceil(PAGE_SIZE_ROWS / 4)));
 
+/** 와일드카드 작업 예산을 넘어 계산하지 않은 칸 — 계산값 대신 수식 원문을 둔다 */
+const OVER_WILDCARD_BUDGET = Symbol('over-wildcard-budget');
+
 async function recomputeFormulasForPage(room: Room, sheetIdx: number, page: number): Promise<void> {
   const store = room.lazyGrid;
   if (!store) return;
@@ -1191,6 +1195,7 @@ async function recomputeFormulasForPage(room: Room, sheetIdx: number, page: numb
   // 만드는데, 이 페이지 재계산 패스 하나 동안 시트 구성은 바뀌지 않으므로 그럴 필요가 없다
   // (buildStoreSheetNameIndex/computeGridCellDisplayAsync 문서 주석 참고).
   const sheetNameIndex = buildStoreSheetNameIndex(store);
+  const pass: WildcardBudget = { left: WILDCARD_WORK_BUDGET };
   for (let start = pageStart; start < pageEnd; start += RECOMPUTE_YIELD_EVERY_N_ROWS) {
     const end = Math.min(start + RECOMPUTE_YIELD_EVERY_N_ROWS, pageEnd);
     // "이 칸이 수식인가"를 판정하려면 원본 텍스트가 필요하다 — getRowCells는 더티 오버레이를
@@ -1206,7 +1211,7 @@ async function recomputeFormulasForPage(room: Room, sheetIdx: number, page: numb
     );
 
     const nonFormulaKeys: string[] = [];
-    const formulaCells: Array<{ r: number; c: number; key: string }> = [];
+    const formulaCells: Array<{ r: number; c: number; key: string; v: string }> = [];
     for (let ri = 0; ri < rowsInChunk.length; ri += 1) {
       const r = rowsInChunk[ri];
       const rowCells = rowCellsList[ri];
@@ -1216,7 +1221,7 @@ async function recomputeFormulasForPage(room: Room, sheetIdx: number, page: numb
         if (cell === 0 || cell === undefined || !cell.v.startsWith('=')) {
           nonFormulaKeys.push(key);
         } else {
-          formulaCells.push({ r, c, key });
+          formulaCells.push({ r, c, key, v: cell.v });
         }
       }
     }
@@ -1225,15 +1230,29 @@ async function recomputeFormulasForPage(room: Room, sheetIdx: number, page: numb
     // 일어난다) — 그래서 computeGridCellDisplayAsync는 반드시 transact 밖에서 먼저 끝낸 뒤,
     // 이미 계산된 값만 동기 콜백 안에서 쓴다(seedGridPageFromXlsx가 getRow를 Promise.all로 먼저
     // 기다린 뒤 transact하는 것과 같은 패턴, xlsx/collab.ts 참고).
-    const values = await Promise.all(
-      formulaCells.map(({ r, c }) => computeGridCellDisplayAsync(store, sheetIdx, r, c, new Set(), memo, tainted, sheetNameIndex)),
-    );
+    // 와일드카드 작업 예산(재검토 2): 쪽 하나 재계산에 WILDCARD_WORK_BUDGET 하나, 칸 하나는 그중 단계 하나(≈114ms)까지.
+    // 예전엔 묶음(125행)을 Promise.all로 한꺼번에 돌려, 무거운 COUNTIF 열 하나가 묶음마다 14초씩 이벤트 루프를 잡았다 —
+    // 이제 칸을 차례로 계산하고 20ms마다 양보한다. 예산을 넘은 칸은 '#ERROR!' 대신 수식 원문을 남긴다.
+    const values: unknown[] = [];
+    let lastYield = performance.now();
+    for (const { r, c } of formulaCells) {
+      values.push(
+        await runWildcardStep(pass, (step) => computeGridCellDisplayAsync(store, sheetIdx, r, c, new Set(), memo, tainted, sheetNameIndex, step)).catch((error: unknown) => {
+          if (!isWildcardBudgetError(error)) throw error;
+          return OVER_WILDCARD_BUDGET;
+        }),
+      );
+      if (performance.now() - lastYield > 20) {
+        await yieldToEventLoop();
+        lastYield = performance.now();
+      }
+    }
     room.ydoc.transact(() => {
       for (const key of nonFormulaKeys) {
         if (computed.has(key)) computed.delete(key);
       }
       for (let i = 0; i < formulaCells.length; i += 1) {
-        computed.set(formulaCells[i].key, formatComputedValueForStorage(values[i]));
+        computed.set(formulaCells[i].key, values[i] === OVER_WILDCARD_BUDGET ? formulaCells[i].v : formatComputedValueForStorage(values[i]));
       }
     }, GRID_COMPUTED_WRITE_ORIGIN);
     await yieldToEventLoop();

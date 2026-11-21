@@ -31,7 +31,7 @@ import { gridCellValue, parseThemeColors, yieldToEventLoop, type GridCell, type 
 import { createCfFormulaFallback } from './cfFormulaEngine.js';
 import { parseCondFormats, parseDxfs } from './condFormatParse.js';
 import { sheetPathsByName } from './drawingPassthrough.js';
-import { WILDCARD_WORK_BUDGET, withWildcardBudget, type WildcardBudget } from '../collab/wildcard.js';
+import { WILDCARD_WORK_BUDGET, runWildcardStep, withWildcardBudget, type WildcardBudget } from '../collab/wildcard.js';
 
 /** 그리드 하나에 조건부 서식을 굽는 시간 예산(ms) */
 export const CF_BAKE_BUDGET_MS = 2_000;
@@ -234,7 +234,8 @@ export async function bakeSheetCondFormats(
         if (!cell) continue;
         const here = (byCol[c] ??= rowEntries.filter((e) => e.ranges.some((rect) => r >= rect.r0 && r <= rect.r1 && c >= rect.c0 && c <= rect.c1)));
         if (here.length === 0) continue;
-        const paint = withWildcardBudget(budget.wildcard, () => paintCell(here, r, c, gridCellValue(cell), stats, valueAt, env));
+        if (budget.expired) break; // 칸마다도 본다 — 한 행에 무거운 칸이 많아도 시간 예산을 단계 하나 넘게 넘기지 않게
+        const paint = runWildcardStep(budget.wildcard, (step) => withWildcardBudget(step, () => paintCell(here, r, c, gridCellValue(cell), stats, valueAt, env)));
         if (!paint) continue;
         out ??= line.slice();
         out[c] = { ...cell, s: registry.register(paintedStyle(registry.styleOf(cell.s), paint)) };

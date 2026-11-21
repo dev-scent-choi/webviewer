@@ -1008,7 +1008,12 @@ export const cfExactKey = (value: CfVal): string => `=${JSON.stringify(value)}`;
 export function cfRangeAnswer(t: CfRangeTable, crits: readonly CfVal[], exact: readonly CfVal[] = []): { agg: CfRangeAgg; crit: Array<[string, number]> } {
   const s = sortedOf(t);
   const agg = { count: s.length, counta: [...countsOf(t).values()].reduce((a, b) => a + b, 0), sum: s.reduce((x, y) => x + y, 0), min: s[0] ?? 0, max: s[s.length - 1] ?? 0 };
-  return { agg, crit: [...crits.map((c): [string, number] => [cfCritKey(c), countIf(t, c)]), ...exact.map((v): [string, number] => [cfExactKey(v), exactCount(t, v)])] };
+  return { agg, crit: [...crits.map((c) => cfCritEntry(t, c)), ...exact.map((v): [string, number] => [cfExactKey(v), exactCount(t, v)])] };
+}
+
+/** 서버 답의 조건 하나 — [키, 개수]. 와일드카드 예산을 조건마다 따로 떼어 쓰려고 하나씩 부를 수 있게 꺼내 둔다 */
+export function cfCritEntry(t: CfRangeTable, c: CfVal): [string, number] {
+  return [cfCritKey(c), countIf(t, c)];
 }
 
 /** 범위에서 값과 정확히 같은 칸 수 — 빈 값은 빈 칸 수, 글자는 대소문자 무시, 수와 글자는 다르다(엑셀 = 비교) */

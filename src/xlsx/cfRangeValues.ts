@@ -13,6 +13,7 @@
  *   CF_GLOBAL_BUILDS개까지. 세는 동안 CF_YIELD_MS마다 양보한다.
  */
 import {
+  cfCritEntry,
   cfRangeAnswer,
   cfRangeTableAdjust,
   cfRangeTableFromRawChunked,
@@ -28,7 +29,7 @@ import {
   type CondFormatEntry,
 } from '../collab/condFormatShared.js';
 import { gridCellValue, yieldToEventLoop } from '../spreadsheet.js';
-import { WILDCARD_WORK_BUDGET, WildcardBudgetError, withWildcardBudget, type WildcardBudget } from '../collab/wildcard.js';
+import { WILDCARD_WORK_BUDGET, WildcardBudgetError, runWildcardStep, withWildcardBudget, type WildcardBudget } from '../collab/wildcard.js';
 import { getRowCells, type LazyGridStore } from './lazyGridStore.js';
 
 /** 방 하나가 세는 칸 수 상한(모든 범위 합) */
@@ -347,20 +348,40 @@ export async function answerCfRemote(
   const s = await ensureSheetTally(t, store, req.sheet, entries, computedAt);
   let stale = false;
   let overBudget = false;
-  const wildcard: WildcardBudget = { left: WILDCARD_WORK_BUDGET };
-  const ranges: CfRemoteRangeAnswer[] = req.ranges.map((q) => {
+  // 와일드카드 예산 — 요청 하나에 WILDCARD_WORK_BUDGET, 조건 하나마다 단계 하나(WILDCARD_STEP_BUDGET)씩 떼어 쓰고 20ms마다 양보한다
+  const pass: WildcardBudget = { left: WILDCARD_WORK_BUDGET };
+  let lastYield = performance.now();
+  const ranges: CfRemoteRangeAnswer[] = [];
+  for (const q of req.ranges) {
     const r = s.rects.get(keyOf(q));
     const rect = { r0: q.r0, c0: q.c0, r1: q.r1, c1: q.c1 };
-    if (!r?.raw || !r.table) return { ...rect, skipped: true as const };
-    if (r.formulaCells > 0 && t.edited) stale = true;
-    try {
-      return { ...rect, cells: r.cells, ...withWildcardBudget(wildcard, () => cfRangeAnswer(r.table!, q.crit ?? [], q.eq ?? [])) };
-    } catch (error) {
-      if (!(error instanceof WildcardBudgetError)) throw error;
-      overBudget = true;
-      return { ...rect, skipped: true as const };
+    if (!r?.raw || !r.table) {
+      ranges.push({ ...rect, skipped: true as const });
+      continue;
     }
-  });
+    if (r.formulaCells > 0 && t.edited) stale = true;
+    const table = r.table;
+    const base = cfRangeAnswer(table, [], q.eq ?? []);
+    const crit: Array<[string, number]> = [];
+    let skipped = false;
+    for (const c of q.crit ?? []) {
+      try {
+        crit.push(runWildcardStep(pass, (step) => withWildcardBudget(step, () => cfCritEntry(table, c))));
+      } catch (error) {
+        if (!(error instanceof WildcardBudgetError)) throw error;
+        skipped = true; // 이 범위는 칠하지 않는다(편집 화면 "일부 생략")
+        break;
+      }
+      if (performance.now() - lastYield > 20) {
+        await yieldToEventLoop();
+        lastYield = performance.now();
+      }
+    }
+    if (skipped) {
+      overBudget = true;
+      ranges.push({ ...rect, skipped: true as const });
+    } else ranges.push({ ...rect, cells: r.cells, agg: base.agg, crit: [...crit, ...base.crit] });
+  }
   const stats: CfRemoteAnswer['stats'] = {};
   let dupKeys = 0;
   for (const id of req.stats ?? []) {

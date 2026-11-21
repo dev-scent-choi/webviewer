@@ -1,5 +1,6 @@
 import FormulaParser, { type CellRef, type RangeRef } from 'fast-formula-parser';
 const { FormulaError } = FormulaParser;
+import { isWildcardBudgetError, WildcardBudgetError, withWildcardBudget, type WildcardBudget } from '../collab/wildcard.js';
 import type { GridDocument } from '../spreadsheet.js';
 // 값 import라 spreadsheet.ts(이 파일을 import함)와 순환이 생기지만, 호이스팅된 함수 선언을
 // 런타임(수식 평가 시점)에만 호출하므로 안전하다 — 모듈 평가 중에는 서로를 호출하지 않는다.
@@ -197,6 +198,8 @@ export function computeGridCellDisplay(
       },
     );
   } catch (error) {
+    // 와일드카드 작업 예산을 넘었다 — '#ERROR!'(틀린 값처럼 보이고 IFERROR가 삼킨다)로 남기지 않고 부르는 쪽에 알린다(수식 원문을 남긴다)
+    if (isWildcardBudgetError(error)) throw new WildcardBudgetError();
     result = rangeTooLarge || rangeSheetMissing ? FormulaError.REF.name : (error instanceof FormulaError ? error.name : '#ERROR!');
   } finally {
     evalGuard.delete(key);
@@ -315,6 +318,8 @@ function computeGridCellDisplaySync(
       },
     );
   } catch (error) {
+    // 와일드카드 작업 예산을 넘었다 — '#ERROR!'(틀린 값처럼 보이고 IFERROR가 삼킨다)로 남기지 않고 부르는 쪽에 알린다(수식 원문을 남긴다)
+    if (isWildcardBudgetError(error)) throw new WildcardBudgetError();
     result = rangeTooLarge || rangeSheetMissing ? FormulaError.REF.name : (error instanceof FormulaError ? error.name : '#ERROR!');
   } finally {
     evalGuard.delete(key);
@@ -385,6 +390,8 @@ export async function computeGridCellDisplayAsync(
   memo: MemoLike = new Map(),
   tainted: Set<string> = new Set(),
   sheetNameIndex?: ReadonlyMap<string, number>,
+  /** 와일드카드 작업 예산(재검토 2) — 부르는 쪽(편집 방 쪽 재계산)이 칸마다 넘긴다. 시도마다 동기 계산 구간에만 쓴다(비동기 경계는 이 인자로 건넌다) */
+  budget?: WildcardBudget,
 ): Promise<unknown> {
   const MAX_RETRIES = 10_000; // 한 수식이 참조할 수 있는 서로 다른 행 수의 넉넉한 상한(안전망)
   // top-level 호출(pass-level 호출자가 넘겨주지 않으면)에서만 새로 만들고, 재시도 루프 전체에서
@@ -407,11 +414,12 @@ export async function computeGridCellDisplayAsync(
     // 공유 memo를 읽기 전용으로 감싸는 쓰기 로그 레이어에서 시작한다 — 이미 다른(깨끗했던)
     // 시도/셀에서 검증된 값은 그대로 재사용하고, 이번 시도에서 새로 계산되는 값은 writeLog에만 쌓인다.
     const attemptMemo = new LayeredMemo(memo);
-    const result = computeGridCellDisplaySync(store, sheetIdx, row, col, new Set(evalGuard), attemptMemo, tainted, (missSheet, missRow) => {
+    const runAttempt = () => computeGridCellDisplaySync(store, sheetIdx, row, col, new Set(evalGuard), attemptMemo, tainted, (missSheet, missRow) => {
       const missKey = `${missSheet}:${missRow}`;
       if (missedRows.size >= store.readCacheLimit || missedRows.has(missKey)) return;
       missedRows.set(missKey, { sheetIdx: missSheet, row: missRow });
     }, nameIndex);
+    const result = budget ? withWildcardBudget(budget, runAttempt) : runAttempt();
     if (missedRows.size === 0) {
       // 깨끗이 끝났으니 이번 시도에서 새로 계산된 값들(writeLog)만 공유 memo에 합친다 — 공유
       // memo에 이미 있던 항목은 건드리지 않는다(O(새 항목 수)이지 O(공유 memo 크기)가 아니다).

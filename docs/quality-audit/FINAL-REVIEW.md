@@ -187,3 +187,81 @@ Two side effects of the library override (informational):
 - C2, I1, M1, M2 and M3 are done.
 - C1 is not fully closed: one edit-token request can still block the server for minutes to hours. Before merge, add the per-request work budget (or a cap on wildcard criteria).
 - The I2 seeding gap is Minor and can follow later.
+
+---
+
+## 재검토 2 (fe23856..f612d0b, read-only)
+
+How I checked:
+- Read the diffs of badb0f1, da3eb82, 9eb376e and af2856d.
+- Timed the real `cfRangeAnswer` and fast-formula-parser COUNTIF (with the patch applied) under the budget.
+- Parsed a legit generated workbook with `parseXlsxToGrid`.
+- Ran the five related test files: 27/27 pass. The full suite was not re-run.
+- Ignored the other worker's files (`src/client/gridLinks.ts`, `scripts/verify-xlsx-links-e2e.mjs`).
+
+| Item | Status | Notes |
+|---|---|---|
+| C1 budget | **부분 반영** | Two holes and one regression (below). |
+| I2 seeding gap | 반영 | |
+| M3 `ensureBuiltinLists` | 반영 | |
+| teardown order | 반영 | No deadlock, no lost save. |
+
+### C1 — the budget
+
+What works:
+- **The near-miss worst case is now bounded per request.** 2,000 criteria × 200 keys of 32k chars, through the real `cfRangeAnswer`, takes **99 ms**. It throws `WildcardBudgetError`, and the ranges answer `skipped` with `overBudget`.
+- **The screen shows the skip.** The grid editor does not paint a `skipped` range and shows "일부 생략" (`grid-editor.ts:3532,3551,3621`). On the bake path, budget errors raised directly or through the fallback engine (which turns them into CF_CANNOT) mark the cell "unsupported", so the cell is not painted and the skip notice is shown. No 0 is displayed as if it were a real count.
+- **Concurrent requests do not mix budgets.** The scoped budget is a module global, but `withWildcardBudget` wraps only synchronous work (`cfRangeAnswer`, `paintCell`, `computeGridCellDisplay`). No await runs inside it, so two requests cannot interleave.
+
+**Hole 1 (Important): cheap patterns are not charged for the string length.**
+- `wildcard.ts` `charge`: when a pattern has fewer than two `*` (`last < 2`), the cost is only `pattern.length + 1`.
+- Each test still does work proportional to the string: `countIf`'s `k.slice(1)` and `norm`'s `toLowerCase` scan it.
+- Measured through the real `cfRangeAnswer`: 2,000 criteria like `q123*z`, or 2,000 `~` operands, against 200 keys of 32k chars take **11.0 s per request**, and the budget never trips. The rate limit allows 240 requests per minute, so one edit-token holder can keep the server blocked.
+- Fix: always charge at least `(s.length + 1)`, e.g. `(s.length + 1) * (middle + 1)` in every case. Better: test without the `slice`.
+
+**Hole 2 (Important, borderline Critical, ~80% confidence): edit-room formula recompute has no shared budget.**
+- Each formula cell has its own matcher budget, about **114 ms per heavy COUNTIF**. Measured through the patched fast-formula-parser: a near-miss pattern over 200 × 32k strings.
+- `recomputeFormulasForPage` (`room.ts:1194-1240`) computes a whole 125-row chunk with `Promise.all` and only yields between chunks. One heavy column therefore blocks about **14 s per chunk, ~57 s per 500-row page**. With K heavy columns, multiply by K (10 columns ≈ 140 s blocks).
+- Which cells are recomputed: those whose value starts with `=`. That includes file formulas with no cached result (`gridCellFromExcel` → `=formula`, the same function in `lazyGridStore.ts:466`). Our own export saves formulas without cached results (`spreadsheet.ts:466-471`).
+- So no live editor is needed: a crafted upload, or a file saved once with such formulas, blocks the server for every person who opens it in the editor. On 향기랩 every file opens in edit mode.
+- `withWildcardBudget` cannot wrap this path, because `computeGridCellDisplayAsync` awaits.
+- Fix: carry a budget object per recompute pass (through the memo or context argument, or on the pooled parser instance) and charge it in the matcher. Alternatively, drop the per-matcher default budget to about 1e6 (~2 ms) and count matchers that run out per pass.
+
+**Regression (Important): one shared budget per upload turns legit cells into `#ERROR!`.**
+- Measured: a generated workbook with 1,000 rows of `C=COUNTIF($A$1:$A$1000,"*"&B1&"*")` (A about 20 chars, no cached results). After `parseXlsxToGrid`, **787 cells hold numbers and 213 hold `#ERROR!`**.
+- `computeGridCellDisplay` catches the wrapped budget error and returns `'#ERROR!'` (`formulas.ts:199`). So the comment at `spreadsheet.ts:566` ("수식 원문으로 남는다") is wrong. Dependent cells such as `IFERROR(C1,0)` would show a plausible wrong value.
+- The same tight budget (5e7 ≈ 75 ms) also makes legit cf-ranges requests and bakes for such a sheet "skipped" after about 400 criteria. The skip notice is shown there, so that part only costs display.
+- Fix:
+  - Make the budget generous for legit work (e.g. 1e9 per upload or request, roughly 1–2 s), while keeping hole 2 closed.
+  - When the budget runs out at upload, leave the formula text (`null`), not `#ERROR!`. Rethrow `WildcardBudgetError` through `computeGridCellDisplay`'s catch, by checking `error.cause` or the message.
+
+**Minor:** once the budget runs out in a request, every later range in the same request is also marked `skipped`, and the client keeps that mark for the range (`grid-editor.ts:3621`). Ranges that would be cheap on their own stay unpainted.
+
+### I2 — 반영 (`room.ts:247, 2449, 3108`)
+
+- `seeded` is set only after `seedRoom` resolves. Unseeded rooms close at once, as before the grace period.
+- `pdfParts` is now counted in the size estimate.
+- `seedRoom` catches its own errors, so a failed seed still sets `seeded`. The room is then small, so lingering is harmless.
+
+### M3 — 반영 (`docx/export.ts:795-825`)
+
+- The indexOf scan is monotone: the open, close and name cursors only move forward, so it is linear.
+- It matches the old regex on well-formed parts. It differs only when an `<w:abstractNum>` is nested before its close (malformed); the old regex crossed into it, the new code stops there.
+
+### Teardown order — 반영 (`room.ts:2518-2535`)
+
+- `persistChangeLog` and `closeLazyGridStore` now run in the `.finally` after the serialized save.
+- No deadlock: nothing awaits inside a serialized task.
+- No lost save: the save step runs before the cleanup.
+- `persistChangeLog` is append-only (`changeLogPersistence.ts:37`), so a later write by a newer room cannot be overwritten.
+- There is no shutdown hook, so nothing depends on the old early write.
+- Minor: if a save ever hangs, the row-store file and the Y.Doc are now held until it ends; before, they were freed at once.
+
+### Verdict
+
+C1 is not finished. Before merge:
+1. Fix the length-free charge for cheap patterns (11 s per request).
+2. Bound the edit-room recompute per pass, not per cell (about 57 s per page per heavy column on any editor open).
+3. Make the budget large enough that legit workbooks do not get `#ERROR!`, and leave the formula text, not `#ERROR!`, when it runs out.
+
+I2, M3 and the teardown order are done.

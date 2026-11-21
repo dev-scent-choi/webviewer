@@ -4,7 +4,7 @@ import type { DocumentMeta } from './types.js';
 import { buildSheetNameIndex, computeGridCellDisplay } from './xlsx/formulas.js';
 import { dateToDateText, isDateNumFmt, serialToDateText } from './collab/cellValueShared.js';
 import { EXCEL_INDEXED_COLORS, formatNumberCode, hashIfTooWide, isNumberOrDateValue, isTextNumFmt } from './collab/numberFormat.js';
-import { WILDCARD_WORK_BUDGET, withWildcardBudget, type WildcardBudget } from './collab/wildcard.js';
+import { WILDCARD_WORK_BUDGET, runWildcardStep, withWildcardBudget, type WildcardBudget } from './collab/wildcard.js';
 import excelBuiltinNumFmts from 'exceljs/lib/xlsx/defaultnumformats.js';
 
 /**
@@ -563,13 +563,14 @@ async function applyComputedFormulaValues(
   const tainted = new Set<string>();
   const sheetNameIndex = buildSheetNameIndex(inputGrid);
   const computedTexts: Array<CellTexts | null> = new Array(pending.length).fill(null);
-  // 와일드카드(COUNTIF·MATCH·SEARCH …) 작업 예산은 업로드 계산 전체에 하나 — 넘으면 그 칸은 계산 실패(수식 원문)로 남는다(재검토 C1)
+  // 와일드카드(COUNTIF·MATCH·SEARCH …) 작업 예산은 업로드 계산 전체에 하나(WILDCARD_WORK_BUDGET), 칸 하나는 그중 단계 하나까지.
+  // 넘은 칸은 computeGridCellDisplay가 WildcardBudgetError를 던져 아래 catch에서 null — 수식 원문이 남는다('#ERROR!'가 아니다)
   const wildcard: WildcardBudget = { left: WILDCARD_WORK_BUDGET };
   for (let i = 0; i < pending.length; i += 1) {
     const { sheetIdx, row, col, numFmt } = pending[i];
     try {
       computedTexts[i] = valueTexts(
-        withWildcardBudget(wildcard, () => computeGridCellDisplay(inputGrid, sheetIdx, row, col, new Set(), memo, tainted, sheetNameIndex)),
+        runWildcardStep(wildcard, (step) => withWildcardBudget(step, () => computeGridCellDisplay(inputGrid, sheetIdx, row, col, new Set(), memo, tainted, sheetNameIndex))),
         numFmt,
       );
     } catch {

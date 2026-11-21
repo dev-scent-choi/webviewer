@@ -58,11 +58,17 @@ export interface WildcardMatcher {
 }
 
 /**
- * 와일드카드 작업량 상한(재검토 C1) — 맞추기 한 번은 칸 길이 × 조건 길이라 지수는 아니지만, 32k자 칸 수백 개 × 긴 조건 수천 개면
- * 요청 하나가 몇 시간 걸린다. 일한 만큼(칸 길이 + 1) × (조건 길이 + 1)을 예산에서 빼고, 모자라면 WildcardBudgetError를 던진다.
- * 예산은 범위(withWildcardBudget — 요청 하나·굽기 하나·업로드 계산 하나)마다 하나, 범위 밖이면 매처 하나(엑셀 함수 호출 하나)마다 하나다.
+ * 와일드카드 작업량 상한(재검토 C1·재검토 2) — 맞추기 한 번은 칸 길이 × 조건 길이라 지수는 아니지만, 32k자 칸 수백 개 × 긴 조건 수천 개면
+ * 요청 하나가 몇 시간 걸린다. 일한 만큼을 예산에서 빼고(값싼 조건도 칸마다 최소 2 × (칸 길이 + 1) — 잘라 내기·소문자로 바꾸기만으로도 칸을 두 번 훑는다),
+ * 모자라면 WildcardBudgetError를 던진다.
+ * - WILDCARD_WORK_BUDGET(1e9): 묶음 하나(cf-ranges 요청 하나·굽기 하나·업로드 수식 계산 하나·편집 방 쪽 하나 재계산)의 합.
+ *   재검토 2 측정으로 5e7 ≈ 114ms(이 PC) → 1e9 ≈ 2.3초. 정상 파일(1,000행 × 칸 20자 × "*"&B1&"*")은 1,000칸 전체가 약 1.5e8이라 넉넉하다.
+ * - WILDCARD_STEP_BUDGET(5e7, ≈ 114ms): 양보 없이 한 번에 하는 일 하나(칸 하나·조건 묶음 하나)의 상한 — 묶음 예산에서 떼어 쓴다(runWildcardStep).
+ *   그래서 묶음 전체가 길어도 이벤트 루프를 한 번에 이보다 오래 잡지 않는다(묶음 쪽이 단계 사이에 양보한다).
+ * 범위 밖(브라우저 등)에서는 매처 하나(엑셀 함수 호출 하나)마다 WILDCARD_STEP_BUDGET 하나다.
  */
-export const WILDCARD_WORK_BUDGET = 5e7;
+export const WILDCARD_WORK_BUDGET = 1e9;
+export const WILDCARD_STEP_BUDGET = 5e7;
 export class WildcardBudgetError extends Error {
   constructor() {
     super('wildcard work budget exceeded');
@@ -82,6 +88,35 @@ export function withWildcardBudget<T>(budget: WildcardBudget, fn: () => T): T {
     scoped = outer;
   }
 }
+/**
+ * 묶음 예산 pass에서 단계 하나(최대 WILDCARD_STEP_BUDGET)를 떼어 fn을 그 예산으로 돌리고, 쓴 만큼 pass에서 뺀다.
+ * fn은 받은 예산을 withWildcardBudget으로 쓴다(동기 구간마다) — 비동기 경계는 이 예산 객체를 인자로 넘겨 건넌다.
+ */
+export function runWildcardStep<T>(pass: WildcardBudget, fn: (step: WildcardBudget) => T): T {
+  const step: WildcardBudget = { left: Math.min(WILDCARD_STEP_BUDGET, pass.left) };
+  const start = step.left;
+  const settle = () => {
+    pass.left -= start - step.left;
+  };
+  let out: T;
+  try {
+    out = fn(step);
+  } catch (error) {
+    settle();
+    throw error;
+  }
+  if (out instanceof Promise) return out.finally(settle) as T;
+  settle();
+  return out;
+}
+/** 예산 오류인가 — fast-formula-parser는 함수 안의 오류를 FormulaError('#ERROR!', 글, details=원래 오류)로 감싼다 */
+export function isWildcardBudgetError(error: unknown): boolean {
+  for (let e: unknown = error, depth = 0; e && depth < 5; depth += 1) {
+    if (e instanceof WildcardBudgetError) return true;
+    e = (e as { details?: unknown; cause?: unknown }).details ?? (e as { cause?: unknown }).cause;
+  }
+  return false;
+}
 /** 남은 예산이 cost보다 적으면 던진다 — 일을 하기 전에 본다 */
 export function chargeWildcardWork(cost: number, own: WildcardBudget): void {
   const budget = scoped ?? own;
@@ -96,14 +131,19 @@ export function wildcardMatcher(pattern: string, ignoreCase = true): WildcardMat
   const segs = compile(pattern, ignoreCase);
   const norm = (v: unknown) => (ignoreCase ? String(v).toLowerCase() : String(v));
   const last = segs.length - 1;
-  const own: WildcardBudget = { left: WILDCARD_WORK_BUDGET };
-  // 실제로 하는 일만큼: 앞·뒤 조각은 한 번 비교, 가운데 조각은 칸 위를 훑는다(칸 길이 × 가운데 조각 길이)
+  const own: WildcardBudget = { left: WILDCARD_STEP_BUDGET };
+  // 실제로 하는 일만큼: 칸을 소문자로 바꾸며 한 번 훑고(칸 길이 + 1), 가운데 조각은 칸 위를 훑는다(칸 길이 × 가운데 조각 길이).
+  // 칸을 바꾸기 전에 뺀다(값싼 조건도 칸마다 최소 칸 길이 + 1 — 재검토 2: 예전엔 조건 길이만 빼서 2,000조건 요청이 11초)
   const middle = segs.slice(1, -1).reduce((a, seg) => a + seg.length, 0);
-  const charge = (s: string, all = false) => chargeWildcardWork(all ? (s.length + 1) * (pattern.length + 1) : last >= 2 ? (s.length + 1) * (middle + 1) : pattern.length + 1, own);
+  const charge = (v: unknown, all = false) => {
+    const n = typeof v === 'string' ? v.length : String(v).length;
+    // +2: 부르는 쪽이 칸을 한 번 잘라 내고(countIf의 slice) 여기서 소문자로 한 번 바꾼다 — 조각이 없어도 칸을 두 번 훑는다
+    chargeWildcardWork((n + 1) * ((all ? pattern.length : middle) + 2), own);
+  };
   return {
     test(value: unknown): boolean {
+      charge(value);
       const s = norm(value);
-      charge(s);
       if (last === 0) return s.length === segs[0].length && segAt(s, 0, segs[0]);
       if (!segAt(s, 0, segs[0])) return false;
       const tail = s.length - segs[last].length;
@@ -112,8 +152,8 @@ export function wildcardMatcher(pattern: string, ignoreCase = true): WildcardMat
       return end >= 0 && end <= tail;
     },
     [Symbol.search](value: string): number {
+      charge(value, true); // 찾기는 모든 조각이 칸 위를 훑는다
       const s = norm(value);
-      charge(s, true); // 찾기는 모든 조각이 칸 위를 훑는다
       // 첫 조각 뒤에 나머지 조각을 놓을 수 있는 가장 늦은 자리(오른쪽부터 가장 오른쪽에 놓아 본다)
       let latest = s.length;
       for (let k = last; k >= 1; k -= 1) {
