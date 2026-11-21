@@ -1011,8 +1011,10 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
     async (request, reply) => {
       const view = await resolveView(request.query.token, reply);
       if (!view) return reply;
-      // 편집 방 전용 — 편집 권한 토큰만(내려받기만 되는 토큰은 열린 편집 방에 일을 시킬 수 없다)
-      if (!view.claims.perms.canEdit) return reply.code(403).send({ success: false, error: '편집 권한이 없습니다.' });
+      // 편집 방에 일을 시키는 경로 — 편집 토큰 또는 읽기 전용 편집기 화면(내려받기 토큰, 이미 방에 읽기로 들어와 있다).
+      // 남용 제한(토큰 예산·문서 슬롯·토큰별 요청 수)은 같다
+      const { canEdit, canDownload } = view.claims.perms;
+      if (!canEdit && !canDownload) return reply.code(403).send({ success: false, error: '권한이 없습니다.' });
       const req = parseCfRemoteRequest(request.body);
       if (view.meta.ext !== 'xlsx' || !req) {
         return reply.code(400).send({ success: false, error: '잘못된 요청입니다.' });

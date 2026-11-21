@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 
-/** /api/view/xlsx-cf-ranges — 편집 권한 토큰만, 요청 검증(검토 r4 C1) */
+/** /api/view/xlsx-cf-ranges — 편집 또는 내려받기 권한 토큰만, 요청 검증(검토 r4 C1) */
 describe('편집 화면 조건부 서식 서버 답 경로', () => {
   let app: FastifyInstance;
   let store: (typeof import('../src/storage.js'))['store'];
@@ -33,11 +33,14 @@ describe('편집 화면 조건부 서식 서버 답 경로', () => {
     app.inject({ method: 'POST', url: `/api/view/xlsx-cf-ranges?token=${encodeURIComponent(token)}`, payload: payload as object });
   const body = { sheet: 0, ranges: [{ r0: 0, c0: 0, r1: 10, c1: 0, crit: ['a'] }] };
 
-  test('내려받기만 되는 토큰(편집 권한 없음)은 403', async () => {
+  test('편집·내려받기 권한이 모두 없는 토큰은 403', async () => {
     const id = await xlsxDoc();
-    const res = await post(tok(id, { canDownload: true }), body);
-    expect(res.statusCode).toBe(403);
     expect((await post(tok(id, {}), body)).statusCode).toBe(403);
+  });
+
+  test('내려받기만 되는 토큰(읽기 전용 편집기 화면)도 받는다 — 편집 방이 없으면 409', async () => {
+    const id = await xlsxDoc();
+    expect((await post(tok(id, { canDownload: true }), body)).statusCode).toBe(409);
   });
 
   test('편집 토큰: 모양이 틀린 요청은 400, 편집 방이 없으면 409', async () => {

@@ -1,7 +1,7 @@
 // 기본 열기 = 읽기 전용 편집기 화면(ui=view) — 설계 2026-11-21-readonly-editor-look §4의 브라우저 검사 (1)~(8). (9) 기존 e2e는 따로 돌린다.
 //  (1) 리본·탭·빠른 실행·파일 화면·수식 입력줄 숨김, 얇은 줄 단추  (2) 편집 시도(타자·Delete·F2·붙여넣기·Ctrl+S/H/B/D/M/I/U·시트 탭·슬라이드 끌기)가
 //      화면·서버(새로 연 화면)를 바꾸지 않음  (3) 찾기·확대·이동·섬네일·인쇄·내려받기  (4) canCopy=false면 복사·우클릭·선택 막힘
-//  (5) 다른 탭의 편집이 실시간 반영  (5b) 큰 엑셀(지연 불러오기) 뒤쪽 행의 조건부 서식이 칠해지거나 "일부 생략" 안내
+//  (5) 다른 탭의 편집이 실시간 반영  (5b) 큰 엑셀(지연 불러오기) 뒤쪽 행의 조건부 서식이 서버 답으로 칠해짐
 //  (6) 메인 화면 기본 "열기"(docx·xlsx·pptx → ui=view, pdf는 그대로)·"▾ 다른 방식" 세 항목·공유 폼 기본값·편집 열기  (7) 600px 폭
 //  (8) 정원 초과(4429) → 안내 + 자동 이동 — 큰 엑셀로 정원을 실제로 채우는 대신 Playwright routeWebSocket으로 서버가 4429로 닫은 것과 같은 상황을 만든다.
 // 이 스크립트가 시험 서버를 직접 띄운다(npm run build:editor 뒤, LibreOffice 필요):
@@ -392,7 +392,7 @@ try {
           const td = document.querySelector(`#grid-edit-table td[data-row="${r}"][data-col="0"]`);
           const bg = td ? getComputedStyle(td).backgroundColor : null;
           const notice = !document.getElementById('cf-skip-notice')?.hidden;
-          return bg === 'rgb(255, 199, 206)' || notice ? { bg, notice } : false;
+          return bg === 'rgb(255, 199, 206)' ? { bg, notice } : false;
         },
         last,
         { timeout: 15000, polling: 300 },
@@ -403,8 +403,8 @@ try {
       return { bg: td ? getComputedStyle(td).backgroundColor : null, text: td?.textContent ?? null, notice: !document.getElementById('cf-skip-notice')?.hidden };
     }, last));
     rec(
-      `(5b) xlsx ${CF_ROWS}행(지연 불러오기) ${CF_ROWS}행 조건부 서식 칠함 또는 "일부 생략" 안내`,
-      state !== null && (state.bg === PINK || state.notice),
+      `(5b) xlsx ${CF_ROWS}행(지연 불러오기) ${CF_ROWS}행 조건부 서식을 서버 답으로 칠함(읽기 전용 토큰도 403 아님)`,
+      state !== null && state.bg === PINK && !cfCalls.includes(403),
       `${JSON.stringify(fallbackState)} · xlsx-cf-ranges 응답 ${cfCalls.length}건 [${[...new Set(cfCalls)].join(',')}]`,
     );
     await context.close();
