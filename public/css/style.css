@@ -4094,3 +4094,25 @@ body.ui-view.no-copy :is(#editor, #grid-editor, #slides-rail, #slide-canvas-wrap
   body.ui-view .titlebar-right { flex: 1 1 auto; }
   body.ui-view .titlebar-right { flex-wrap: wrap; }
 }
+
+/* 메인 화면 "▾ 다른 방식" — 기본 "열기" 옆, 예전 여는 단추들(리브레오피스·아트크래프트·동시편집·PDF 편집)을 담는 펼침 메뉴 */
+.open-more { position: relative; display: inline-block; }
+.open-more > summary { list-style: none; cursor: pointer; user-select: none; }
+.open-more > summary::-webkit-details-marker { display: none; }
+.open-more-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 190px;
+  padding: 6px;
+  border: 1px solid var(--color-line);
+  border-radius: 8px;
+  background: var(--color-surface);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
+}
+.open-more-menu .btn { width: 100%; text-align: left; }
+.open-more-menu > span { display: block; }
