@@ -50,6 +50,7 @@
     "verify:legacy-edit": "node scripts/verify-legacy-edit-e2e.mjs",
     "audit:office": "node audit/office/run.mjs",
     "verify:docx": "node scripts/verify-docx-edit-e2e.mjs",
+    "verify:readonly": "node scripts/verify-readonly-editor-e2e.mjs",
     "verify:artcraft": "node scripts/verify-artcraft-e2e.mjs",
     "perf:docx": "node audit/office/perf-docx-typing.mjs"
   },
