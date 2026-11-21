@@ -13,12 +13,12 @@ import type { DocxRenderExtras, DocxSectionInfo, DocxStyleRule } from '../docx/i
  *  - 탭 정지(왼쪽·가운데·오른쪽·소수점, 점선 채움) — 그려진 글자 위치를 재어 탭 폭을 정한다
  *  - 문서 스타일(제목·부제·인용·문자 스타일 등)의 색·크기·글꼴·간격 → CSS 규칙
  * 모두 읽기 전용 장식이라 저장 내용에 들어가지 않는다(머리글·각주 원본 파트는 저장 때 그대로 남는다).
- * 쪽은 명시적 나눔(쪽 나누기·구역·문단 앞 쪽 나눔)과, 그려진 블록 높이를 재어 쪽 본문 높이를 넘는 곳(블록 단위 — 한 블록 안에서는
- * 나누지 않는다)에서 바뀐다. 구역마다 본문 폭이 다르면(세로·가로 쪽) 그 구역 블록의 폭을 그 구역 본문 폭으로 줄인다.
+ * 쪽은 명시적 나눔(쪽 나누기·구역·문단 앞 쪽 나눔)과 넘침(블록 높이표로 센다 — paginateFlow: 각주 높이를 빼고, 긴 문단은 줄 단위,
+ * 긴 표·다단은 쪽 수만)에서 바뀐다. 구역마다 본문 폭이 다르면(세로·가로 쪽) 그 구역 블록의 폭을 그 구역 본문 폭으로 줄인다.
  *
- * 성능(400쪽 문서에서 글자 하나 16ms 안): 글자 입력처럼 한 문단 안에서만 바뀐 편집은 장식을 다시 만들지 않고 옮기기만 하고(번호·쪽은
- * 그대로), 탭 폭은 바뀐 문단만 다시 잰다. 잴 때는 모든 쓰기를 먼저 하고 읽기를 모아서 해 문서 전체 다시 배치를 한 번으로 줄인다.
- * 넘침 쪽 나눔은 입력이 멈춘 뒤(0.4초) 한 번 잰다.
+ * 성능: 글자 입력처럼 한 문단 안에서만 바뀐 편집은 장식을 다시 만들지 않고 옮기기만 하고(번호·쪽은 그대로), 번호 들여쓰기는 노드 장식
+ * 대신 CSS 규칙, 탭 폭은 바뀐 문단과 화면 안 문단만 잰다(모든 쓰기 → 모든 읽기). 화면에서 먼 블록은 그리기를 건너뛰고(content-visibility:
+ * hidden), 넘침 쪽 나눔은 블록 높이가 바뀌거나 구조가 바뀐 뒤 0.8초 쉬면 한 번 잰다(그려진 위치를 읽지 않는다).
  */
 
 const TWIPS_PER_PX = 15;
@@ -516,8 +516,14 @@ function measureAutoBreaks(view: EditorView, extras: DocxRenderExtras, heights: 
   const items: FlowItem[] = [];
   const nodes: Array<{ node: PMNode; pos: number; dom: HTMLElement | null }> = [];
   let section = 0;
+  // 본문 직속 블록 → DOM: view.nodeDOM(pos)는 앞에서부터 세어 찾아 블록 수 제곱이 된다(400쪽 4배 느리게 글자당 약 0.3초) — 한 번 훑어 표로
+  const domOf = new Map<PMNode, HTMLElement>();
+  for (const child of view.dom.children) {
+    const node = (child as HTMLElement & { pmViewDesc?: { node?: PMNode } }).pmViewDesc?.node;
+    if (node && child instanceof HTMLElement) domOf.set(node, child);
+  }
   view.state.doc.forEach((node, pos) => {
-    const dom = view.nodeDOM(pos);
+    const dom = domOf.get(node) ?? view.nodeDOM(pos);
     const el = dom instanceof HTMLElement ? dom : null;
     const m = el ? heights.get(el) : undefined;
     let notes = 0;
@@ -861,20 +867,24 @@ export function docxLayoutPlugin(extras: DocxRenderExtras, totalPages: number | 
         const top = Math.max(rect.top, clip?.top ?? 0, 0) + 1;
         const bottom = Math.min(rect.bottom, clip?.bottom ?? Infinity, window.innerHeight) - 1;
         const x = rect.left + rect.width / 2;
-        const indexAt = (y: number) => {
-          let node: Element | null = document.elementFromPoint(x, y);
-          while (node && node.parentElement !== view.dom) node = node.parentElement;
-          return node ? Array.prototype.indexOf.call(children, node) : -1;
+        // 블록 사이 틈·여백(편집 영역 자체)에 걸리면 조금씩 옮겨 다시 집는다
+        const indexAt = (y: number, step: number) => {
+          for (let k = 0; k < 12; k += 1) {
+            let node: Element | null = document.elementFromPoint(x, y + k * step);
+            while (node && node.parentElement !== view.dom) node = node.parentElement;
+            if (node) return Array.prototype.indexOf.call(children, node) as number;
+          }
+          return -1;
         };
-        const first = bottom > top ? indexAt(top) : -1;
-        const last = bottom > top ? indexAt(bottom) : -1;
+        const first = bottom > top ? indexAt(top, 24) : -1;
+        const last = bottom > top ? indexAt(bottom, -24) : -1;
         if (first < 0 || last < 0) return; // 못 집으면 그대로(다른 것이 화면을 덮었다)
         if (shownRange && first - shownRange[0] >= SKIP_MARGIN / 4 && shownRange[1] - last >= SKIP_MARGIN / 4) return; // 아직 여유 — 규칙을 바꾸지 않는다
         const lo = Math.max(0, first - SKIP_MARGIN);
         const hi = Math.min(children.length - 1, last + SKIP_MARGIN);
         shownRange = [lo, hi];
         const ranges = [lo > 0 ? `:nth-child(-n+${lo})` : '', `:nth-child(n+${hi + 2})`].filter(Boolean).join(', ');
-        skipStyle.textContent = `.editor-surface .ProseMirror.docx-skip > :is(p, h1, h2, h3, h4, h5, h6, table, .tableWrapper, ul, ol, blockquote):not(.docx-float-host):is(${ranges}) { content-visibility: hidden; }`;
+        skipStyle.textContent = `.editor-surface .ProseMirror.docx-skip > :is(p, h1, h2, h3, h4, h5, h6, table, .tableWrapper, ul, ol, blockquote, .docx-page-boundary):not(.docx-float-host):is(${ranges}) { content-visibility: hidden; }`;
       };
       let skipFrame = 0;
       // 굴리면 건너뛰기 범위를 옮기고, 새로 들어온 문단의 탭 폭을 잰다(다시 잴 것이 있을 때만)
@@ -936,7 +946,7 @@ export function docxLayoutPlugin(extras: DocxRenderExtras, totalPages: number | 
           if (tr.getMeta(PAGINATION_META) || tr.getMeta(CONTENT_SKIP_META)) view.dispatch(tr.setMeta('addToHistory', false));
           shownRange = null; // 쪽 경계가 바뀌면 순서 번호도 바뀐다
           updateSkip();
-        }, 400);
+        }, 800);
       };
       schedule('all');
       // 글꼴이 늦게 내려오면 글자 폭이 바뀐다 — 다 내려온 뒤 한 번 더 잰다(높이는 ResizeObserver가 다시 적는다)
@@ -961,7 +971,8 @@ export function docxLayoutPlugin(extras: DocxRenderExtras, totalPages: number | 
             }
             if (touched.length > 0) schedule(touched);
           }
-          if (v.state.doc !== prevState.doc) paginate();
+          // 글자만 친 편집은 높이가 바뀔 때 ResizeObserver가 부른다 — 글자마다 쪽 나눔을 다시 재지 않는다
+          if (v.state.doc !== prevState.doc && dirty === 'all') paginate();
         },
         destroy: () => {
           cancelAnimationFrame(frame);
