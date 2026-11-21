@@ -708,6 +708,8 @@ async function main(): Promise<void> {
   const shell = initOfficeShell({
     token,
     docName: info.name,
+    docId: info.docId,
+    canCopy: info.permissions.canCopy,
     canEdit,
     canDownload: info.permissions.canDownload,
     canPrint: info.permissions.canPrint,

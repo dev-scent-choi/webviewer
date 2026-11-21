@@ -1314,6 +1314,8 @@ async function main(): Promise<void> {
   initOfficeShell({
     token: token ?? '',
     docName: info.name,
+    docId: info.docId,
+    canCopy: info.permissions.canCopy,
     canEdit,
     canDownload: info.permissions.canDownload,
     canPrint: info.permissions.canPrint,

@@ -8,13 +8,19 @@
  */
 
 import { mountBackToView } from './backToView.js';
+import { officeAlert } from './officeDialog.js';
+import { EDIT_DOC_KEY, installViewGuards, isViewUi, stripActions, type StripAction } from './viewStrip.js';
 
 export interface OfficeShellOptions {
   readonly token: string;
+  /** /api/view/info 의 docId — 보기 꾸밈의 "편집 열기"가 같은 문서의 편집 토큰을 다시 받는다 */
+  readonly docId: string;
   readonly docName: string;
   readonly canEdit: boolean;
   readonly canDownload: boolean;
   readonly canPrint: boolean;
+  /** 보기 꾸밈(ui=view)에서만 쓴다 — false면 복사·선택·브라우저 우클릭 메뉴를 막는다(보기 화면 view.ts와 같은 규칙) */
+  readonly canCopy: boolean;
   /** /api/view/info 의 viewerUrl — 보기 화면에서 들어왔으면(from=view) 제목 표시줄에 "보기로"(backToView.ts) */
   readonly viewerUrl?: string;
   /** 향기랩 옛 형식(.doc·.xls·.ppt)을 바꿔 연 문서 — 내려받기는 원래 형식(서버 /api/view/download), 매크로가 있으면 경고 한 줄 */
@@ -23,10 +29,20 @@ export interface OfficeShellOptions {
   readonly onRedo?: () => void;
 }
 
+/** 보기 꾸밈 얇은 줄의 이전/다음 — 워드는 쪽, 엑셀은 시트, PPT는 슬라이드 */
+export interface ViewNav {
+  readonly prevLabel: string;
+  readonly nextLabel: string;
+  prev(): void;
+  next(): void;
+}
+
 export interface OfficeShell {
   selectTab(tab: string): void;
   /** 상황별 탭(예: 표 안에 커서가 있을 때만 보이는 "표 레이아웃")을 보이거나 숨긴다. */
   setContextualTab(tab: string, visible: boolean): void;
+  /** 보기 꾸밈일 때만 얇은 줄에 이전/다음 단추를 단다. 아니면 아무것도 하지 않는다 */
+  setViewNav(nav: ViewNav): void;
 }
 
 const COLLAPSE_STORAGE_KEY = 'docview-ribbon-collapsed';
@@ -60,6 +76,45 @@ const EXT_LABELS: Readonly<Record<string, string>> = {
   xls: 'Excel 97-2003 통합 문서',
   ppt: 'PowerPoint 97-2003 프레젠테이션',
 };
+
+const svgIcon = (inner: string): string =>
+  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${inner}</svg>`;
+
+const STRIP_BUTTONS: Readonly<Record<StripAction | 'prev' | 'next', { readonly label: string; readonly icon: string }>> = {
+  'zoom-out': { label: '축소', icon: '<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/><path d="M8 11h6"/>' },
+  'zoom-in': { label: '확대', icon: '<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/><path d="M11 8v6"/><path d="M8 11h6"/>' },
+  prev: { label: '이전', icon: '<path d="m15 18-6-6 6-6"/>' },
+  next: { label: '다음', icon: '<path d="m9 18 6-6-6-6"/>' },
+  print: {
+    label: '인쇄',
+    icon: '<path d="M6 9V4h12v5"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8" rx="1"/>',
+  },
+  download: { label: '내려받기', icon: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>' },
+  edit: { label: '편집 열기', icon: '' },
+};
+
+function readEditDoc(): string | null {
+  try {
+    return sessionStorage.getItem(EDIT_DOC_KEY);
+  } catch {
+    return null;
+  }
+}
+
+/** 메인 화면에서 연 업로더 본인만 — 같은 문서의 편집 토큰을 지금 받아 편집기로(API 키 규칙은 메인 화면과 같다) */
+async function openEditFromView(docId: string): Promise<void> {
+  const res = await fetch(`/api/documents/${encodeURIComponent(docId)}/tokens`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ viewer: '업로더', canPrint: true, canDownload: true, canCopy: true, canEdit: true }),
+  }).catch(() => null);
+  const json = (await res?.json().catch(() => null)) as { success?: boolean; data?: { editorUrl?: string }; error?: string } | null;
+  if (!res?.ok || !json?.success || !json.data?.editorUrl) {
+    await officeAlert(json?.error ?? '편집 화면을 열지 못했습니다. 잠시 뒤 다시 눌러 주세요.');
+    return;
+  }
+  location.href = json.data.editorUrl;
+}
 
 export function initOfficeShell(options: OfficeShellOptions): OfficeShell {
   const toolbar = document.getElementById('toolbar') as HTMLElement;
@@ -225,10 +280,8 @@ export function initOfficeShell(options: OfficeShellOptions): OfficeShell {
   const downloadLink = backstage.querySelector<HTMLAnchorElement>('[data-action="download"]');
   if (downloadLink) downloadLink.href = `/api/view/download?token=${encodeURIComponent(options.token)}`;
 
-  backstage.querySelector('[data-action="print"]')?.addEventListener('click', async (event) => {
-    const button = event.currentTarget as HTMLButtonElement;
-    button.disabled = true;
-    button.textContent = '저장하는 중…';
+  /** 인쇄 — 백스테이지와 보기 꾸밈 얇은 줄이 같이 쓴다 */
+  async function printDoc(): Promise<void> {
     // 새 창은 클릭과 같은 틱에 열어야 팝업 차단에 걸리지 않는다 — 저장이 끝나면 주소를 채운다.
     const printWindow = window.open('about:blank', '_blank');
     try {
@@ -239,6 +292,12 @@ export function initOfficeShell(options: OfficeShellOptions): OfficeShell {
     const url = `/api/view/print?token=${encodeURIComponent(options.token)}`;
     if (printWindow) printWindow.location.href = url;
     else window.open(url, '_blank');
+  }
+  backstage.querySelector('[data-action="print"]')?.addEventListener('click', async (event) => {
+    const button = event.currentTarget as HTMLButtonElement;
+    button.disabled = true;
+    button.textContent = '저장하는 중…';
+    await printDoc();
     button.disabled = false;
     button.textContent = '인쇄';
   });
@@ -270,6 +329,72 @@ export function initOfficeShell(options: OfficeShellOptions): OfficeShell {
     if (event.key === 'Escape') closeBackstage();
   });
 
+  // ---------- 보기 꾸밈(ui=view, 설계 2026-11-21-readonly-editor-look §3.1) ----------
+  // 숨기기는 CSS(body.ui-view) 한 묶음, 여기서는 제목 줄에 얇은 도구 줄 단추를 단다(문서 이름·찾기·참석자는 제목 줄에 이미 있다).
+  let stripTools: HTMLElement | null = null;
+  if (isViewUi(location.search, options.canEdit)) {
+    document.body.classList.add('ui-view');
+    document.body.classList.toggle('no-copy', !options.canCopy);
+    installViewGuards(options.canCopy);
+    toolbar.querySelector('.office-titlebar')?.classList.add('view-strip');
+    stripTools = document.createElement('div');
+    stripTools.className = 'view-strip-tools';
+    stripTools.setAttribute('role', 'toolbar');
+    stripTools.setAttribute('aria-label', '보기 도구');
+    const actions = stripActions({
+      canPrint: options.canPrint,
+      canDownload: options.canDownload,
+      hasZoom: document.getElementById('zoom-in') !== null,
+      canOpenEdit: readEditDoc() === options.docId,
+    });
+    for (const act of actions) stripTools.append(stripButton(act));
+    titleRight?.insertBefore(stripTools, titleRight.querySelector('#presence-list'));
+    const readOnlyItem = document.createElement('span');
+    readOnlyItem.className = 'statusbar-item view-readonly';
+    readOnlyItem.textContent = '읽기 전용';
+    // 엑셀은 #statusbar 대신 격자 아래 .grid-status-row가 상태 줄이다
+    document.querySelector('#statusbar, .grid-status-row')?.prepend(readOnlyItem);
+  }
+
+  function stripButton(act: StripAction | 'prev' | 'next', label: string = STRIP_BUTTONS[act].label): HTMLElement {
+    if (act === 'edit') {
+      const edit = document.createElement('button');
+      edit.type = 'button';
+      edit.className = 'btn-pill back-to-view';
+      edit.dataset.act = act;
+      edit.textContent = label;
+      edit.title = '편집할 수 있는 화면으로 다시 엽니다';
+      edit.addEventListener('click', () => {
+        edit.disabled = true;
+        void openEditFromView(options.docId).finally(() => {
+          edit.disabled = false;
+        });
+      });
+      return edit;
+    }
+    if (act === 'download') {
+      const link = document.createElement('a');
+      link.className = 'icon-btn';
+      link.dataset.act = act;
+      link.title = label;
+      link.setAttribute('aria-label', label);
+      link.innerHTML = svgIcon(STRIP_BUTTONS[act].icon);
+      link.href = `/api/view/download?token=${encodeURIComponent(options.token)}`;
+      return link;
+    }
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'icon-btn';
+    button.dataset.act = act;
+    button.title = label;
+    button.setAttribute('aria-label', label);
+    button.innerHTML = svgIcon(STRIP_BUTTONS[act].icon);
+    // 확대·축소는 상태 줄의 같은 id 단추(#zoom-in·#zoom-out)를 대신 누른다 — 확대 로직은 편집기 것 그대로
+    if (act === 'zoom-out' || act === 'zoom-in') button.addEventListener('click', () => document.getElementById(act)?.click());
+    if (act === 'print') button.addEventListener('click', () => void printDoc());
+    return button;
+  }
+
   if (!tabs.some((tab) => tab.dataset.tab === activeTab && !tab.hidden)) activeTab = firstVisibleTab();
   render();
 
@@ -281,6 +406,20 @@ export function initOfficeShell(options: OfficeShellOptions): OfficeShell {
       button.hidden = !visible;
       if (!visible && activeTab === tab) activeTab = 'home';
       render();
+    },
+    setViewNav(nav) {
+      const tools = stripTools;
+      if (!tools) return;
+      const before = tools.querySelector('[data-act="print"], [data-act="download"], [data-act="edit"]');
+      const pairs: Array<['prev' | 'next', string, () => void]> = [
+        ['prev', nav.prevLabel, () => nav.prev()],
+        ['next', nav.nextLabel, () => nav.next()],
+      ];
+      for (const [act, label, run] of pairs) {
+        const button = stripButton(act, label);
+        button.addEventListener('click', run);
+        tools.insertBefore(button, before);
+      }
     },
   };
 }
