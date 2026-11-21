@@ -329,18 +329,64 @@ function cloneNoteReference(type: 'footnote' | 'endnote', raw: string, k: number
   const id = /\bw:id="(-?\d+)"/.exec(raw)?.[1];
   if (!part || !id) return '';
   const marker = `${CLONE_MARK}${id}_${k}`;
-  let cloneId = new RegExp(`<w:${type}\\b[^>]*\\bw:id="(-?\\d+)"[^>]*>(?:(?!</w:${type}>)[\\s\\S])*w:name="${marker}"`).exec(part)?.[1];
+  const index = noteIndexOf(type, part);
+  let cloneId = index.markers.get(marker);
   if (!cloneId) {
-    const body = new RegExp(`<w:${type}\\b[^>]*\\bw:id="${id}"[^>]*>[\\s\\S]*?</w:${type}>`).exec(part)?.[0];
+    const body = index.bodies.get(id);
     if (!body) return '';
-    cloneId = String(Math.max(0, ...[...part.matchAll(new RegExp(`<w:${type}\\b[^>]*\\bw:id="(-?\\d+)"`, 'g'))].map((m) => Number(m[1]))) + 1);
+    cloneId = String(index.maxId + 1);
     const bookmark = `<w:bookmarkStart w:id="${900000 + Number(cloneId)}" w:name="${marker}"/><w:bookmarkEnd w:id="${900000 + Number(cloneId)}"/>`;
     const clone = body
       .replace(new RegExp(`(<w:${type}\\b[^>]*\\bw:id=")${id}"`), `$1${cloneId}"`)
       .replace(/(<w:p\b[^>]*>(?:<w:pPr>[\s\S]*?<\/w:pPr>)?)/, `$1${bookmark}`);
     noteParts[type] = part.replace(`</w:${type}s>`, `${clone}</w:${type}s>`);
+    // 색인도 이어서 고친다(파트를 다시 훑지 않게)
+    index.part = noteParts[type]!;
+    index.bodies.set(cloneId, clone);
+    index.markers.set(marker, cloneId);
+    index.maxId = Number(cloneId);
   }
   return raw.replace(/(<w:(?:footnote|endnote)Reference\b[^>]*\bw:id=")-?\d+"/, `$1${cloneId}"`);
+}
+
+/** 각주 파트 색인 — id → 각주 전체, 복제 표지 → 복제 id, 가장 큰 id. 파트가 바뀌었을 때만 다시 만든다(최종 검토 M3) */
+interface NoteIndex {
+  part: string;
+  readonly bodies: Map<string, string>;
+  readonly markers: Map<string, string>;
+  maxId: number;
+}
+let noteIndexes: Partial<Record<'footnote' | 'endnote', NoteIndex>> = {};
+function noteIndexOf(type: 'footnote' | 'endnote', part: string): NoteIndex {
+  const hit = noteIndexes[type];
+  if (hit && hit.part === part) return hit;
+  const index: NoteIndex = { part, bodies: new Map(), markers: new Map(), maxId: 0 };
+  for (const note of notesIn(part, type)) {
+    if (note.id === undefined) continue;
+    if (!index.bodies.has(note.id)) index.bodies.set(note.id, note.whole);
+    index.maxId = Math.max(index.maxId, Number(note.id));
+    for (const m of note.whole.matchAll(new RegExp(`w:name="(${CLONE_MARK}[^"]*)"`, 'g'))) if (!index.markers.has(m[1])) index.markers.set(m[1], note.id);
+  }
+  noteIndexes[type] = index;
+  return index;
+}
+
+/** 파트의 <w:footnote …>…</w:footnote>를 차례로(indexOf — 안 닫힌 태그에서도 제곱으로 느려지지 않는다). 닫는 태그가 없으면 거기서 멈춘다 */
+function* notesIn(part: string, type: 'footnote' | 'endnote'): Generator<{ start: number; end: number; id: string | undefined; whole: string }> {
+  const open = `<w:${type}`;
+  const close = `</w:${type}>`;
+  let from = 0;
+  for (;;) {
+    let at = part.indexOf(open, from);
+    while (at >= 0 && /\w/.test(part[at + open.length] ?? '')) at = part.indexOf(open, at + 1); // <w:footnotes>·<w:footnoteRef> 아님
+    if (at < 0) return;
+    const headEnd = part.indexOf('>', at);
+    const closeAt = headEnd < 0 ? -1 : part.indexOf(close, headEnd);
+    if (closeAt < 0) return;
+    const end = closeAt + close.length;
+    yield { start: at, end, id: /\bw:id="(-?\d+)"/.exec(part.slice(at, headEnd))?.[1], whole: part.slice(at, end) };
+    from = end;
+  }
 }
 
 /**
@@ -351,8 +397,15 @@ function dropUnusedNoteClones(type: 'footnote' | 'endnote', documentXml: string)
   const part = noteParts[type];
   if (!part) return;
   const referenced = new Set([...documentXml.matchAll(new RegExp(`<w:${type}Reference\\b[^>]*\\bw:id="(-?\\d+)"`, 'g'))].map((m) => m[1]));
-  noteParts[type] = part.replace(new RegExp(`<w:${type}\\b[^>]*\\bw:id="(-?\\d+)"[^>]*>(?:(?!</w:${type}>)[\\s\\S])*w:name="${CLONE_MARK}[\\d_-]+"[\\s\\S]*?</w:${type}>`, 'g'),
-    (whole, id: string) => (referenced.has(id) ? whole : ''));
+  const marked = new RegExp(`w:name="${CLONE_MARK}[\\d_-]+"`);
+  const kept: string[] = [];
+  let done = 0;
+  for (const note of notesIn(part, type)) {
+    if (note.id === undefined || referenced.has(note.id) || !marked.test(note.whole)) continue;
+    kept.push(part.slice(done, note.start));
+    done = note.end;
+  }
+  if (done > 0) noteParts[type] = kept.join('') + part.slice(done);
 }
 
 /** 갤러리 스타일 id → 이 문서에서 실제로 쓸 w:styleId (exportDocx가 styles.xml을 보고 정한다). */
@@ -751,7 +804,12 @@ function ensureBuiltinLists(doc: PMNode, entries: Record<string, Uint8Array>): M
   const existing = entries['word/numbering.xml'];
   let xml = existing ? strFromU8(existing) : `${DOCUMENT_XML_HEADER}<w:numbering xmlns:w="${NS_W}"></w:numbering>`;
   const before = xml;
-  const maxOf = (attr: string) => Math.max(0, ...[...xml.matchAll(new RegExp(`${attr}="(\\d+)"`, 'g'))].map((m) => Number(m[1])));
+  // 펼침(Math.max(...))은 번호가 아주 많으면 RangeError — 하나씩 본다(최종 검토 M3)
+  const maxOf = (attr: string) => {
+    let max = 0;
+    for (const m of xml.matchAll(new RegExp(`${attr}="(\\d+)"`, 'g'))) max = Math.max(max, Number(m[1]));
+    return max;
+  };
   for (const id of BUILTIN_LISTS.filter((l) => used.has(l.id)).map((l) => l.id)) {
     // 앞선 저장이 더한 정의(w:name 표지)가 있으면 그 번호를 다시 쓴다 — 저장마다 정의가 늘거나 numId가 바뀌지 않게
     const abstractId = new RegExp(`<w:abstractNum\\b[^>]*w:abstractNumId="(\\d+)"[^>]*>(?:(?!</w:abstractNum>)[\\s\\S])*<w:name w:val="${id}"/>`).exec(xml)?.[1]
@@ -917,6 +975,7 @@ export function exportDocx(
     }
   } finally {
     noteParts = { footnote: null, endnote: null };
+    noteIndexes = {};
   }
   // 메모가 있거나, 원본에 있던 메모를 모두 지운 경우에만 comments.xml을 새로 쓴다
   if (commentNumbers.size > 0 || entries['word/comments.xml']) {
