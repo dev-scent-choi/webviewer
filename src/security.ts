@@ -53,5 +53,5 @@ export function verifyViewToken(token: string): ViewClaims {
     canEdit: raw.canEdit === true,
     ...(raw.pdfEditor === true ? { pdfEditor: true } : {}),
   };
-  return { docId, viewer, perms: permissions, ...(engine === 'artcraft' ? { engine: 'artcraft' as const } : {}) };
+  return { docId, viewer, perms: permissions, ...(engine === 'artcraft' || engine === 'editor' ? { engine } : {}) };
 }

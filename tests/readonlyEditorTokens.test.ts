@@ -51,7 +51,21 @@ describe('읽기 전용 편집기 보기 꾸밈 — 토큰 engine:editor', () =>
     expect(d.fallbackUrl).toBe(`${fallback}?token=${t}`);
     const claims = verifyViewToken(d.token);
     expect(claims.perms.canEdit).toBe(false);
-    expect('engine' in claims).toBe(false);
+    expect(claims.engine).toBe('editor');
+    const info = (await app.inject({ method: 'GET', url: `/api/view/info?token=${t}` })).json().data;
+    expect(info.engine).toBe('editor');
+    expect(info.artcraft).toBeUndefined();
+    // 엔진 전용 원본 경로는 artcraft 토큰만 — editor 토큰은 거부
+    expect((await app.inject({ method: 'GET', url: `/api/view/engine-source?token=${t}` })).statusCode).toBe(403);
+  });
+
+  test('옛 형식 편집 업로드(.doc 이름, 저장본 docx)도 editor', async () => {
+    const id = newDocumentId();
+    await store.saveOriginal(id, 'docx', Buffer.from('원본'));
+    await store.writeMeta({ id, name: '시험.doc', ext: 'docx', status: 'ready', pageCount: 3, createdAt: new Date().toISOString() });
+    const d = await data(id, { canDownload: true, engine: 'editor' });
+    expect(d.engine).toBe('editor');
+    expect(d.viewerUrl).toBe(`/editor.html?token=${encodeURIComponent(d.token)}&ui=view`);
   });
 
   test('내려받기 권한이 없으면 libreoffice + 이유, 보기 화면 주소, fallbackUrl 없음, canEdit false', async () => {
@@ -64,20 +78,24 @@ describe('읽기 전용 편집기 보기 꾸밈 — 토큰 engine:editor', () =>
     expect(verifyViewToken(d.token).perms.canEdit).toBe(false);
   });
 
-  test.each(['pdf', 'hwp'])('%s에 editor → libreoffice + 편집기 없음 이유, 지금 보기 화면, fallbackUrl 없음', async (ext) => {
+  test.each(['pdf', 'hwp'])('%s에 editor → libreoffice + 편집기 없음 이유, 지금 보기 화면, fallbackUrl 없음, canEdit 그대로', async (ext) => {
     const id = await addDoc(ext);
-    const d = await data(id, { canDownload: true, engine: 'editor' });
+    const d = await data(id, { canDownload: true, canEdit: true, engine: 'editor' });
+    expect(verifyViewToken(d.token).perms.canEdit).toBe(true);
     expect(d.engine).toBe('libreoffice');
     expect(d.engineReason).toBe('이 형식은 읽기 전용 편집기 화면이 없습니다');
     expect(d.viewerUrl).toMatch(/^\/view(er)?\.html\?token=[^&]+$/);
     expect(d.fallbackUrl).toBeUndefined();
   });
 
-  test('pdf에 editor → 편집기 주소 없음', async () => {
+  test('pdf에 editor → 편집기 주소 없음, pdfEditor를 보내면 PDF 편집기 조건 그대로', async () => {
     const id = await addDoc('pdf');
-    const d = await data(id, { canDownload: true, engine: 'editor' });
+    const d = await data(id, { canDownload: true, canEdit: true, engine: 'editor' });
     expect(d.viewerUrl).toBe(`/view.html?token=${encodeURIComponent(d.token)}`);
     expect(d.editorUrl).toBeUndefined();
+    const e = await data(id, { canDownload: true, canEdit: true, pdfEditor: true, engine: 'editor' });
+    expect(e.editorUrl).toBe(`/editor-pdf.html?token=${encodeURIComponent(e.token)}`);
+    expect(verifyViewToken(e.token).perms).toMatchObject({ canEdit: true, pdfEditor: true });
   });
 
   test('engine 생략 → 지금과 같다(응답 필드 구성 그대로, editorUrl에 ui 없음, 편집 토큰은 편집 그대로)', async () => {

@@ -48,6 +48,6 @@ export interface ViewClaims {
   readonly docId: string;
   readonly viewer: string;
   readonly perms: Permissions;
-  /** 토큰 요청에 engine:'artcraft'를 보낸 경우만 — "요청한" 엔진. 실제 판정은 /api/view/info가 매번 한다(artcraftEngine.ts) */
-  readonly engine?: 'artcraft';
+  /** 토큰 요청에 engine:'artcraft'·'editor'를 보낸 경우만 — "요청한" 엔진. 실제 판정은 /api/view/info가 매번 한다(artcraftEngine.ts) */
+  readonly engine?: 'artcraft' | 'editor';
 }

@@ -805,7 +805,7 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
           ),
           viewerUrl: `${viewPathFor(view.meta.ext, view.meta.viewKind)}?token=${encodeURIComponent(request.query.token!)}`,
           processing: view.meta.status === 'processing',
-          engine: artcraft ? 'artcraft' : 'libreoffice',
+          engine: artcraft ? 'artcraft' : engine.engine === 'editor' ? 'editor' : 'libreoffice',
           ...(engine.reason ? { engineReason: engine.reason } : {}),
           // Worker 주소에도 내용 해시 — 캐시된 옛 Worker가 새 artcraftSource와 어긋나지 않게
           ...(artcraft ? { artcraft: { ...artcraft, workerUrl: versionedUrl(ARTCRAFT_WORKER, PUBLIC_DIR) } } : {}),

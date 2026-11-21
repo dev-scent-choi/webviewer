@@ -18,7 +18,7 @@ import { buildGridFromOriginal, saveGridDerived, type GridDocument } from '../sp
 import { newDocumentId, store } from '../storage.js';
 import type { DocumentMeta, LegacyExt, ViewKind } from '../types.js';
 import { invalidateViewCaches } from './viewer.js';
-import { engineFor, type Engine } from '../artcraftEngine.js';
+import { EDITOR_VIEW_FORMATS, engineFor, type Engine } from '../artcraftEngine.js';
 import { readArtcraftManifest } from '../artcraftManifest.js';
 import { isOpenable, trackInitialConversion } from '../conversionGate.js';
 import { assertZipNotTooLarge, ZipTooLargeError } from '../zipGuard.js';
@@ -540,8 +540,10 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
       // 뷰어 전용 권한이라 변환기 유무와 상관없이 요청한 대로 발급한다. 어느 쪽이든 동시편집
       // WebSocket(src/routes/edit.ts)은 docx/xlsx가 아니면 canEdit 값과 무관하게 접속 자체를 거부해
       // canEdit이 마크업 용도로 켜진 문서가 잘못 동시편집 룸에 들어가 원본을 덮어쓰는 일을 막는다.
-      // engine:'editor'는 읽기 전용 참여만 — 요청의 canEdit과 무관하게 끈다(두 겹 중 서버 쪽 겹, 설계 §6)
-      const effectiveCanEdit = engine !== 'editor' && canEdit && (!isEditableExt || findConverter(meta.ext) !== null);
+      // engine:'editor'는 편집기 형식(docx/xlsx/pptx)에서 읽기 전용 참여만 — 요청의 canEdit과 무관하게 끈다(두 겹 중 서버 쪽 겹, 설계 §6).
+      // 내려받기 없음으로 서버 변환에 떨어져도 끈다. pdf·hwp 등은 영향 없음(pdf canEdit = 마크업·PDF 편집기 조건)
+      const forceReadOnly = engine === 'editor' && EDITOR_VIEW_FORMATS.has(meta.ext);
+      const effectiveCanEdit = !forceReadOnly && canEdit && (!isEditableExt || findConverter(meta.ext) !== null);
       const decision = engineFor(meta.ext, { canDownload }, engine, readArtcraftManifest() !== null);
       const token = issueViewToken(
         {
@@ -554,7 +556,7 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
             canEdit: effectiveCanEdit,
             ...(meta.ext === 'pdf' && pdfEditor && canDownload ? { pdfEditor: true } : {}),
           },
-          ...(engine === 'artcraft' ? { engine: 'artcraft' as const } : {}),
+          ...(engine === 'artcraft' || engine === 'editor' ? { engine } : {}),
         },
         config.tokenTtlSeconds,
       );
