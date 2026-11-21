@@ -3048,7 +3048,40 @@ function passesStateCheck(room: Room, socket: WebSocket, bytes: Uint8Array, hasE
  * 않는다(메모리). 타이머는 프로세스를 붙잡지 않는다(unref) — 서버가 꺼지면 남은 방은 이미 저장돼 있다.
  */
 const MAX_LINGERING_ROOMS = 20;
-const lingeringRooms = new Map<string, { room: Room; timer: ReturnType<typeof setTimeout> }>();
+/**
+ * [최종 검토 I2] 개수만으로는 큰 PDF·덱·문서 방 20개가 45초 동안 남을 수 있었다 — 방 크기(어림)로도 묶는다.
+ * 어림 = PDF 원본(+암호화 원본) + 엑셀 원본 + Y.Doc 인코딩 길이(메모리에서는 이보다 몇 배 크다). 방 하나가 16MB를 넘으면 유예하지 않고
+ * (예전처럼 바로 닫음), 유예 중인 방들의 합이 64MB를 넘으면 가장 오래된 방부터 닫는다. 근거는 INTEGRATION.md "최종 검토 반영".
+ * 환경 변수 DOCVIEW_ROOM_LINGER_MAX_BYTES·DOCVIEW_ROOM_LINGER_TOTAL_BYTES로 바꿀 수 있다(시험용).
+ */
+const ROOM_LINGER_MAX_BYTES = 16 * 1024 * 1024;
+const ROOM_LINGER_TOTAL_BYTES = 64 * 1024 * 1024;
+const lingeringRooms = new Map<string, { room: Room; timer: ReturnType<typeof setTimeout>; bytes: number }>();
+let lingeringBytes = 0;
+
+function envBytes(name: string, fallback: number): number {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+/** 유예할 때 남는 메모리 어림(바이트) — shortcut: Y.Doc은 인코딩 길이로 잰다(실제 메모리는 몇 배), 더 정확히 재야 하면 v8 힙 표본으로 */
+function lingerBytesOf(room: Room): number {
+  let bytes = (room.originalPdfBytes?.length ?? 0) + (room.pdfEncryptedFile?.length ?? 0) + (room.originalXlsxBytes?.length ?? 0);
+  try {
+    bytes += Y.encodeStateAsUpdate(room.ydoc).length;
+  } catch {
+    bytes += ROOM_LINGER_MAX_BYTES; // 잴 수 없으면 크게 본다(유예하지 않음)
+  }
+  return bytes;
+}
+
+function dropOldestLingering(): void {
+  const [oldestId, oldest] = lingeringRooms.entries().next().value as [string, { room: Room; timer: ReturnType<typeof setTimeout>; bytes: number }];
+  clearTimeout(oldest.timer);
+  lingeringRooms.delete(oldestId);
+  lingeringBytes -= oldest.bytes;
+  if (oldest.room.conns.size === 0 && rooms.get(oldestId) === oldest.room) teardownRoom(oldest.room);
+}
 /** 문서 삭제 등으로 유예 없이 바로 닫아야 하는 방 */
 const closeWithoutGrace = new Set<string>();
 
@@ -3062,18 +3095,17 @@ function roomCloseGraceMs(): number {
 function lingerRoom(room: Room): boolean {
   const ms = roomCloseGraceMs();
   if (ms === 0 || closeWithoutGrace.has(room.docId) || largeRoomDocIds.has(room.docId)) return false;
-  while (lingeringRooms.size >= MAX_LINGERING_ROOMS) {
-    const [oldestId, oldest] = lingeringRooms.entries().next().value as [string, { room: Room; timer: ReturnType<typeof setTimeout> }];
-    clearTimeout(oldest.timer);
-    lingeringRooms.delete(oldestId);
-    if (oldest.room.conns.size === 0 && rooms.get(oldestId) === oldest.room) teardownRoom(oldest.room);
-  }
+  const bytes = lingerBytesOf(room);
+  const total = envBytes('DOCVIEW_ROOM_LINGER_TOTAL_BYTES', ROOM_LINGER_TOTAL_BYTES);
+  if (bytes > Math.min(envBytes('DOCVIEW_ROOM_LINGER_MAX_BYTES', ROOM_LINGER_MAX_BYTES), total)) return false;
+  while (lingeringRooms.size > 0 && (lingeringRooms.size >= MAX_LINGERING_ROOMS || lingeringBytes + bytes > total)) dropOldestLingering();
   const timer = setTimeout(() => {
-    lingeringRooms.delete(room.docId);
+    wakeLingeringRoom(room.docId);
     if (room.conns.size === 0 && rooms.get(room.docId) === room) teardownRoom(room);
   }, ms);
   timer.unref?.();
-  lingeringRooms.set(room.docId, { room, timer });
+  lingeringRooms.set(room.docId, { room, timer, bytes });
+  lingeringBytes += bytes;
   return true;
 }
 
@@ -3083,6 +3115,7 @@ function wakeLingeringRoom(docId: string): void {
   if (!lingering) return;
   clearTimeout(lingering.timer);
   lingeringRooms.delete(docId);
+  lingeringBytes -= lingering.bytes;
 }
 /* ===== [RX-C1] 끝 ===== */
 
