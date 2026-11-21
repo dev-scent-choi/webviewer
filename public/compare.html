@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>리브레오피스 · 아트크래프트 나란히 비교</title>
+  <style>
+    :root { color-scheme: light; }
+    html, body { margin: 0; height: 100%; font-family: system-ui, 'Malgun Gothic', sans-serif; background: #e9ecef; }
+    body { display: grid; grid-template-rows: auto 1fr; }
+    header { display: flex; gap: 1rem; align-items: center; padding: 0.4rem 0.8rem; background: #fff; border-bottom: 1px solid #d0d4d9; font-size: 0.9rem; }
+    header a { color: #1a5fb4; }
+    #name { font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    main { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; min-height: 0; }
+    section { display: grid; grid-template-rows: auto 1fr; min-height: 0; background: #fff; }
+    section h2 { margin: 0; padding: 0.3rem 0.6rem; font-size: 0.85rem; background: #f3f5f7; border-bottom: 1px solid #d0d4d9; }
+    section h2 small { font-weight: 400; color: #6b7280; margin-left: 0.5rem; }
+    iframe { width: 100%; height: 100%; border: 0; }
+    #err { color: #b42318; }
+    @media (max-width: 900px) { main { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; } }
+  </style>
+</head>
+<body>
+  <header>
+    <a href="/">← 목록</a>
+    <span id="name">비교 준비 중…</span>
+    <span id="err" role="alert"></span>
+  </header>
+  <main>
+    <section>
+      <h2>리브레오피스<small>서버 변환</small></h2>
+      <iframe id="left" title="리브레오피스(서버 변환)"></iframe>
+    </section>
+    <section>
+      <h2>아트크래프트<small id="right-note">브라우저 엔진</small></h2>
+      <iframe id="right" title="아트크래프트(브라우저 엔진)"></iframe>
+    </section>
+  </main>
+  <script src="/js/compare.js"></script>
+</body>
+</html>

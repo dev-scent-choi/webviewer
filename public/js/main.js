@@ -6,6 +6,14 @@ const fileInput = document.getElementById('file-input');
 const fileLabel = document.getElementById('file-label');
 const uploadStatus = document.getElementById('upload-status');
 const docList = document.getElementById('doc-list');
+// 리브레오피스 · 아트크래프트 나란히 비교 체크박스 — 선택은 이 브라우저에만 기억(localStorage)
+const compareToggle = document.getElementById('compare-artcraft');
+try {
+  if (compareToggle) compareToggle.checked = localStorage.getItem('docview-compare-artcraft') === '1';
+} catch { /* 저장소를 못 쓰면 매번 꺼진 채 시작 */ }
+compareToggle?.addEventListener('change', () => {
+  try { localStorage.setItem('docview-compare-artcraft', compareToggle.checked ? '1' : '0'); } catch { /* 무시 */ }
+});
 const emptyMessage = document.getElementById('empty-message');
 
 function setStatus(message, kind) {
@@ -342,6 +350,11 @@ function renderDocItem(doc) {
   openBtn.textContent = '열기';
   openBtn.title = editorLook ? '편집기와 같은 화면으로 엽니다 — 편집 도구 없이 읽기만' : '';
   openBtn.addEventListener('click', () => {
+    // "아트크래프트와 나란히 비교" 체크 + 아트크래프트가 되는 형식이면 두 화면(compare.html)으로
+    if (compareToggle?.checked && supportsArtcraft(doc)) {
+      location.href = `/compare.html?doc=${encodeURIComponent(doc.id)}`;
+      return;
+    }
     openBtn.disabled = true;
     (editorLook ? openReadonlyEditor(doc.id, '업로더') : openViewer(doc.id, '업로더', doc.ext)).catch((error) => {
       openBtn.disabled = false;

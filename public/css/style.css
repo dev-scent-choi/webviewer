@@ -4122,3 +4122,6 @@ body.ui-view.no-copy :is(#editor, #grid-editor, #slides-rail, #slide-canvas-wrap
 .open-more-menu .btn { width: 100%; text-align: left; }
 .token-form .engine-hint { flex-basis: 100%; font-size: 0.8rem; color: var(--v-text-dim); }
 .open-more-menu > span { display: block; }
+
+/* 메인 화면: 리브레오피스 · 아트크래프트 나란히 비교 체크박스 */
+.compare-toggle { display: inline-flex; align-items: center; gap: 0.4rem; margin: 0 0 0.6rem; font-size: 0.9rem; color: #374151; cursor: pointer; }
