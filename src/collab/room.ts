@@ -1775,7 +1775,15 @@ async function flushToStore(room: Room): Promise<void> {
     );
     await store.saveOriginal(docId, meta.ext, Buffer.from(newPptxBytes));
     // [pptx 품질 갈래] 고친 글상자의 원문을 다 지키지 못했으면(위조·연결 대상 없음 등) 편집 화면에 알린다 — 조용히 버리지 않는다
-    if (notices.length > 0) ydoc.getMap(PPTX_SAVE_NOTICE_MAP).set('last', { at: Date.now(), text: notices.join(' ') });
+    // 저장 결과 쓰기라 다음 자동저장을 예약하지 않는다(안 그러면 알림이 있을 때마다 같은 내용을 한 번 더 저장 — 3차 검토 이중 저장)
+    if (notices.length > 0) {
+      room.suppressAutosaveReschedule = true;
+      try {
+        ydoc.getMap(PPTX_SAVE_NOTICE_MAP).set('last', { at: Date.now(), text: notices.join(' ') });
+      } finally {
+        room.suppressAutosaveReschedule = false;
+      }
+    }
 
     // 저장이 끝난 직후, Yjs 배열을 "방금 디스크에 쓴 내용"과 다시 일치시킨다: 모든 항목을
     // finalParts 순서의 'original' 항목으로 재구성한다. 이렇게 하지 않으면 (1) duplicate 항목이
@@ -2737,9 +2745,10 @@ function passesStateCheck(room: Room, socket: WebSocket, bytes: Uint8Array, hasE
   try {
     const decoder = decoding.createDecoder(bytes);
     if (decoding.readVarUint(decoder) !== MESSAGE_SYNC) return true; // awareness 등은 문서에 쓰지 않는다
-    if (decoding.readVarUint(decoder) !== messageYjsSyncStep1) return false;
-    const theirs = Y.decodeStateVector(decoding.readVarUint8Array(decoder));
     stateChecked.add(socket);
+    // y-websocket 클라이언트(옛 번들 포함)는 열리자마자 SyncStep1부터 보낸다 — 그 밖의 첫 메시지는 판정할 상태가 없다
+    if (decoding.readVarUint(decoder) !== messageYjsSyncStep1) return true;
+    const theirs = Y.decodeStateVector(decoding.readVarUint8Array(decoder));
     if (theirs.size === 0) return true;
     const ours = Y.decodeStateVector(Y.encodeStateVector(room.ydoc));
     for (const id of theirs.keys()) if (ours.has(id)) return true;
@@ -2772,7 +2781,7 @@ function roomCloseGraceMs(): number {
 /** 남겨 둘 수 있으면 타이머를 걸고 true(저장은 부르는 쪽이 지금 한다), 아니면 false(바로 닫는다) */
 function lingerRoom(room: Room): boolean {
   const ms = roomCloseGraceMs();
-  if (ms === 0 || closeWithoutGrace.has(room.docId) || room.lazyGrid || largeRoomDocIds.has(room.docId)) return false;
+  if (ms === 0 || closeWithoutGrace.has(room.docId) || largeRoomDocIds.has(room.docId)) return false;
   while (lingeringRooms.size >= MAX_LINGERING_ROOMS) {
     const [oldestId, oldest] = lingeringRooms.entries().next().value as [string, { room: Room; timer: ReturnType<typeof setTimeout> }];
     clearTimeout(oldest.timer);
