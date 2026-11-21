@@ -43,6 +43,7 @@ import { pickPresenceColorForName, renderPresenceAvatars } from './presence.js';
 import { applyWatermark } from './watermark.js';
 import { DOC_META_MAP, DOC_META_SAVED_AT_KEY, DOC_META_SAVE_ERROR_AT_KEY } from '../collab/gridShared.js';
 import { initOfficeShell } from './officeShell.js';
+import { capacityFallback, fallBackToViewer, isViewUi, pickBoundary } from './viewStrip.js';
 import { bindDropdown, fillColorPalette, type PaletteColor } from './ribbonMenus.js';
 import {
   applyMark,
@@ -654,7 +655,10 @@ async function main(): Promise<void> {
   provider.on('connection-close', (event: CloseEvent | null) => {
     if (event && event.code >= 4400) {
       provider.shouldConnect = false;
-      showFatalError(event.reason || '서버가 연결을 거부했습니다.');
+      // 보기 꾸밈이 정원 초과(4429)에 걸리면 같은 토큰의 보기 화면으로(설계 §3.4) — 그 밖은 지금처럼 이유를 보여 준다
+      const fallback = capacityFallback(event.code, isViewUi(location.search, canEdit), info.viewerUrl);
+      if (fallback) fallBackToViewer(fallback);
+      else showFatalError(event.reason || '서버가 연결을 거부했습니다.');
     }
   });
   let readyPosted = false;
@@ -724,6 +728,46 @@ async function main(): Promise<void> {
       view.focus();
     },
   });
+
+  // 보기 꾸밈의 이전/다음 쪽 — 쪽 사이 간격(docxLayout.ts .docx-page-gap)으로 몸체를 스크롤한다. 본문은 body가 스크롤되고
+  // 도구 줄(#toolbar)은 sticky라 그 아래를 기준으로 잰다. 쪽 나눔이 없는 문서(경계 0개)면 이전만 맨 위로 간다.
+  shell.setViewNav({
+    prevLabel: '이전 쪽',
+    nextLabel: '다음 쪽',
+    prev: () => jumpPage(-1),
+    next: () => jumpPage(1),
+  });
+  function jumpPage(dir: 1 | -1): void {
+    const offset = toolbar.getBoundingClientRect().bottom;
+    const tops = [...editorHost.querySelectorAll('.docx-page-gap')].map((gap) => gap.getBoundingClientRect().top - offset);
+    const index = pickBoundary(tops, dir);
+    if (index >= 0) window.scrollBy(0, tops[index]);
+    else if (dir === -1) window.scrollTo(0, 0);
+  }
+
+  // 보기 꾸밈 얇은 줄의 "메모" — 메모가 하나라도 있을 때만 보이고, 검토 탭의 "메모 표시"(숨은 리본 단추)를 대신 눌러 읽기 전용 메모 창을 연다
+  const stripTools = document.querySelector('.view-strip-tools');
+  if (stripTools) {
+    const commentsMap = ydoc.getMap<DocxComment>(DOCX_COMMENTS_MAP);
+    const memoBtn = document.createElement('button');
+    memoBtn.type = 'button';
+    memoBtn.className = 'icon-btn';
+    memoBtn.dataset.act = 'memo';
+    memoBtn.style.width = 'auto'; // 얇은 줄 .icon-btn은 30px 정사각 — 글자 단추라 넓힌다
+    memoBtn.style.padding = '0 0.5rem';
+    memoBtn.textContent = '메모';
+    memoBtn.title = '메모 창 열기/닫기';
+    memoBtn.addEventListener('click', () => {
+      const ribbonBtn = document.getElementById('btn-show-comments');
+      ribbonBtn?.click();
+      memoBtn.setAttribute('aria-pressed', ribbonBtn?.getAttribute('aria-pressed') ?? 'false');
+    });
+    // 단추 클래스의 display가 [hidden]을 이길 수 있어 style로 감춘다
+    const syncMemo = () => (memoBtn.style.display = commentsMap.size > 0 ? '' : 'none');
+    syncMemo();
+    commentsMap.observe(syncMemo);
+    stripTools.insertBefore(memoBtn, stripTools.querySelector('[data-act="print"], [data-act="download"], [data-act="edit"]'));
+  }
 
   // 서식 복사: 한 번 누르면 다음 선택 한 번에, 두 번 누르면 Esc를 누를 때까지 계속 칠한다(Word와 같다).
   let painter: { format: CopiedFormat; sticky: boolean } | null = null;
