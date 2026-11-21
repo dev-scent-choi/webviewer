@@ -168,8 +168,7 @@ function pageDecorations(doc: PMNode, extras: DocxRenderExtras, totalPages: numb
     while (ai < auto.length && auto[ai] < pos) ai += 1;
     const autoHere = ai < auto.length && auto[ai] === pos;
     if (autoHere) ai += 1;
-    if ((node.attrs.breakBefore || (autoHere && !inColumns)) && pos > 0) boundaries.push({ pos, nextSection: null });
-    else if (autoHere && inColumns) boundaries.push({ pos, nextSection: null, hidden: true });
+    if ((node.attrs.breakBefore || autoHere) && pos > 0) boundaries.push({ pos, nextSection: null });
     for (; ai < auto.length && auto[ai] < after; ai += 1) {
       const inline = node.isTextblock && !inColumns;
       boundaries.push({ pos: auto[ai], nextSection: null, inline, hidden: !inline });
@@ -504,6 +503,24 @@ interface Measured {
   readonly lineHeight: number;
 }
 
+/** 블록 안 각주 참조 id·쪽 나누기 — 노드는 바뀌지 않으니 노드마다 한 번만 찾는다(쪽 나눔 재기마다 문서 전체를 훑지 않게) */
+const blockFacts = new WeakMap<PMNode, { noteIds: string[]; hasBreak: boolean }>();
+function blockFactsOf(node: PMNode): { noteIds: string[]; hasBreak: boolean } {
+  let facts = blockFacts.get(node);
+  if (!facts) {
+    const noteIds: string[] = [];
+    let hasBreak = false;
+    node.descendants((child) => {
+      if (child.type.name === 'page_break') hasBreak = true;
+      if (child.type.name === 'ooxml' && child.attrs.kind === 'note' && child.attrs.noteType === 'footnote') noteIds.push(String(child.attrs.noteId));
+      return true;
+    });
+    facts = { noteIds, hasBreak };
+    blockFacts.set(node, facts);
+  }
+  return facts;
+}
+
 /** 쪽 경계·쪽 끝 장식(본문 블록이 아니다 — 높이표에 넣지 않는다) */
 const isPageWidget = (dom: Element) => dom.matches('.docx-page-boundary, .docx-page-start, .docx-page-end');
 
@@ -516,23 +533,24 @@ function measureAutoBreaks(view: EditorView, extras: DocxRenderExtras, heights: 
   const items: FlowItem[] = [];
   const nodes: Array<{ node: PMNode; pos: number; dom: HTMLElement | null }> = [];
   let section = 0;
-  // 본문 직속 블록 → DOM: view.nodeDOM(pos)는 앞에서부터 세어 찾아 블록 수 제곱이 된다(400쪽 4배 느리게 글자당 약 0.3초) — 한 번 훑어 표로
+  // 본문 직속 블록(다단 구역은 그 안 블록) → DOM: view.nodeDOM(pos)는 앞에서부터 세어 찾아 블록 수 제곱이 된다(400쪽 4배 느리게 글자당 약 0.3초) — 한 번 훑어 표로
   const domOf = new Map<PMNode, HTMLElement>();
-  for (const child of view.dom.children) {
-    const node = (child as HTMLElement & { pmViewDesc?: { node?: PMNode } }).pmViewDesc?.node;
-    if (node && child instanceof HTMLElement) domOf.set(node, child);
-  }
-  view.state.doc.forEach((node, pos) => {
+  const collect = (parent: Element) => {
+    for (const child of parent.children) {
+      const node = (child as HTMLElement & { pmViewDesc?: { node?: PMNode } }).pmViewDesc?.node;
+      if (!node || !(child instanceof HTMLElement)) continue;
+      domOf.set(node, child);
+      if (node.type.name === 'columns') collect(child);
+    }
+  };
+  collect(view.dom);
+  const add = (node: PMNode, pos: number, columns: number) => {
     const dom = domOf.get(node) ?? view.nodeDOM(pos);
     const el = dom instanceof HTMLElement ? dom : null;
     const m = el ? heights.get(el) : undefined;
+    const { noteIds, hasBreak } = blockFactsOf(node);
     let notes = 0;
-    let hasBreak = false;
-    node.descendants((child) => {
-      if (child.type.name === 'page_break') hasBreak = true;
-      if (child.type.name === 'ooxml' && child.attrs.kind === 'note' && child.attrs.noteType === 'footnote') notes += noteHeight(String(child.attrs.noteId));
-      return true;
-    });
+    for (const id of noteIds) notes += noteHeight(id);
     const sect = node.attrs.sect;
     let breakAfter = hasBreak;
     const own = section;
@@ -540,11 +558,12 @@ function measureAutoBreaks(view: EditorView, extras: DocxRenderExtras, heights: 
       section = sect + 1;
       if ((extras.sections[section]?.type ?? 'nextPage') !== 'continuous') breakAfter = true;
     }
-    const kind = node.type.name === 'table' || node.type.name === 'columns' ? 'split' : node.isTextblock && !hasBreak ? 'para' : 'block';
+    // 다단 안 블록: 단 수만큼 나란히 쌓이므로 세로로는 높이 ÷ 단 수만큼 차지한다(블록 경계에서만 나눈다 — 나눈 곳엔 단 전체에 걸친 쪽 경계)
+    const kind = columns > 1 ? 'block' : node.type.name === 'table' ? 'split' : node.isTextblock && !hasBreak ? 'para' : 'block';
     items.push({
-      height: m?.height ?? null,
-      marginTop: m?.marginTop ?? 0,
-      marginBottom: m?.marginBottom ?? 0,
+      height: m ? m.height / columns : null,
+      marginTop: (m?.marginTop ?? 0) / columns,
+      marginBottom: (m?.marginBottom ?? 0) / columns,
       kind,
       lineHeight: m?.lineHeight ?? 0,
       notes,
@@ -553,6 +572,11 @@ function measureAutoBreaks(view: EditorView, extras: DocxRenderExtras, heights: 
       breakAfter,
     });
     nodes.push({ node, pos, dom: el });
+  };
+  view.state.doc.forEach((node, pos) => {
+    if (node.type.name !== 'columns') return add(node, pos, 1);
+    const count = Math.max(1, Number(node.attrs.count) || 1);
+    node.forEach((child, offset) => add(child, pos + 1 + offset, count));
   });
   const flow = paginateFlow(items, (i) => {
     const page = extras.sections[i]?.page;
@@ -566,7 +590,7 @@ function measureAutoBreaks(view: EditorView, extras: DocxRenderExtras, heights: 
     if (offset === 0) breaks.push(pos);
     else if (items[index].kind === 'para') breaks.push(lineStartAt(view, node, pos, dom, offset, items[index].height ?? 1, estimated));
     else {
-      // 표·다단 안: 그리지 않고 쪽 수만 센다(안쪽 위치 하나에 쪽 하나)
+      // 표 안: 그리지 않고 쪽 수만 센다(안쪽 위치 하나에 쪽 하나 — 행 경계는 모른다)
       const k = (inner.get(pos) ?? 0) + 1;
       inner.set(pos, k);
       if (k < node.nodeSize - 1) breaks.push(pos + k);
@@ -920,7 +944,14 @@ export function docxLayoutPlugin(extras: DocxRenderExtras, totalPages: number | 
         })
         : null;
       const observeBlocks = (list: Iterable<Node>) => {
-        for (const child of list) if (child instanceof HTMLElement && !isPageWidget(child)) ro?.observe(child);
+        for (const child of list) {
+          if (!(child instanceof HTMLElement) || isPageWidget(child)) continue;
+          if (child.classList.contains('docx-columns')) {
+            // 다단 상자는 그 안 블록을 잰다(쪽 나눔이 단 안 블록 경계에서 나눈다)
+            mo.observe(child, { childList: true });
+            observeBlocks(child.children);
+          } else ro?.observe(child);
+        }
       };
       const mo = new MutationObserver((records) => {
         for (const r of records) {

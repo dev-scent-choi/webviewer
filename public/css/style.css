@@ -3632,6 +3632,8 @@ body[data-app] { --v-accent: var(--app-accent); --v-accent-ink: #ffffff; }
 .editor-surface .ProseMirror .docx-num { display: inline-block; text-indent: 0; white-space: pre; user-select: none; }
 /* 다단 구역 */
 .editor-surface .ProseMirror .docx-columns > :first-child { margin-top: 0; }
+/* 다단 구역 안의 쪽 경계는 단 전체에 걸친다 — 경계 앞뒤가 각각 그 쪽의 단 묶음이 된다(Word처럼 쪽마다 단이 새로 시작) */
+.editor-surface .ProseMirror .docx-columns > .docx-page-boundary { column-span: all; }
 /* 글꼴마다 다른 Word "1줄"(schema.ts WORD_SINGLE_LINE_RATIO) — 고정 줄 간격 문단이면 그 px, 아니면 이 글꼴 1줄 × 문단 배수 */
 .editor-surface .ProseMirror .docx-font-lh { line-height: var(--run-line-height, calc(var(--doc-single-line) * var(--line-mult, 1))); }
 /* 큰 문서 입력 속도: 화면에서 먼 본문 블록은 그리기(배치·칠하기)를 건너뛴다(content-visibility: hidden — 범위 규칙은 docxLayout.ts가
