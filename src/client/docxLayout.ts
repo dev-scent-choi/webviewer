@@ -153,7 +153,7 @@ function bodyBlocksOf(doc: PMNode): Array<{ node: PMNode; pos: number; after: nu
 }
 
 /** 쪽 경계 장식(머리글·바닥글·각주)과 구역 폭 — autoBreaks: 넘침으로 생긴 쪽 경계(블록 위치) */
-function pageDecorations(doc: PMNode, extras: DocxRenderExtras, totalPages: number | null, autoBreaks: readonly number[], out: Decoration[]): void {
+function pageDecorations(doc: PMNode, extras: DocxRenderExtras, totalPages: number | null, autoBreaks: readonly number[], out: Decoration[], numbers: PageNumbers): void {
   if (extras.sections.length === 0) return;
   const hostContent = Math.max(0, ...extras.sections.map((s) => contentWidthOf(s) ?? 0));
   const auto = [...autoBreaks].sort((a, b) => a - b);
@@ -196,7 +196,12 @@ function pageDecorations(doc: PMNode, extras: DocxRenderExtras, totalPages: numb
   const total = totalPages ?? counted;
 
   const cur: PageCursor = { page: 1, section: 0, firstOfSection: true, notes: [] };
+  numbers.total = total;
+  numbers.seq.push(1);
   out.push(Decoration.widget(0, () => pageStartDOM(extras, { ...cur }, total, true), { side: -1, key: 'page-1', ignoreSelection: true }));
+  // 장식 key엔 쪽 번호를 넣지 않는다 — 쪽 경계 하나가 생기거나 없어져도 뒤 쪽들의 머리글·바닥글 DOM을 다시 만들지 않게(REVIEW-r3 I-r3-2).
+  // 번호(PAGE·NUMPAGES 필드)는 그린 뒤 renumberPages가 글자만 바꾼다. 짝수 쪽 머리글을 따로 쓰는 문서만 홀짝을 key에 넣는다.
+  const parity = (page: number) => (extras.evenAndOddHeaders ? `${page % 2}` : '');
   let next = 0;
   // 각주·미주 번호는 문서 순서대로 다시 센다 — 같은 문서 안에서 복사한 참조도 저장 때 새 각주가 되므로(export.ts) 화면도 새 번호로
   const counters = { footnote: 0, endnote: 0 };
@@ -223,6 +228,7 @@ function pageDecorations(doc: PMNode, extras: DocxRenderExtras, totalPages: numb
       continue;
     }
     const ending = { ...cur, notes: [...cur.notes] };
+    numbers.seq.push(ending.page, ending.page + 1);
     cur.page += 1;
     cur.notes = [];
     cur.firstOfSection = boundary.nextSection !== null;
@@ -233,11 +239,12 @@ function pageDecorations(doc: PMNode, extras: DocxRenderExtras, totalPages: numb
         const wrap = el('div', 'docx-page-boundary');
         wrap.append(pageEndDOM(extras, ending, total, false), el('div', 'docx-page-gap'), pageStartDOM(extras, starting, total, false));
         return wrap;
-      }, { side: -1, key: `page-${starting.page}-${starting.section}-${ending.notes.map((n) => `${n.node.attrs.noteId}:${n.label}`).join(',')}`, ignoreSelection: true }),
+      }, { side: -1, key: `page-${ending.section}${ending.firstOfSection ? 'f' : ''}${parity(ending.page)}-${starting.section}${starting.firstOfSection ? 'f' : ''}${parity(starting.page)}-${ending.notes.map((n) => `${n.node.attrs.noteId}:${n.label}`).join(',')}`, ignoreSelection: true }),
     );
   }
   notesUntil(doc.content.size);
   const lastPage = { ...cur, notes: [...cur.notes] };
+  numbers.seq.push(lastPage.page);
   out.push(
     Decoration.widget(doc.content.size, () => {
       const end = pageEndDOM(extras, lastPage, total, true);
@@ -247,7 +254,7 @@ function pageDecorations(doc: PMNode, extras: DocxRenderExtras, totalPages: numb
         end.prepend(endnotes);
       }
       return end;
-    }, { side: 1, key: `page-end-${lastPage.page}-${[...lastPage.notes, ...endnoteRefs].map((n) => `${n.node.attrs.noteId}:${n.label}`).join(',')}`, ignoreSelection: true }),
+    }, { side: 1, key: `page-end-${lastPage.section}${parity(lastPage.page)}-${[...lastPage.notes, ...endnoteRefs].map((n) => `${n.node.attrs.noteId}:${n.label}`).join(',')}`, ignoreSelection: true }),
   );
 }
 
@@ -255,16 +262,42 @@ function pageDecorations(doc: PMNode, extras: DocxRenderExtras, totalPages: numb
 let numberingStyle: HTMLStyleElement | null = null;
 const numberingRules = new Map<string, string>();
 
+/** 쪽 시작·끝 장식(DOM 순서)의 쪽 번호와 전체 쪽 수 — 장식 묶음마다 */
+interface PageNumbers {
+  seq: number[];
+  total: number;
+}
+const pageNumbersOf = new WeakMap<DecorationSet, PageNumbers>();
+
+/** 쪽 시작·끝 장식의 PAGE·NUMPAGES 필드 글자를 지금 쪽 번호로 — 바뀐 것만 쓴다 */
+function renumberPages(root: HTMLElement, numbers: PageNumbers | undefined): void {
+  if (!numbers) return;
+  root.querySelectorAll<HTMLElement>('.docx-page-start, .docx-page-end').forEach((box, i) => {
+    const page = String(numbers.seq[i] ?? '');
+    if (box.dataset.page === page) return;
+    box.dataset.page = page;
+    for (const field of box.querySelectorAll<HTMLElement>('[data-field="PAGE"]')) field.textContent = page;
+  });
+  const total = String(numbers.total);
+  if (root.dataset.pages !== total) {
+    root.dataset.pages = total;
+    for (const field of root.querySelectorAll<HTMLElement>('[data-field="NUMPAGES"], [data-field="SECTIONPAGES"]')) field.textContent = total;
+  }
+}
+
 function buildDecorations(doc: PMNode, extras: DocxRenderExtras, totalPages: number | null, autoBreaks: readonly number[]): DecorationSet {
   const out: Decoration[] = [];
+  const numbers: PageNumbers = { seq: [], total: 0 };
   const before = numberingRules.size;
   numberingDecorations(doc, extras.numbering, out, numberingRules);
   if (numberingRules.size !== before && typeof document !== 'undefined') {
     numberingStyle ??= document.head.appendChild(document.createElement('style'));
     numberingStyle.textContent = [...numberingRules.values()].join('\n');
   }
-  pageDecorations(doc, extras, totalPages, autoBreaks, out);
-  return DecorationSet.create(doc, out);
+  pageDecorations(doc, extras, totalPages, autoBreaks, out, numbers);
+  const set = DecorationSet.create(doc, out);
+  pageNumbersOf.set(set, numbers);
+  return set;
 }
 
 /** 쪽·번호를 바꾸지 않는 편집인가 — 한 글줄 블록 안에서 글자(인라인)만 넣고 지운 것(각주 참조·쪽 나누기는 제외) */
@@ -989,7 +1022,10 @@ export function docxLayoutPlugin(extras: DocxRenderExtras, totalPages: number | 
         update: (v, prevState) => {
           if (v.state.doc === prevState.doc && layoutKey.getState(v.state)?.deco === layoutKey.getState(prevState)?.deco) return;
           const dirty = layoutKey.getState(v.state)?.dirty ?? 'all';
-          if (dirty === 'all') schedule('all');
+          if (dirty === 'all') {
+            renumberPages(v.dom, pageNumbersOf.get(layoutKey.getState(v.state)!.deco));
+            schedule('all');
+          }
           else {
             const touched: HTMLElement[] = [];
             for (const [from, to] of dirty) {

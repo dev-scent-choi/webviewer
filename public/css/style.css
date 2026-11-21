@@ -2945,6 +2945,8 @@ body.home-hidden .doclist-link { display: none !important; }
   pointer-events: none;
   background-image: var(--watermark-bg, none);
   background-repeat: repeat;
+  /* 자기 합성 레이어 — 글자 하나 칠 때 화면 전체 겹층을 다시 칠하지 않게(큰 워드 문서 4배 느리게 Paint 약 50ms의 큰 몫) */
+  will-change: transform;
 }
 
 /* ProseMirror 문서 내 검색 하이라이트 (Decoration으로 삽입되는 인라인 span) */
@@ -3640,6 +3642,9 @@ body[data-app] { --v-accent: var(--app-accent); --v-accent-ink: #ffffff; }
    만든다). 건너뛴 블록 크기는 마지막으로 그렸을 때 크기(auto)라 스크롤 위치가 그대로다 — 그래서 첫 쪽 나눔을 잰 뒤(모든 블록을 한 번
    그린 뒤)에 켠다. 떠 있는 그림이 든 문단(.docx-float-host)은 가두면 글 둘러싸기가 바뀌어 빼고, 다단은 넣지 않는다. */
 .editor-surface .ProseMirror.docx-paged > :is(p, h1, h2, h3, h4, h5, h6, table, .tableWrapper, ul, ol, blockquote) { contain-intrinsic-block-size: auto 24px; }
+/* 본문 문단은 칠하기·배치를 자기 상자 안에 가둔다 — 한 문단을 고칠 때 다시 칠하고 배치할 범위가 그 문단으로 줄어든다.
+   떠 있는 그림(.docx-float-host)·그림·글상자가 든 문단(.docx-obj-host)은 상자 밖으로 나가거나 둘러싸기가 바뀌어 뺀다. */
+.editor-surface .ProseMirror.docx-paged > :is(p, h1, h2, h3, h4, h5, h6):not(.docx-float-host):not(.docx-obj-host) { contain: layout paint style; }
 /* 쪽 경계(바닥글·간격·머리글)도 화면에서 멀면 건너뛴다 — 처음 그리기 전 크기는 대략 쪽 위·아래 여백 + 간격 */
 .editor-surface .ProseMirror.docx-paged > .docx-page-boundary { contain-intrinsic-block-size: auto 200px; }
 /* 쪽 경계: 바닥글(쪽 아래 여백) · 회색 쪽 간격 · 다음 쪽 머리글(쪽 위 여백) — 종이 폭 전체로 */

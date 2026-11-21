@@ -130,13 +130,16 @@ function parseJsonAttr<T>(dom: HTMLElement, name: string): T | null {
 
 /** paragraph/heading의 공통 문단 속성 — DOM에는 인라인 스타일로 보이게 하고, 붙여넣기·복원용으로
  * data-* 속성에 원래 값을 남긴다. docx로는 w:pPr(shd·spacing·ind·jc)로 나간다. */
-/** 떠 있는(둘러싸기) 그림·글상자가 든 문단 표시 — 편집기가 화면 밖 블록 그리기를 건너뛸 때(content-visibility, 블록을 가둔다) 이 문단은 빼야 다음 문단이 그림을 그대로 둘러싼다 */
+/** 떠 있는(둘러싸기) 그림·글상자가 든 문단(docx-float-host)·그림·글상자가 든 문단(docx-obj-host) 표시 — 편집기가 화면 밖 블록 그리기를 건너뛸 때(content-visibility, 블록을 가둔다) 이 문단은 빼야 다음 문단이 그림을 그대로 둘러싼다 */
 function floatHostAttrs(node: PMNode, attrs: Record<string, string>): Record<string, string> {
   let float = false;
+  let object = false;
   node.forEach((child) => {
     if (child.attrs.float === 'left' || child.attrs.float === 'right') float = true;
+    else if (child.type.name === 'ooxml' && (child.attrs.kind === 'image' || child.attrs.kind === 'textbox')) object = true;
   });
-  let out = float ? { ...attrs, class: attrs.class ? `${attrs.class} docx-float-host` : 'docx-float-host' } : attrs;
+  const extra = float ? 'docx-float-host' : object ? 'docx-obj-host' : '';
+  let out = extra ? { ...attrs, class: attrs.class ? `${attrs.class} ${extra}` : extra } : attrs;
   // 글자가 모두 한 글꼴이면 문단 1줄도 그 글꼴로(맑은 고딕 문서 안 바탕 문단 등) — 문단에 줄 간격이 없으면 문서 배수로
   const ratio = paragraphFontRatio(node);
   if (ratio !== null) {

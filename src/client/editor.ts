@@ -1020,11 +1020,27 @@ async function main(): Promise<void> {
   const statusChars = document.getElementById('status-chars');
   let statusTimer: ReturnType<typeof setTimeout> | undefined;
   const countWords = (text: string) => (text.trim() ? text.trim().split(/\s+/).length : 0);
+  // 단어·문자 수는 본문 직속 블록마다 한 번만 센다(노드는 바뀌지 않으니 바뀐 블록만 다시) — 예전엔 입력이 멈출 때마다 문서 전체 글자를
+  // 뽑아 800쪽 4배 느리게에서 약 45ms짜리 작업이었다(REVIEW-r3 I-r3-4)
+  const blockCounts = new WeakMap<PMNode, { words: number; chars: number }>();
+  const countsOf = (node: PMNode) => {
+    let counts = blockCounts.get(node);
+    if (!counts) {
+      const text = node.textBetween(0, node.content.size, '\n', ' ');
+      counts = { words: countWords(text), chars: text.replace(/\n/g, '').length };
+      blockCounts.set(node, counts);
+    }
+    return counts;
+  };
   function updateStatus(): void {
     const { doc, selection } = view.state;
-    const all = doc.textBetween(0, doc.content.size, '\n', ' ');
-    const words = countWords(all);
-    const chars = all.replace(/\n/g, '').length;
+    let words = 0;
+    let chars = 0;
+    doc.forEach((node) => {
+      const c = countsOf(node);
+      words += c.words;
+      chars += c.chars;
+    });
     if (!selection.empty) {
       const selected = doc.textBetween(selection.from, selection.to, '\n', ' ');
       if (statusWords) statusWords.textContent = `단어 ${countWords(selected).toLocaleString()}/${words.toLocaleString()}개`;
