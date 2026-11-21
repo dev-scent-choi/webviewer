@@ -8,6 +8,7 @@ import { keymap } from 'prosemirror-keymap';
 import type { Mark, MarkType, Node as PMNode } from 'prosemirror-model';
 import { ySyncPlugin, yCursorPlugin, yUndoPlugin, ySyncPluginKey, undo, redo } from 'y-prosemirror';
 import { initOfficeShell } from './officeShell.js';
+import { capacityFallback, fallBackToViewer, isViewUi, stepIndex } from './viewStrip.js';
 import { setupSlideDesign } from './slideDesignUi.js';
 import {
   PPTX_SAVE_NOTICE_MAP,
@@ -939,6 +940,15 @@ function activeSlideIndex(): number {
   return activeSlideId ? slidesArray.toArray().findIndex((e) => e.id === activeSlideId) : -1;
 }
 
+/** 보기 꾸밈의 이전/다음 단추 — 섬네일을 누른 것과 같다(selectSlide). 끝에서 멈추고, 그 섬네일이 레일에 보이게 한다. */
+function stepSlide(dir: 1 | -1): void {
+  const list = slidesArray.toArray();
+  const index = stepIndex(list.length, activeSlideIndex(), dir);
+  if (index < 0) return;
+  selectSlide(list[index].id);
+  railEl.querySelector<HTMLElement>(`.slide-card[data-id="${CSS.escape(list[index].id)}"]`)?.scrollIntoView({ block: 'nearest' });
+}
+
 /** 실제 프레젠테이션 프로그램처럼 새 슬라이드는 "지금 보고 있는 슬라이드 바로 뒤"에 들어가고
  * 곧바로 그 슬라이드로 이동한다(예전엔 항상 맨 끝에 붙고 선택도 안 바뀌어, 긴 문서에서는 추가된
  * 슬라이드를 찾아 스크롤해야 했다). */
@@ -1311,7 +1321,7 @@ async function main(): Promise<void> {
   document.title = `${info.name} — DocView 편집`;
   canEdit = info.permissions.canEdit;
   // 리본 편집 탭은 읽기 전용이면 셸이 숨긴다(파일 탭만 남는다).
-  initOfficeShell({
+  const shell = initOfficeShell({
     token: token ?? '',
     docName: info.name,
     docId: info.docId,
@@ -1327,6 +1337,12 @@ async function main(): Promise<void> {
     onRedo: () => {
       if (focusedView) redo(focusedView.state);
     },
+  });
+  shell.setViewNav({
+    prevLabel: '이전 슬라이드',
+    nextLabel: '다음 슬라이드',
+    prev: () => stepSlide(-1),
+    next: () => stepSlide(1),
   });
   if (info.slideSize && info.slideSize.cx > 0 && info.slideSize.cy > 0) {
     SLIDE_W_EMU = info.slideSize.cx;
@@ -1385,7 +1401,10 @@ async function main(): Promise<void> {
   provider.on('connection-close', (event: CloseEvent | null) => {
     if (event && event.code >= 4400) {
       provider.shouldConnect = false;
-      showFatalError(event.reason || '서버가 연결을 거부했습니다.');
+      // 보기 꾸밈이 정원 초과(4429)에 걸리면 같은 토큰의 보기 화면으로(설계 §3.4) — 그 밖은 지금처럼 이유를 보여 준다
+      const fallback = capacityFallback(event.code, isViewUi(location.search, canEdit), info.viewerUrl);
+      if (fallback) fallBackToViewer(fallback);
+      else showFatalError(event.reason || '서버가 연결을 거부했습니다.');
     }
   });
   provider.awareness.on('change', () => renderPresenceAvatars(presenceListEl, provider.awareness));
