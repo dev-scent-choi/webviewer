@@ -27,7 +27,7 @@ import { parseViewerGrid } from './viewerGrid.js';
 import { sanitizeCellStyle, type BorderSpec } from '../collab/cellBoxCss.js';
 import type { LazyGridSheetMeta, LazyGridStore } from './lazyGridStore.js';
 import { GRID_COND_FORMATS_MAP, shiftSpan, type CondFormatEntry } from '../collab/condFormatShared.js';
-import { rewriteStructuredRefs, shiftTableRows, type TableColumnChanges } from './tableStyles.js';
+import { rewriteStructuredRefs, shiftTableRows, type TableAsRange, type TableColumnChanges } from './tableStyles.js';
 import { applyEditedCondFormats, preserveUnsupportedCfRules } from './condFormatExport.js';
 import { getRow } from './lazyGridStore.js';
 import { dateTextToDate, parseTypedNumber } from '../collab/cellValueShared.js';
@@ -783,8 +783,9 @@ function restoreTableHeaderAndButtons(workbook: ExcelJS.Workbook, originalXlsxBy
  * 표 열 이름을 머리 칸 글자에 맞추고(편집 화면에서 머리 칸을 고치면 엑셀처럼 열 이름이 바뀐다 — 다르면 엑셀이 파일을 "복구"한다),
  * 이름이 바뀐 열·지운 열을 가리키는 구조적 참조(표1[값] 등)를 모든 수식에서 고친다(바뀐 이름으로 / #REF!로). 바뀐 것이 없으면 수식을 훑지 않는다.
  */
-function applyTableColumnChanges(workbook: ExcelJS.Workbook, deleted: ReadonlyMap<string, ReadonlySet<string>>): void {
+function applyTableColumnChanges(workbook: ExcelJS.Workbook, deleted: ReadonlyMap<string, ReadonlySet<string>>, removed: ReadonlyMap<string, TableAsRange | null>): void {
   const changes = new Map<string, TableColumnChanges>();
+  for (const [name, range] of removed) changes.set(name, { renames: new Map(), deleted: new Set(), range });
   const boxes: Array<{ ws: ExcelJS.Worksheet; name: string; r0: number; c0: number; r1: number; c1: number }> = [];
   for (const ws of workbook.worksheets) {
     for (const { table: m } of ws.getTables() as unknown as Array<{ table: LoadedTableModel }>) {
@@ -813,7 +814,7 @@ function applyTableColumnChanges(workbook: ExcelJS.Workbook, deleted: ReadonlyMa
         const v = cell.value as { formula?: unknown } | null;
         if (!v || typeof v !== 'object' || typeof v.formula !== 'string' || !v.formula.includes('[')) return;
         const own = boxes.find((b) => b.ws === ws && r - 1 >= b.r0 && r - 1 <= b.r1 && c - 1 >= b.c0 && c - 1 <= b.c1)?.name;
-        const next = rewriteStructuredRefs(v.formula, changes, own);
+        const next = rewriteStructuredRefs(v.formula, changes, own, r - 1);
         if (next !== v.formula) cell.value = { ...(cell.value as object), formula: next } as ExcelJS.CellValue;
       });
     });
@@ -843,6 +844,7 @@ function shiftWorksheetTables(
   count: number,
   insert: boolean,
   deletedColumns: Map<string, Set<string>>,
+  removedTables: Map<string, TableAsRange | null>,
 ): Array<{ row: number; col: number; names: string[] }> {
   const headers: Array<{ row: number; col: number; names: string[] }> = [];
   for (const table of sheet.getTables() as unknown as Array<{ table: LoadedTableModel }>) {
@@ -857,6 +859,16 @@ function shiftWorksheetTables(
     const rowsBox = onRows ? shiftTableRows({ r0, r1, headerRows: m.headerRow === false ? 0 : 1, totalsRows: m.totalsRow ? 1 : 0 }, at, count, insert) : null;
     const span = onRows ? (rowsBox ? [rowsBox.r0, rowsBox.r1] : null) : shiftSpan(c0, c1, at, count, insert);
     if (!span) {
+      // 표를 뺀다 — 남은 자리가 있으면 그 표를 가리키는 구조적 참조를 칸 주소로, 없으면 #REF!로(applyTableColumnChanges)
+      const rest = onRows ? shiftSpan(r0, r1, at, count, insert) : null;
+      const headerGone = m.headerRow !== false && at <= r0 && r0 < at + count;
+      const totalsKept = Boolean(m.totalsRow) && !(at <= r1 && r1 < at + count);
+      removedTables.set(
+        m.name.toLowerCase(),
+        rest
+          ? { c0, columns: m.columns.map((c) => c.name), dataR0: rest[0] + (headerGone || m.headerRow === false ? 0 : 1), dataR1: rest[1] - (totalsKept ? 1 : 0), ...(totalsKept ? { totalsRow: rest[1] } : {}) }
+          : null,
+      );
       sheet.removeTable(m.name);
       continue;
     }
@@ -965,6 +977,8 @@ export async function exportXlsxFromGrid(
 
   /** 표에서 지운 열(소문자 표 이름 → 열 이름) — 구조적 참조를 #REF!로 바꾼다(applyTableColumnChanges) */
   const deletedTableColumns = new Map<string, Set<string>>();
+  /** 뺀 표(일반 범위가 됐거나 다 지워짐) — 구조적 참조를 칸 주소·#REF!로 */
+  const removedTables = new Map<string, TableAsRange | null>();
   for (let sheetIdx = 0; sheetIdx < store.sheetMeta.length; sheetIdx += 1) {
     if (removedSheets.has(sheetIdx)) continue;
     const target = store.sheetMeta[sheetIdx];
@@ -995,7 +1009,7 @@ export async function exportXlsxFromGrid(
       if (op.sheet !== sheetIdx) continue;
       const onRows = op.kind === 'insertRows' || op.kind === 'deleteRows';
       const insert = op.kind === 'insertRows' || op.kind === 'insertCols';
-      const tableHeaders = shiftWorksheetTables(sheet, onRows, op.at, op.count, insert, deletedTableColumns);
+      const tableHeaders = shiftWorksheetTables(sheet, onRows, op.at, op.count, insert, deletedTableColumns, removedTables);
       if (onRows) {
         if (insert) {
           sheet.spliceRows(op.at + 1, 0, ...Array.from({ length: op.count }, () => [] as unknown[]));
@@ -1086,7 +1100,7 @@ export async function exportXlsxFromGrid(
     }
   }
 
-  applyTableColumnChanges(workbook, deletedTableColumns);
+  applyTableColumnChanges(workbook, deletedTableColumns, removedTables);
 
   // 자동 필터: 범위를 맞추고 조건에 안 맞는 행을 숨긴다(조건 XML은 쓰기 뒤 writeFilterCriteria가 붙인다)
   const filtersByName = new Map<string, SheetFilter>();

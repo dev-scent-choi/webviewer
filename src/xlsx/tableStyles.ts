@@ -25,6 +25,9 @@ export interface SheetTable {
   readonly colStripes: boolean;
   readonly firstCol: boolean;
   readonly lastCol: boolean;
+  /** 표 이름·열 이름(파일 기준 — 구조적 참조를 고칠 때) */
+  readonly name?: string;
+  readonly columns?: readonly string[];
 }
 
 /** 표가 칸에 입히는 모양(칸 서식 GridStyle의 일부) */
@@ -59,9 +62,31 @@ export function shiftTables<T extends SheetTable & { readonly sheetName: string 
         return box ? [{ ...t, ...box }] : [];
       }
       const span = shiftSpan(t.c0, t.c1, op.at, op.count, insert);
-      return span ? [{ ...t, c0: span[0], c1: span[1] }] : [];
+      if (!span) return [];
+      return [{ ...t, c0: span[0], c1: span[1], ...(t.columns ? { columns: shiftTableColumns(t.columns, t.c0, t.c1, op.at, op.count, insert) } : {}) }];
     });
   }
+  return out;
+}
+
+/** 열 삽입·삭제 뒤의 표 열 이름(표 안에 넣으면 "열N", 지우면 뺀다 — 저장 collab.ts shiftWorksheetTables와 같다) */
+export function shiftTableColumns(columns: readonly string[], c0: number, c1: number, at: number, count: number, insert: boolean): string[] {
+  const out = [...columns];
+  if (insert) {
+    if (at <= c0 || at > c1) return out;
+    const used = new Set(out.map((c) => c.toLowerCase()));
+    let k = 1;
+    const added = Array.from({ length: count }, () => {
+      while (used.has(`열${k}`)) k += 1;
+      used.add(`열${k}`);
+      return `열${k}`;
+    });
+    out.splice(at - c0, 0, ...added);
+    return out;
+  }
+  const from = Math.max(at, c0) - c0;
+  const to = Math.min(at + count - 1, c1) - c0;
+  if (to >= from) out.splice(from, to - from + 1);
   return out;
 }
 
@@ -78,8 +103,8 @@ export interface TableRows {
  * - 표 전체를 지우면 표를 뺀다.
  * - 머리 줄만 지우면(엑셀은 이 삭제를 막는다 — 편집 화면도 막는다) 표를 일반 범위로 바꾼다(다른 참여자·옛 화면이 보낸 연산 대비).
  * - 요약 행을 지우면 요약 행을 끈다(마지막 데이터 행이 요약 행으로 바뀌지 않게).
- * - 데이터 행이 하나도 안 남으면 엑셀처럼 데이터 행 하나를 남긴다(요약 행이 있으면 그 행을, 없으면 표 아래 한 행을 데이터 행으로
- *   — 편집 화면은 첫 데이터 행을 지우지 않고 비워서 이 경우를 만들지 않는다).
+ * - 데이터 행을 모두 지우는 삭제는 편집 방(room.ts applyGridStructureOp)이 엑셀처럼 "첫 데이터 행은 비우고 나머지만 지우기"로 바꿔
+ *   받는다(빈 데이터 행 하나가 남는다 — 저장과 화면이 같다). 그래도 데이터 행이 0개가 되면(옛 기록) 일반 범위로 바꾼다.
  */
 export function shiftTableRows(t: TableRows, at: number, count: number, insert: boolean): TableRows | null {
   const span = shiftSpan(t.r0, t.r1, at, count, insert);
@@ -87,14 +112,10 @@ export function shiftTableRows(t: TableRows, at: number, count: number, insert: 
   if (insert) return { ...t, r0: span[0], r1: span[1] };
   const gone = (row: number) => row >= at && row < at + count;
   if (t.headerRows > 0 && gone(t.r0)) return null;
-  let totalsRows = t.totalsRows > 0 && gone(t.r1) ? 0 : t.totalsRows;
-  let r1 = span[1];
-  if (r1 - span[0] + 1 - t.headerRows - totalsRows <= 0) {
-    // 데이터 행이 없다 — 요약 행이 있으면 그 행을 데이터 행으로, 없으면 표 아래 한 행을 데이터 행으로
-    if (totalsRows > 0) totalsRows = 0;
-    else r1 = span[0] + t.headerRows;
-  }
-  return { ...t, r0: span[0], r1, totalsRows };
+  const totalsRows = t.totalsRows > 0 && gone(t.r1) ? 0 : t.totalsRows;
+  // 데이터 행이 하나도 안 남으면 일반 범위로 바꾼다(편집 방은 이런 삭제를 "첫 데이터 행 비우기"로 바꿔 받으므로 여기 오지 않는다)
+  if (span[1] - span[0] + 1 - t.headerRows - totalsRows <= 0) return null;
+  return { ...t, r0: span[0], r1: span[1], totalsRows };
 }
 
 export function parseTableXml(xml: string): SheetTable | null {
@@ -119,8 +140,11 @@ export function parseTableXml(xml: string): SheetTable | null {
     colStripes: on('showColumnStripes', false),
     firstCol: on('showFirstColumn', false),
     lastCol: on('showLastColumn', false),
+    name: xmlText(attr(tag, 'name') ?? ''),
+    columns: [...xml.matchAll(/<tableColumn\b[^>]*?\sname="([^"]*)"/g)].map((m) => xmlText(m[1])),
   };
 }
+const xmlText = (s: string) => s.replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
 
 /** '#RRGGBB'을 HSL 명도로 옅게(t>0, 흰색 쪽)·짙게(t<0) — 엑셀 tint와 같은 계산 */
 function tint(hex: string, t: number): string {
@@ -246,10 +270,58 @@ export function withTableLook<T extends object>(base: T, look: TableLook): T {
   return out as T;
 }
 
-/** 표 하나의 열 이름 바뀜(소문자 옛 이름 → 새 이름)과 지운 열(소문자 이름) */
+/** 표가 일반 범위가 됐을 때 남은 자리 — 구조적 참조를 칸 주소로 바꾼다(엑셀 "범위로 변환"과 같다) */
+export interface TableAsRange {
+  readonly c0: number;
+  readonly columns: readonly string[];
+  /** 데이터 행(0부터, 양 끝 포함). dataR1 < dataR0이면 데이터 행 없음 */
+  readonly dataR0: number;
+  readonly dataR1: number;
+  readonly totalsRow?: number;
+}
+/** 표 하나의 열 이름 바뀜(소문자 옛 이름 → 새 이름)과 지운 열(소문자 이름). range: 표가 일반 범위가 됨(null = 표 자리가 다 지워짐 → #REF!) */
 export interface TableColumnChanges {
   readonly renames: ReadonlyMap<string, string>;
   readonly deleted: ReadonlySet<string>;
+  readonly range?: TableAsRange | null;
+}
+
+/** 0부터 센 열 → $B 같은 절대 열 */
+function absCol(c: number): string {
+  let n = c + 1;
+  let s = '';
+  while (n > 0) {
+    const m = (n - 1) % 26;
+    s = String.fromCharCode(65 + m) + s;
+    n = Math.floor((n - 1) / 26);
+  }
+  return `$${s}`;
+}
+/** 일반 범위가 된 표를 가리키는 구조적 참조 하나 → 칸 주소(없는 부분이면 #REF!) */
+function structuredRefToAddress(items: readonly string[], range: TableAsRange | null, ownRow: number | undefined): string {
+  if (!range) return '#REF!';
+  const specials = items.map((x) => x.trim().toLowerCase()).filter((x) => x.startsWith('#'));
+  const thisRow = items.some((x) => x.startsWith('@')) || specials.includes('#this row');
+  const cols = items.map((x) => x.replace(/^@/, '').trim()).filter((x) => x !== '' && !x.startsWith('#'));
+  let r0 = range.dataR0;
+  let r1 = range.dataR1;
+  if (specials.includes('#headers')) return '#REF!'; // 머리 줄은 없어졌다
+  if (specials.includes('#totals')) {
+    if (range.totalsRow === undefined) return '#REF!';
+    r0 = r1 = range.totalsRow;
+  } else if (specials.includes('#all') && range.totalsRow !== undefined) r1 = range.totalsRow;
+  const idx = cols.map((c) => range.columns.findIndex((x) => x.toLowerCase() === c.toLowerCase()));
+  if (idx.some((i) => i < 0)) return '#REF!';
+  const ca = range.c0 + (idx.length > 0 ? Math.min(...idx) : 0);
+  const cb = range.c0 + (idx.length > 0 ? Math.max(...idx) : range.columns.length - 1);
+  if (thisRow) {
+    if (ownRow === undefined) return '#REF!';
+    return ca === cb ? `${absCol(ca)}${ownRow + 1}` : `${absCol(ca)}${ownRow + 1}:${absCol(cb)}${ownRow + 1}`;
+  }
+  if (r1 < r0) return '#REF!';
+  const a = `${absCol(ca)}$${r0 + 1}`;
+  const b = `${absCol(cb)}$${r1 + 1}`;
+  return a === b ? a : `${a}:${b}`;
 }
 
 /**
@@ -257,7 +329,7 @@ export interface TableColumnChanges {
  * 이름이 바뀐 열은 새 이름으로, 지운 열을 가리키는 참조는 #REF!로. tables: 소문자 표 이름 → 변경. ownTable: 이 칸이 든 표(이름 없는
  * [@값] 참조용). 따옴표 안 글자는 건드리지 않는다.
  */
-export function rewriteStructuredRefs(formula: string, tables: ReadonlyMap<string, TableColumnChanges>, ownTable?: string): string {
+export function rewriteStructuredRefs(formula: string, tables: ReadonlyMap<string, TableColumnChanges>, ownTable?: string, ownRow?: number): string {
   let out = '';
   let i = 0;
   while (i < formula.length) {
@@ -297,7 +369,11 @@ export function rewriteStructuredRefs(formula: string, tables: ReadonlyMap<strin
     const inner = body.slice(1, -1);
     const items = inner.includes('[') ? [...inner.matchAll(/\[([^\]]*)\]/g)].map((m) => m[1]) : [inner];
     const columns = items.map((x) => x.replace(/^@/, '').trim()).filter((x) => x !== '' && !x.startsWith('#'));
-    if (columns.some((c) => changes.deleted.has(c.toLowerCase()))) {
+    if (changes.range !== undefined) {
+      // 표가 일반 범위가 됐다(또는 다 지워졌다) — 칸 주소로(엑셀 "범위로 변환")
+      if (nameMatch) out = out.slice(0, out.length - nameMatch[0].length);
+      out += structuredRefToAddress(items, changes.range, ownRow);
+    } else if (columns.some((c) => changes.deleted.has(c.toLowerCase()))) {
       if (nameMatch) out = out.slice(0, out.length - nameMatch[0].length);
       out += '#REF!';
     } else {

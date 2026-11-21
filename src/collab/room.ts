@@ -96,7 +96,7 @@ import {
   type LazyGridStore,
 } from '../xlsx/lazyGridStore.js';
 import { answerCfRemote, cfTallyApplyBatch, cfTallyDropSheet, cfTallyRelease, newCfRoomTally, type CfCellChange, type CfRemoteAnswer, type CfRemoteRequest, type CfRoomTally } from '../xlsx/cfRangeValues.js';
-import { shiftTables } from '../xlsx/tableStyles.js';
+import { rewriteStructuredRefs, shiftTables, type TableColumnChanges } from '../xlsx/tableStyles.js';
 import {
   duplicateSlideContent,
   exportPptxFromSlides,
@@ -621,6 +621,8 @@ async function applyCellsChangeToCanonical(
   }
   // 조건부 서식 서버 답의 값 개수 표 — 묶음 하나로 반영한다(큰 붙여넣기는 표를 하나씩 고치지 않고 다시 만든다)
   for (const [sheet, list] of tallyChanges) cfTallyApplyBatch(room.cfRanges, sheet, list);
+  // 엑셀 표 머리 칸을 고쳤으면 그 열 이름이 바뀐다 — 이 방 수식의 구조적 참조도 새 이름으로
+  await renameTableColumnsFromHeaderEdits(room, tallyChanges);
 }
 
 /**
@@ -1448,7 +1450,131 @@ async function refreshSeededPagesAfterShift(
  * isAutosaveExemptOrigin에 들어 있지 않으므로, 위 쓰기들이 그대로 ydoc 'update'를 타고
  * scheduleAutosave를 건다.
  */
+/** 편집 방의 지금 엑셀 표(파일 표 + 구조 연산) — 칸 편집마다 다시 읽지 않게 구조 연산 수로 기억한다 */
+const roomTablesCache = new WeakMap<Room, { ops: number; tables: SheetExtras['tables'] }>();
+async function roomTables(room: Room): Promise<SheetExtras['tables']> {
+  const hit = roomTablesCache.get(room);
+  if (hit && hit.ops === room.structuralOps.length) return hit.tables;
+  const tables = (await getFileExtras(room.docId).catch(() => ({ tables: [] as SheetExtras['tables'] }))).tables;
+  roomTablesCache.set(room, { ops: room.structuralOps.length, tables });
+  return tables;
+}
+
+/** 표의 지금 열 이름 — 머리 칸 글자(편집으로 바뀌었을 수 있다), 비었으면 파일의 열 이름 */
+async function tableColumnNames(store: LazyGridStore, sheet: number, t: SheetExtras['tables'][number]): Promise<string[]> {
+  const fileNames = t.columns ?? [];
+  if (t.headerRows === 0) return [...fileNames];
+  const line = await getRowCells(store, sheet, t.r0, t.c1 + 1);
+  return Array.from({ length: t.c1 - t.c0 + 1 }, (_, i) => {
+    const cell = line[t.c0 + i];
+    const text = cell ? gridCellValue(cell).trim() : '';
+    return text || fileNames[i] || '';
+  });
+}
+
+/**
+ * 표 열 이름 바뀜·지운 열·없어진 표를 이 방 수식(이 세션에서 넣은 수식 — 파일의 수식 칸은 계산값으로 들어온다)에 반영한다:
+ * 구조적 참조를 새 이름·#REF!·칸 주소로(엑셀과 같다). 받은 페이지의 칸은 편집 화면에도 바로 보인다. 저장할 때 collab.ts가 파일의
+ * 수식에도 같은 규칙(rewriteStructuredRefs)을 쓴다.
+ */
+async function rewriteRoomTableRefs(room: Room, changes: ReadonlyMap<string, TableColumnChanges>): Promise<void> {
+  const store = room.lazyGrid;
+  if (!store || changes.size === 0) return;
+  const tables = await roomTables(room);
+  const cells = room.ydoc.getMap<string>(GRID_CELLS_MAP);
+  const updates: Array<[string, string]> = [];
+  for (const [key, cell] of store.dirtyOverlay) {
+    if (!cell || !cell.v.startsWith('=') || !cell.v.includes('[')) continue;
+    const at = parseGridCellKey(key);
+    if (!at) continue;
+    const sheetName = store.sheetMeta[at.sheetIdx]?.name;
+    const own = tables.find((t) => t.sheetName === sheetName && at.row >= t.r0 && at.row <= t.r1 && at.col >= t.c0 && at.col <= t.c1)?.name;
+    const next = rewriteStructuredRefs(cell.v, changes, own, at.row);
+    if (next === cell.v) continue;
+    setDirtyCell(store, at.sheetIdx, at.row, at.col, { ...cell, v: next });
+    if (cells.has(key)) updates.push([key, next]);
+  }
+  if (updates.length > 0) room.ydoc.transact(() => updates.forEach(([k, v]) => cells.set(k, v)), GRID_WINDOW_SEED_ORIGIN);
+  room.editedSinceSave = true;
+}
+
+/** 칸 편집 묶음에서 표 머리 칸이 바뀐 것 — 엑셀처럼 그 열의 이름이 바뀐다(구조적 참조도 따라간다) */
+async function renameTableColumnsFromHeaderEdits(room: Room, edits: ReadonlyMap<number, readonly CfCellChange[]>): Promise<void> {
+  const store = room.lazyGrid;
+  if (!store) return;
+  const tables = await roomTables(room);
+  if (tables.length === 0) return;
+  const changes = new Map<string, TableColumnChanges>();
+  for (const [sheet, list] of edits) {
+    const sheetName = store.sheetMeta[sheet]?.name;
+    for (const t of tables) {
+      if (t.sheetName !== sheetName || t.headerRows === 0 || !t.name) continue;
+      for (const e of list) {
+        if (e.row !== t.r0 || e.col < t.c0 || e.col > t.c1 || !e.before.trim() || !e.after.trim() || e.before === e.after) continue;
+        const entry = changes.get(t.name.toLowerCase()) ?? { renames: new Map<string, string>(), deleted: new Set<string>() };
+        (entry.renames as Map<string, string>).set(e.before.trim().toLowerCase(), e.after.trim());
+        changes.set(t.name.toLowerCase(), entry);
+      }
+    }
+  }
+  await rewriteRoomTableRefs(room, changes);
+}
+
+/**
+ * 행/열 삭제 전에 엑셀 표 규칙을 본다(모든 편집 화면·옛 화면에 같은 규칙 — 저장과 화면이 같은 결과).
+ * - 표의 머리 줄만 지우는 행 삭제는 받지 않는다(엑셀도 막는다).
+ * - 표의 데이터 행을 모두 지우면 첫 데이터 행은 비우고 나머지만 지운다(엑셀처럼 빈 데이터 행 하나가 남는다).
+ * - 표를 통째로 지우거나 표 열을 지우면, 지운 뒤 구조적 참조를 #REF!로 고친다.
+ */
 async function applyGridStructureOp(room: Room, op: GridStructureOp): Promise<void> {
+  const store = room.lazyGrid;
+  const meta = store?.sheetMeta[op.sheet];
+  if (!store || !meta || op.kind === 'insertRows' || op.kind === 'insertCols') return applyGridStructureOpCore(room, op);
+  const onRows = op.kind === 'deleteRows';
+  const extent = onRows ? meta.rowCount : meta.colCount;
+  // 범위를 벗어난 연산은 손대지 않고 그대로 넘긴다(아래 함수가 거부한다)
+  if (rooms.get(room.docId) !== room || room.removedSheetIndices.has(op.sheet) || op.at + op.count > extent || extent - op.count < 1) return applyGridStructureOpCore(room, op);
+  const end = op.at + op.count - 1;
+  const tables = (await roomTables(room)).filter((t) => t.sheetName === meta.name);
+  const refChanges = new Map<string, TableColumnChanges>();
+  for (const t of tables) {
+    const [lo, hi] = onRows ? [t.r0, t.r1] : [t.c0, t.c1];
+    if (op.at > hi || end < lo) continue;
+    if (op.at <= lo && end >= hi) {
+      if (t.name) refChanges.set(t.name.toLowerCase(), { renames: new Map(), deleted: new Set(), range: null });
+      continue;
+    }
+    if (onRows) {
+      if (t.headerRows > 0 && op.at <= t.r0) {
+        console.error(`표 머리 줄만 지우는 행 삭제를 받지 않음(문서 ${room.docId})`);
+        return;
+      }
+      const d0 = t.r0 + t.headerRows;
+      const d1 = t.r1 - t.totalsRows;
+      if (d1 >= d0 && op.at <= d0 && end >= d1) {
+        // 첫 데이터 행은 비우고 나머지만 지운다
+        const cells = room.ydoc.getMap<string>(GRID_CELLS_MAP);
+        const keys: string[] = [];
+        for (let c = t.c0; c <= t.c1; c += 1) {
+          setDirtyCell(store, op.sheet, d0, c, 0);
+          keys.push(gridCellKey(op.sheet, d0, c));
+        }
+        room.ydoc.transact(() => keys.forEach((k) => cells.delete(k)), GRID_WINDOW_SEED_ORIGIN);
+        room.editedSinceSave = true;
+        if (end > d0) await applyGridStructureOp(room, { ...op, at: d0 + 1, count: end - d0 });
+        return;
+      }
+    } else if (t.name) {
+      const names = await tableColumnNames(store, op.sheet, t);
+      const gone = names.slice(Math.max(op.at, t.c0) - t.c0, Math.min(end, t.c1) - t.c0 + 1).filter(Boolean).map((n) => n.toLowerCase());
+      if (gone.length > 0) refChanges.set(t.name.toLowerCase(), { renames: new Map(), deleted: new Set(gone) });
+    }
+  }
+  await applyGridStructureOpCore(room, op);
+  await rewriteRoomTableRefs(room, refChanges);
+}
+
+async function applyGridStructureOpCore(room: Room, op: GridStructureOp): Promise<void> {
   if (rooms.get(room.docId) !== room) return; // 룸이 이미 닫혔다(체인에 줄 서 있는 동안)
   const store = room.lazyGrid;
   if (!store) return;

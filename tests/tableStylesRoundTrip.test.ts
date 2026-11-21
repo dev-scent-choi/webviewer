@@ -151,25 +151,21 @@ describe('검토 r4 I2 — 표 경계 사례(머리 줄·데이터 행 전부·�
   }
   const a1 = (t: { r0: number; r1: number; c0: number; c1: number }) => `${String.fromCharCode(65 + t.c0)}${t.r0 + 1}:${String.fromCharCode(65 + t.c1)}${t.r1 + 1}`;
 
-  test('머리 줄 행(3행) 삭제: 두 표 모두 일반 범위로 바뀐다(칸 값은 남는다) — 화면도 같다', async () => {
+  test('머리 줄 행(3행) 삭제(옛 기록 — 편집 방은 받지 않는다): 표를 일반 범위로, 구조적 참조는 칸 주소로 — 화면도 같다', async () => {
     const { screen, xml, ws } = await saveWith([{ kind: 'deleteRows', at: 2, count: 1 }]);
     expect(screen).toEqual([]);
     expect(Object.keys(xml)).toEqual([]);
     expect(ws.getCell('A3').value).toBe('a');
+    // 엑셀 "범위로 변환"처럼: T1[값] → 데이터 칸 주소, 머리 줄 참조 → #REF!(머리 줄이 없어졌다)
+    expect((ws.getCell('H1').value as { formula: string }).formula).toBe('SUM($B$3:$B$4)');
+    expect((ws.getCell('H2').value as { formula: string }).formula).toBe('COUNTA($C$3:$C$4)+COUNTA(#REF!)');
   });
 
-  test('데이터 행 전부(4·5행) 삭제: 데이터 행 하나를 남긴다(요약 행 → 데이터 행) — 화면도 같다', async () => {
-    const { screen, xml, savedExtras } = await saveWith([{ kind: 'deleteRows', at: 3, count: 2 }]);
-    const t1 = screen.find((t) => t.c0 === 0)!;
-    expect(a1(t1)).toBe('A3:C4');
-    expect(t1.totalsRows).toBe(0);
-    expect(xml.T1).toMatch(/<table [^>]*ref="A3:C4"/);
-    expect(xml.T1).not.toMatch(/totalsRowCount="1"/);
-    expect(xml.T1).toMatch(/<autoFilter ref="A3:C4"/);
-    // T2(E3:F5)는 데이터 행 2개를 모두 잃는다 → 표 아래 한 행을 데이터 행으로
-    expect(a1(screen.find((t) => t.c0 === 4)!)).toBe('E3:F4');
-    expect(xml.T2).toMatch(/<table [^>]*ref="E3:F4"/);
-    expect(savedExtras.map(a1).sort()).toEqual(screen.map(a1).sort());
+  test('데이터 행이 0개가 되는 기록(옛 기록 — 편집 방은 첫 데이터 행을 비워 남긴다): 요약 행을 데이터 행으로 바꾸지 않고 일반 범위로', async () => {
+    const { screen, xml, ws } = await saveWith([{ kind: 'deleteRows', at: 3, count: 2 }]);
+    expect(screen).toEqual([]);
+    expect(Object.keys(xml)).toEqual([]);
+    expect((ws.getCell('H1').value as { formula: string }).formula).toBe('SUM(#REF!)'); // 데이터 칸이 없다
   });
 
   test('요약 행(6행) 삭제: 요약 행을 끈다(마지막 데이터 행이 요약 행이 되지 않게) — 화면도 같다', async () => {
