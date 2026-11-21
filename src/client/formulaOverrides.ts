@@ -4,8 +4,11 @@ import FormulaParser, {
   type FormulaFunction,
   type ParsedCriteria,
 } from 'fast-formula-parser';
+import { patchFormulaWildcards } from '../collab/wildcard.js';
 
 const { Criteria, FormulaError, FormulaHelpers, Types, WildCard } = FormulaParser;
+// 라이브러리 와일드카드(정규식, 되돌아가기로 멈춤)를 선형 매처로 — COUNTIF·SUMIF·AVERAGEIF·MATCH·VLOOKUP·SEARCH 모두(FINAL-REVIEW C1)
+patchFormulaWildcards(FormulaParser);
 
 /**
  * fast-formula-parser(MIT)는 VLOOKUP/HLOOKUP/INDEX는 실제로 구현돼 있지만, README의 "280개 함수

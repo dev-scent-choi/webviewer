@@ -54,7 +54,7 @@ declare module 'fast-formula-parser' {
 
   interface WildCardApi {
     isWildCard(value: unknown): boolean;
-    toRegex(value: unknown, flags?: string): RegExp;
+    toRegex(value: unknown, flags?: string): { test(value: unknown): boolean };
   }
 
   export interface FormulaHelpersApi {

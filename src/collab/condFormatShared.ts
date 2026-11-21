@@ -8,6 +8,7 @@
  * 다시 찾아 그대로 쓴다(그래서 화면에 못 그리는 종류(`t: 'other'`, 수식·아이콘 집합 등)도 잃지 않는다).
  */
 
+import { wildcardMatcher } from './wildcard.js';
 import { dateTextToSerial } from './cellValueShared.js';
 
 export const GRID_COND_FORMATS_MAP = 'condFormats';
@@ -1120,8 +1121,8 @@ function countIf(t: CfRangeTable, crit: CfVal): number {
   if (op === '=' || op === '<>') {
     let eq: number;
     if (operand === '') eq = t.cells - [...countsOf(t).values()].reduce((a, b) => a + b, 0);
-    else if (/[*?]/.test(operand)) {
-      const re = new RegExp(`^${operand.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.')}$`, 'i');
+    else if (/[*?~]/.test(operand)) { // ~ 이스케이프(~~·~*·~?)도 와일드카드 규칙으로 읽는다(엑셀)
+      const re = wildcardMatcher(operand); // 정규식이 아닌 선형 매처(FINAL-REVIEW C1)
       eq = 0;
       for (const [k, n] of countsOf(t)) if (k.startsWith('s') && re.test(k.slice(1))) eq += n;
     } else eq = (countsOf(t).get(`s${operand.toLowerCase()}`) ?? 0) + (n !== null ? (countsOf(t).get(`n${n}`) ?? 0) : 0);
