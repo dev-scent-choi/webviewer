@@ -35,3 +35,30 @@ export function checkLock(repo: string, wantCommit: string, head: string, porcel
 export function brotli(bytes: Uint8Array): Buffer {
   return brotliCompressSync(bytes, { params: { [constants.BROTLI_PARAM_QUALITY]: 11, [constants.BROTLI_PARAM_SIZE_HINT]: bytes.length } });
 }
+
+/** wasm 메모리 절(5)의 최대 크기(바이트) — 상한이 없거나 메모리 절이 없으면 null. 빌드 뒤 --max-memory가 정말 들어갔는지 본다 */
+export function wasmMaxMemory(bytes: Uint8Array): number | null {
+  let i = 8;
+  const leb = (): number => {
+    let v = 0;
+    for (let shift = 0; ; shift += 7) {
+      const b = bytes[i++];
+      if (b === undefined) throw new Error('wasm이 잘렸습니다');
+      v += (b & 0x7f) * 2 ** shift;
+      if ((b & 0x80) === 0) return v;
+    }
+  };
+  while (i < bytes.length) {
+    const id = bytes[i++];
+    const size = leb();
+    if (id === 5) {
+      if (leb() < 1) return null;
+      const flags = leb();
+      leb(); // min
+      // 0x01 = max 있음(0x04 memory64는 쪽 수가 같은 단위라 그대로 읽힌다)
+      return flags & 0x01 ? leb() * 65536 : null;
+    }
+    i += size;
+  }
+  return null;
+}

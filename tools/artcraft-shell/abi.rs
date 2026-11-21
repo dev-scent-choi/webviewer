@@ -8,20 +8,29 @@ thread_local! {
     static DOCS: RefCell<Vec<Option<Doc>>> = RefCell::new(Vec::new());
 }
 
+fn layout(n: usize) -> Option<std::alloc::Layout> {
+    std::alloc::Layout::array::<u8>(n.max(1)).ok()
+}
+
+/// n바이트 버퍼. 너무 크거나 메모리가 없으면 0(null) — JS는 0이면 실패로 본다.
 #[unsafe(no_mangle)]
 pub extern "C" fn sp_alloc(n: usize) -> *mut u8 {
-    let mut v = Vec::<u8>::with_capacity(n.max(1));
-    let p = v.as_mut_ptr();
-    std::mem::forget(v);
-    p
+    layout(n).map_or(std::ptr::null_mut(), |l| unsafe { std::alloc::alloc(l) })
 }
 
+/// sp_alloc(n)이 준 p를 같은 n으로 돌려준다. null은 무시.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sp_free(p: *mut u8, n: usize) {
-    drop(unsafe { Vec::from_raw_parts(p, 0, n.max(1)) });
+    if let (false, Some(l)) = (p.is_null(), layout(n)) {
+        unsafe { std::alloc::dealloc(p, l) }
+    }
 }
 
+/// 길이 0이거나 null이면 빈 조각 — from_raw_parts는 n == 0이어도 null이면 UB다(빈 alias를 (0, 0)으로 넘기는 경우).
 unsafe fn slice<'a>(p: *const u8, n: usize) -> &'a [u8] {
+    if n == 0 || p.is_null() {
+        return &[];
+    }
     unsafe { std::slice::from_raw_parts(p, n) }
 }
 

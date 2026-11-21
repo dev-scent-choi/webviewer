@@ -8,7 +8,7 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { brotli, checkLock, hashedName, sizeProblems } from './artcraftBuildLib.js';
+import { brotli, checkLock, hashedName, sizeProblems, wasmMaxMemory } from './artcraftBuildLib.js';
 
 const ROOT = process.cwd();
 const SHELL = path.join(ROOT, 'tools', 'artcraft-shell');
@@ -29,7 +29,8 @@ function fail(message: string): never {
   console.error(`build:artcraft 실패 — ${message}`);
   process.exit(1);
 }
-const git = (dir: string, ...args: string[]) => execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8' });
+// --no-optional-locks: status가 엔진 저장소의 .git/index를 새로 쓰지 않게(저장소는 건드리지 않는다)
+const git = (dir: string, ...args: string[]) => execFileSync('git', ['--no-optional-locks', '-C', dir, ...args], { encoding: 'utf8' });
 
 const lock = JSON.parse(fs.readFileSync(path.join(SHELL, 'ARTCRAFT.lock'), 'utf8')) as { repos: Record<string, { url: string; commit: string }> };
 for (const { repo } of CRATES) {
@@ -37,9 +38,14 @@ for (const { repo } of CRATES) {
   if (!want) fail(`ARTCRAFT.lock에 ${repo} 커밋이 없습니다`);
   const dir = path.join(ARTCRAFT_DIR, repo);
   if (!fs.existsSync(dir)) fail(`${dir} 없음 — ${lock.repos[repo].url}을(를) ${want}로 받아 두세요`);
-  const problem = checkLock(repo, want, git(dir, 'rev-parse', 'HEAD'), git(dir, 'status', '--porcelain', '--untracked-files=no'));
+  const problem = checkLock(repo, want, git(dir, 'rev-parse', 'HEAD'), git(dir, 'status', '--porcelain', '--untracked-files=normal'));
   if (problem) fail(problem);
 }
+
+// 사용자 환경의 RUSTFLAGS·CARGO_ENCODED_RUSTFLAGS는 대상별 RUSTFLAGS(--max-memory)를 조용히 없애고,
+// CRAFT_FONTS_DIR는 엔진 fonts/build.rs가 글꼴을 wasm에 넣게 한다 — 빌드 환경에서 뺀다
+const buildEnv: NodeJS.ProcessEnv = { ...process.env };
+for (const k of ['RUSTFLAGS', 'CARGO_ENCODED_RUSTFLAGS', 'CRAFT_FONTS_DIR']) delete buildEnv[k];
 
 const wasmBytes: Record<string, Buffer> = {};
 for (const c of CRATES) {
@@ -57,7 +63,7 @@ for (const c of CRATES) {
     cwd: dir,
     stdio: 'inherit',
     env: {
-      ...process.env,
+      ...buildEnv,
       CARGO_TARGET_DIR: path.join(BUILD, 'target'),
       CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS: `-C link-arg=--max-memory=${MAX_MEMORY}`,
     },
@@ -71,6 +77,8 @@ for (const c of CRATES) {
     console.log(`[${c.id}] wasm-bindgen 없음(${WASM_BINDGEN}) — 크기 줄이기 건너뜀(약 10% 큼)`);
   }
   wasmBytes[c.id] = fs.readFileSync(wasm);
+  const max = wasmMaxMemory(wasmBytes[c.id]);
+  if (max !== MAX_MEMORY) fail(`${c.id} wasm 최대 메모리 ${max ?? '없음'} ≠ ${MAX_MEMORY}(--max-memory가 빠졌습니다)`);
 }
 
 const fontBytes = ['SCDream4', 'SCDream6'].map((name) => ({ name, bytes: fs.readFileSync(path.join(FONT_DIR, `${name}.otf`)) }));

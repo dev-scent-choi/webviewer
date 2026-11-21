@@ -125,6 +125,8 @@ export async function buildApp(): Promise<FastifyInstance> {
   await registerArtcraftStatic(app, artcraftDir());
   await app.register(fastifyStatic, {
     root: publicDir,
+    // send 기본 cache-control(public, max-age=0)이 setHeaders 뒤에 덮어써서 아래 값이 한 번도 나가지 않았다 — 끄고 setHeaders가 정한다
+    cacheControl: false,
     // 뷰어/관리 화면 JS가 브라우저에 캐시되어 구버전이 돌지 않도록 항상 재검증시킨다.
     // 단 화면 HTML이 내용 해시(?v=, assetVersion.ts)를 붙여 부른 주소는 내용이 바뀌면 주소도 바뀌므로 오래 보관해도 된다 —
     // 화면을 열 때마다 번들마다 재검증 요청이 가던 것을 없앤다.

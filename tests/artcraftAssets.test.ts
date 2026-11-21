@@ -72,7 +72,9 @@ describe('/artcraft/* 정적 서빙', () => {
     expect(Buffer.compare(res.rawPayload, raw)).toBe(0);
   });
 
-  test('manifest.json은 내주지 않는다(서버만 읽는다)', async () => {
-    expect((await app.inject({ method: 'GET', url: '/artcraft/manifest.json' })).statusCode).toBe(404);
+  test('manifest.json은 내주지 않는다(서버만 읽는다) — //·대소문자·.br 직접 요청도 404(해시 이름 wasm·otf만 허용)', async () => {
+    for (const url of ['/artcraft/manifest.json', '/artcraft//manifest.json', '/artcraft/Manifest.json', '/artcraft/MANIFEST.JSON', '/artcraft/artcraft_word-0123456789.wasm.br']) {
+      expect((await app.inject({ method: 'GET', url, headers: { 'accept-encoding': 'br' } })).statusCode, url).toBe(404);
+    }
   });
 });
