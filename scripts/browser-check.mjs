@@ -1,3 +1,5 @@
+// 낡음(2026-11-21): npm 스크립트에 연결돼 있지 않고 최근 돌린 적이 없다 — 업로드 뒤 viewer.html 이동·LibreOffice 없음 가정이
+// 지금과 다를 수 있다. 메뉴 열기 한 줄만 맞춰 두었다. 회귀 확인은 verify:* 스크립트를 쓴다.
 // 헤드리스 브라우저로 실제 UI를 구동해 확인한다: 업로드→뷰어, docx 동시편집기(editor.html),
 // xlsx 동시편집기(editor-grid.html). 이 환경에는 LibreOffice가 없어 docx는 서식 없는 텍스트
 // 미리보기 폴백 컨버터(src/converters/docxTextPreview.ts)로 변환된다 — 그래서 이제 실제 업로드
@@ -228,6 +230,7 @@ async function main() {
     { timeout: 20000 },
   );
   const uploadedItem = page.locator('.doc-item', { hasText: 'sample.xlsx' }).first();
+  await uploadedItem.locator('details.open-more > summary').click(); // 2026-11-21부터 예전 단추는 "▾ 다른 방식" 메뉴 안
   const quickEditBtn = uploadedItem.getByRole('button', { name: '동시편집 열기' });
   await quickEditBtn.waitFor({ state: 'visible', timeout: 10000 });
   const [gridPage] = await Promise.all([
@@ -259,6 +262,7 @@ async function main() {
     { timeout: 20000 },
   );
   const uploadedDocxItem = page.locator('.doc-item', { hasText: 'sample-real-upload.docx' }).first();
+  await uploadedDocxItem.locator('details.open-more > summary').click(); // 2026-11-21부터 예전 단추는 "▾ 다른 방식" 메뉴 안
   const quickEditDocxBtn = uploadedDocxItem.getByRole('button', { name: '동시편집 열기' });
   await quickEditDocxBtn.waitFor({ state: 'visible', timeout: 10000 });
   const [docxEditorPage] = await Promise.all([

@@ -91,10 +91,27 @@ async function openReadonlyEditor(docId, viewer) {
   location.href = issued.viewerUrl;
 }
 
-// "▾ 다른 방식" 메뉴는 밖을 누르면 닫는다 — 펼친 채 두면 아래 공유 폼을 덮는다
+// "▾ 다른 방식" 메뉴는 밖을 누르거나 초점이 밖으로 나가거나 Esc 면 닫는다 — 펼친 채 두면 아래 공유 폼을 덮는다
 document.addEventListener('click', (event) => {
   for (const menu of document.querySelectorAll('details.open-more[open]')) if (!menu.contains(event.target)) menu.open = false;
 });
+document.addEventListener('keydown', (event) => {
+  if (event.key !== 'Escape') return;
+  for (const menu of document.querySelectorAll('details.open-more[open]')) {
+    menu.open = false;
+    menu.querySelector('summary')?.focus();
+  }
+});
+document.addEventListener('focusin', (event) => {
+  for (const menu of document.querySelectorAll('details.open-more[open]')) if (!menu.contains(event.target)) menu.open = false;
+});
+/** 펼칠 때 화면 오른쪽을 넘으면 오른쪽 끝에 맞춰 왼쪽으로 편다(좁은 화면 360–600px) */
+function placeMoreMenu(menu) {
+  const panel = menu.querySelector('.open-more-menu');
+  if (!menu.open || !panel) return;
+  panel.classList.remove('flip');
+  if (panel.getBoundingClientRect().right > document.documentElement.clientWidth - 8) panel.classList.add('flip');
+}
 
 /** 업로더 본인 편집용 — 전체 권한 + canEdit 토큰을 발급해 동시편집기로 이동한다(docx/xlsx). */
 async function openEditor(docId, viewer) {
@@ -339,6 +356,7 @@ function renderDocItem(doc) {
   const moreMenu = document.createElement('div');
   moreMenu.className = 'open-more-menu';
   more.append(moreSummary, moreMenu);
+  more.addEventListener('toggle', () => placeMoreMenu(more));
   info.append(openBtn, more);
 
   const quickView = document.createElement('button');
@@ -426,8 +444,19 @@ function renderDocItem(doc) {
       <label><input type="radio" name="engine" value="libreoffice" ${supportsEdit(doc) ? '' : 'checked'} /> 리브레오피스</label>
       <label title="${artOk ? '브라우저 안에서 그립니다 — 저장 권한이 있어야 합니다' : ARTCRAFT_UNSUPPORTED}"><input type="radio" name="engine" value="artcraft" ${artOk ? '' : 'disabled'} /> 아트크래프트</label>
     </span>
+    <span class="engine-hint" hidden>저장(내려받기) 권한이 없으면 서버 변환 화면으로 열립니다</span>
     <button type="submit" class="btn btn-primary">열람 링크 발급</button>
   `;
+  // 읽기 전용 편집기 화면은 저장 권한이 있어야 한다 — 권한을 몰래 켜지 않고 알려만 준다(서버도 libreoffice + engineReason 으로 돌린다)
+  const engineHint = form.querySelector('.engine-hint');
+  const editorWithoutSave = () => {
+    const editorRadio = form.querySelector('input[name=engine][value=editor]');
+    return Boolean(editorRadio && editorRadio.checked && !editorRadio.disabled && !form.querySelector('input[name=canDownload]').checked);
+  };
+  form.addEventListener('change', () => {
+    engineHint.hidden = !editorWithoutSave();
+  });
+  engineHint.hidden = !editorWithoutSave();
   // "동시편집"을 켜면 엔진 라디오는 끈다 — 편집 토큰은 지금처럼 편집기(editorUrl)로 열린다(꺼진 라디오는 FormData 에 없어 libreoffice)
   const editBox = form.querySelector('input[name=canEdit]');
   if (editBox && supportsEdit(doc)) {
@@ -458,7 +487,15 @@ function renderDocItem(doc) {
       open.target = '_blank';
       open.rel = 'noopener';
       open.textContent =
-        issued.engine === 'editor' ? '읽기 전용 편집기 화면 열기' : issued.engine === 'artcraft' ? '아트크래프트로 열기' : artOk ? '리브레오피스로 열기' : '뷰어 열기';
+        issued.engine === 'editor'
+          ? '읽기 전용 편집기 화면 열기'
+          : issued.engine === 'artcraft'
+            ? '아트크래프트로 열기'
+            : data.get('engine') === 'editor' && !data.get('canEdit')
+              ? '서버 변환 화면 열기'
+              : artOk
+                ? '리브레오피스로 열기'
+                : '뷰어 열기';
       open.className = 'btn';
       result.append(open);
       if (issued.engineReason) {

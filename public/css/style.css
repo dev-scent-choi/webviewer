@@ -4067,11 +4067,14 @@ body.ui-view #search-replace-row,
 body.ui-view #search-replace-one,
 body.ui-view #search-replace-all { display: none !important; }
 body.ui-view .editor-toolbar.office-shell { padding-bottom: 0; }
+body.ui-view .formula-bar { width: max-content; } /* 수식 입력칸을 숨긴 빈 상자는 없애고 이름 상자만 */
 body.ui-view .grid-status-row .view-readonly { font-size: 0.72rem; color: var(--v-text-dim); }
 body.ui-view .grid-status-row .view-readonly + .grid-status-text { margin-right: auto; }
 .view-strip-tools { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; }
 .view-strip-tools .icon-btn { width: 30px; height: 30px; }
 .view-strip-tools .icon-btn svg { width: 18px; height: 18px; }
+.view-strip-tools .icon-btn.view-strip-text { width: auto; padding: 0 0.5rem; } /* 글자 단추(메모) */
+.view-strip-tools [hidden] { display: none; }
 .view-strip-tools .back-to-view { margin-left: 0.35rem; }
 body.ui-view.no-copy :is(#editor, #grid-editor, #slides-rail, #slide-canvas-wrap),
 body.ui-view.no-copy :is(#editor, #grid-editor, #slides-rail, #slide-canvas-wrap) * { user-select: none; -webkit-user-select: none; }
@@ -4114,5 +4117,8 @@ body.ui-view.no-copy :is(#editor, #grid-editor, #slides-rail, #slide-canvas-wrap
   background: var(--color-surface);
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
 }
+.open-more-menu.flip { left: auto; right: 0; }
+.open-more-menu { max-width: calc(100vw - 32px); }
 .open-more-menu .btn { width: 100%; text-align: left; }
+.token-form .engine-hint { flex-basis: 100%; font-size: 0.8rem; color: var(--v-text-dim); }
 .open-more-menu > span { display: block; }
