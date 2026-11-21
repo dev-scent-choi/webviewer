@@ -78,7 +78,7 @@ import {
 } from './wordCommands.js';
 import { officeAlert } from './officeDialog.js';
 import { guardRoomEpoch } from './roomEpoch.js';
-import { docxLayoutPlugin, docxStyleSheetText } from './docxLayout.js';
+import { caretBlockPlugin, docxLayoutPlugin, docxStyleSheetText } from './docxLayout.js';
 import { docxPastePlugin } from './docxPaste.js';
 import type { DocxRenderExtras } from '../docx/import.js';
 import type { NumberingDefs } from '../docx/numbering.js';
@@ -687,7 +687,7 @@ async function main(): Promise<void> {
       columnResizing({ View: AlignedTableView }),
       tableEditing(),
       buildSearchPlugin(),
-      ...(info.docxRender ? [docxLayoutPlugin(info.docxRender, info.pageCount ?? null)] : []),
+      ...(info.docxRender ? [docxLayoutPlugin(info.docxRender, info.pageCount ?? null), caretBlockPlugin] : []),
       docxPastePlugin(info.docId, () => void officeAlert('다른 문서에서 붙여넣은 그림·글상자·번호 같은 Word 요소 일부는 이 문서에 저장할 수 없어 빼고 붙였습니다(글자는 그대로).')),
     ],
   });

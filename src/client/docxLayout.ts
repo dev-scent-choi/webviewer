@@ -781,6 +781,25 @@ function farAwareView(node: PMNode) {
   return { dom, contentDOM, ignoreMutation: (m: { type: string; attributeName?: string | null }) => m.type === 'attributes' && m.attributeName === 'data-far' };
 }
 
+/**
+ * 커서(선택 양 끝)가 든 본문 직속 문단·제목에 data-caret을 단다 — CSS가 그 블록은 data-far여도 그린다.
+ * 그리지 않는(content-visibility: hidden) 블록 안에는 Chromium이 DOM 선택을 둘 수 없어 다른 곳으로 옮기고, 그러면 Ctrl+End처럼
+ * 화면 밖으로 커서를 보낸 뒤 친 글자가 엉뚱한 자리(마지막 문단 맨 앞)에 들어가 첫 글자 뒤로 순서가 뒤집혔다. 장식은 ProseMirror가
+ * DOM 선택을 쓰기 전에 붙으므로 건너뛰기 범위(updateSkip, 스크롤 뒤 다음 그림)를 기다리지 않는다.
+ */
+export const caretBlockPlugin = new Plugin({
+  props: {
+    decorations: ({ doc, selection }) => {
+      const deco: Decoration[] = [];
+      for (const $pos of selection.anchor === selection.head ? [selection.$head] : [selection.$anchor, selection.$head]) {
+        const block = $pos.depth >= 1 ? $pos.node(1) : null;
+        if (block && (block.type.name === 'paragraph' || block.type.name === 'heading')) deco.push(Decoration.node($pos.before(1), $pos.after(1), { 'data-caret': '' }));
+      }
+      return deco.length > 0 ? DecorationSet.create(doc, deco) : null;
+    },
+  },
+});
+
 /** 화면에 보이는 블록 앞뒤로 그려 둘 본문 직속 블록(쪽 장식 포함) 수 */
 const SKIP_MARGIN = 60;
 
