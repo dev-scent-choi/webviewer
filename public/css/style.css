@@ -4199,11 +4199,11 @@ body.ui-view.no-copy :is(#editor, #grid-editor, #slides-rail, #slide-canvas-wrap
 .ribbon-skin .icon-btn-big > svg { flex: none; width: var(--skin-big-icon); height: var(--skin-big-icon); }
 
 /* "자세히" — 묶음 오른쪽 아래 작은 화살표, data-proxy로 기존 단추(대화상자)를 대신 누른다(officeShell.ts) */
-.ribbon-launcher { position: absolute; right: 1px; bottom: 1px; display: inline-flex; align-items: center; justify-content: center; width: 12px; height: 12px; padding: 0; border: 0; border-radius: 2px; background: transparent; color: var(--skin-text-dim); cursor: pointer; }
-.ribbon-launcher:hover { background: var(--skin-hover); color: var(--skin-text); }
-.ribbon-launcher:focus-visible { outline: 2px solid var(--app-accent, var(--v-accent)); outline-offset: 0; }
-.ribbon-launcher svg { width: 8px; height: 8px; }
-.ribbon-group:has(> .ribbon-launcher) .ribbon-group-label { padding-right: 14px; }
+.ribbon-skin .ribbon-launcher { position: absolute; right: 1px; bottom: 1px; display: inline-flex; align-items: center; justify-content: center; width: 12px; height: 12px; padding: 0; border: 0; border-radius: 2px; background: transparent; color: var(--skin-text-dim); cursor: pointer; }
+.ribbon-skin .ribbon-launcher:hover { background: var(--skin-hover); color: var(--skin-text); }
+.ribbon-skin .ribbon-launcher:focus-visible { outline: 2px solid var(--app-accent, var(--v-accent)); outline-offset: 0; }
+.ribbon-skin .ribbon-launcher svg { width: 8px; height: 8px; }
+.ribbon-skin .ribbon-group:has(> .ribbon-launcher) .ribbon-group-label { padding-right: 14px; }
 
 /* 상태 줄 — 18px(워드·PPT는 #statusbar, 엑셀은 격자 아래 .grid-status-row) */
 :is(.word-editor-page, .slides-editor-page) .office-statusbar { box-sizing: border-box; height: var(--skin-status-h); padding: 0 8px; gap: 16px; border-top-color: var(--skin-line); background: var(--skin-frame); font: 400 10px var(--skin-font); }
