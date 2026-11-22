@@ -2751,13 +2751,15 @@ body.home-hidden .doclist-link { display: none !important; }
    1628px 아래에서 클립보드·셀·병합 단추, 1448px 아래에서 "자동 줄 바꿈", 1397px 아래에서 큰 단추 글자까지(그룹 여백도 줄임), 1270px 아래에서 작은 단추 폭까지 — 그래야 향기랩 화면(약 1400px)에서도
    홈 탭이 옆으로 넘치지 않는다(예전 홈 탭처럼 1200px 창까지 한 화면에 들어간다). */
 @media (max-width: 1627px) {
-  .grid-editor-page #btn-cut .ribbon-btn-label, .grid-editor-page #btn-copy .ribbon-btn-label,
-  .grid-editor-page #btn-add-row .ribbon-btn-label, .grid-editor-page #btn-del-row .ribbon-btn-label,
-  .grid-editor-page #btn-add-col .ribbon-btn-label, .grid-editor-page #btn-del-col .ribbon-btn-label,
-  .grid-editor-page #btn-merge-center .ribbon-btn-label { display: none; }
+  .grid-editor-page #toolbar:not(.ribbon-skin) :is(#btn-cut, #btn-copy, #btn-add-row, #btn-del-row, #btn-add-col, #btn-del-col, #btn-merge-center) .ribbon-btn-label { display: none; }
 }
 @media (max-width: 1447px) {
-  .grid-editor-page #btn-wrap-text .ribbon-btn-label { display: none; }
+  .grid-editor-page #toolbar:not(.ribbon-skin) #btn-wrap-text .ribbon-btn-label { display: none; }
+}
+/* 리본 꾸밈에서는 아트크래프트처럼 작은 단추 이름(잘라내기·복사·행 삽입…)을 남긴다(사용자 지시 2026-11-22) — 1400px 홈 탭이 940px쯤이라 넉넉하다.
+   1100px 아래에서만 접는다(그 아래는 판 안 가로 넘김) */
+@media (max-width: 1100px) {
+  .grid-editor-page #toolbar.ribbon-skin :is(#btn-cut, #btn-copy, #btn-add-row, #btn-del-row, #btn-add-col, #btn-del-col, #btn-merge-center, #btn-wrap-text) .ribbon-btn-label { display: none; }
 }
 /* 리본 꾸밈(#toolbar.ribbon-skin)에서는 큰 단추가 40px·작은 단추가 16px로 좁아 1200px 창에도 큰 단추 이름까지 다 들어간다(2026-11-22 실측 370px 남음) —
    아래 두 단계(큰 단추 글자 접기·38px/30px 강제)는 꾸밈 없는 툴바에만 건다. 1627/1447px 작은 단추 글자 접기는 꾸밈과 함께 그대로 쓴다. */
