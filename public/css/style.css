@@ -4166,6 +4166,8 @@ body.ui-view.no-copy :is(#editor, #grid-editor, #slides-rail, #slide-canvas-wrap
   box-shadow: 0 0 0 1px var(--skin-line), 0 1px 2px rgba(0, 0, 0, 0.06);
   overflow-y: hidden;
 }
+/* 편집기 판은 .toolbar-format의 flex: 1(기준 0%)이라 내용 최소 높이(스타일 갤러리 48.5px)만큼 62px을 넘었다 — 높이를 고정 */
+.ribbon-skin .toolbar-format.ribbon-panel { flex: none; }
 .ribbon-skin.ribbon-peeking .ribbon-panel:not([hidden]) { top: calc(var(--skin-title-h) + var(--skin-tabs-h)); }
 
 /* 묶음 — 위는 단추 칸, 아래 14px은 묶음 이름, 사이는 세로 구분선 */
@@ -4183,6 +4185,9 @@ body.ui-view.no-copy :is(#editor, #grid-editor, #slides-rail, #slide-canvas-wrap
 .ribbon-skin .ribbon-btn-labeled { height: var(--skin-small-h); padding: 0 3px; gap: 3px; }
 .ribbon-skin .ribbon-btn-label { color: var(--skin-text); font: 400 11px/14px var(--skin-font); }
 .ribbon-skin .ribbon-panel :is(.toolbar-select, .toolbar-number) { height: var(--skin-small-h); font: 400 11px var(--skin-font); }
+/* ▾(작은 줄 옆 펼침)는 원래 34px 높이라 홈 탭 판을 64px로 밀었다 — 작은 줄 높이로. 색 단추("가"+막대)도 16px 안에 */
+.ribbon-skin .ribbon-panel .dropdown-btn > .dropdown-caret:not(.icon-btn-big) { height: var(--skin-small-h); }
+.ribbon-skin .color-apply-btn { gap: 1px; }
 
 /* 큰 단추 — 48px, 아이콘(24px) 위, 이름 아래 */
 .ribbon-skin .icon-btn-big {
@@ -4236,7 +4241,7 @@ body.ui-view.no-copy :is(#editor, #grid-editor, #slides-rail, #slide-canvas-wrap
 .slides-editor-page .slide-card-number { color: var(--skin-text-dim); font: 400 11px var(--skin-font); }
 /* PPT 리본 안 높이 맞춤(62px) — 색 단추·전환/애니메이션 효과 칸·타이밍 고르기 상자가 작은 줄(16px)·큰 단추(48px)를 넘던 것 */
 .slides-editor-page .ribbon-skin .color-btn { height: var(--skin-small-h); gap: 1px; }
-.slides-editor-page .ribbon-skin .color-btn-glyph,
-.slides-editor-page .ribbon-skin .color-btn-glyph svg { height: 12px; font-size: 11px; }
+.ribbon-skin .color-btn-glyph,
+.ribbon-skin .color-btn-glyph svg { height: 12px; font-size: 11px; }
 .slides-editor-page .ribbon-skin .effect-tile { padding: 1px 2px; gap: 2px; font: 400 10px/13px var(--skin-font); }
 .slides-editor-page .ribbon-skin .layout-field select { box-sizing: border-box; height: var(--skin-small-h); padding: 0 2px; }
