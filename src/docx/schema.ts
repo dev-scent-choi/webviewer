@@ -462,6 +462,7 @@ export function safeFontName(value: unknown): string {
 const KOREAN_FONT_ALIASES: Readonly<Record<string, string>> = {
   '맑은 고딕': 'Malgun Gothic', 바탕: 'Batang', 바탕체: 'BatangChe', 굴림: 'Gulim', 굴림체: 'GulimChe',
   돋움: 'Dotum', 돋움체: 'DotumChe', 궁서: 'Gungsuh', 궁서체: 'GungsuhChe',
+  나눔고딕: 'NanumGothic',
 };
 const SERIF_FONT = /바탕|궁서|명조|batang|gungsuh|myeongjo|times|georgia|cambria|garamond/i;
 

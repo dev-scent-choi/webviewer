@@ -3908,6 +3908,13 @@ body.review-pane-open #editor-zoom-host { margin-right: 320px; }
 @font-face { font-family: 'S-Core Dream 8 Heavy'; src: local('S-Core Dream 8 Heavy'), url('/fonts/s-core-dream/SCDream8.otf') format('opentype'); font-display: swap; }
 @font-face { font-family: '에스코어 드림 9 Black'; src: local('에스코어 드림 9 Black'), url('/fonts/s-core-dream/SCDream9.otf') format('opentype'); font-display: swap; }
 @font-face { font-family: 'S-Core Dream 9 Black'; src: local('S-Core Dream 9 Black'), url('/fonts/s-core-dream/SCDream9.otf') format('opentype'); font-display: swap; }
+/* 나눔고딕(SIL OFL) — KS X 1001 한글·라틴 부분집합. 맑은 고딕보다 폭이 좁아 PowerPoint·아트크래프트와 줄바꿈이 맞는다 */
+@font-face { font-family: 'NanumGothic'; font-weight: 400; src: url('/fonts/nanum/NanumGothic-Regular.woff') format('woff'); font-display: swap; }
+@font-face { font-family: 'NanumGothic'; font-weight: 700; src: url('/fonts/nanum/NanumGothic-Bold.woff') format('woff'); font-display: swap; }
+@font-face { font-family: '나눔고딕'; font-weight: 400; src: url('/fonts/nanum/NanumGothic-Regular.woff') format('woff'); font-display: swap; }
+@font-face { font-family: '나눔고딕'; font-weight: 700; src: url('/fonts/nanum/NanumGothic-Bold.woff') format('woff'); font-display: swap; }
+@font-face { font-family: 'Nanum Gothic'; font-weight: 400; src: url('/fonts/nanum/NanumGothic-Regular.woff') format('woff'); font-display: swap; }
+@font-face { font-family: 'Nanum Gothic'; font-weight: 700; src: url('/fonts/nanum/NanumGothic-Bold.woff') format('woff'); font-display: swap; }
 /* KoPub돋움체는 서버·웹에 실어 쓰려면 별도 승인이 필요해 싣지 않는다 — 사용자 PC에 있으면 그것, 없으면 같은 고딕 계열인 맑은 고딕 */
 @font-face { font-family: 'KoPub돋움체 Light'; src: local('KoPub돋움체 Light'), local('Malgun Gothic'), local('맑은 고딕'); font-display: swap; }
 @font-face { font-family: 'KoPubWorld돋움체 Light'; src: local('KoPubWorld돋움체 Light'), local('Malgun Gothic'), local('맑은 고딕'); font-display: swap; }
