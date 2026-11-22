@@ -1,0 +1,3715 @@
+{
+  "version": 1,
+  "spec": "docs/superpowers/specs/2026-11-22-office-ribbon-structure-design.md",
+  "source": "Microsoft 365 한국어 데스크톱(2024~2026) — 계획 작성 시 기억으로 적음. Task 1에서 이 PC의 한국어 M365(16.0.19127) UIA 덤프와 대조해 고친다.",
+  "schema": {
+    "key": "묶음 안에서 유일한 영문 이름. DOM data-rb = \"<탭 id>.<묶음 id>.<key>\"",
+    "size": "big | small (gallery는 big)",
+    "kind": "button | split | dropdown | gallery | toggle | input | select | info — 화면에 실제로 그리는 종류",
+    "officeKind": "오피스 원래 종류가 kind와 다를 때만(기존 단추를 그대로 둔 자리)",
+    "pending": "true = 아직 없는 기능(disabled, 말풍선 \"준비 중 — <name>\")",
+    "ref": "기존 기능의 누르는 요소 CSS 선택자(id 우선)",
+    "unit": "ref와 다를 때만 — data-rb를 다는 바깥 요소(드롭다운 span·label 등)",
+    "proxy": "다른 탭의 기존 단추 id를 대신 누르는 단추(officeShell data-proxy)",
+    "map": "same = 오피스 같은 기능·같은 자리 | moved = 다른 탭/묶음에서 오피스 자리로 옮김 | nearest = 오피스에 딱 맞는 것이 없어 가장 가까운 자리 | proxy",
+    "convert": "big→small | small→big — Task 2~4가 기존 마크업 크기를 오피스 크기로 바꿈",
+    "fix": "Task 2~4가 고치는 이름·말풍선",
+    "row": "layout=rows 묶음에서 줄 번호(0부터). row가 없는 단추는 세 줄 쌓기",
+    "iconOnly": "작은 단추를 아이콘만(이름은 aria-label·title)",
+    "break": "columns 쌓기에서 이 단추부터 새 칸",
+    "stackTitle": "layout=fields 칸 제목(이 단추부터 새 칸)",
+    "collapse": "묶음 접힘 순서 1~9 — 작은 수가 먼저 접힘(같으면 오른쪽 묶음 먼저)",
+    "launcher": "null | {pending:\"대화상자 이름\"} | {proxy:\"id\"}",
+    "icon": "아이콘 키(기본 = key)"
+  },
+  "summary": {
+    "word": {
+      "tabs": 10,
+      "contextualTabs": 5,
+      "groups": 84,
+      "controls": 324,
+      "existing": 64,
+      "proxy": 1,
+      "pending": 259,
+      "launchersPending": 16,
+      "mainExisting": 56,
+      "mainPending": 152,
+      "ctxExisting": 9,
+      "ctxPending": 107
+    },
+    "excel": {
+      "tabs": 9,
+      "contextualTabs": 4,
+      "groups": 75,
+      "controls": 298,
+      "existing": 63,
+      "proxy": 0,
+      "pending": 235,
+      "launchersPending": 14,
+      "mainExisting": 57,
+      "mainPending": 165,
+      "ctxExisting": 6,
+      "ctxPending": 70
+    },
+    "powerpoint": {
+      "tabs": 11,
+      "contextualTabs": 8,
+      "groups": 96,
+      "controls": 333,
+      "existing": 33,
+      "proxy": 3,
+      "pending": 297,
+      "launchersPending": 16,
+      "mainExisting": 35,
+      "mainPending": 143,
+      "ctxExisting": 1,
+      "ctxPending": 154
+    }
+  },
+  "apps": {
+    "word": {
+      "page": "public/editor.html",
+      "backstage": {
+        "office": ["홈","새로 만들기","열기","정보","저장","다른 이름으로 저장","인쇄","공유","내보내기","변환","닫기","계정","피드백","옵션"],
+        "existing": ["정보","다운로드","인쇄","닫기"]
+      },
+      "tabs": [
+        {
+          "id": "home",
+          "name": "홈",
+          "editOnly": true,
+          "groups": [
+            {
+              "id": "clipboard",
+              "name": "클립보드",
+              "collapse": 9,
+              "layout": "columns",
+              "launcher": {"pending":"클립보드 창"},
+              "controls": [
+                {"key":"paste","name":"붙여넣기","size":"big","kind":"button","ref":"#btn-paste","map":"same","officeKind":"split"},
+                {"key":"cut","name":"잘라내기","size":"small","kind":"button","ref":"#btn-cut","map":"same"},
+                {"key":"copy","name":"복사","size":"small","kind":"button","ref":"#btn-copy","map":"same"},
+                {"key":"format-painter","name":"서식 복사","size":"small","kind":"button","ref":"#btn-format-painter","map":"same"}
+              ]
+            },
+            {
+              "id": "font",
+              "name": "글꼴",
+              "collapse": 8,
+              "layout": "rows",
+              "launcher": {"pending":"글꼴"},
+              "controls": [
+                {"key":"font-family","name":"글꼴","size":"small","kind":"select","ref":"#font-family","map":"same","row":0},
+                {"key":"font-size","name":"글꼴 크기","size":"small","kind":"select","ref":"#font-size","map":"same","row":0},
+                {"key":"grow","name":"글꼴 크기 크게","size":"small","kind":"button","iconOnly":true,"ref":"#btn-font-grow","map":"same","row":0},
+                {"key":"shrink","name":"글꼴 크기 작게","size":"small","kind":"button","iconOnly":true,"ref":"#btn-font-shrink","map":"same","row":0},
+                {"key":"change-case","name":"대/소문자 바꾸기","size":"small","kind":"dropdown","iconOnly":true,"ref":"#change-case-dropdown > button","map":"same","unit":"#change-case-dropdown","row":0},
+                {"key":"clear-format","name":"모든 서식 지우기","size":"small","kind":"button","iconOnly":true,"ref":"#btn-clear-format","map":"same","row":0},
+                {"key":"phonetic-guide","name":"윗주 달기","size":"small","kind":"button","pending":true,"iconOnly":true,"row":0},
+                {"key":"char-border","name":"문자 테두리","size":"small","kind":"button","pending":true,"iconOnly":true,"row":0},
+                {"key":"bold","name":"굵게","size":"small","kind":"button","iconOnly":true,"ref":"#btn-bold","map":"same","row":1},
+                {"key":"italic","name":"기울임꼴","size":"small","kind":"button","iconOnly":true,"ref":"#btn-italic","map":"same","row":1},
+                {"key":"underline","name":"밑줄","size":"small","kind":"button","iconOnly":true,"ref":"#btn-underline","map":"same","officeKind":"split","row":1},
+                {"key":"strike","name":"취소선","size":"small","kind":"button","iconOnly":true,"ref":"#btn-strike","map":"same","row":1},
+                {"key":"subscript","name":"아래 첨자","size":"small","kind":"button","iconOnly":true,"ref":"#btn-subscript","map":"same","row":1},
+                {"key":"superscript","name":"위 첨자","size":"small","kind":"button","iconOnly":true,"ref":"#btn-superscript","map":"same","row":1},
+                {"key":"text-effects","name":"텍스트 효과 및 타이포그래피","size":"small","kind":"dropdown","pending":true,"iconOnly":true,"row":1},
+                {"key":"highlight","name":"텍스트 강조 색","size":"small","kind":"split","iconOnly":true,"ref":"#btn-highlight-apply","map":"same","unit":"#highlight-dropdown","row":1},
+                {"key":"font-color","name":"글꼴 색","size":"small","kind":"split","iconOnly":true,"ref":"#btn-font-color-apply","map":"same","unit":"#font-color-dropdown","row":1},
+                {"key":"char-shading","name":"문자 음영","size":"small","kind":"button","pending":true,"iconOnly":true,"row":1},
+                {"key":"enclose-chars","name":"원 문자","size":"small","kind":"dropdown","pending":true,"iconOnly":true,"row":1}
+              ]
+            },
+            {
+              "id": "paragraph",
+              "name": "단락",
+              "collapse": 7,
+              "layout": "rows",
+              "launcher": {"pending":"단락"},
+              "controls": [
+                {"key":"bullets","name":"글머리 기호","size":"small","kind":"button","iconOnly":true,"ref":"#btn-bullet-list","map":"same","officeKind":"split","row":0},
+                {"key":"numbering","name":"번호 매기기","size":"small","kind":"button","iconOnly":true,"ref":"#btn-ordered-list","map":"same","officeKind":"split","row":0},
+                {"key":"multilevel","name":"다단계 목록","size":"small","kind":"button","iconOnly":true,"ref":"#btn-multilevel-list","map":"same","officeKind":"dropdown","row":0},
+                {"key":"outdent","name":"내어쓰기","size":"small","kind":"button","iconOnly":true,"ref":"#btn-outdent","map":"same","row":0},
+                {"key":"indent","name":"들여쓰기","size":"small","kind":"button","iconOnly":true,"ref":"#btn-indent","map":"same","row":0},
+                {"key":"sort","name":"정렬","size":"small","kind":"button","pending":true,"iconOnly":true,"row":0},
+                {"key":"show-marks","name":"편집 기호 표시/숨기기","size":"small","kind":"button","pending":true,"iconOnly":true,"row":0},
+                {"key":"align-left","name":"왼쪽 맞춤","size":"small","kind":"button","iconOnly":true,"ref":"#btn-align-left","map":"same","row":1},
+                {"key":"align-center","name":"가운데 맞춤","size":"small","kind":"button","iconOnly":true,"ref":"#btn-align-center","map":"same","row":1},
+                {"key":"align-right","name":"오른쪽 맞춤","size":"small","kind":"button","iconOnly":true,"ref":"#btn-align-right","map":"same","row":1},
+                {"key":"justify","name":"양쪽 맞춤","size":"small","kind":"button","iconOnly":true,"ref":"#btn-align-justify","map":"same","row":1},
+                {"key":"distributed","name":"균등 분할","size":"small","kind":"button","pending":true,"iconOnly":true,"row":1},
+                {"key":"line-spacing","name":"줄 및 단락 간격","size":"small","kind":"dropdown","iconOnly":true,"ref":"#line-spacing-dropdown > button","map":"same","unit":"#line-spacing-dropdown","row":1},
+                {"key":"shading","name":"음영","size":"small","kind":"split","iconOnly":true,"ref":"#btn-shading-apply","map":"same","unit":"#shading-dropdown","row":1},
+                {"key":"borders","name":"테두리","size":"small","kind":"split","pending":true,"items":["아래쪽 테두리","위쪽 테두리","왼쪽 테두리","오른쪽 테두리","테두리 없음","모든 테두리","바깥쪽 테두리","안쪽 테두리","가로 선","테두리 및 음영…"],"iconOnly":true,"row":1}
+              ]
+            },
+            {
+              "id": "styles",
+              "name": "스타일",
+              "collapse": 4,
+              "layout": "columns",
+              "launcher": {"pending":"스타일 창"},
+              "controls": [
+                {"key":"style-gallery","name":"스타일","size":"big","kind":"gallery","ref":".style-gallery","map":"same","fix":"div.style-gallery 에 aria-label=\"스타일\" 더함"}
+              ]
+            },
+            {
+              "id": "editing",
+              "name": "편집",
+              "collapse": 5,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"find","name":"찾기","size":"small","kind":"button","ref":"#btn-ribbon-find","map":"same","officeKind":"split"},
+                {"key":"replace","name":"바꾸기","size":"small","kind":"button","ref":"#btn-ribbon-replace","map":"same"},
+                {"key":"select","name":"선택","size":"small","kind":"button","ref":"#btn-ribbon-select","map":"nearest","officeKind":"dropdown","fix":"이름 \"모두 선택\" → \"선택\"(말풍선 \"모두 선택 (Ctrl+A)\" 그대로)","note":"오피스 \"선택\" 드롭다운(모두 선택·개체 선택…) 자리 — 우리는 모두 선택 한 가지"}
+              ]
+            },
+            {
+              "id": "voice",
+              "name": "음성",
+              "collapse": 2,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"dictate","name":"받아쓰기","size":"big","kind":"split","pending":true}
+              ]
+            },
+            {
+              "id": "editor",
+              "name": "편집기",
+              "collapse": 1,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"editor","name":"편집기","size":"big","kind":"button","pending":true}
+              ]
+            }
+          ]
+        },
+        {
+          "id": "insert",
+          "name": "삽입",
+          "editOnly": true,
+          "groups": [
+            {
+              "id": "pages",
+              "name": "페이지",
+              "collapse": 3,
+              "layout": "columns",
+              "launcher": null,
+              "note": "우리 \"나누기\" 묶음은 없어짐(두 단추가 이 묶음으로)",
+              "controls": [
+                {"key":"cover-page","name":"표지","size":"small","kind":"dropdown","pending":true},
+                {"key":"blank-page","name":"빈 페이지","size":"small","kind":"button","pending":true},
+                {"key":"page-break","name":"페이지 나누기","size":"small","kind":"button","ref":"#btn-page-break","map":"moved","convert":"big→small","note":"레이아웃 > 페이지 설정에서 옮김(오피스 자리)"},
+                {"key":"line-break","name":"줄 바꿈","size":"small","kind":"button","ref":"#btn-insert-break","map":"nearest","convert":"big→small","note":"오피스 리본엔 없음(Shift+Enter) — 가장 가까운 페이지 묶음 끝에"}
+              ]
+            },
+            {
+              "id": "tables",
+              "name": "표",
+              "collapse": 8,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"table","name":"표","size":"big","kind":"dropdown","items":["표 삽입…","표 그리기","텍스트를 표로 변환…","Excel 스프레드시트","빠른 표"],"ref":"#btn-table","map":"same","unit":"#table-insert-dropdown"}
+              ]
+            },
+            {
+              "id": "illustrations",
+              "name": "일러스트레이션",
+              "collapse": 6,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"pictures","name":"그림","size":"big","kind":"dropdown","pending":true,"items":["이 디바이스…","스톡 이미지…","온라인 그림…"]},
+                {"key":"shapes","name":"도형","size":"big","kind":"dropdown","pending":true},
+                {"key":"icons","name":"아이콘","size":"big","kind":"button","pending":true},
+                {"key":"3d-models","name":"3D 모델","size":"big","kind":"split","pending":true},
+                {"key":"smartart","name":"스마트아트","size":"small","kind":"button","pending":true,"note":"오피스 이름 \"SmartArt\" — 한글 표기(사용자 규칙 4)"},
+                {"key":"chart","name":"차트","size":"small","kind":"button","pending":true},
+                {"key":"screenshot","name":"스크린샷","size":"small","kind":"dropdown","pending":true}
+              ]
+            },
+            {
+              "id": "addins",
+              "name": "추가 기능",
+              "collapse": 2,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"addins","name":"추가 기능","size":"big","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "media",
+              "name": "미디어",
+              "collapse": 2,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"online-video","name":"온라인 비디오","size":"big","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "links",
+              "name": "링크",
+              "collapse": 4,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"link","name":"링크","size":"big","kind":"split","pending":true},
+                {"key":"bookmark","name":"책갈피","size":"small","kind":"button","pending":true},
+                {"key":"cross-reference","name":"상호 참조","size":"small","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "comments",
+              "name": "메모",
+              "collapse": 5,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"comment","name":"메모","size":"big","kind":"button","proxy":"btn-new-comment","map":"proxy"}
+              ]
+            },
+            {
+              "id": "header-footer",
+              "name": "머리글/바닥글",
+              "collapse": 5,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"header","name":"머리글","size":"big","kind":"dropdown","pending":true},
+                {"key":"footer","name":"바닥글","size":"big","kind":"dropdown","pending":true},
+                {"key":"page-number","name":"페이지 번호","size":"big","kind":"dropdown","pending":true}
+              ]
+            },
+            {
+              "id": "text",
+              "name": "텍스트",
+              "collapse": 4,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"text-box","name":"텍스트 상자","size":"big","kind":"dropdown","pending":true},
+                {"key":"quick-parts","name":"빠른 문서 요소","size":"small","kind":"dropdown","pending":true},
+                {"key":"wordart","name":"워드아트","size":"small","kind":"dropdown","pending":true,"note":"오피스 이름 \"WordArt\" — 한글 표기"},
+                {"key":"drop-cap","name":"단락의 첫 문자 장식","size":"small","kind":"dropdown","pending":true},
+                {"key":"signature-line","name":"서명란","size":"small","kind":"split","pending":true},
+                {"key":"date-time","name":"날짜 및 시간","size":"small","kind":"button","pending":true},
+                {"key":"object","name":"개체","size":"small","kind":"split","pending":true}
+              ]
+            },
+            {
+              "id": "symbols",
+              "name": "기호",
+              "collapse": 3,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"equation","name":"수식","size":"big","kind":"split","pending":true},
+                {"key":"symbol","name":"기호","size":"big","kind":"dropdown","pending":true}
+              ]
+            }
+          ]
+        },
+        {
+          "id": "draw",
+          "name": "그리기",
+          "editOnly": true,
+          "groups": [
+            {
+              "id": "draw-tools",
+              "name": "그리기 도구",
+              "collapse": 6,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"draw-select","name":"선택","size":"big","kind":"dropdown","pending":true},
+                {"key":"lasso","name":"올가미 선택","size":"big","kind":"button","pending":true},
+                {"key":"eraser","name":"지우개","size":"big","kind":"dropdown","pending":true},
+                {"key":"pens","name":"펜","size":"big","kind":"gallery","pending":true},
+                {"key":"add-pen","name":"펜 추가","size":"big","kind":"dropdown","pending":true,"items":["펜","연필","형광펜"]}
+              ]
+            },
+            {
+              "id": "convert",
+              "name": "변환",
+              "collapse": 4,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"ink-to-shape","name":"잉크를 도형으로","size":"big","kind":"button","pending":true},
+                {"key":"ink-to-math","name":"잉크를 수식으로","size":"big","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "replay",
+              "name": "재생",
+              "collapse": 2,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"ink-replay","name":"잉크 재생","size":"big","kind":"button","pending":true}
+              ]
+            }
+          ]
+        },
+        {
+          "id": "design",
+          "name": "디자인",
+          "editOnly": true,
+          "groups": [
+            {
+              "id": "document-formatting",
+              "name": "문서 서식",
+              "collapse": 5,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"themes","name":"테마","size":"big","kind":"dropdown","pending":true},
+                {"key":"style-set","name":"스타일 세트","size":"big","kind":"gallery","pending":true},
+                {"key":"colors","name":"색","size":"big","kind":"dropdown","pending":true},
+                {"key":"fonts","name":"글꼴","size":"big","kind":"dropdown","pending":true},
+                {"key":"paragraph-spacing","name":"단락 간격","size":"small","kind":"dropdown","pending":true},
+                {"key":"effects","name":"효과","size":"small","kind":"dropdown","pending":true},
+                {"key":"set-default","name":"기본값으로 설정","size":"small","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "page-background",
+              "name": "페이지 배경",
+              "collapse": 6,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"watermark","name":"워터마크","size":"big","kind":"dropdown","pending":true},
+                {"key":"page-color","name":"페이지 색","size":"big","kind":"dropdown","pending":true},
+                {"key":"page-borders","name":"페이지 테두리","size":"big","kind":"button","pending":true}
+              ]
+            }
+          ]
+        },
+        {
+          "id": "layout",
+          "name": "레이아웃",
+          "editOnly": true,
+          "groups": [
+            {
+              "id": "page-setup",
+              "name": "페이지 설정",
+              "collapse": 8,
+              "layout": "columns",
+              "launcher": {"pending":"페이지 설정"},
+              "controls": [
+                {"key":"text-direction","name":"텍스트 방향","size":"big","kind":"dropdown","pending":true},
+                {"key":"margins","name":"여백","size":"big","kind":"dropdown","ref":"#margins-dropdown > button","map":"same","unit":"#margins-dropdown"},
+                {"key":"orientation","name":"용지 방향","size":"big","kind":"dropdown","ref":"#orientation-dropdown > button","map":"same","unit":"#orientation-dropdown"},
+                {"key":"size","name":"크기","size":"big","kind":"dropdown","ref":"#paper-size-dropdown > button","map":"same","unit":"#paper-size-dropdown"},
+                {"key":"columns","name":"단","size":"big","kind":"dropdown","pending":true,"items":["하나","둘","셋","왼쪽","오른쪽","기타 단…"]},
+                {"key":"breaks","name":"나누기","size":"small","kind":"dropdown","pending":true,"items":["페이지","단","텍스트 배치","다음 페이지부터","이어서","짝수 페이지부터","홀수 페이지부터"]},
+                {"key":"line-numbers","name":"줄 번호","size":"small","kind":"dropdown","pending":true,"items":["없음","연속","페이지마다 다시 매기기","구역마다 다시 매기기","현재 단락에 사용 안 함","줄 번호 옵션…"]},
+                {"key":"hyphenation","name":"하이픈 넣기","size":"small","kind":"dropdown","pending":true,"items":["없음","자동","수동","하이픈 넣기 옵션…"]}
+              ]
+            },
+            {
+              "id": "manuscript",
+              "name": "원고지",
+              "collapse": 2,
+              "layout": "columns",
+              "launcher": null,
+              "note": "한국어판 전용 묶음 — 설계 §2 목록엔 없지만 한국어 M365 실제 구조라 넣음(UIA 대조로 확인)",
+              "controls": [
+                {"key":"manuscript-settings","name":"원고지 설정","size":"big","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "paragraph",
+              "name": "단락",
+              "collapse": 7,
+              "layout": "fields",
+              "launcher": {"pending":"단락"},
+              "controls": [
+                {"key":"indent-left","name":"왼쪽","size":"small","kind":"input","stackTitle":"들여쓰기","ref":"#indent-left","map":"same","unit":"label.layout-field:has(> #indent-left)"},
+                {"key":"indent-right","name":"오른쪽","size":"small","kind":"input","ref":"#indent-right","map":"same","unit":"label.layout-field:has(> #indent-right)"},
+                {"key":"spacing-before","name":"앞","size":"small","kind":"input","stackTitle":"간격","ref":"#spacing-before","map":"same","unit":"label.layout-field:has(> #spacing-before)"},
+                {"key":"spacing-after","name":"뒤","size":"small","kind":"input","ref":"#spacing-after","map":"same","unit":"label.layout-field:has(> #spacing-after)"}
+              ]
+            },
+            {
+              "id": "arrange",
+              "name": "정렬",
+              "collapse": 4,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"position","name":"위치","size":"big","kind":"dropdown","pending":true},
+                {"key":"wrap-text","name":"텍스트 줄 바꿈","size":"big","kind":"dropdown","pending":true,"items":["텍스트 줄 안","정사각형","빽빽하게","투과","위/아래","텍스트 뒤","텍스트 앞"]},
+                {"key":"bring-forward","name":"앞으로 가져오기","size":"small","kind":"split","pending":true},
+                {"key":"send-backward","name":"뒤로 보내기","size":"small","kind":"split","pending":true},
+                {"key":"selection-pane","name":"선택 창","size":"small","kind":"button","pending":true},
+                {"key":"align","name":"맞춤","size":"small","kind":"dropdown","pending":true,"items":["왼쪽 맞춤","가운데 맞춤","오른쪽 맞춤","위쪽 맞춤","중간 맞춤","아래쪽 맞춤","가로 간격을 동일하게","세로 간격을 동일하게"]},
+                {"key":"group","name":"그룹화","size":"small","kind":"dropdown","pending":true,"items":["그룹","그룹 해제"]},
+                {"key":"rotate","name":"회전","size":"small","kind":"dropdown","pending":true,"items":["오른쪽으로 90도 회전","왼쪽으로 90도 회전","상하 대칭","좌우 대칭"]}
+              ]
+            }
+          ]
+        },
+        {
+          "id": "references",
+          "name": "참조",
+          "editOnly": true,
+          "groups": [
+            {
+              "id": "toc",
+              "name": "목차",
+              "collapse": 5,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"toc","name":"목차","size":"big","kind":"dropdown","pending":true},
+                {"key":"add-text","name":"텍스트 추가","size":"small","kind":"dropdown","pending":true,"items":["단락 표시 안 함","수준 1","수준 2","수준 3"]},
+                {"key":"update-table","name":"목차 업데이트","size":"small","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "footnotes",
+              "name": "각주",
+              "collapse": 5,
+              "layout": "columns",
+              "launcher": {"pending":"각주 및 미주"},
+              "controls": [
+                {"key":"insert-footnote","name":"각주 삽입","size":"big","kind":"button","pending":true},
+                {"key":"insert-endnote","name":"미주 삽입","size":"small","kind":"button","pending":true},
+                {"key":"next-footnote","name":"다음 각주","size":"small","kind":"split","pending":true},
+                {"key":"show-notes","name":"주석 표시","size":"small","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "research",
+              "name": "조사",
+              "collapse": 2,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"search","name":"검색","size":"big","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "citations",
+              "name": "인용 및 참고 문헌",
+              "collapse": 4,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"insert-citation","name":"인용 삽입","size":"big","kind":"dropdown","pending":true},
+                {"key":"manage-sources","name":"원본 관리","size":"small","kind":"button","pending":true},
+                {"key":"citation-style","name":"스타일","size":"small","kind":"select","pending":true},
+                {"key":"bibliography","name":"참고 문헌","size":"small","kind":"dropdown","pending":true}
+              ]
+            },
+            {
+              "id": "captions",
+              "name": "캡션",
+              "collapse": 3,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"insert-caption","name":"캡션 삽입","size":"big","kind":"button","pending":true},
+                {"key":"insert-table-of-figures","name":"그림 목차 삽입","size":"small","kind":"button","pending":true},
+                {"key":"update-table-of-figures","name":"표 업데이트","size":"small","kind":"button","pending":true},
+                {"key":"cross-reference","name":"상호 참조","size":"small","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "index",
+              "name": "색인",
+              "collapse": 3,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"mark-entry","name":"항목 표시","size":"big","kind":"button","pending":true},
+                {"key":"insert-index","name":"색인 삽입","size":"small","kind":"button","pending":true},
+                {"key":"update-index","name":"색인 업데이트","size":"small","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "toa",
+              "name": "인용 목차",
+              "collapse": 2,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"mark-citation","name":"인용 표시","size":"big","kind":"button","pending":true},
+                {"key":"insert-toa","name":"인용 목차 삽입","size":"small","kind":"button","pending":true},
+                {"key":"update-toa","name":"인용 목차 업데이트","size":"small","kind":"button","pending":true}
+              ]
+            }
+          ]
+        },
+        {
+          "id": "mailings",
+          "name": "편지",
+          "editOnly": true,
+          "groups": [
+            {
+              "id": "create",
+              "name": "만들기",
+              "collapse": 3,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"envelopes","name":"봉투","size":"big","kind":"button","pending":true},
+                {"key":"labels","name":"레이블","size":"big","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "start-mail-merge",
+              "name": "편지 병합 시작",
+              "collapse": 5,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"start-mail-merge","name":"편지 병합 시작","size":"big","kind":"dropdown","pending":true,"items":["편지","전자 메일 메시지","봉투","레이블","디렉터리","일반 Word 문서","단계별 편지 병합 마법사"]},
+                {"key":"select-recipients","name":"받는 사람 선택","size":"big","kind":"dropdown","pending":true,"items":["새 목록 입력","기존 목록 사용","Outlook 연락처에서 선택"]},
+                {"key":"edit-recipient-list","name":"받는 사람 목록 편집","size":"big","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "write-insert-fields",
+              "name": "필드 쓰기 및 삽입",
+              "collapse": 4,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"highlight-merge-fields","name":"병합 필드 강조 표시","size":"big","kind":"button","pending":true},
+                {"key":"address-block","name":"주소 블록","size":"big","kind":"button","pending":true},
+                {"key":"greeting-line","name":"인사말","size":"big","kind":"button","pending":true},
+                {"key":"insert-merge-field","name":"병합 필드 삽입","size":"big","kind":"split","pending":true},
+                {"key":"rules","name":"규칙","size":"small","kind":"dropdown","pending":true},
+                {"key":"match-fields","name":"필드 일치","size":"small","kind":"button","pending":true},
+                {"key":"update-labels","name":"레이블 업데이트","size":"small","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "preview-results",
+              "name": "결과 미리 보기",
+              "collapse": 3,
+              "layout": "rows",
+              "launcher": null,
+              "controls": [
+                {"key":"preview-results","name":"결과 미리 보기","size":"big","kind":"button","pending":true},
+                {"key":"first-record","name":"처음 레코드","size":"small","kind":"button","pending":true,"iconOnly":true,"row":0},
+                {"key":"previous-record","name":"이전 레코드","size":"small","kind":"button","pending":true,"iconOnly":true,"row":0},
+                {"key":"record-number","name":"레코드","size":"small","kind":"input","pending":true,"row":0},
+                {"key":"next-record","name":"다음 레코드","size":"small","kind":"button","pending":true,"iconOnly":true,"row":0},
+                {"key":"last-record","name":"마지막 레코드","size":"small","kind":"button","pending":true,"iconOnly":true,"row":0},
+                {"key":"find-recipient","name":"받는 사람 찾기","size":"small","kind":"button","pending":true,"row":1},
+                {"key":"check-errors","name":"오류 자동 확인","size":"small","kind":"button","pending":true,"row":2}
+              ]
+            },
+            {
+              "id": "finish",
+              "name": "마침",
+              "collapse": 6,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"finish-merge","name":"완료 및 병합","size":"big","kind":"dropdown","pending":true,"items":["개별 문서 편집…","문서 인쇄…","전자 메일 메시지 보내기…"]}
+              ]
+            }
+          ]
+        },
+        {
+          "id": "review",
+          "name": "검토",
+          "editOnly": false,
+          "groups": [
+            {
+              "id": "proofing",
+              "name": "언어 교정",
+              "collapse": 6,
+              "layout": "columns",
+              "launcher": null,
+              "note": "기존 \"자세히\"(단어 개수 대리)는 지움 — 오피스 언어 교정 묶음엔 자세히가 없다",
+              "controls": [
+                {"key":"spelling","name":"맞춤법 및 문법 검사","size":"big","kind":"button","ref":"#btn-spellcheck","map":"nearest","officeKind":"split","fix":"이름 \"맞춤법 검사\" → \"맞춤법 및 문법 검사\"","note":"우리 기능은 브라우저 맞춤법 표시 켜고 끄기 — 오피스 맞춤법 검사 자리"},
+                {"key":"thesaurus","name":"동의어 사전","size":"small","kind":"button","pending":true},
+                {"key":"word-count","name":"단어 개수","size":"small","kind":"button","ref":"#btn-word-count","map":"same","convert":"big→small"}
+              ]
+            },
+            {
+              "id": "speech",
+              "name": "음성",
+              "collapse": 2,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"read-aloud","name":"소리 내어 읽기","size":"big","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "accessibility",
+              "name": "접근성",
+              "collapse": 2,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"check-accessibility","name":"접근성 검사","size":"big","kind":"split","pending":true}
+              ]
+            },
+            {
+              "id": "language",
+              "name": "언어",
+              "collapse": 3,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"translate","name":"번역","size":"big","kind":"dropdown","pending":true,"items":["선택 영역 번역","문서 번역"]},
+                {"key":"language","name":"언어","size":"big","kind":"dropdown","pending":true}
+              ]
+            },
+            {
+              "id": "comments",
+              "name": "메모",
+              "collapse": 7,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"new-comment","name":"새 메모","size":"big","kind":"button","ref":"#btn-new-comment","map":"same"},
+                {"key":"delete-comment","name":"삭제","size":"small","kind":"button","ref":"#btn-delete-comment","map":"same","officeKind":"split"},
+                {"key":"previous-comment","name":"이전","size":"small","kind":"button","ref":"#btn-prev-comment","map":"same"},
+                {"key":"next-comment","name":"다음","size":"small","kind":"button","ref":"#btn-next-comment","map":"same"},
+                {"key":"show-comments","name":"메모 표시","size":"big","kind":"button","ref":"#btn-show-comments","map":"same","convert":"small→big","officeKind":"dropdown"}
+              ]
+            },
+            {
+              "id": "tracking",
+              "name": "추적",
+              "collapse": 5,
+              "layout": "columns",
+              "launcher": {"pending":"변경 내용 추적 옵션"},
+              "controls": [
+                {"key":"track-changes","name":"변경 내용 추적","size":"big","kind":"split","pending":true},
+                {"key":"display-for-review","name":"검토할 표시","size":"small","kind":"select","pending":true,"items":["단순 태그","모든 태그","태그 없음","원본"]},
+                {"key":"show-markup","name":"태그 표시","size":"small","kind":"dropdown","pending":true},
+                {"key":"reviewing-pane","name":"검토 창","size":"small","kind":"button","ref":"#btn-show-changes","map":"nearest","convert":"big→small","officeKind":"split","fix":"이름 \"변경 내용\" → \"검토 창\"","note":"이 편집 세션에서 누가 어느 문단을 바꿨는지 보여 주는 창 — 오피스 \"검토 창\" 자리"}
+              ]
+            },
+            {
+              "id": "changes",
+              "name": "변경 내용",
+              "collapse": 4,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"accept","name":"적용","size":"big","kind":"split","pending":true},
+                {"key":"reject","name":"거부","size":"small","kind":"split","pending":true},
+                {"key":"previous-change","name":"이전","size":"small","kind":"button","pending":true},
+                {"key":"next-change","name":"다음","size":"small","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "compare",
+              "name": "비교",
+              "collapse": 3,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"compare","name":"비교","size":"big","kind":"dropdown","pending":true,"items":["비교…","조합…"]}
+              ]
+            },
+            {
+              "id": "protect",
+              "name": "보호",
+              "collapse": 3,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"block-authors","name":"작성자 차단","size":"big","kind":"button","pending":true},
+                {"key":"restrict-editing","name":"편집 제한","size":"big","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "ink",
+              "name": "잉크",
+              "collapse": 1,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"hide-ink","name":"잉크 숨기기","size":"big","kind":"dropdown","pending":true}
+              ]
+            }
+          ]
+        },
+        {
+          "id": "view",
+          "name": "보기",
+          "editOnly": false,
+          "groups": [
+            {
+              "id": "views",
+              "name": "보기",
+              "collapse": 6,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"read-mode","name":"읽기 모드","size":"big","kind":"button","pending":true},
+                {"key":"print-layout","name":"인쇄 모양","size":"big","kind":"button","pending":true},
+                {"key":"web-layout","name":"웹 모양","size":"big","kind":"button","pending":true},
+                {"key":"outline","name":"개요","size":"small","kind":"button","pending":true},
+                {"key":"draft","name":"초안","size":"small","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "immersive",
+              "name": "몰입형",
+              "collapse": 3,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"focus","name":"포커스","size":"big","kind":"button","pending":true},
+                {"key":"immersive-reader","name":"몰입형 리더","size":"big","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "page-movement",
+              "name": "페이지 이동",
+              "collapse": 3,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"vertical","name":"세로","size":"big","kind":"button","pending":true},
+                {"key":"side-to-side","name":"나란히","size":"big","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "show",
+              "name": "표시",
+              "collapse": 4,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"ruler","name":"눈금자","size":"small","kind":"toggle","pending":true},
+                {"key":"gridlines","name":"눈금선","size":"small","kind":"toggle","pending":true},
+                {"key":"navigation-pane","name":"탐색 창","size":"small","kind":"toggle","pending":true}
+              ]
+            },
+            {
+              "id": "zoom",
+              "name": "확대/축소",
+              "collapse": 7,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"zoom","name":"확대/축소","size":"big","kind":"button","pending":true},
+                {"key":"zoom-100","name":"100%","size":"big","kind":"button","ref":"#btn-zoom-100","map":"same"},
+                {"key":"one-page","name":"한 페이지","size":"small","kind":"button","pending":true},
+                {"key":"multiple-pages","name":"여러 페이지","size":"small","kind":"button","pending":true},
+                {"key":"page-width","name":"페이지 너비","size":"small","kind":"button","ref":"#btn-zoom-page-width","map":"same","convert":"big→small"},
+                {"key":"zoom-in","name":"확대","size":"small","kind":"button","ref":"#btn-zoom-in-ribbon","map":"nearest","note":"오피스는 상태 줄 확대/축소 막대 — 리본 확대/축소 묶음 끝에 둠"},
+                {"key":"zoom-out","name":"축소","size":"small","kind":"button","ref":"#btn-zoom-out-ribbon","map":"nearest","note":"위와 같음"}
+              ]
+            },
+            {
+              "id": "window",
+              "name": "창",
+              "collapse": 5,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"new-window","name":"새 창","size":"big","kind":"button","pending":true},
+                {"key":"arrange-all","name":"모두 정렬","size":"big","kind":"button","pending":true},
+                {"key":"split","name":"나누기","size":"big","kind":"button","pending":true},
+                {"key":"view-side-by-side","name":"나란히 보기","size":"small","kind":"button","pending":true},
+                {"key":"synchronous-scrolling","name":"동시 스크롤","size":"small","kind":"button","pending":true},
+                {"key":"reset-window-position","name":"창 위치 다시 설정","size":"small","kind":"button","pending":true},
+                {"key":"switch-windows","name":"창 전환","size":"big","kind":"dropdown","pending":true}
+              ]
+            },
+            {
+              "id": "macros",
+              "name": "매크로",
+              "collapse": 2,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"macros","name":"매크로","size":"big","kind":"split","pending":true,"items":["매크로 보기","매크로 기록…"]}
+              ]
+            },
+            {
+              "id": "sharepoint",
+              "name": "셰어포인트",
+              "collapse": 1,
+              "layout": "columns",
+              "launcher": null,
+              "note": "오피스 묶음 이름 \"SharePoint\" — 한글 표기(사용자 규칙 4)",
+              "controls": [
+                {"key":"properties","name":"속성","size":"big","kind":"button","pending":true}
+              ]
+            }
+          ]
+        }
+      ],
+      "contextual": [
+        {
+          "id": "table-design",
+          "name": "테이블 디자인",
+          "editOnly": true,
+          "trigger": "표 안에 커서",
+          "wired": "editor.ts dispatchTransaction의 isInTable(newState) — setContextualTab('table-design', …) 한 줄 더함",
+          "groups": [
+            {
+              "id": "style-options",
+              "name": "표 스타일 옵션",
+              "collapse": 3,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"header-row","name":"머리글 행","size":"small","kind":"toggle","pending":true},
+                {"key":"first-column","name":"첫째 열","size":"small","kind":"toggle","pending":true},
+                {"key":"total-row","name":"요약 행","size":"small","kind":"toggle","pending":true},
+                {"key":"last-column","name":"마지막 열","size":"small","kind":"toggle","pending":true},
+                {"key":"banded-rows","name":"줄무늬 행","size":"small","kind":"toggle","pending":true},
+                {"key":"banded-columns","name":"줄무늬 열","size":"small","kind":"toggle","pending":true}
+              ]
+            },
+            {
+              "id": "table-styles",
+              "name": "표 스타일",
+              "collapse": 5,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"table-styles","name":"표 스타일","size":"big","kind":"gallery","pending":true},
+                {"key":"shading","name":"음영","size":"big","kind":"split","pending":true}
+              ]
+            },
+            {
+              "id": "borders",
+              "name": "테두리",
+              "collapse": 4,
+              "layout": "columns",
+              "launcher": {"pending":"테두리 및 음영"},
+              "controls": [
+                {"key":"border-styles","name":"테두리 스타일","size":"big","kind":"dropdown","pending":true},
+                {"key":"line-style","name":"선 스타일","size":"small","kind":"select","pending":true},
+                {"key":"line-weight","name":"펜 두께","size":"small","kind":"select","pending":true},
+                {"key":"pen-color","name":"펜 색","size":"small","kind":"split","pending":true},
+                {"key":"borders","name":"테두리","size":"big","kind":"split","pending":true},
+                {"key":"border-painter","name":"테두리 복사","size":"big","kind":"button","pending":true}
+              ]
+            }
+          ]
+        },
+        {
+          "id": "table",
+          "name": "레이아웃",
+          "editOnly": true,
+          "trigger": "표 안에 커서",
+          "wired": "기존 — editor.ts setContextualTab('table', canEdit && isInTable(newState))",
+          "groups": [
+            {
+              "id": "table",
+              "name": "표",
+              "collapse": 3,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"select","name":"선택","size":"small","kind":"dropdown","pending":true,"items":["셀 선택","열 선택","행 선택","표 선택"]},
+                {"key":"view-gridlines","name":"눈금선 보기","size":"small","kind":"button","pending":true},
+                {"key":"properties","name":"속성","size":"small","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "draw",
+              "name": "그리기",
+              "collapse": 2,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"draw-table","name":"표 그리기","size":"big","kind":"button","pending":true},
+                {"key":"eraser","name":"지우개","size":"big","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "rows-columns",
+              "name": "행 및 열",
+              "collapse": 8,
+              "layout": "columns",
+              "launcher": {"pending":"셀 삽입"},
+              "controls": [
+                {"key":"delete-table","name":"표 삭제","size":"small","kind":"button","ref":"#btn-del-table","map":"nearest","convert":"big→small","note":"오피스는 \"삭제\" 드롭다운 하나(셀·열·행·표 삭제) — 우리 세 기능(표·행·열 삭제)을 그 자리에 작은 단추로. 기존 \"삭제\" 묶음은 없어짐"},
+                {"key":"delete-row","name":"행 삭제","size":"small","kind":"button","ref":"#btn-del-row","map":"nearest","note":"위와 같음"},
+                {"key":"delete-column","name":"열 삭제","size":"small","kind":"button","ref":"#btn-del-col","map":"nearest","note":"위와 같음"},
+                {"key":"insert-above","name":"위에 삽입","size":"big","kind":"button","ref":"#btn-add-row-before","map":"same","convert":"small→big"},
+                {"key":"insert-below","name":"아래에 삽입","size":"big","kind":"button","ref":"#btn-add-row","map":"same","convert":"small→big"},
+                {"key":"insert-left","name":"왼쪽에 삽입","size":"big","kind":"button","ref":"#btn-add-col-before","map":"same","convert":"small→big"},
+                {"key":"insert-right","name":"오른쪽에 삽입","size":"big","kind":"button","ref":"#btn-add-col","map":"same","convert":"small→big"}
+              ]
+            },
+            {
+              "id": "merge",
+              "name": "병합",
+              "collapse": 7,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"merge-cells","name":"셀 병합","size":"small","kind":"button","ref":"#btn-merge-cells","map":"same"},
+                {"key":"split-cells","name":"셀 분할","size":"small","kind":"button","ref":"#btn-split-cell","map":"same"},
+                {"key":"split-table","name":"표 분할","size":"small","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "cell-size",
+              "name": "셀 크기",
+              "collapse": 4,
+              "layout": "columns",
+              "launcher": {"pending":"표 속성"},
+              "controls": [
+                {"key":"autofit","name":"자동 맞춤","size":"big","kind":"dropdown","pending":true,"items":["내용에 자동으로 맞춤","창에 자동으로 맞춤","열 너비 고정"]},
+                {"key":"height","name":"높이","size":"small","kind":"input","pending":true},
+                {"key":"width","name":"너비","size":"small","kind":"input","pending":true},
+                {"key":"distribute-rows","name":"행 높이를 같게","size":"small","kind":"button","pending":true},
+                {"key":"distribute-columns","name":"열 너비를 같게","size":"small","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "alignment",
+              "name": "맞춤",
+              "collapse": 3,
+              "layout": "rows",
+              "launcher": null,
+              "controls": [
+                {"key":"align-00","name":"위쪽 왼쪽 맞춤","size":"small","kind":"button","pending":true,"iconOnly":true,"row":0},
+                {"key":"align-01","name":"위쪽 가운데 맞춤","size":"small","kind":"button","pending":true,"iconOnly":true,"row":0},
+                {"key":"align-02","name":"위쪽 오른쪽 맞춤","size":"small","kind":"button","pending":true,"iconOnly":true,"row":0},
+                {"key":"align-10","name":"가운데 왼쪽 맞춤","size":"small","kind":"button","pending":true,"iconOnly":true,"row":1},
+                {"key":"align-11","name":"가운데 맞춤","size":"small","kind":"button","pending":true,"iconOnly":true,"row":1},
+                {"key":"align-12","name":"가운데 오른쪽 맞춤","size":"small","kind":"button","pending":true,"iconOnly":true,"row":1},
+                {"key":"align-20","name":"아래쪽 왼쪽 맞춤","size":"small","kind":"button","pending":true,"iconOnly":true,"row":2},
+                {"key":"align-21","name":"아래쪽 가운데 맞춤","size":"small","kind":"button","pending":true,"iconOnly":true,"row":2},
+                {"key":"align-22","name":"아래쪽 오른쪽 맞춤","size":"small","kind":"button","pending":true,"iconOnly":true,"row":2},
+                {"key":"text-direction","name":"텍스트 방향","size":"big","kind":"button","pending":true},
+                {"key":"cell-margins","name":"셀 여백","size":"big","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "data",
+              "name": "데이터",
+              "collapse": 2,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"sort","name":"정렬","size":"big","kind":"button","pending":true},
+                {"key":"repeat-header-rows","name":"제목 행 반복","size":"small","kind":"button","pending":true},
+                {"key":"convert-to-text","name":"텍스트로 변환","size":"small","kind":"button","pending":true},
+                {"key":"formula","name":"수식","size":"small","kind":"button","pending":true}
+              ]
+            }
+          ]
+        },
+        {
+          "id": "header-footer",
+          "name": "머리글/바닥글",
+          "editOnly": true,
+          "trigger": "머리글·바닥글 편집 중(우리 편집기엔 아직 없음)",
+          "wired": null,
+          "groups": [
+            {
+              "id": "header-footer",
+              "name": "머리글/바닥글",
+              "collapse": 5,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"header","name":"머리글","size":"big","kind":"dropdown","pending":true},
+                {"key":"footer","name":"바닥글","size":"big","kind":"dropdown","pending":true},
+                {"key":"page-number","name":"페이지 번호","size":"big","kind":"dropdown","pending":true}
+              ]
+            },
+            {
+              "id": "insert",
+              "name": "삽입",
+              "collapse": 4,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"date-time","name":"날짜 및 시간","size":"big","kind":"button","pending":true},
+                {"key":"document-info","name":"문서 정보","size":"big","kind":"dropdown","pending":true},
+                {"key":"quick-parts","name":"빠른 문서 요소","size":"big","kind":"dropdown","pending":true},
+                {"key":"pictures","name":"그림","size":"big","kind":"button","pending":true},
+                {"key":"online-pictures","name":"온라인 그림","size":"big","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "navigation",
+              "name": "탐색",
+              "collapse": 3,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"go-to-header","name":"머리글로 이동","size":"big","kind":"button","pending":true},
+                {"key":"go-to-footer","name":"바닥글로 이동","size":"big","kind":"button","pending":true},
+                {"key":"previous","name":"이전","size":"small","kind":"button","pending":true},
+                {"key":"next","name":"다음","size":"small","kind":"button","pending":true},
+                {"key":"link-to-previous","name":"이전 머리글에 연결","size":"small","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "options",
+              "name": "옵션",
+              "collapse": 3,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"different-first-page","name":"첫 페이지를 다르게 지정","size":"small","kind":"toggle","pending":true},
+                {"key":"different-odd-even","name":"홀수/짝수 페이지를 다르게 지정","size":"small","kind":"toggle","pending":true},
+                {"key":"show-document-text","name":"문서 텍스트 표시","size":"small","kind":"toggle","pending":true}
+              ]
+            },
+            {
+              "id": "position",
+              "name": "위치",
+              "collapse": 2,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"header-from-top","name":"위쪽 머리글","size":"small","kind":"input","pending":true},
+                {"key":"footer-from-bottom","name":"아래쪽 바닥글","size":"small","kind":"input","pending":true},
+                {"key":"insert-alignment-tab","name":"맞춤 탭 삽입","size":"small","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "close",
+              "name": "닫기",
+              "collapse": 9,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"close-header-footer","name":"머리글/바닥글 닫기","size":"big","kind":"button","pending":true}
+              ]
+            }
+          ]
+        },
+        {
+          "id": "picture-format",
+          "name": "그림 서식",
+          "editOnly": true,
+          "trigger": "그림 선택(우리 편집기엔 아직 없음)",
+          "wired": null,
+          "groups": [
+            {
+              "id": "adjust",
+              "name": "조정",
+              "collapse": 6,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"remove-background","name":"배경 제거","size":"big","kind":"button","pending":true},
+                {"key":"corrections","name":"수정","size":"big","kind":"dropdown","pending":true},
+                {"key":"color","name":"색","size":"big","kind":"dropdown","pending":true},
+                {"key":"artistic-effects","name":"꾸밈 효과","size":"big","kind":"dropdown","pending":true},
+                {"key":"transparency","name":"투명도","size":"big","kind":"dropdown","pending":true},
+                {"key":"compress","name":"그림 압축","size":"small","kind":"button","pending":true},
+                {"key":"change-picture","name":"그림 바꾸기","size":"small","kind":"dropdown","pending":true},
+                {"key":"reset-picture","name":"그림 원래대로","size":"small","kind":"split","pending":true}
+              ]
+            },
+            {
+              "id": "picture-styles",
+              "name": "그림 스타일",
+              "collapse": 5,
+              "layout": "columns",
+              "launcher": {"pending":"그림 서식"},
+              "controls": [
+                {"key":"picture-styles","name":"그림 스타일","size":"big","kind":"gallery","pending":true},
+                {"key":"picture-border","name":"그림 테두리","size":"small","kind":"split","pending":true},
+                {"key":"picture-effects","name":"그림 효과","size":"small","kind":"dropdown","pending":true},
+                {"key":"picture-layout","name":"그림 레이아웃","size":"small","kind":"dropdown","pending":true}
+              ]
+            },
+            {
+              "id": "accessibility",
+              "name": "접근성",
+              "collapse": 2,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"alt-text","name":"대체 텍스트","size":"big","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "arrange",
+              "name": "정렬",
+              "collapse": 3,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"bring-forward","name":"앞으로 가져오기","size":"small","kind":"split","pending":true},
+                {"key":"send-backward","name":"뒤로 보내기","size":"small","kind":"split","pending":true},
+                {"key":"selection-pane","name":"선택 창","size":"small","kind":"button","pending":true},
+                {"key":"align","name":"맞춤","size":"small","kind":"dropdown","pending":true,"items":["왼쪽 맞춤","가운데 맞춤","오른쪽 맞춤","위쪽 맞춤","중간 맞춤","아래쪽 맞춤","가로 간격을 동일하게","세로 간격을 동일하게"]},
+                {"key":"group","name":"그룹화","size":"small","kind":"dropdown","pending":true,"items":["그룹","그룹 해제"]},
+                {"key":"rotate","name":"회전","size":"small","kind":"dropdown","pending":true,"items":["오른쪽으로 90도 회전","왼쪽으로 90도 회전","상하 대칭","좌우 대칭"]}
+              ]
+            },
+            {
+              "id": "size",
+              "name": "크기",
+              "collapse": 4,
+              "layout": "columns",
+              "launcher": {"pending":"크기 및 위치"},
+              "controls": [
+                {"key":"crop","name":"자르기","size":"big","kind":"split","pending":true},
+                {"key":"height","name":"높이","size":"small","kind":"input","pending":true},
+                {"key":"width","name":"너비","size":"small","kind":"input","pending":true}
+              ]
+            }
+          ]
+        },
+        {
+          "id": "shape-format",
+          "name": "도형 서식",
+          "editOnly": true,
+          "trigger": "도형·텍스트 상자 선택(우리 편집기엔 아직 없음)",
+          "wired": null,
+          "groups": [
+            {
+              "id": "insert-shapes",
+              "name": "도형 삽입",
+              "collapse": 3,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"shapes","name":"도형","size":"big","kind":"gallery","pending":true},
+                {"key":"edit-shape","name":"도형 편집","size":"small","kind":"dropdown","pending":true},
+                {"key":"draw-text-box","name":"텍스트 상자 그리기","size":"small","kind":"split","pending":true}
+              ]
+            },
+            {
+              "id": "shape-styles",
+              "name": "도형 스타일",
+              "collapse": 5,
+              "layout": "columns",
+              "launcher": {"pending":"도형 서식"},
+              "controls": [
+                {"key":"shape-styles","name":"도형 스타일","size":"big","kind":"gallery","pending":true},
+                {"key":"shape-fill","name":"도형 채우기","size":"small","kind":"split","pending":true},
+                {"key":"shape-outline","name":"도형 윤곽선","size":"small","kind":"split","pending":true},
+                {"key":"shape-effects","name":"도형 효과","size":"small","kind":"dropdown","pending":true}
+              ]
+            },
+            {
+              "id": "wordart-styles",
+              "name": "워드아트 스타일",
+              "collapse": 4,
+              "layout": "columns",
+              "launcher": {"pending":"텍스트 효과 서식"},
+              "note": "오피스 이름 \"WordArt 스타일\" — 영문만 이름은 한글 표기(사용자 규칙 4·verify:ribbon-skin (2))",
+              "controls": [
+                {"key":"wordart-styles","name":"빠른 스타일","size":"big","kind":"gallery","pending":true},
+                {"key":"text-fill","name":"텍스트 채우기","size":"small","kind":"split","pending":true},
+                {"key":"text-outline","name":"텍스트 윤곽선","size":"small","kind":"split","pending":true},
+                {"key":"text-effects","name":"텍스트 효과","size":"small","kind":"dropdown","pending":true}
+              ]
+            },
+            {
+              "id": "text",
+              "name": "텍스트",
+              "collapse": 3,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"text-direction","name":"텍스트 방향","size":"small","kind":"dropdown","pending":true},
+                {"key":"align-text","name":"텍스트 맞춤","size":"small","kind":"dropdown","pending":true},
+                {"key":"create-link","name":"연결 만들기","size":"small","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "accessibility",
+              "name": "접근성",
+              "collapse": 2,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"alt-text","name":"대체 텍스트","size":"big","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "arrange",
+              "name": "정렬",
+              "collapse": 3,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"position","name":"위치","size":"big","kind":"dropdown","pending":true},
+                {"key":"wrap-text","name":"텍스트 줄 바꿈","size":"big","kind":"dropdown","pending":true,"items":["텍스트 줄 안","정사각형","빽빽하게","투과","위/아래","텍스트 뒤","텍스트 앞"]},
+                {"key":"bring-forward","name":"앞으로 가져오기","size":"small","kind":"split","pending":true},
+                {"key":"send-backward","name":"뒤로 보내기","size":"small","kind":"split","pending":true},
+                {"key":"selection-pane","name":"선택 창","size":"small","kind":"button","pending":true},
+                {"key":"align","name":"맞춤","size":"small","kind":"dropdown","pending":true,"items":["왼쪽 맞춤","가운데 맞춤","오른쪽 맞춤","위쪽 맞춤","중간 맞춤","아래쪽 맞춤","가로 간격을 동일하게","세로 간격을 동일하게"]},
+                {"key":"group","name":"그룹화","size":"small","kind":"dropdown","pending":true,"items":["그룹","그룹 해제"]},
+                {"key":"rotate","name":"회전","size":"small","kind":"dropdown","pending":true,"items":["오른쪽으로 90도 회전","왼쪽으로 90도 회전","상하 대칭","좌우 대칭"]}
+              ]
+            },
+            {
+              "id": "size",
+              "name": "크기",
+              "collapse": 4,
+              "layout": "columns",
+              "launcher": {"pending":"크기 및 위치"},
+              "controls": [
+                {"key":"height","name":"높이","size":"small","kind":"input","pending":true},
+                {"key":"width","name":"너비","size":"small","kind":"input","pending":true}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "excel": {
+      "page": "public/editor-grid.html",
+      "backstage": {
+        "office": ["홈","새로 만들기","열기","정보","저장","다른 이름으로 저장","인쇄","공유","내보내기","게시","닫기","계정","피드백","옵션"],
+        "existing": ["정보","다운로드","인쇄","닫기"]
+      },
+      "tabs": [
+        {
+          "id": "home",
+          "name": "홈",
+          "editOnly": true,
+          "groups": [
+            {
+              "id": "clipboard",
+              "name": "클립보드",
+              "collapse": 9,
+              "layout": "columns",
+              "launcher": {"pending":"클립보드 창"},
+              "controls": [
+                {"key":"paste","name":"붙여넣기","size":"big","kind":"button","ref":"#btn-paste","map":"same","officeKind":"split"},
+                {"key":"cut","name":"잘라내기","size":"small","kind":"button","ref":"#btn-cut","map":"same"},
+                {"key":"copy","name":"복사","size":"small","kind":"button","ref":"#btn-copy","map":"same","officeKind":"split"},
+                {"key":"format-painter","name":"서식 복사","size":"small","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "font",
+              "name": "글꼴",
+              "collapse": 8,
+              "layout": "rows",
+              "launcher": {"pending":"셀 서식: 글꼴"},
+              "controls": [
+                {"key":"font-family","name":"글꼴","size":"small","kind":"select","ref":"#cell-font-family","map":"same","row":0},
+                {"key":"font-size","name":"글꼴 크기","size":"small","kind":"input","ref":"#cell-font-size","map":"same","officeKind":"select","fix":"aria-label·title \"글자 크기\" → \"글꼴 크기\"","row":0},
+                {"key":"grow","name":"글꼴 크기 크게","size":"small","kind":"button","iconOnly":true,"ref":"#btn-font-size-up","map":"same","fix":"title \"글자 크기 크게\" → \"글꼴 크기 크게\"","row":0},
+                {"key":"shrink","name":"글꼴 크기 작게","size":"small","kind":"button","iconOnly":true,"ref":"#btn-font-size-down","map":"same","fix":"title \"글자 크기 작게\" → \"글꼴 크기 작게\"","row":0},
+                {"key":"bold","name":"굵게","size":"small","kind":"button","iconOnly":true,"ref":"#btn-cell-bold","map":"same","row":1},
+                {"key":"italic","name":"기울임꼴","size":"small","kind":"button","iconOnly":true,"ref":"#btn-cell-italic","map":"same","fix":"title \"기울임 (Ctrl+I)\" → \"기울임꼴 (Ctrl+I)\"","row":1},
+                {"key":"underline","name":"밑줄","size":"small","kind":"button","iconOnly":true,"ref":"#btn-cell-underline","map":"same","officeKind":"split","row":1},
+                {"key":"borders","name":"테두리","size":"small","kind":"split","iconOnly":true,"ref":"#btn-border","map":"same","unit":"#border-dropdown","row":1},
+                {"key":"fill-color","name":"채우기 색","size":"small","kind":"split","iconOnly":true,"ref":"#btn-bg-color-apply","map":"same","unit":"#cell-bg-color-btn","fix":"title \"배경 색 채우기\" → \"채우기 색\"","row":1},
+                {"key":"font-color","name":"글꼴 색","size":"small","kind":"split","iconOnly":true,"ref":"#btn-font-color-apply","map":"same","unit":"#cell-font-color-btn","fix":"title \"글자 색 채우기\" → \"글꼴 색\"","row":1},
+                {"key":"strikethrough","name":"취소선","size":"small","kind":"button","iconOnly":true,"ref":"#btn-cell-strike","map":"nearest","note":"엑셀 리본엔 없음(셀 서식 대화상자) — 글꼴 묶음 끝에 둠","row":1},
+                {"key":"phonetic","name":"윗주 필드 표시/숨기기","size":"small","kind":"split","pending":true,"iconOnly":true,"row":1}
+              ]
+            },
+            {
+              "id": "alignment",
+              "name": "맞춤",
+              "collapse": 7,
+              "layout": "rows",
+              "launcher": {"pending":"셀 서식: 맞춤"},
+              "controls": [
+                {"key":"top-align","name":"위쪽 맞춤","size":"small","kind":"button","iconOnly":true,"ref":"#btn-valign-top","map":"same","row":0},
+                {"key":"middle-align","name":"가운데 맞춤","size":"small","kind":"button","iconOnly":true,"ref":"#btn-valign-middle","map":"same","row":0},
+                {"key":"bottom-align","name":"아래쪽 맞춤","size":"small","kind":"button","iconOnly":true,"ref":"#btn-valign-bottom","map":"same","row":0},
+                {"key":"orientation","name":"방향","size":"small","kind":"dropdown","pending":true,"items":["시계 반대 방향 각도","시계 방향 각도","세로 쓰기","텍스트 위로 회전","텍스트 아래로 회전","셀 맞춤 서식"],"iconOnly":true,"row":0},
+                {"key":"wrap-text","name":"자동 줄 바꿈","size":"small","kind":"button","ref":"#btn-wrap-text","map":"same","row":0},
+                {"key":"align-left","name":"왼쪽 맞춤","size":"small","kind":"button","iconOnly":true,"ref":"#btn-cell-align-l","map":"same","fix":"title \"왼쪽 정렬\" → \"왼쪽 맞춤\"","row":1},
+                {"key":"center","name":"가운데 맞춤","size":"small","kind":"button","iconOnly":true,"ref":"#btn-cell-align-c","map":"same","fix":"title \"가운데 정렬\" → \"가운데 맞춤\"","row":1},
+                {"key":"align-right","name":"오른쪽 맞춤","size":"small","kind":"button","iconOnly":true,"ref":"#btn-cell-align-r","map":"same","fix":"title \"오른쪽 정렬\" → \"오른쪽 맞춤\"","row":1},
+                {"key":"decrease-indent","name":"내어쓰기","size":"small","kind":"button","pending":true,"iconOnly":true,"row":1},
+                {"key":"increase-indent","name":"들여쓰기","size":"small","kind":"button","pending":true,"iconOnly":true,"row":1},
+                {"key":"merge-center","name":"병합하고 가운데 맞춤","size":"small","kind":"split","ref":"#btn-merge-center","map":"same","unit":"#merge-dropdown","row":1}
+              ]
+            },
+            {
+              "id": "number",
+              "name": "표시 형식",
+              "collapse": 5,
+              "layout": "rows",
+              "launcher": {"pending":"셀 서식: 표시 형식"},
+              "controls": [
+                {"key":"number-format","name":"표시 형식","size":"small","kind":"select","ref":"#cell-numfmt-select","map":"same","row":0},
+                {"key":"accounting","name":"회계 표시 형식","size":"small","kind":"button","iconOnly":true,"ref":"#btn-numfmt-currency","map":"same","officeKind":"split","row":1},
+                {"key":"percent","name":"백분율 스타일","size":"small","kind":"button","iconOnly":true,"ref":"#btn-numfmt-percent","map":"same","row":1},
+                {"key":"comma","name":"쉼표 스타일","size":"small","kind":"button","iconOnly":true,"ref":"#btn-numfmt-comma","map":"same","row":1},
+                {"key":"increase-decimal","name":"자릿수 늘림","size":"small","kind":"button","iconOnly":true,"ref":"#btn-numfmt-decimal-up","map":"same","row":1},
+                {"key":"decrease-decimal","name":"자릿수 줄임","size":"small","kind":"button","iconOnly":true,"ref":"#btn-numfmt-decimal-down","map":"same","row":1}
+              ]
+            },
+            {
+              "id": "styles",
+              "name": "스타일",
+              "collapse": 2,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"conditional-formatting","name":"조건부 서식","size":"big","kind":"dropdown","ref":"#cf-dropdown > button","map":"same","unit":"#cf-dropdown"},
+                {"key":"format-as-table","name":"표 서식","size":"big","kind":"dropdown","ref":"#home-table-style-dropdown > button","map":"same","unit":"#home-table-style-dropdown"},
+                {"key":"cell-styles","name":"셀 스타일","size":"big","kind":"dropdown","pending":true}
+              ]
+            },
+            {
+              "id": "cells",
+              "name": "셀",
+              "collapse": 6,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"insert-row","name":"행 삽입","size":"small","kind":"button","ref":"#btn-add-row","map":"nearest","note":"오피스 \"삽입\"(분할 단추: 셀·시트 행·시트 열·시트 삽입) 자리 — 행·열 삽입을 작은 단추로"},
+                {"key":"insert-column","name":"열 삽입","size":"small","kind":"button","ref":"#btn-add-col","map":"nearest","note":"위와 같음"},
+                {"key":"delete-row","name":"행 삭제","size":"small","kind":"button","ref":"#btn-del-row","map":"nearest","break":true,"note":"오피스 \"삭제\"(분할 단추) 자리 — 행·열 삭제를 작은 단추로"},
+                {"key":"delete-column","name":"열 삭제","size":"small","kind":"button","ref":"#btn-del-col","map":"nearest","note":"위와 같음"},
+                {"key":"format","name":"서식","size":"big","kind":"dropdown","pending":true,"items":["행 높이…","행 높이 자동 맞춤","열 너비…","열 너비 자동 맞춤","기본 너비…","숨기기 및 숨기기 취소","시트 이름 바꾸기","시트 이동/복사…","탭 색","시트 보호…","셀 잠금","셀 서식…"]}
+              ]
+            },
+            {
+              "id": "editing",
+              "name": "편집",
+              "collapse": 3,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"autosum","name":"자동 합계","size":"small","kind":"split","ref":"#btn-autosum","map":"same","unit":"#autosum-dropdown-home"},
+                {"key":"fill","name":"채우기","size":"small","kind":"dropdown","pending":true,"items":["아래쪽","오른쪽","위쪽","왼쪽","시트에 걸쳐…","계열…","양쪽 맞춤","빠른 채우기"]},
+                {"key":"clear","name":"지우기","size":"small","kind":"button","ref":"#btn-cell-clear-format","map":"moved","officeKind":"dropdown","fix":"title \"서식 지우기\" → \"지우기 — 서식 지우기\"","note":"글꼴 묶음에서 옮김 — 오피스 \"지우기\" 드롭다운 자리, 우리는 서식 지우기 한 가지"},
+                {"key":"sort-filter","name":"정렬 및 필터","size":"big","kind":"dropdown","ref":"#home-sort-filter-dropdown > button","map":"same","unit":"#home-sort-filter-dropdown"},
+                {"key":"find-select","name":"찾기 및 선택","size":"big","kind":"button","ref":"#btn-find-replace","map":"same","officeKind":"dropdown"}
+              ]
+            },
+            {
+              "id": "analysis",
+              "name": "분석",
+              "collapse": 1,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"analyze-data","name":"데이터 분석","size":"big","kind":"button","pending":true}
+              ]
+            }
+          ]
+        },
+        {
+          "id": "insert",
+          "name": "삽입",
+          "editOnly": true,
+          "groups": [
+            {
+              "id": "tables",
+              "name": "표",
+              "collapse": 6,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"pivot-table","name":"피벗 테이블","size":"big","kind":"split","pending":true},
+                {"key":"recommended-pivot","name":"추천 피벗 테이블","size":"big","kind":"button","pending":true},
+                {"key":"table","name":"표","size":"big","kind":"dropdown","ref":"#table-style-dropdown > button","map":"nearest","unit":"#table-style-dropdown","fix":"이름 \"표 서식 ▾\" → \"표 ▾\"(말풍선 그대로)","officeKind":"button","note":"오피스 \"표\"(Ctrl+T 표 만들기) 자리 — 우리 기능은 범위에 표 서식 입히기"}
+              ]
+            },
+            {
+              "id": "illustrations",
+              "name": "일러스트레이션",
+              "collapse": 4,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"pictures","name":"그림","size":"big","kind":"dropdown","pending":true,"items":["이 디바이스…","스톡 이미지…","온라인 그림…"]},
+                {"key":"shapes","name":"도형","size":"small","kind":"dropdown","pending":true},
+                {"key":"icons","name":"아이콘","size":"small","kind":"button","pending":true},
+                {"key":"3d-models","name":"3D 모델","size":"small","kind":"split","pending":true},
+                {"key":"smartart","name":"스마트아트","size":"small","kind":"button","pending":true},
+                {"key":"screenshot","name":"스크린샷","size":"small","kind":"dropdown","pending":true}
+              ]
+            },
+            {
+              "id": "addins",
+              "name": "추가 기능",
+              "collapse": 2,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"addins","name":"추가 기능","size":"big","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "charts",
+              "name": "차트",
+              "collapse": 8,
+              "layout": "columns",
+              "launcher": {"pending":"모든 차트 보기"},
+              "controls": [
+                {"key":"recommended-charts","name":"추천 차트","size":"big","kind":"button","pending":true},
+                {"key":"column","name":"세로 막대형","size":"small","kind":"button","ref":"[data-insert-chart=\"column\"]","map":"nearest","convert":"big→small","note":"오피스 \"세로 또는 가로 막대형 차트 삽입\" 드롭다운 자리 — 종류별 단추"},
+                {"key":"bar","name":"가로 막대형","size":"small","kind":"button","ref":"[data-insert-chart=\"bar\"]","map":"nearest","convert":"big→small","note":"위와 같음"},
+                {"key":"line","name":"꺾은선형","size":"small","kind":"button","ref":"[data-insert-chart=\"line\"]","map":"nearest","convert":"big→small","note":"오피스 \"꺾은선형 또는 영역형 차트 삽입\" 자리"},
+                {"key":"pie","name":"원형","size":"small","kind":"button","ref":"[data-insert-chart=\"pie\"]","map":"nearest","convert":"big→small","note":"오피스 \"원형 또는 도넛형 차트 삽입\" 자리"},
+                {"key":"hierarchy","name":"계층 구조 차트","size":"small","kind":"dropdown","pending":true},
+                {"key":"statistic","name":"통계 차트","size":"small","kind":"dropdown","pending":true},
+                {"key":"scatter","name":"분산형 또는 거품형 차트","size":"small","kind":"dropdown","pending":true},
+                {"key":"waterfall","name":"폭포, 깔때기형, 주식형, 표면형 또는 방사형 차트","size":"small","kind":"dropdown","pending":true},
+                {"key":"combo","name":"콤보 차트","size":"small","kind":"dropdown","pending":true},
+                {"key":"maps","name":"지도","size":"big","kind":"dropdown","pending":true},
+                {"key":"pivot-chart","name":"피벗 차트","size":"big","kind":"split","pending":true}
+              ]
+            },
+            {
+              "id": "tours",
+              "name": "투어",
+              "collapse": 1,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"3d-map","name":"3D 맵","size":"big","kind":"dropdown","pending":true}
+              ]
+            },
+            {
+              "id": "sparklines",
+              "name": "스파크라인",
+              "collapse": 3,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"sparkline-line","name":"꺾은선형","size":"big","kind":"button","pending":true},
+                {"key":"sparkline-column","name":"열","size":"big","kind":"button","pending":true},
+                {"key":"win-loss","name":"승패","size":"big","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "filters",
+              "name": "필터",
+              "collapse": 3,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"slicer","name":"슬라이서","size":"big","kind":"button","pending":true},
+                {"key":"timeline","name":"시간 표시 막대","size":"big","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "links",
+              "name": "링크",
+              "collapse": 3,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"link","name":"링크","size":"big","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "comments",
+              "name": "메모",
+              "collapse": 4,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"comment","name":"메모","size":"big","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "text",
+              "name": "텍스트",
+              "collapse": 2,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"text-box","name":"텍스트 상자","size":"big","kind":"button","pending":true},
+                {"key":"header-footer","name":"머리글/바닥글","size":"big","kind":"button","pending":true},
+                {"key":"wordart","name":"워드아트","size":"small","kind":"dropdown","pending":true},
+                {"key":"signature-line","name":"서명란","size":"small","kind":"split","pending":true},
+                {"key":"object","name":"개체","size":"small","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "symbols",
+              "name": "기호",
+              "collapse": 2,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"equation","name":"수식","size":"big","kind":"split","pending":true},
+                {"key":"symbol","name":"기호","size":"big","kind":"button","pending":true}
+              ]
+            }
+          ]
+        },
+        {
+          "id": "draw",
+          "name": "그리기",
+          "editOnly": true,
+          "groups": [
+            {
+              "id": "draw-tools",
+              "name": "그리기 도구",
+              "collapse": 6,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"draw-select","name":"선택","size":"big","kind":"dropdown","pending":true},
+                {"key":"lasso","name":"올가미 선택","size":"big","kind":"button","pending":true},
+                {"key":"eraser","name":"지우개","size":"big","kind":"dropdown","pending":true},
+                {"key":"pens","name":"펜","size":"big","kind":"gallery","pending":true},
+                {"key":"add-pen","name":"펜 추가","size":"big","kind":"dropdown","pending":true,"items":["펜","연필","형광펜"]}
+              ]
+            },
+            {
+              "id": "convert",
+              "name": "변환",
+              "collapse": 4,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"ink-to-shape","name":"잉크를 도형으로","size":"big","kind":"button","pending":true},
+                {"key":"ink-to-math","name":"잉크를 수식으로","size":"big","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "replay",
+              "name": "재생",
+              "collapse": 2,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"ink-replay","name":"잉크 재생","size":"big","kind":"button","pending":true}
+              ]
+            }
+          ]
+        },
+        {
+          "id": "page-layout",
+          "name": "페이지 레이아웃",
+          "editOnly": true,
+          "groups": [
+            {
+              "id": "themes",
+              "name": "테마",
+              "collapse": 3,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"themes","name":"테마","size":"big","kind":"dropdown","pending":true},
+                {"key":"colors","name":"색","size":"small","kind":"dropdown","pending":true},
+                {"key":"fonts","name":"글꼴","size":"small","kind":"dropdown","pending":true},
+                {"key":"effects","name":"효과","size":"small","kind":"dropdown","pending":true}
+              ]
+            },
+            {
+              "id": "page-setup",
+              "name": "페이지 설정",
+              "collapse": 7,
+              "layout": "columns",
+              "launcher": {"pending":"페이지 설정"},
+              "controls": [
+                {"key":"margins","name":"여백","size":"big","kind":"dropdown","pending":true,"items":["기본","넓게","좁게","사용자 지정 여백…"]},
+                {"key":"orientation","name":"용지 방향","size":"big","kind":"dropdown","pending":true,"items":["세로","가로"]},
+                {"key":"size","name":"크기","size":"big","kind":"dropdown","pending":true},
+                {"key":"print-area","name":"인쇄 영역","size":"big","kind":"dropdown","pending":true,"items":["인쇄 영역 설정","인쇄 영역 해제"]},
+                {"key":"breaks","name":"나누기","size":"big","kind":"dropdown","pending":true,"items":["페이지 나누기 삽입","페이지 나누기 제거","페이지 나누기 모두 원래대로"]},
+                {"key":"background","name":"배경","size":"big","kind":"button","pending":true},
+                {"key":"print-titles","name":"인쇄 제목","size":"big","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "scale-to-fit",
+              "name": "크기 조정",
+              "collapse": 5,
+              "layout": "columns",
+              "launcher": {"pending":"페이지 설정: 페이지"},
+              "controls": [
+                {"key":"width","name":"너비","size":"small","kind":"select","pending":true},
+                {"key":"height","name":"높이","size":"small","kind":"select","pending":true},
+                {"key":"scale","name":"배율","size":"small","kind":"input","pending":true}
+              ]
+            },
+            {
+              "id": "sheet-options",
+              "name": "시트 옵션",
+              "collapse": 4,
+              "layout": "fields",
+              "launcher": {"pending":"페이지 설정: 시트"},
+              "controls": [
+                {"key":"gridlines-view","name":"보기","size":"small","kind":"toggle","pending":true,"stackTitle":"눈금선"},
+                {"key":"gridlines-print","name":"인쇄","size":"small","kind":"toggle","pending":true},
+                {"key":"headings-view","name":"보기","size":"small","kind":"toggle","pending":true,"stackTitle":"제목"},
+                {"key":"headings-print","name":"인쇄","size":"small","kind":"toggle","pending":true}
+              ]
+            },
+            {
+              "id": "arrange",
+              "name": "정렬",
+              "collapse": 2,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"bring-forward","name":"앞으로 가져오기","size":"small","kind":"split","pending":true},
+                {"key":"send-backward","name":"뒤로 보내기","size":"small","kind":"split","pending":true},
+                {"key":"selection-pane","name":"선택 창","size":"small","kind":"button","pending":true},
+                {"key":"align","name":"맞춤","size":"small","kind":"dropdown","pending":true,"items":["왼쪽 맞춤","가운데 맞춤","오른쪽 맞춤","위쪽 맞춤","중간 맞춤","아래쪽 맞춤","가로 간격을 동일하게","세로 간격을 동일하게"]},
+                {"key":"group","name":"그룹화","size":"small","kind":"dropdown","pending":true,"items":["그룹","그룹 해제"]},
+                {"key":"rotate","name":"회전","size":"small","kind":"dropdown","pending":true,"items":["오른쪽으로 90도 회전","왼쪽으로 90도 회전","상하 대칭","좌우 대칭"]}
+              ]
+            }
+          ]
+        },
+        {
+          "id": "formulas",
+          "name": "수식",
+          "editOnly": true,
+          "groups": [
+            {
+              "id": "function-library",
+              "name": "함수 라이브러리",
+              "collapse": 8,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"insert-function","name":"함수 삽입","size":"big","kind":"button","pending":true},
+                {"key":"autosum","name":"자동 합계","size":"big","kind":"split","ref":"#autosum-dropdown-formulas > .autosum-apply","map":"same","unit":"#autosum-dropdown-formulas"},
+                {"key":"average","name":"평균","size":"small","kind":"button","ref":".autosum-apply[data-fn=\"AVERAGE\"]","map":"nearest","note":"오피스엔 자동 합계 드롭다운 안 항목 — 자동 합계 바로 뒤에 작은 단추로"},
+                {"key":"max","name":"최대값","size":"small","kind":"button","ref":".autosum-apply[data-fn=\"MAX\"]","map":"nearest","note":"위와 같음"},
+                {"key":"count","name":"숫자 개수","size":"small","kind":"button","ref":".autosum-apply[data-fn=\"COUNT\"]","map":"nearest","note":"위와 같음"},
+                {"key":"min","name":"최소값","size":"small","kind":"button","ref":".autosum-apply[data-fn=\"MIN\"]","map":"nearest","note":"위와 같음"},
+                {"key":"recently-used","name":"최근 사용 항목","size":"big","kind":"dropdown","pending":true},
+                {"key":"financial","name":"재무","size":"big","kind":"dropdown","pending":true},
+                {"key":"logical","name":"논리","size":"big","kind":"dropdown","pending":true},
+                {"key":"text","name":"텍스트","size":"big","kind":"dropdown","pending":true},
+                {"key":"date-time","name":"날짜 및 시간","size":"big","kind":"dropdown","pending":true},
+                {"key":"lookup","name":"찾기/참조 영역","size":"big","kind":"dropdown","pending":true},
+                {"key":"math-trig","name":"수학/삼각","size":"big","kind":"dropdown","pending":true},
+                {"key":"more-functions","name":"함수 더 보기","size":"big","kind":"dropdown","pending":true,"items":["통계","공학","큐브","정보","호환성","웹"]}
+              ]
+            },
+            {
+              "id": "defined-names",
+              "name": "정의된 이름",
+              "collapse": 4,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"name-manager","name":"이름 관리자","size":"big","kind":"button","pending":true},
+                {"key":"define-name","name":"이름 정의","size":"small","kind":"split","pending":true},
+                {"key":"use-in-formula","name":"수식에서 사용","size":"small","kind":"dropdown","pending":true},
+                {"key":"create-from-selection","name":"선택 영역에서 만들기","size":"small","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "formula-auditing",
+              "name": "수식 분석",
+              "collapse": 3,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"trace-precedents","name":"참조되는 셀 추적","size":"small","kind":"button","pending":true},
+                {"key":"trace-dependents","name":"참조하는 셀 추적","size":"small","kind":"button","pending":true},
+                {"key":"remove-arrows","name":"연결선 제거","size":"small","kind":"split","pending":true},
+                {"key":"show-formulas","name":"수식 표시","size":"small","kind":"button","pending":true},
+                {"key":"error-checking","name":"오류 검사","size":"small","kind":"split","pending":true},
+                {"key":"evaluate-formula","name":"수식 계산","size":"small","kind":"button","pending":true},
+                {"key":"watch-window","name":"조사식 창","size":"big","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "calculation",
+              "name": "계산",
+              "collapse": 5,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"calculation-options","name":"계산 옵션","size":"big","kind":"dropdown","pending":true,"items":["자동","데이터 표만 수동","수동"]},
+                {"key":"calculate-now","name":"지금 계산","size":"small","kind":"button","pending":true},
+                {"key":"calculate-sheet","name":"시트 계산","size":"small","kind":"button","pending":true}
+              ]
+            }
+          ]
+        },
+        {
+          "id": "data",
+          "name": "데이터",
+          "editOnly": true,
+          "groups": [
+            {
+              "id": "get-transform",
+              "name": "데이터 가져오기 및 변환",
+              "collapse": 4,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"get-data","name":"데이터 가져오기","size":"big","kind":"dropdown","pending":true},
+                {"key":"from-text-csv","name":"텍스트/CSV에서","size":"small","kind":"button","pending":true},
+                {"key":"from-web","name":"웹","size":"small","kind":"button","pending":true},
+                {"key":"from-table","name":"테이블/범위에서","size":"small","kind":"button","pending":true},
+                {"key":"from-picture","name":"그림에서","size":"small","kind":"dropdown","pending":true},
+                {"key":"recent-sources","name":"최근에 사용한 원본","size":"small","kind":"button","pending":true},
+                {"key":"existing-connections","name":"기존 연결","size":"small","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "queries-connections",
+              "name": "쿼리 및 연결",
+              "collapse": 3,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"refresh-all","name":"모두 새로 고침","size":"big","kind":"split","pending":true},
+                {"key":"queries-connections","name":"쿼리 및 연결","size":"small","kind":"button","pending":true},
+                {"key":"properties","name":"속성","size":"small","kind":"button","pending":true},
+                {"key":"workbook-links","name":"통합 문서 링크","size":"small","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "data-types",
+              "name": "데이터 형식",
+              "collapse": 2,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"data-types","name":"데이터 형식","size":"big","kind":"gallery","pending":true}
+              ]
+            },
+            {
+              "id": "sort-filter",
+              "name": "정렬 및 필터",
+              "collapse": 8,
+              "layout": "columns",
+              "launcher": null,
+              "note": "기존 \"자세히\"(사용자 지정 정렬 대리)는 지움 — 오피스 정렬 및 필터 묶음엔 자세히가 없다(정렬 단추가 같은 대화상자)",
+              "controls": [
+                {"key":"sort-asc","name":"오름차순 정렬","size":"small","kind":"button","ref":"#btn-sort-asc","map":"same","fix":"이름 \"오름차순\" → \"오름차순 정렬\""},
+                {"key":"sort-desc","name":"내림차순 정렬","size":"small","kind":"button","ref":"#btn-sort-desc","map":"same","fix":"이름 \"내림차순\" → \"내림차순 정렬\""},
+                {"key":"sort","name":"정렬","size":"big","kind":"button","ref":"#btn-sort-custom","map":"same"},
+                {"key":"filter","name":"필터","size":"big","kind":"button","ref":"#btn-filter","map":"same"},
+                {"key":"clear","name":"지우기","size":"small","kind":"button","ref":"#btn-filter-clear","map":"same"},
+                {"key":"reapply","name":"다시 적용","size":"small","kind":"button","pending":true},
+                {"key":"advanced","name":"고급","size":"small","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "data-tools",
+              "name": "데이터 도구",
+              "collapse": 5,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"text-to-columns","name":"텍스트 나누기","size":"big","kind":"button","pending":true},
+                {"key":"flash-fill","name":"빠른 채우기","size":"small","kind":"button","pending":true},
+                {"key":"remove-duplicates","name":"중복된 항목 제거","size":"small","kind":"button","pending":true},
+                {"key":"data-validation","name":"데이터 유효성 검사","size":"small","kind":"split","pending":true},
+                {"key":"consolidate","name":"통합","size":"small","kind":"button","pending":true},
+                {"key":"relationships","name":"관계","size":"small","kind":"button","pending":true},
+                {"key":"manage-data-model","name":"데이터 모델 관리","size":"small","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "forecast",
+              "name": "예측",
+              "collapse": 4,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"what-if","name":"가상 분석","size":"big","kind":"dropdown","pending":true,"items":["시나리오 관리자…","목표값 찾기…","데이터 표…"]},
+                {"key":"forecast-sheet","name":"예측 시트","size":"big","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "outline",
+              "name": "개요",
+              "collapse": 3,
+              "layout": "columns",
+              "launcher": {"pending":"설정"},
+              "controls": [
+                {"key":"group","name":"그룹","size":"big","kind":"split","pending":true},
+                {"key":"ungroup","name":"그룹 해제","size":"big","kind":"split","pending":true},
+                {"key":"subtotal","name":"부분합","size":"big","kind":"button","pending":true}
+              ]
+            }
+          ]
+        },
+        {
+          "id": "review",
+          "name": "검토",
+          "editOnly": false,
+          "groups": [
+            {
+              "id": "proofing",
+              "name": "언어 교정",
+              "collapse": 5,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"spelling","name":"맞춤법 검사","size":"big","kind":"button","pending":true},
+                {"key":"thesaurus","name":"동의어 사전","size":"small","kind":"button","pending":true},
+                {"key":"workbook-statistics","name":"통합 문서 통계","size":"small","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "accessibility",
+              "name": "접근성",
+              "collapse": 2,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"check-accessibility","name":"접근성 검사","size":"big","kind":"split","pending":true}
+              ]
+            },
+            {
+              "id": "insights",
+              "name": "정보 활용",
+              "collapse": 1,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"smart-lookup","name":"스마트 조회","size":"big","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "language",
+              "name": "언어",
+              "collapse": 2,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"translate","name":"번역","size":"big","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "changes",
+              "name": "변경 내용",
+              "collapse": 3,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"show-changes","name":"변경 내용 표시","size":"big","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "comments",
+              "name": "메모",
+              "collapse": 5,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"new-comment","name":"새 메모","size":"big","kind":"button","pending":true},
+                {"key":"delete","name":"삭제","size":"big","kind":"button","pending":true},
+                {"key":"previous","name":"이전 메모","size":"big","kind":"button","pending":true},
+                {"key":"next","name":"다음 메모","size":"big","kind":"button","pending":true},
+                {"key":"show-comments","name":"메모 표시","size":"big","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "notes",
+              "name": "노트",
+              "collapse": 3,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"notes","name":"노트","size":"big","kind":"dropdown","pending":true,"items":["새 노트","이전 노트","다음 노트","모든 노트 표시","메모로 변환"]}
+              ]
+            },
+            {
+              "id": "protect",
+              "name": "보호",
+              "collapse": 4,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"protect-sheet","name":"시트 보호","size":"big","kind":"button","pending":true},
+                {"key":"protect-workbook","name":"통합 문서 보호","size":"big","kind":"button","pending":true},
+                {"key":"allow-edit-ranges","name":"범위 편집 허용","size":"big","kind":"button","pending":true},
+                {"key":"unshare-workbook","name":"통합 문서 공유 취소","size":"big","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "ink",
+              "name": "잉크",
+              "collapse": 1,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"hide-ink","name":"잉크 숨기기","size":"big","kind":"dropdown","pending":true}
+              ]
+            }
+          ]
+        },
+        {
+          "id": "view",
+          "name": "보기",
+          "editOnly": false,
+          "groups": [
+            {
+              "id": "sheet-view",
+              "name": "시트 보기",
+              "collapse": 3,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"sheet-view-select","name":"시트 보기","size":"small","kind":"select","pending":true},
+                {"key":"keep","name":"유지","size":"small","kind":"button","pending":true},
+                {"key":"exit","name":"종료","size":"small","kind":"button","pending":true},
+                {"key":"new","name":"새로 만들기","size":"small","kind":"button","pending":true},
+                {"key":"options","name":"옵션","size":"small","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "workbook-views",
+              "name": "통합 문서 보기",
+              "collapse": 4,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"normal","name":"기본","size":"big","kind":"button","pending":true},
+                {"key":"page-break-preview","name":"페이지 나누기 미리 보기","size":"big","kind":"button","pending":true},
+                {"key":"page-layout","name":"페이지 레이아웃","size":"big","kind":"button","pending":true},
+                {"key":"custom-views","name":"사용자 지정 보기","size":"big","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "show",
+              "name": "표시",
+              "collapse": 3,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"ruler","name":"눈금자","size":"small","kind":"toggle","pending":true},
+                {"key":"formula-bar","name":"수식 입력줄","size":"small","kind":"toggle","pending":true},
+                {"key":"gridlines","name":"눈금선","size":"small","kind":"toggle","pending":true},
+                {"key":"headings","name":"머리글","size":"small","kind":"toggle","pending":true}
+              ]
+            },
+            {
+              "id": "zoom",
+              "name": "확대/축소",
+              "collapse": 6,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"zoom","name":"확대/축소","size":"big","kind":"button","pending":true},
+                {"key":"zoom-100","name":"100%","size":"big","kind":"button","ref":"#btn-zoom-100","map":"same"},
+                {"key":"zoom-to-selection","name":"선택 영역 확대/축소","size":"big","kind":"button","pending":true},
+                {"key":"zoom-in","name":"확대","size":"small","kind":"button","ref":"#btn-zoom-in-ribbon","map":"nearest","note":"오피스는 상태 줄 확대/축소 막대 — 이 묶음 끝에"},
+                {"key":"zoom-out","name":"축소","size":"small","kind":"button","ref":"#btn-zoom-out-ribbon","map":"nearest","note":"위와 같음"}
+              ]
+            },
+            {
+              "id": "window",
+              "name": "창",
+              "collapse": 6,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"new-window","name":"새 창","size":"small","kind":"button","pending":true},
+                {"key":"arrange-all","name":"모두 정렬","size":"small","kind":"button","pending":true},
+                {"key":"freeze-panes","name":"틀 고정","size":"small","kind":"button","ref":"#btn-freeze-panes","map":"same","convert":"big→small","officeKind":"dropdown"},
+                {"key":"split","name":"나누기","size":"small","kind":"button","pending":true},
+                {"key":"hide","name":"숨기기","size":"small","kind":"button","pending":true},
+                {"key":"unhide","name":"숨기기 취소","size":"small","kind":"button","pending":true},
+                {"key":"view-side-by-side","name":"나란히 보기","size":"small","kind":"button","pending":true},
+                {"key":"synchronous-scrolling","name":"동시 스크롤","size":"small","kind":"button","pending":true},
+                {"key":"reset-window-position","name":"창 위치 다시 설정","size":"small","kind":"button","pending":true},
+                {"key":"switch-windows","name":"창 전환","size":"big","kind":"dropdown","pending":true}
+              ]
+            },
+            {
+              "id": "macros",
+              "name": "매크로",
+              "collapse": 2,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"macros","name":"매크로","size":"big","kind":"split","pending":true,"items":["매크로 보기","매크로 기록…","상대 참조로 기록"]}
+              ]
+            }
+          ]
+        }
+      ],
+      "contextual": [
+        {
+          "id": "chart",
+          "name": "차트 디자인",
+          "editOnly": true,
+          "trigger": "넣은 차트를 고를 때",
+          "wired": "기존 — grid-editor.ts setChartTabVisible → setContextualTab('chart', …)",
+          "groups": [
+            {
+              "id": "chart-layouts",
+              "name": "차트 레이아웃",
+              "collapse": 6,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"add-chart-element","name":"차트 요소 추가","size":"big","kind":"dropdown","pending":true,"items":["축","축 제목","차트 제목","데이터 레이블","데이터 표","오차 막대","눈금선","범례","선","추세선","양선/음선"]},
+                {"key":"quick-layout","name":"빠른 레이아웃","size":"big","kind":"dropdown","pending":true},
+                {"key":"chart-title","name":"차트 제목","size":"small","kind":"input","ref":"#chart-title-input","map":"nearest","unit":"label.chart-title-field","fix":"이름 \"제목\" → \"차트 제목\"","note":"오피스는 \"차트 요소 추가 > 차트 제목\" — 제목 입력칸을 이 묶음에. 기존 \"차트 요소\" 묶음은 없어짐"}
+              ]
+            },
+            {
+              "id": "chart-styles",
+              "name": "차트 스타일",
+              "collapse": 5,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"change-colors","name":"색 변경","size":"big","kind":"dropdown","pending":true},
+                {"key":"chart-styles","name":"차트 스타일","size":"big","kind":"gallery","pending":true}
+              ]
+            },
+            {
+              "id": "data",
+              "name": "데이터",
+              "collapse": 4,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"switch-row-column","name":"행/열 전환","size":"big","kind":"button","pending":true},
+                {"key":"select-data","name":"데이터 선택","size":"big","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "type",
+              "name": "종류",
+              "collapse": 7,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"column","name":"세로 막대형","size":"big","kind":"button","ref":"[data-chart-kind=\"column\"]","map":"nearest","note":"오피스는 \"차트 종류 변경\" 대화상자 단추 하나 — 종류 단추 넷을 그 자리에. 기존 \"차트 종류 변경\" 묶음 이름은 \"종류\"로"},
+                {"key":"bar","name":"가로 막대형","size":"big","kind":"button","ref":"[data-chart-kind=\"bar\"]","map":"nearest","note":"위와 같음"},
+                {"key":"line","name":"꺾은선형","size":"big","kind":"button","ref":"[data-chart-kind=\"line\"]","map":"nearest","note":"위와 같음"},
+                {"key":"pie","name":"원형","size":"big","kind":"button","ref":"[data-chart-kind=\"pie\"]","map":"nearest","note":"위와 같음"}
+              ]
+            },
+            {
+              "id": "location",
+              "name": "위치",
+              "collapse": 3,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"move-chart","name":"차트 이동","size":"big","kind":"button","pending":true},
+                {"key":"delete","name":"삭제","size":"big","kind":"button","ref":"#btn-chart-delete","map":"nearest","note":"오피스 리본엔 없음(Delete 키) — 마지막 묶음에. 기존 \"차트\" 묶음은 없어짐"}
+              ]
+            }
+          ]
+        },
+        {
+          "id": "chart-format",
+          "name": "서식",
+          "editOnly": true,
+          "trigger": "넣은 차트를 고를 때",
+          "wired": "grid-editor.ts setChartTabVisible에 setContextualTab('chart-format', visible) 한 줄 더함",
+          "groups": [
+            {
+              "id": "current-selection",
+              "name": "현재 선택 영역",
+              "collapse": 4,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"chart-elements","name":"차트 요소","size":"small","kind":"select","pending":true},
+                {"key":"format-selection","name":"선택 영역 서식","size":"small","kind":"button","pending":true},
+                {"key":"reset-to-match","name":"스타일에 맞게 다시 설정","size":"small","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "insert-shapes",
+              "name": "도형 삽입",
+              "collapse": 3,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"shapes","name":"도형","size":"big","kind":"gallery","pending":true},
+                {"key":"change-shape","name":"도형 모양 변경","size":"small","kind":"dropdown","pending":true}
+              ]
+            },
+            {
+              "id": "shape-styles",
+              "name": "도형 스타일",
+              "collapse": 5,
+              "layout": "columns",
+              "launcher": {"pending":"도형 서식"},
+              "controls": [
+                {"key":"shape-styles","name":"도형 스타일","size":"big","kind":"gallery","pending":true},
+                {"key":"shape-fill","name":"도형 채우기","size":"small","kind":"split","pending":true},
+                {"key":"shape-outline","name":"도형 윤곽선","size":"small","kind":"split","pending":true},
+                {"key":"shape-effects","name":"도형 효과","size":"small","kind":"dropdown","pending":true}
+              ]
+            },
+            {
+              "id": "wordart-styles",
+              "name": "워드아트 스타일",
+              "collapse": 4,
+              "layout": "columns",
+              "launcher": {"pending":"텍스트 효과 서식"},
+              "note": "오피스 이름 \"WordArt 스타일\" — 영문만 이름은 한글 표기(사용자 규칙 4·verify:ribbon-skin (2))",
+              "controls": [
+                {"key":"wordart-styles","name":"빠른 스타일","size":"big","kind":"gallery","pending":true},
+                {"key":"text-fill","name":"텍스트 채우기","size":"small","kind":"split","pending":true},
+                {"key":"text-outline","name":"텍스트 윤곽선","size":"small","kind":"split","pending":true},
+                {"key":"text-effects","name":"텍스트 효과","size":"small","kind":"dropdown","pending":true}
+              ]
+            },
+            {
+              "id": "accessibility",
+              "name": "접근성",
+              "collapse": 2,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"alt-text","name":"대체 텍스트","size":"big","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "arrange",
+              "name": "정렬",
+              "collapse": 3,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"bring-forward","name":"앞으로 가져오기","size":"small","kind":"split","pending":true},
+                {"key":"send-backward","name":"뒤로 보내기","size":"small","kind":"split","pending":true},
+                {"key":"selection-pane","name":"선택 창","size":"small","kind":"button","pending":true},
+                {"key":"align","name":"맞춤","size":"small","kind":"dropdown","pending":true,"items":["왼쪽 맞춤","가운데 맞춤","오른쪽 맞춤","위쪽 맞춤","중간 맞춤","아래쪽 맞춤","가로 간격을 동일하게","세로 간격을 동일하게"]},
+                {"key":"group","name":"그룹화","size":"small","kind":"dropdown","pending":true,"items":["그룹","그룹 해제"]},
+                {"key":"rotate","name":"회전","size":"small","kind":"dropdown","pending":true,"items":["오른쪽으로 90도 회전","왼쪽으로 90도 회전","상하 대칭","좌우 대칭"]}
+              ]
+            },
+            {
+              "id": "size",
+              "name": "크기",
+              "collapse": 4,
+              "layout": "columns",
+              "launcher": {"pending":"크기 및 위치"},
+              "controls": [
+                {"key":"height","name":"높이","size":"small","kind":"input","pending":true},
+                {"key":"width","name":"너비","size":"small","kind":"input","pending":true}
+              ]
+            }
+          ]
+        },
+        {
+          "id": "table-design",
+          "name": "테이블 디자인",
+          "editOnly": true,
+          "trigger": "표(테이블) 범위 안 칸(우리 \"표 서식\"은 서식만 입혀 표 개체가 없음 — 아직 없음)",
+          "wired": null,
+          "groups": [
+            {
+              "id": "properties",
+              "name": "속성",
+              "collapse": 3,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"table-name","name":"표 이름","size":"small","kind":"input","pending":true},
+                {"key":"resize-table","name":"표 크기 조정","size":"small","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "tools",
+              "name": "도구",
+              "collapse": 4,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"summarize-pivot","name":"피벗 테이블로 요약","size":"small","kind":"button","pending":true},
+                {"key":"remove-duplicates","name":"중복된 항목 제거","size":"small","kind":"button","pending":true},
+                {"key":"convert-to-range","name":"범위로 변환","size":"small","kind":"button","pending":true},
+                {"key":"insert-slicer","name":"슬라이서 삽입","size":"big","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "external-data",
+              "name": "외부 표 데이터",
+              "collapse": 2,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"export","name":"내보내기","size":"big","kind":"dropdown","pending":true},
+                {"key":"refresh","name":"새로 고침","size":"big","kind":"split","pending":true},
+                {"key":"properties","name":"속성","size":"small","kind":"button","pending":true},
+                {"key":"open-in-browser","name":"브라우저에서 열기","size":"small","kind":"button","pending":true},
+                {"key":"unlink","name":"연결 끊기","size":"small","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "style-options",
+              "name": "표 스타일 옵션",
+              "collapse": 5,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"header-row","name":"머리글 행","size":"small","kind":"toggle","pending":true},
+                {"key":"total-row","name":"요약 행","size":"small","kind":"toggle","pending":true},
+                {"key":"banded-rows","name":"줄무늬 행","size":"small","kind":"toggle","pending":true},
+                {"key":"first-column","name":"첫째 열","size":"small","kind":"toggle","pending":true},
+                {"key":"last-column","name":"마지막 열","size":"small","kind":"toggle","pending":true},
+                {"key":"banded-columns","name":"줄무늬 열","size":"small","kind":"toggle","pending":true},
+                {"key":"filter-button","name":"필터 단추","size":"small","kind":"toggle","pending":true}
+              ]
+            },
+            {
+              "id": "table-styles",
+              "name": "표 스타일",
+              "collapse": 6,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"table-styles","name":"표 스타일","size":"big","kind":"gallery","pending":true}
+              ]
+            }
+          ]
+        },
+        {
+          "id": "picture-format",
+          "name": "그림 서식",
+          "editOnly": true,
+          "trigger": "그림 선택(우리 편집기엔 아직 없음)",
+          "wired": null,
+          "groups": [
+            {
+              "id": "adjust",
+              "name": "조정",
+              "collapse": 6,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"remove-background","name":"배경 제거","size":"big","kind":"button","pending":true},
+                {"key":"corrections","name":"수정","size":"big","kind":"dropdown","pending":true},
+                {"key":"color","name":"색","size":"big","kind":"dropdown","pending":true},
+                {"key":"artistic-effects","name":"꾸밈 효과","size":"big","kind":"dropdown","pending":true},
+                {"key":"transparency","name":"투명도","size":"big","kind":"dropdown","pending":true},
+                {"key":"compress","name":"그림 압축","size":"small","kind":"button","pending":true},
+                {"key":"change-picture","name":"그림 바꾸기","size":"small","kind":"dropdown","pending":true},
+                {"key":"reset-picture","name":"그림 원래대로","size":"small","kind":"split","pending":true}
+              ]
+            },
+            {
+              "id": "picture-styles",
+              "name": "그림 스타일",
+              "collapse": 5,
+              "layout": "columns",
+              "launcher": {"pending":"그림 서식"},
+              "controls": [
+                {"key":"picture-styles","name":"그림 스타일","size":"big","kind":"gallery","pending":true},
+                {"key":"picture-border","name":"그림 테두리","size":"small","kind":"split","pending":true},
+                {"key":"picture-effects","name":"그림 효과","size":"small","kind":"dropdown","pending":true},
+                {"key":"picture-layout","name":"그림 레이아웃","size":"small","kind":"dropdown","pending":true}
+              ]
+            },
+            {
+              "id": "accessibility",
+              "name": "접근성",
+              "collapse": 2,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"alt-text","name":"대체 텍스트","size":"big","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "arrange",
+              "name": "정렬",
+              "collapse": 3,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"bring-forward","name":"앞으로 가져오기","size":"small","kind":"split","pending":true},
+                {"key":"send-backward","name":"뒤로 보내기","size":"small","kind":"split","pending":true},
+                {"key":"selection-pane","name":"선택 창","size":"small","kind":"button","pending":true},
+                {"key":"align","name":"맞춤","size":"small","kind":"dropdown","pending":true,"items":["왼쪽 맞춤","가운데 맞춤","오른쪽 맞춤","위쪽 맞춤","중간 맞춤","아래쪽 맞춤","가로 간격을 동일하게","세로 간격을 동일하게"]},
+                {"key":"group","name":"그룹화","size":"small","kind":"dropdown","pending":true,"items":["그룹","그룹 해제"]},
+                {"key":"rotate","name":"회전","size":"small","kind":"dropdown","pending":true,"items":["오른쪽으로 90도 회전","왼쪽으로 90도 회전","상하 대칭","좌우 대칭"]}
+              ]
+            },
+            {
+              "id": "size",
+              "name": "크기",
+              "collapse": 4,
+              "layout": "columns",
+              "launcher": {"pending":"크기 및 위치"},
+              "controls": [
+                {"key":"crop","name":"자르기","size":"big","kind":"split","pending":true},
+                {"key":"height","name":"높이","size":"small","kind":"input","pending":true},
+                {"key":"width","name":"너비","size":"small","kind":"input","pending":true}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "powerpoint": {
+      "page": "public/editor-slides.html",
+      "backstage": {
+        "office": ["홈","새로 만들기","열기","정보","저장","다른 이름으로 저장","인쇄","공유","내보내기","닫기","계정","피드백","옵션"],
+        "existing": ["정보","다운로드","인쇄","닫기"]
+      },
+      "tabs": [
+        {
+          "id": "home",
+          "name": "홈",
+          "editOnly": true,
+          "panelId": "slides-ribbon",
+          "groups": [
+            {
+              "id": "clipboard",
+              "name": "클립보드",
+              "collapse": 9,
+              "layout": "columns",
+              "launcher": {"pending":"클립보드 창"},
+              "controls": [
+                {"key":"paste","name":"붙여넣기","size":"big","kind":"split","pending":true},
+                {"key":"cut","name":"잘라내기","size":"small","kind":"button","pending":true},
+                {"key":"copy","name":"복사","size":"small","kind":"split","pending":true},
+                {"key":"format-painter","name":"서식 복사","size":"small","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "slides",
+              "name": "슬라이드",
+              "collapse": 8,
+              "layout": "columns",
+              "launcher": null,
+              "domId": "ribbon-slides",
+              "controls": [
+                {"key":"new-slide","name":"새 슬라이드","size":"big","kind":"button","ref":"#btn-add-blank","map":"same","officeKind":"split"},
+                {"key":"layout","name":"레이아웃","size":"small","kind":"dropdown","pending":true},
+                {"key":"reset","name":"다시 설정","size":"small","kind":"button","pending":true},
+                {"key":"section","name":"구역","size":"small","kind":"dropdown","pending":true,"items":["구역 추가","구역 이름 바꾸기","구역 제거","모든 구역 제거","모두 축소","모두 확장"]},
+                {"key":"duplicate","name":"복제","size":"small","kind":"button","ref":"#btn-dup-slide","map":"nearest","break":true,"note":"오피스는 \"새 슬라이드 > 선택한 슬라이드 복제\" — 같은 묶음 끝에"},
+                {"key":"delete","name":"삭제","size":"small","kind":"button","ref":"#btn-del-slide","map":"nearest","note":"오피스 리본엔 없음(Delete 키·오른쪽 클릭) — 같은 묶음 끝에"}
+              ]
+            },
+            {
+              "id": "font",
+              "name": "글꼴",
+              "collapse": 7,
+              "layout": "rows",
+              "launcher": {"pending":"글꼴"},
+              "domId": "format-toolbar",
+              "className": "slides-text-group",
+              "controls": [
+                {"key":"font-family","name":"글꼴","size":"small","kind":"select","ref":"#font-family","map":"same","row":0},
+                {"key":"font-size","name":"글꼴 크기","size":"small","kind":"select","ref":"#font-size","map":"same","fix":"aria-label·title \"글자 크기\" → \"글꼴 크기\"","row":0},
+                {"key":"grow","name":"글꼴 크기 크게","size":"small","kind":"button","iconOnly":true,"ref":"#btn-font-grow","map":"same","row":0},
+                {"key":"shrink","name":"글꼴 크기 작게","size":"small","kind":"button","iconOnly":true,"ref":"#btn-font-shrink","map":"same","row":0},
+                {"key":"clear-format","name":"모든 서식 지우기","size":"small","kind":"button","iconOnly":true,"ref":"#btn-clear-format","map":"same","row":0},
+                {"key":"bold","name":"굵게","size":"small","kind":"button","iconOnly":true,"ref":"#btn-bold","map":"same","row":1},
+                {"key":"italic","name":"기울임꼴","size":"small","kind":"button","iconOnly":true,"ref":"#btn-italic","map":"same","row":1},
+                {"key":"underline","name":"밑줄","size":"small","kind":"button","iconOnly":true,"ref":"#btn-underline","map":"same","row":1},
+                {"key":"text-shadow","name":"텍스트 그림자","size":"small","kind":"button","pending":true,"iconOnly":true,"row":1},
+                {"key":"strikethrough","name":"취소선","size":"small","kind":"button","pending":true,"iconOnly":true,"row":1},
+                {"key":"character-spacing","name":"문자 간격","size":"small","kind":"dropdown","pending":true,"items":["매우 좁게","좁게","표준","넓게","매우 넓게","기타 간격…"],"iconOnly":true,"row":1},
+                {"key":"change-case","name":"대/소문자 바꾸기","size":"small","kind":"dropdown","pending":true,"iconOnly":true,"row":1},
+                {"key":"highlight","name":"텍스트 강조 색","size":"small","kind":"split","pending":true,"iconOnly":true,"row":1},
+                {"key":"font-color","name":"글꼴 색","size":"small","kind":"split","iconOnly":true,"ref":"#text-color-picker","map":"same","unit":"#text-color-btn","row":1}
+              ]
+            },
+            {
+              "id": "paragraph",
+              "name": "단락",
+              "collapse": 6,
+              "layout": "rows",
+              "launcher": {"pending":"단락"},
+              "domId": "ribbon-paragraph",
+              "controls": [
+                {"key":"bullets","name":"글머리 기호","size":"small","kind":"split","pending":true,"iconOnly":true,"row":0},
+                {"key":"numbering","name":"번호 매기기","size":"small","kind":"split","pending":true,"iconOnly":true,"row":0},
+                {"key":"decrease-list-level","name":"목록 수준 줄임","size":"small","kind":"button","pending":true,"iconOnly":true,"row":0},
+                {"key":"increase-list-level","name":"목록 수준 늘림","size":"small","kind":"button","pending":true,"iconOnly":true,"row":0},
+                {"key":"line-spacing","name":"줄 간격","size":"small","kind":"dropdown","pending":true,"items":["1.0","1.5","2.0","2.5","3.0","줄 간격 옵션…"],"iconOnly":true,"row":0},
+                {"key":"align-left","name":"왼쪽 맞춤","size":"small","kind":"button","iconOnly":true,"ref":"#btn-align-left","map":"same","row":1},
+                {"key":"align-center","name":"가운데 맞춤","size":"small","kind":"button","iconOnly":true,"ref":"#btn-align-center","map":"same","row":1},
+                {"key":"align-right","name":"오른쪽 맞춤","size":"small","kind":"button","iconOnly":true,"ref":"#btn-align-right","map":"same","row":1},
+                {"key":"justify","name":"양쪽 맞춤","size":"small","kind":"button","iconOnly":true,"ref":"#btn-align-justify","map":"same","row":1},
+                {"key":"distributed","name":"균등 분할","size":"small","kind":"button","pending":true,"iconOnly":true,"row":1},
+                {"key":"columns","name":"열 추가 또는 제거","size":"small","kind":"dropdown","pending":true,"iconOnly":true,"row":1},
+                {"key":"text-direction","name":"텍스트 방향","size":"small","kind":"dropdown","pending":true,"items":["가로","세로","모든 텍스트 90도 회전","모든 텍스트 270도 회전","스택형"]},
+                {"key":"align-text","name":"텍스트 맞춤","size":"small","kind":"dropdown","pending":true,"items":["위쪽","중간","아래쪽"]},
+                {"key":"convert-to-smartart","name":"스마트아트로 변환","size":"small","kind":"dropdown","pending":true}
+              ]
+            },
+            {
+              "id": "drawing",
+              "name": "그리기",
+              "collapse": 5,
+              "layout": "columns",
+              "launcher": null,
+              "domId": "ribbon-draw",
+              "controls": [
+                {"key":"text-box","name":"텍스트 상자","size":"big","kind":"button","ref":"#btn-add-textbox","map":"nearest","note":"오피스 홈 \"그리기\"의 도형 갤러리 첫 칸(텍스트 상자) 자리 — 큰 단추로 둠"},
+                {"key":"rect","name":"사각형 삽입","size":"small","kind":"button","ref":"#btn-shape-rect","map":"nearest","note":"오피스 도형 갤러리 자리 — 우리 도형 셋"},
+                {"key":"roundrect","name":"둥근 사각형 삽입","size":"small","kind":"button","ref":"#btn-shape-roundrect","map":"nearest","note":"위와 같음"},
+                {"key":"ellipse","name":"타원 삽입","size":"small","kind":"button","ref":"#btn-shape-ellipse","map":"nearest","note":"위와 같음"},
+                {"key":"arrange","name":"정렬","size":"big","kind":"dropdown","pending":true},
+                {"key":"quick-styles","name":"빠른 스타일","size":"big","kind":"dropdown","pending":true},
+                {"key":"shape-fill","name":"도형 채우기","size":"small","kind":"split","ref":"#shape-fill-picker","map":"same","unit":"#shape-fill-btn","fix":"input title·aria-label \"도형 채우기 색\" → \"도형 채우기\""},
+                {"key":"shape-outline","name":"도형 윤곽선","size":"small","kind":"split","pending":true},
+                {"key":"shape-effects","name":"도형 효과","size":"small","kind":"dropdown","pending":true}
+              ]
+            },
+            {
+              "id": "editing",
+              "name": "편집",
+              "collapse": 4,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"find","name":"찾기","size":"small","kind":"button","pending":true},
+                {"key":"replace","name":"바꾸기","size":"small","kind":"split","pending":true},
+                {"key":"select","name":"선택","size":"small","kind":"dropdown","pending":true,"items":["모두 선택","개체 선택","선택 창…"]}
+              ]
+            },
+            {
+              "id": "addins",
+              "name": "추가 기능",
+              "collapse": 2,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"addins","name":"추가 기능","size":"big","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "designer",
+              "name": "디자이너",
+              "collapse": 1,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"designer","name":"디자이너","size":"big","kind":"button","pending":true}
+              ]
+            }
+          ]
+        },
+        {
+          "id": "insert",
+          "name": "삽입",
+          "editOnly": true,
+          "groups": [
+            {
+              "id": "slides",
+              "name": "슬라이드",
+              "collapse": 7,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"new-slide","name":"새 슬라이드","size":"big","kind":"button","proxy":"btn-add-blank","map":"proxy","officeKind":"split"},
+                {"key":"reuse-slides","name":"슬라이드 다시 사용","size":"big","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "tables",
+              "name": "표",
+              "collapse": 6,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"table","name":"표","size":"big","kind":"dropdown","pending":true,"items":["표 삽입…","표 그리기","Excel 스프레드시트"]}
+              ]
+            },
+            {
+              "id": "images",
+              "name": "이미지",
+              "collapse": 6,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"pictures","name":"그림","size":"big","kind":"dropdown","pending":true,"items":["이 디바이스…","스톡 이미지…","온라인 그림…"]},
+                {"key":"screenshot","name":"스크린샷","size":"big","kind":"dropdown","pending":true},
+                {"key":"photo-album","name":"사진 앨범","size":"big","kind":"split","pending":true}
+              ]
+            },
+            {
+              "id": "illustrations",
+              "name": "일러스트레이션",
+              "collapse": 5,
+              "layout": "columns",
+              "launcher": null,
+              "note": "기존 \"도형\" 묶음(사각형·둥근 사각형·타원 대리 단추)은 지움 — 같은 단추가 홈 > 그리기에 있음, 오피스 도형 갤러리는 준비 중",
+              "controls": [
+                {"key":"shapes","name":"도형","size":"big","kind":"dropdown","pending":true},
+                {"key":"icons","name":"아이콘","size":"big","kind":"button","pending":true},
+                {"key":"3d-models","name":"3D 모델","size":"big","kind":"split","pending":true},
+                {"key":"smartart","name":"스마트아트","size":"big","kind":"button","pending":true},
+                {"key":"chart","name":"차트","size":"big","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "addins",
+              "name": "추가 기능",
+              "collapse": 2,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"addins","name":"추가 기능","size":"big","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "links",
+              "name": "링크",
+              "collapse": 4,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"zoom","name":"확대/축소","size":"big","kind":"dropdown","pending":true,"items":["요약 확대/축소","구역 확대/축소","슬라이드 확대/축소"]},
+                {"key":"link","name":"링크","size":"big","kind":"button","pending":true},
+                {"key":"action","name":"실행","size":"big","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "comments",
+              "name": "메모",
+              "collapse": 4,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"comment","name":"메모","size":"big","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "text",
+              "name": "텍스트",
+              "collapse": 6,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"text-box","name":"텍스트 상자","size":"big","kind":"button","proxy":"btn-add-textbox","map":"proxy"},
+                {"key":"header-footer","name":"머리글/바닥글","size":"big","kind":"button","pending":true},
+                {"key":"wordart","name":"워드아트","size":"big","kind":"dropdown","pending":true},
+                {"key":"date-time","name":"날짜 및 시간","size":"small","kind":"button","pending":true},
+                {"key":"slide-number","name":"슬라이드 번호","size":"small","kind":"button","pending":true},
+                {"key":"object","name":"개체","size":"small","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "symbols",
+              "name": "기호",
+              "collapse": 3,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"equation","name":"수식","size":"big","kind":"split","pending":true},
+                {"key":"symbol","name":"기호","size":"big","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "media",
+              "name": "미디어",
+              "collapse": 3,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"video","name":"비디오","size":"big","kind":"dropdown","pending":true},
+                {"key":"audio","name":"오디오","size":"big","kind":"dropdown","pending":true},
+                {"key":"screen-recording","name":"화면 녹화","size":"big","kind":"button","pending":true}
+              ]
+            }
+          ]
+        },
+        {
+          "id": "draw",
+          "name": "그리기",
+          "editOnly": true,
+          "groups": [
+            {
+              "id": "draw-tools",
+              "name": "그리기 도구",
+              "collapse": 6,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"draw-select","name":"선택","size":"big","kind":"dropdown","pending":true},
+                {"key":"lasso","name":"올가미 선택","size":"big","kind":"button","pending":true},
+                {"key":"eraser","name":"지우개","size":"big","kind":"dropdown","pending":true},
+                {"key":"pens","name":"펜","size":"big","kind":"gallery","pending":true},
+                {"key":"add-pen","name":"펜 추가","size":"big","kind":"dropdown","pending":true,"items":["펜","연필","형광펜"]}
+              ]
+            },
+            {
+              "id": "stencils",
+              "name": "스텐실",
+              "collapse": 2,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"ruler","name":"눈금자","size":"big","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "convert",
+              "name": "변환",
+              "collapse": 4,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"ink-to-shape","name":"잉크를 도형으로","size":"big","kind":"button","pending":true},
+                {"key":"ink-to-math","name":"잉크를 수식으로","size":"big","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "replay",
+              "name": "재생",
+              "collapse": 2,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"ink-replay","name":"잉크 재생","size":"big","kind":"button","pending":true}
+              ]
+            }
+          ]
+        },
+        {
+          "id": "design",
+          "name": "디자인",
+          "editOnly": true,
+          "groups": [
+            {
+              "id": "themes",
+              "name": "테마",
+              "collapse": 6,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"themes","name":"테마","size":"big","kind":"gallery","pending":true}
+              ]
+            },
+            {
+              "id": "variants",
+              "name": "적용",
+              "collapse": 5,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"variants","name":"적용","size":"big","kind":"gallery","pending":true}
+              ]
+            },
+            {
+              "id": "customize",
+              "name": "사용자 지정",
+              "collapse": 7,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"slide-size","name":"슬라이드 크기","size":"big","kind":"dropdown","pending":true,"items":["표준(4:3)","와이드스크린(16:9)","사용자 지정 슬라이드 크기…"]},
+                {"key":"background-colors","name":"배경 색","size":"big","kind":"gallery","ref":".slide-bg-swatches","map":"nearest","note":"오피스는 \"배경 서식\"(창 여는 단추) — 우리 배경 견본·다른 색·모두 적용·원래대로를 이 묶음에. 기존 \"배경 서식\" 묶음 이름은 \"사용자 지정\"으로"},
+                {"key":"background-custom","name":"배경 색 직접 고르기","size":"small","kind":"split","ref":"#slide-bg-custom","map":"nearest","unit":"label.slide-bg-custom","note":"위와 같음"},
+                {"key":"apply-all","name":"모두 적용","size":"small","kind":"button","ref":"#btn-bg-apply-all","map":"nearest","note":"위와 같음"},
+                {"key":"reset-background","name":"배경 원래대로","size":"small","kind":"button","ref":"#btn-bg-reset","map":"nearest","note":"위와 같음"}
+              ]
+            },
+            {
+              "id": "designer",
+              "name": "디자이너",
+              "collapse": 4,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"designer","name":"디자이너","size":"big","kind":"button","pending":true}
+              ]
+            }
+          ]
+        },
+        {
+          "id": "transitions",
+          "name": "전환",
+          "editOnly": true,
+          "groups": [
+            {
+              "id": "preview",
+              "name": "미리 보기",
+              "collapse": 9,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"preview","name":"미리 보기","size":"big","kind":"button","ref":"#btn-transition-preview","map":"same"}
+              ]
+            },
+            {
+              "id": "transition-to-this-slide",
+              "name": "이 슬라이드로 전환",
+              "collapse": 8,
+              "layout": "columns",
+              "launcher": null,
+              "note": "설계 §2는 \"슬라이드 화면 전환\"이라 적었지만 한국어 M365 묶음 이름은 \"이 슬라이드로 전환\"(UIA 대조로 확인)",
+              "controls": [
+                {"key":"transition-gallery","name":"전환 효과","size":"big","kind":"gallery","ref":".effect-gallery[aria-label=\"전환 효과\"]","map":"same","fix":"전환 갤러리 div에 aria-label=\"전환 효과\" 더함"},
+                {"key":"effect-options","name":"효과 옵션","size":"big","kind":"dropdown","pending":true}
+              ]
+            },
+            {
+              "id": "timing",
+              "name": "타이밍",
+              "collapse": 6,
+              "layout": "fields",
+              "launcher": null,
+              "controls": [
+                {"key":"sound","name":"소리","size":"small","kind":"select","pending":true},
+                {"key":"duration","name":"속도","size":"small","kind":"select","ref":"#transition-speed","map":"nearest","unit":"label.layout-field:has(> #transition-speed)","note":"오피스 \"기간\"(초 입력) 자리 — 빠르게·보통·느리게"},
+                {"key":"apply-all","name":"모두 적용","size":"small","kind":"button","ref":"#btn-transition-apply-all","map":"same"},
+                {"key":"on-click","name":"마우스를 클릭할 때","size":"small","kind":"toggle","pending":true,"stackTitle":"화면 전환"},
+                {"key":"after","name":"다음 시간 후","size":"small","kind":"toggle","pending":true},
+                {"key":"after-seconds","name":"시간","size":"small","kind":"input","pending":true}
+              ]
+            }
+          ]
+        },
+        {
+          "id": "animations",
+          "name": "애니메이션",
+          "editOnly": true,
+          "groups": [
+            {
+              "id": "preview",
+              "name": "미리 보기",
+              "collapse": 9,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"preview","name":"미리 보기","size":"big","kind":"button","ref":"#btn-animation-preview","map":"same"}
+              ]
+            },
+            {
+              "id": "animation",
+              "name": "애니메이션",
+              "collapse": 8,
+              "layout": "columns",
+              "launcher": {"pending":"효과 옵션"},
+              "controls": [
+                {"key":"animation-gallery","name":"애니메이션 효과","size":"big","kind":"gallery","ref":".effect-gallery[aria-label=\"애니메이션 효과\"]","map":"same","fix":"애니메이션 갤러리 div에 aria-label=\"애니메이션 효과\" 더함"},
+                {"key":"effect-options","name":"효과 옵션","size":"big","kind":"dropdown","pending":true}
+              ]
+            },
+            {
+              "id": "advanced-animation",
+              "name": "고급 애니메이션",
+              "collapse": 5,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"add-animation","name":"애니메이션 추가","size":"big","kind":"dropdown","pending":true},
+                {"key":"animation-pane","name":"애니메이션 창","size":"small","kind":"button","pending":true},
+                {"key":"trigger","name":"트리거","size":"small","kind":"dropdown","pending":true},
+                {"key":"animation-painter","name":"애니메이션 복사","size":"small","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "timing",
+              "name": "타이밍",
+              "collapse": 6,
+              "layout": "fields",
+              "launcher": null,
+              "controls": [
+                {"key":"start","name":"시작","size":"small","kind":"select","ref":"#animation-trigger","map":"same","unit":"label.anim-trigger-field"},
+                {"key":"duration","name":"재생 시간","size":"small","kind":"input","pending":true},
+                {"key":"delay","name":"지연","size":"small","kind":"input","pending":true},
+                {"key":"target","name":"애니메이션 대상","size":"small","kind":"info","ref":"#animation-target","map":"nearest","fix":"span#animation-target 에 aria-label=\"애니메이션 대상\" 더함","note":"오피스엔 없음 — 고른 개체를 알려 주는 글, 타이밍 묶음에 그대로"},
+                {"key":"move-earlier","name":"앞으로 이동","size":"small","kind":"button","pending":true,"stackTitle":"애니메이션 순서 바꾸기"},
+                {"key":"move-later","name":"뒤로 이동","size":"small","kind":"button","pending":true}
+              ]
+            }
+          ]
+        },
+        {
+          "id": "slide-show",
+          "name": "슬라이드 쇼",
+          "editOnly": false,
+          "groups": [
+            {
+              "id": "start",
+              "name": "슬라이드 쇼 시작",
+              "collapse": 5,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"from-beginning","name":"처음부터","size":"big","kind":"button","pending":true},
+                {"key":"from-current","name":"현재 슬라이드부터","size":"big","kind":"button","pending":true},
+                {"key":"present-online","name":"온라인 프레젠테이션","size":"big","kind":"dropdown","pending":true},
+                {"key":"custom-show","name":"슬라이드 쇼 재구성","size":"big","kind":"dropdown","pending":true}
+              ]
+            },
+            {
+              "id": "set-up",
+              "name": "설정",
+              "collapse": 4,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"set-up-show","name":"슬라이드 쇼 설정","size":"big","kind":"button","pending":true},
+                {"key":"hide-slide","name":"슬라이드 숨기기","size":"big","kind":"button","pending":true},
+                {"key":"rehearse-timings","name":"예행 연습","size":"big","kind":"button","pending":true},
+                {"key":"record","name":"녹화","size":"big","kind":"dropdown","pending":true},
+                {"key":"play-narrations","name":"내레이션 재생","size":"small","kind":"toggle","pending":true},
+                {"key":"use-timings","name":"시간 사용","size":"small","kind":"toggle","pending":true},
+                {"key":"show-media-controls","name":"미디어 컨트롤 표시","size":"small","kind":"toggle","pending":true}
+              ]
+            },
+            {
+              "id": "monitors",
+              "name": "모니터",
+              "collapse": 2,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"monitor","name":"모니터","size":"small","kind":"select","pending":true},
+                {"key":"presenter-view","name":"발표자 보기 사용","size":"small","kind":"toggle","pending":true}
+              ]
+            }
+          ]
+        },
+        {
+          "id": "record",
+          "name": "녹음/녹화",
+          "editOnly": true,
+          "note": "녹음/녹화 탭 묶음은 빌드마다 달라 UIA 대조로 반드시 고친다",
+          "groups": [
+            {
+              "id": "record",
+              "name": "녹음/녹화",
+              "collapse": 5,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"record","name":"녹음/녹화","size":"big","kind":"split","pending":true,"items":["현재 슬라이드부터","처음부터"]}
+              ]
+            },
+            {
+              "id": "content",
+              "name": "콘텐츠",
+              "collapse": 4,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"screen-recording","name":"화면 녹화","size":"big","kind":"button","pending":true},
+                {"key":"audio","name":"오디오","size":"big","kind":"dropdown","pending":true}
+              ]
+            },
+            {
+              "id": "save",
+              "name": "저장",
+              "collapse": 3,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"save-as-show","name":"쇼로 저장","size":"big","kind":"button","pending":true},
+                {"key":"export-video","name":"비디오로 내보내기","size":"big","kind":"button","pending":true}
+              ]
+            }
+          ]
+        },
+        {
+          "id": "review",
+          "name": "검토",
+          "editOnly": false,
+          "groups": [
+            {
+              "id": "proofing",
+              "name": "언어 교정",
+              "collapse": 5,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"spelling","name":"맞춤법 검사","size":"big","kind":"button","pending":true},
+                {"key":"thesaurus","name":"동의어 사전","size":"small","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "accessibility",
+              "name": "접근성",
+              "collapse": 2,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"check-accessibility","name":"접근성 검사","size":"big","kind":"split","pending":true}
+              ]
+            },
+            {
+              "id": "insights",
+              "name": "정보 활용",
+              "collapse": 1,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"smart-lookup","name":"스마트 조회","size":"big","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "language",
+              "name": "언어",
+              "collapse": 2,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"translate","name":"번역","size":"big","kind":"button","pending":true},
+                {"key":"language","name":"언어","size":"big","kind":"dropdown","pending":true}
+              ]
+            },
+            {
+              "id": "comments",
+              "name": "메모",
+              "collapse": 5,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"new-comment","name":"새 메모","size":"big","kind":"button","pending":true},
+                {"key":"delete","name":"삭제","size":"big","kind":"split","pending":true},
+                {"key":"previous","name":"이전","size":"big","kind":"button","pending":true},
+                {"key":"next","name":"다음","size":"big","kind":"button","pending":true},
+                {"key":"show-comments","name":"메모 표시","size":"big","kind":"dropdown","pending":true}
+              ]
+            },
+            {
+              "id": "compare",
+              "name": "비교",
+              "collapse": 3,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"compare","name":"비교","size":"big","kind":"button","pending":true},
+                {"key":"accept","name":"적용","size":"big","kind":"split","pending":true},
+                {"key":"reject","name":"거부","size":"big","kind":"split","pending":true},
+                {"key":"previous-change","name":"이전","size":"small","kind":"button","pending":true},
+                {"key":"next-change","name":"다음","size":"small","kind":"button","pending":true},
+                {"key":"reviewing-pane","name":"검토 창","size":"small","kind":"button","pending":true},
+                {"key":"end-review","name":"검토 끝내기","size":"big","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "ink",
+              "name": "잉크",
+              "collapse": 1,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"hide-ink","name":"잉크 숨기기","size":"big","kind":"dropdown","pending":true}
+              ]
+            }
+          ]
+        },
+        {
+          "id": "view",
+          "name": "보기",
+          "editOnly": false,
+          "groups": [
+            {
+              "id": "presentation-views",
+              "name": "프레젠테이션 보기",
+              "collapse": 6,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"normal","name":"기본","size":"big","kind":"button","pending":true},
+                {"key":"outline-view","name":"개요 보기","size":"big","kind":"button","pending":true},
+                {"key":"slide-sorter","name":"여러 슬라이드","size":"big","kind":"button","pending":true},
+                {"key":"notes-page","name":"슬라이드 노트","size":"big","kind":"button","pending":true},
+                {"key":"reading-view","name":"읽기용 보기","size":"big","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "master-views",
+              "name": "마스터 보기",
+              "collapse": 4,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"slide-master","name":"슬라이드 마스터","size":"big","kind":"button","pending":true},
+                {"key":"handout-master","name":"유인물 마스터","size":"big","kind":"button","pending":true},
+                {"key":"notes-master","name":"슬라이드 노트 마스터","size":"big","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "show",
+              "name": "표시",
+              "collapse": 4,
+              "layout": "columns",
+              "launcher": {"pending":"눈금 및 안내선"},
+              "controls": [
+                {"key":"ruler","name":"눈금자","size":"small","kind":"toggle","pending":true},
+                {"key":"gridlines","name":"눈금선","size":"small","kind":"toggle","pending":true},
+                {"key":"guides","name":"안내선","size":"small","kind":"toggle","pending":true},
+                {"key":"notes","name":"슬라이드 노트","size":"big","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "zoom",
+              "name": "확대/축소",
+              "collapse": 5,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"zoom","name":"확대/축소","size":"big","kind":"button","pending":true},
+                {"key":"fit-to-window","name":"창에 맞춤","size":"big","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "color-grayscale",
+              "name": "컬러/회색조",
+              "collapse": 3,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"color","name":"컬러","size":"small","kind":"button","pending":true},
+                {"key":"grayscale","name":"회색조","size":"small","kind":"button","pending":true},
+                {"key":"black-white","name":"흑백","size":"small","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "window",
+              "name": "창",
+              "collapse": 4,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"new-window","name":"새 창","size":"big","kind":"button","pending":true},
+                {"key":"arrange-all","name":"모두 정렬","size":"small","kind":"button","pending":true},
+                {"key":"cascade","name":"계단식 배열","size":"small","kind":"button","pending":true},
+                {"key":"move-split","name":"창 나누기 이동","size":"small","kind":"button","pending":true},
+                {"key":"switch-windows","name":"창 전환","size":"big","kind":"dropdown","pending":true}
+              ]
+            },
+            {
+              "id": "macros",
+              "name": "매크로",
+              "collapse": 2,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"macros","name":"매크로","size":"big","kind":"button","pending":true}
+              ]
+            }
+          ]
+        }
+      ],
+      "contextual": [
+        {
+          "id": "shape-format",
+          "name": "도형 서식",
+          "editOnly": true,
+          "trigger": "텍스트 상자·도형을 클릭할 때",
+          "wired": "editor-slides.ts 상자 focus 처리기 → setContextualTab('shape-format', canEdit), 슬라이드를 다시 그릴 때(renderCanvasForSlideInner) 숨김",
+          "groups": [
+            {
+              "id": "insert-shapes",
+              "name": "도형 삽입",
+              "collapse": 3,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"shapes","name":"도형","size":"big","kind":"gallery","pending":true},
+                {"key":"edit-shape","name":"도형 편집","size":"small","kind":"dropdown","pending":true},
+                {"key":"text-box","name":"텍스트 상자","size":"small","kind":"button","proxy":"btn-add-textbox","map":"proxy"},
+                {"key":"merge-shapes","name":"도형 병합","size":"small","kind":"dropdown","pending":true}
+              ]
+            },
+            {
+              "id": "shape-styles",
+              "name": "도형 스타일",
+              "collapse": 5,
+              "layout": "columns",
+              "launcher": {"pending":"도형 서식"},
+              "controls": [
+                {"key":"shape-styles","name":"도형 스타일","size":"big","kind":"gallery","pending":true},
+                {"key":"shape-fill","name":"도형 채우기","size":"small","kind":"split","pending":true},
+                {"key":"shape-outline","name":"도형 윤곽선","size":"small","kind":"split","pending":true},
+                {"key":"shape-effects","name":"도형 효과","size":"small","kind":"dropdown","pending":true}
+              ]
+            },
+            {
+              "id": "wordart-styles",
+              "name": "워드아트 스타일",
+              "collapse": 4,
+              "layout": "columns",
+              "launcher": {"pending":"텍스트 효과 서식"},
+              "note": "오피스 이름 \"WordArt 스타일\" — 영문만 이름은 한글 표기(사용자 규칙 4·verify:ribbon-skin (2))",
+              "controls": [
+                {"key":"wordart-styles","name":"빠른 스타일","size":"big","kind":"gallery","pending":true},
+                {"key":"text-fill","name":"텍스트 채우기","size":"small","kind":"split","pending":true},
+                {"key":"text-outline","name":"텍스트 윤곽선","size":"small","kind":"split","pending":true},
+                {"key":"text-effects","name":"텍스트 효과","size":"small","kind":"dropdown","pending":true}
+              ]
+            },
+            {
+              "id": "accessibility",
+              "name": "접근성",
+              "collapse": 2,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"alt-text","name":"대체 텍스트","size":"big","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "arrange",
+              "name": "정렬",
+              "collapse": 3,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"bring-forward","name":"앞으로 가져오기","size":"big","kind":"split","pending":true},
+                {"key":"send-backward","name":"뒤로 보내기","size":"big","kind":"split","pending":true},
+                {"key":"selection-pane","name":"선택 창","size":"big","kind":"button","pending":true},
+                {"key":"align","name":"맞춤","size":"small","kind":"dropdown","pending":true},
+                {"key":"group","name":"그룹화","size":"small","kind":"dropdown","pending":true},
+                {"key":"rotate","name":"회전","size":"small","kind":"dropdown","pending":true}
+              ]
+            },
+            {
+              "id": "size",
+              "name": "크기",
+              "collapse": 4,
+              "layout": "columns",
+              "launcher": {"pending":"크기 및 위치"},
+              "controls": [
+                {"key":"height","name":"높이","size":"small","kind":"input","pending":true},
+                {"key":"width","name":"너비","size":"small","kind":"input","pending":true}
+              ]
+            }
+          ]
+        },
+        {
+          "id": "table-design",
+          "name": "테이블 디자인",
+          "editOnly": true,
+          "trigger": "표 선택(우리 편집기엔 아직 없음)",
+          "wired": null,
+          "groups": [
+            {
+              "id": "style-options",
+              "name": "표 스타일 옵션",
+              "collapse": 3,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"header-row","name":"머리글 행","size":"small","kind":"toggle","pending":true},
+                {"key":"total-row","name":"요약 행","size":"small","kind":"toggle","pending":true},
+                {"key":"banded-rows","name":"줄무늬 행","size":"small","kind":"toggle","pending":true},
+                {"key":"first-column","name":"첫째 열","size":"small","kind":"toggle","pending":true},
+                {"key":"last-column","name":"마지막 열","size":"small","kind":"toggle","pending":true},
+                {"key":"banded-columns","name":"줄무늬 열","size":"small","kind":"toggle","pending":true}
+              ]
+            },
+            {
+              "id": "table-styles",
+              "name": "표 스타일",
+              "collapse": 5,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"table-styles","name":"표 스타일","size":"big","kind":"gallery","pending":true},
+                {"key":"shading","name":"음영","size":"small","kind":"split","pending":true},
+                {"key":"borders","name":"테두리","size":"small","kind":"split","pending":true},
+                {"key":"effects","name":"효과","size":"small","kind":"dropdown","pending":true}
+              ]
+            },
+            {
+              "id": "wordart-styles",
+              "name": "워드아트 스타일",
+              "collapse": 3,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"quick-styles","name":"빠른 스타일","size":"big","kind":"gallery","pending":true},
+                {"key":"text-fill","name":"텍스트 채우기","size":"small","kind":"split","pending":true},
+                {"key":"text-outline","name":"텍스트 윤곽선","size":"small","kind":"split","pending":true},
+                {"key":"text-effects","name":"텍스트 효과","size":"small","kind":"dropdown","pending":true}
+              ]
+            },
+            {
+              "id": "draw-borders",
+              "name": "테두리 그리기",
+              "collapse": 4,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"pen-style","name":"펜 스타일","size":"small","kind":"select","pending":true},
+                {"key":"pen-weight","name":"펜 두께","size":"small","kind":"select","pending":true},
+                {"key":"pen-color","name":"펜 색","size":"small","kind":"split","pending":true},
+                {"key":"draw-table","name":"표 그리기","size":"big","kind":"button","pending":true},
+                {"key":"eraser","name":"지우개","size":"big","kind":"button","pending":true}
+              ]
+            }
+          ]
+        },
+        {
+          "id": "table-layout",
+          "name": "레이아웃",
+          "editOnly": true,
+          "trigger": "표 선택(우리 편집기엔 아직 없음)",
+          "wired": null,
+          "groups": [
+            {
+              "id": "table",
+              "name": "표",
+              "collapse": 3,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"select","name":"선택","size":"small","kind":"dropdown","pending":true},
+                {"key":"view-gridlines","name":"눈금선 보기","size":"small","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "rows-columns",
+              "name": "행 및 열",
+              "collapse": 7,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"delete","name":"삭제","size":"big","kind":"dropdown","pending":true,"items":["열 삭제","행 삭제","표 삭제"]},
+                {"key":"insert-above","name":"위에 삽입","size":"big","kind":"button","pending":true},
+                {"key":"insert-below","name":"아래에 삽입","size":"big","kind":"button","pending":true},
+                {"key":"insert-left","name":"왼쪽에 삽입","size":"big","kind":"button","pending":true},
+                {"key":"insert-right","name":"오른쪽에 삽입","size":"big","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "merge",
+              "name": "병합",
+              "collapse": 6,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"merge-cells","name":"셀 병합","size":"big","kind":"button","pending":true},
+                {"key":"split-cells","name":"셀 분할","size":"big","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "cell-size",
+              "name": "셀 크기",
+              "collapse": 4,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"height","name":"높이","size":"small","kind":"input","pending":true},
+                {"key":"width","name":"너비","size":"small","kind":"input","pending":true},
+                {"key":"distribute-rows","name":"행 높이를 같게","size":"small","kind":"button","pending":true},
+                {"key":"distribute-columns","name":"열 너비를 같게","size":"small","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "alignment",
+              "name": "맞춤",
+              "collapse": 3,
+              "layout": "rows",
+              "launcher": null,
+              "controls": [
+                {"key":"align-left","name":"텍스트 왼쪽 맞춤","size":"small","kind":"button","pending":true,"iconOnly":true,"row":0},
+                {"key":"center","name":"가운데 맞춤","size":"small","kind":"button","pending":true,"iconOnly":true,"row":0},
+                {"key":"align-right","name":"텍스트 오른쪽 맞춤","size":"small","kind":"button","pending":true,"iconOnly":true,"row":0},
+                {"key":"align-top","name":"위쪽 맞춤","size":"small","kind":"button","pending":true,"iconOnly":true,"row":1},
+                {"key":"center-vertically","name":"세로 가운데 맞춤","size":"small","kind":"button","pending":true,"iconOnly":true,"row":1},
+                {"key":"align-bottom","name":"아래쪽 맞춤","size":"small","kind":"button","pending":true,"iconOnly":true,"row":1},
+                {"key":"text-direction","name":"텍스트 방향","size":"big","kind":"dropdown","pending":true},
+                {"key":"cell-margins","name":"셀 여백","size":"big","kind":"dropdown","pending":true}
+              ]
+            },
+            {
+              "id": "table-size",
+              "name": "표 크기",
+              "collapse": 2,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"height","name":"높이","size":"small","kind":"input","pending":true},
+                {"key":"width","name":"너비","size":"small","kind":"input","pending":true},
+                {"key":"lock-aspect","name":"가로 세로 비율 고정","size":"small","kind":"toggle","pending":true}
+              ]
+            },
+            {
+              "id": "arrange",
+              "name": "정렬",
+              "collapse": 2,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"bring-forward","name":"앞으로 가져오기","size":"small","kind":"split","pending":true},
+                {"key":"send-backward","name":"뒤로 보내기","size":"small","kind":"split","pending":true},
+                {"key":"selection-pane","name":"선택 창","size":"small","kind":"button","pending":true},
+                {"key":"align","name":"맞춤","size":"small","kind":"dropdown","pending":true}
+              ]
+            }
+          ]
+        },
+        {
+          "id": "picture-format",
+          "name": "그림 서식",
+          "editOnly": true,
+          "trigger": "그림 선택(우리 편집기엔 아직 없음)",
+          "wired": null,
+          "groups": [
+            {
+              "id": "adjust",
+              "name": "조정",
+              "collapse": 6,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"remove-background","name":"배경 제거","size":"big","kind":"button","pending":true},
+                {"key":"corrections","name":"수정","size":"big","kind":"dropdown","pending":true},
+                {"key":"color","name":"색","size":"big","kind":"dropdown","pending":true},
+                {"key":"artistic-effects","name":"꾸밈 효과","size":"big","kind":"dropdown","pending":true},
+                {"key":"transparency","name":"투명도","size":"big","kind":"dropdown","pending":true},
+                {"key":"compress","name":"그림 압축","size":"small","kind":"button","pending":true},
+                {"key":"change-picture","name":"그림 바꾸기","size":"small","kind":"dropdown","pending":true},
+                {"key":"reset-picture","name":"그림 원래대로","size":"small","kind":"split","pending":true}
+              ]
+            },
+            {
+              "id": "picture-styles",
+              "name": "그림 스타일",
+              "collapse": 5,
+              "layout": "columns",
+              "launcher": {"pending":"그림 서식"},
+              "controls": [
+                {"key":"picture-styles","name":"그림 스타일","size":"big","kind":"gallery","pending":true},
+                {"key":"picture-border","name":"그림 테두리","size":"small","kind":"split","pending":true},
+                {"key":"picture-effects","name":"그림 효과","size":"small","kind":"dropdown","pending":true},
+                {"key":"picture-layout","name":"그림 레이아웃","size":"small","kind":"dropdown","pending":true}
+              ]
+            },
+            {
+              "id": "accessibility",
+              "name": "접근성",
+              "collapse": 2,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"alt-text","name":"대체 텍스트","size":"big","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "arrange",
+              "name": "정렬",
+              "collapse": 3,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"bring-forward","name":"앞으로 가져오기","size":"small","kind":"split","pending":true},
+                {"key":"send-backward","name":"뒤로 보내기","size":"small","kind":"split","pending":true},
+                {"key":"selection-pane","name":"선택 창","size":"small","kind":"button","pending":true},
+                {"key":"align","name":"맞춤","size":"small","kind":"dropdown","pending":true,"items":["왼쪽 맞춤","가운데 맞춤","오른쪽 맞춤","위쪽 맞춤","중간 맞춤","아래쪽 맞춤","가로 간격을 동일하게","세로 간격을 동일하게"]},
+                {"key":"group","name":"그룹화","size":"small","kind":"dropdown","pending":true,"items":["그룹","그룹 해제"]},
+                {"key":"rotate","name":"회전","size":"small","kind":"dropdown","pending":true,"items":["오른쪽으로 90도 회전","왼쪽으로 90도 회전","상하 대칭","좌우 대칭"]}
+              ]
+            },
+            {
+              "id": "size",
+              "name": "크기",
+              "collapse": 4,
+              "layout": "columns",
+              "launcher": {"pending":"크기 및 위치"},
+              "controls": [
+                {"key":"crop","name":"자르기","size":"big","kind":"split","pending":true},
+                {"key":"height","name":"높이","size":"small","kind":"input","pending":true},
+                {"key":"width","name":"너비","size":"small","kind":"input","pending":true}
+              ]
+            }
+          ]
+        },
+        {
+          "id": "chart-design",
+          "name": "차트 디자인",
+          "editOnly": true,
+          "trigger": "차트 선택(우리 편집기엔 아직 없음)",
+          "wired": null,
+          "groups": [
+            {
+              "id": "chart-layouts",
+              "name": "차트 레이아웃",
+              "collapse": 5,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"add-chart-element","name":"차트 요소 추가","size":"big","kind":"dropdown","pending":true},
+                {"key":"quick-layout","name":"빠른 레이아웃","size":"big","kind":"dropdown","pending":true}
+              ]
+            },
+            {
+              "id": "chart-styles",
+              "name": "차트 스타일",
+              "collapse": 4,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"change-colors","name":"색 변경","size":"big","kind":"dropdown","pending":true},
+                {"key":"chart-styles","name":"차트 스타일","size":"big","kind":"gallery","pending":true}
+              ]
+            },
+            {
+              "id": "data",
+              "name": "데이터",
+              "collapse": 3,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"switch-row-column","name":"행/열 전환","size":"big","kind":"button","pending":true},
+                {"key":"select-data","name":"데이터 선택","size":"big","kind":"button","pending":true},
+                {"key":"edit-data","name":"데이터 편집","size":"big","kind":"split","pending":true},
+                {"key":"refresh-data","name":"데이터 새로 고침","size":"big","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "type",
+              "name": "종류",
+              "collapse": 6,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"change-chart-type","name":"차트 종류 변경","size":"big","kind":"button","pending":true}
+              ]
+            }
+          ]
+        },
+        {
+          "id": "chart-format",
+          "name": "서식",
+          "editOnly": true,
+          "trigger": "차트 선택(우리 편집기엔 아직 없음)",
+          "wired": null,
+          "groups": [
+            {
+              "id": "current-selection",
+              "name": "현재 선택 영역",
+              "collapse": 4,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"chart-elements","name":"차트 요소","size":"small","kind":"select","pending":true},
+                {"key":"format-selection","name":"선택 영역 서식","size":"small","kind":"button","pending":true},
+                {"key":"reset-to-match","name":"스타일에 맞게 다시 설정","size":"small","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "insert-shapes",
+              "name": "도형 삽입",
+              "collapse": 3,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"shapes","name":"도형","size":"big","kind":"gallery","pending":true},
+                {"key":"change-shape","name":"도형 모양 변경","size":"small","kind":"dropdown","pending":true}
+              ]
+            },
+            {
+              "id": "shape-styles",
+              "name": "도형 스타일",
+              "collapse": 5,
+              "layout": "columns",
+              "launcher": {"pending":"도형 서식"},
+              "controls": [
+                {"key":"shape-styles","name":"도형 스타일","size":"big","kind":"gallery","pending":true},
+                {"key":"shape-fill","name":"도형 채우기","size":"small","kind":"split","pending":true},
+                {"key":"shape-outline","name":"도형 윤곽선","size":"small","kind":"split","pending":true},
+                {"key":"shape-effects","name":"도형 효과","size":"small","kind":"dropdown","pending":true}
+              ]
+            },
+            {
+              "id": "wordart-styles",
+              "name": "워드아트 스타일",
+              "collapse": 4,
+              "layout": "columns",
+              "launcher": {"pending":"텍스트 효과 서식"},
+              "note": "오피스 이름 \"WordArt 스타일\" — 영문만 이름은 한글 표기(사용자 규칙 4·verify:ribbon-skin (2))",
+              "controls": [
+                {"key":"wordart-styles","name":"빠른 스타일","size":"big","kind":"gallery","pending":true},
+                {"key":"text-fill","name":"텍스트 채우기","size":"small","kind":"split","pending":true},
+                {"key":"text-outline","name":"텍스트 윤곽선","size":"small","kind":"split","pending":true},
+                {"key":"text-effects","name":"텍스트 효과","size":"small","kind":"dropdown","pending":true}
+              ]
+            },
+            {
+              "id": "accessibility",
+              "name": "접근성",
+              "collapse": 2,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"alt-text","name":"대체 텍스트","size":"big","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "arrange",
+              "name": "정렬",
+              "collapse": 3,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"bring-forward","name":"앞으로 가져오기","size":"small","kind":"split","pending":true},
+                {"key":"send-backward","name":"뒤로 보내기","size":"small","kind":"split","pending":true},
+                {"key":"selection-pane","name":"선택 창","size":"small","kind":"button","pending":true},
+                {"key":"align","name":"맞춤","size":"small","kind":"dropdown","pending":true,"items":["왼쪽 맞춤","가운데 맞춤","오른쪽 맞춤","위쪽 맞춤","중간 맞춤","아래쪽 맞춤","가로 간격을 동일하게","세로 간격을 동일하게"]},
+                {"key":"group","name":"그룹화","size":"small","kind":"dropdown","pending":true,"items":["그룹","그룹 해제"]},
+                {"key":"rotate","name":"회전","size":"small","kind":"dropdown","pending":true,"items":["오른쪽으로 90도 회전","왼쪽으로 90도 회전","상하 대칭","좌우 대칭"]}
+              ]
+            },
+            {
+              "id": "size",
+              "name": "크기",
+              "collapse": 4,
+              "layout": "columns",
+              "launcher": {"pending":"크기 및 위치"},
+              "controls": [
+                {"key":"height","name":"높이","size":"small","kind":"input","pending":true},
+                {"key":"width","name":"너비","size":"small","kind":"input","pending":true}
+              ]
+            }
+          ]
+        },
+        {
+          "id": "smartart-design",
+          "name": "SmartArt 디자인",
+          "editOnly": true,
+          "trigger": "SmartArt 선택(우리 편집기엔 아직 없음)",
+          "wired": null,
+          "groups": [
+            {
+              "id": "create-graphic",
+              "name": "그래픽 만들기",
+              "collapse": 4,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"add-shape","name":"도형 추가","size":"small","kind":"split","pending":true},
+                {"key":"add-bullet","name":"글머리 기호 추가","size":"small","kind":"button","pending":true},
+                {"key":"text-pane","name":"텍스트 창","size":"small","kind":"button","pending":true},
+                {"key":"promote","name":"수준 올리기","size":"small","kind":"button","pending":true},
+                {"key":"demote","name":"수준 내리기","size":"small","kind":"button","pending":true},
+                {"key":"right-to-left","name":"오른쪽에서 왼쪽","size":"small","kind":"button","pending":true},
+                {"key":"move-up","name":"위로 이동","size":"small","kind":"button","pending":true},
+                {"key":"move-down","name":"아래로 이동","size":"small","kind":"button","pending":true},
+                {"key":"layout","name":"레이아웃","size":"small","kind":"dropdown","pending":true}
+              ]
+            },
+            {
+              "id": "layouts",
+              "name": "레이아웃",
+              "collapse": 5,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"layouts","name":"레이아웃","size":"big","kind":"gallery","pending":true}
+              ]
+            },
+            {
+              "id": "smartart-styles",
+              "name": "SmartArt 스타일",
+              "collapse": 3,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"change-colors","name":"색 변경","size":"big","kind":"dropdown","pending":true},
+                {"key":"smartart-styles","name":"SmartArt 스타일","size":"big","kind":"gallery","pending":true}
+              ]
+            },
+            {
+              "id": "reset",
+              "name": "원래대로",
+              "collapse": 2,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"reset-graphic","name":"그래픽 원래대로","size":"big","kind":"button","pending":true},
+                {"key":"convert","name":"변환","size":"big","kind":"dropdown","pending":true,"items":["텍스트로 변환","도형으로 변환"]}
+              ]
+            }
+          ]
+        },
+        {
+          "id": "smartart-format",
+          "name": "서식",
+          "editOnly": true,
+          "trigger": "SmartArt 선택(우리 편집기엔 아직 없음)",
+          "wired": null,
+          "groups": [
+            {
+              "id": "shapes",
+              "name": "도형",
+              "collapse": 3,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"change-shape","name":"도형 모양 변경","size":"small","kind":"dropdown","pending":true},
+                {"key":"larger","name":"크게","size":"small","kind":"button","pending":true},
+                {"key":"smaller","name":"작게","size":"small","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "shape-styles",
+              "name": "도형 스타일",
+              "collapse": 5,
+              "layout": "columns",
+              "launcher": {"pending":"도형 서식"},
+              "controls": [
+                {"key":"shape-styles","name":"도형 스타일","size":"big","kind":"gallery","pending":true},
+                {"key":"shape-fill","name":"도형 채우기","size":"small","kind":"split","pending":true},
+                {"key":"shape-outline","name":"도형 윤곽선","size":"small","kind":"split","pending":true},
+                {"key":"shape-effects","name":"도형 효과","size":"small","kind":"dropdown","pending":true}
+              ]
+            },
+            {
+              "id": "wordart-styles",
+              "name": "워드아트 스타일",
+              "collapse": 4,
+              "layout": "columns",
+              "launcher": {"pending":"텍스트 효과 서식"},
+              "note": "오피스 이름 \"WordArt 스타일\" — 영문만 이름은 한글 표기(사용자 규칙 4·verify:ribbon-skin (2))",
+              "controls": [
+                {"key":"wordart-styles","name":"빠른 스타일","size":"big","kind":"gallery","pending":true},
+                {"key":"text-fill","name":"텍스트 채우기","size":"small","kind":"split","pending":true},
+                {"key":"text-outline","name":"텍스트 윤곽선","size":"small","kind":"split","pending":true},
+                {"key":"text-effects","name":"텍스트 효과","size":"small","kind":"dropdown","pending":true}
+              ]
+            },
+            {
+              "id": "accessibility",
+              "name": "접근성",
+              "collapse": 2,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"alt-text","name":"대체 텍스트","size":"big","kind":"button","pending":true}
+              ]
+            },
+            {
+              "id": "arrange",
+              "name": "정렬",
+              "collapse": 3,
+              "layout": "columns",
+              "launcher": null,
+              "controls": [
+                {"key":"bring-forward","name":"앞으로 가져오기","size":"small","kind":"split","pending":true},
+                {"key":"send-backward","name":"뒤로 보내기","size":"small","kind":"split","pending":true},
+                {"key":"selection-pane","name":"선택 창","size":"small","kind":"button","pending":true},
+                {"key":"align","name":"맞춤","size":"small","kind":"dropdown","pending":true,"items":["왼쪽 맞춤","가운데 맞춤","오른쪽 맞춤","위쪽 맞춤","중간 맞춤","아래쪽 맞춤","가로 간격을 동일하게","세로 간격을 동일하게"]},
+                {"key":"group","name":"그룹화","size":"small","kind":"dropdown","pending":true,"items":["그룹","그룹 해제"]},
+                {"key":"rotate","name":"회전","size":"small","kind":"dropdown","pending":true,"items":["오른쪽으로 90도 회전","왼쪽으로 90도 회전","상하 대칭","좌우 대칭"]}
+              ]
+            },
+            {
+              "id": "size",
+              "name": "크기",
+              "collapse": 4,
+              "layout": "columns",
+              "launcher": {"pending":"크기 및 위치"},
+              "controls": [
+                {"key":"height","name":"높이","size":"small","kind":"input","pending":true},
+                {"key":"width","name":"너비","size":"small","kind":"input","pending":true}
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
