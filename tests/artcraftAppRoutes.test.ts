@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -10,6 +11,15 @@ const { openRooms } = vi.hoisted(() => ({ openRooms: new Set<string>() }));
 vi.mock('../src/collab/room.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../src/collab/room.js')>()),
   isRoomOpen: (docId: string) => openRooms.has(docId),
+}));
+// 쪽 문서(docx) 저장 뒤 PDF 다시 만들기 — LibreOffice를 띄우지 않고 불렸는지만 본다
+const { convertCalls } = vi.hoisted(() => ({ convertCalls: [] as string[] }));
+vi.mock('../src/routes/documents.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../src/routes/documents.js')>()),
+  convertToPdf: async (meta: { id: string }) => {
+    convertCalls.push(meta.id);
+    return { pdfBytes: Buffer.from('%PDF'), pageCount: 3 };
+  },
 }));
 
 type Perms = { canPrint?: boolean; canDownload?: boolean; canCopy?: boolean; canEdit?: boolean };
@@ -44,6 +54,7 @@ describe('아트크래프트 앱 화면 — 토큰·info·engine-source·저장'
     vi.stubEnv('DOCVIEW_PERSIST_LOGS', '1');
     vi.stubEnv('DOCVIEW_ARTCRAFT_DIR', engineDir);
     vi.stubEnv('DOCVIEW_ARTCRAFT_APP_DIR', appDir);
+    vi.stubEnv('DOCVIEW_MAX_UPLOAD_MB', '1'); // 본문 상한 413 시험용
     // viewer.ts를 먼저 — room.ts가 viewer.ts를 import하는 순환이라, room.js를 먼저 부르면 viewer.ts가 흉내 전 원래 isRoomOpen에 묶인다
     await import('../src/routes/viewer.js');
     ({ store, newDocumentId } = await import('../src/storage.js'));
@@ -74,8 +85,17 @@ describe('아트크래프트 앱 화면 — 토큰·info·engine-source·저장'
   const tok = (docId: string, perms: Perms, engine?: 'artcraft') =>
     issueViewToken({ docId, viewer: '시험자', perms: { canPrint: false, canDownload: false, canCopy: false, canEdit: false, ...perms }, ...(engine ? { engine } : {}) }, 600);
   const info = async (token: string) => (await app.inject({ method: 'GET', url: `/api/view/info?token=${encodeURIComponent(token)}` })).json().data;
-  const save = (token: string, body: Buffer) =>
-    app.inject({ method: 'PUT', url: `/api/view/artcraft-save?token=${encodeURIComponent(token)}`, headers: { 'content-type': 'application/octet-stream' }, payload: body });
+  const sha = (b: Uint8Array) => createHash('sha256').update(b).digest('hex');
+  /** engine-source가 주는 ETag와 같은 값 — 지금 저장된 원본의 sha256 */
+  const etag = async (id: string, ext: string) => `"${sha(await store.readOriginal(id, ext))}"`;
+  const save = (token: string, body: Buffer, ifMatch?: string) =>
+    app.inject({
+      method: 'PUT',
+      url: `/api/view/artcraft-save?token=${encodeURIComponent(token)}`,
+      headers: { 'content-type': 'application/octet-stream', ...(ifMatch ? { 'if-match': ifMatch } : {}) },
+      payload: body,
+    });
+  const editTok = (id: string) => tok(id, { canDownload: true, canEdit: true }, 'artcraft');
   const audits = (docId: string) =>
     readdirSync(path.join(dataDir, 'audit'))
       .flatMap((f) => readFileSync(path.join(dataDir, 'audit', f), 'utf8').trim().split('\n'))
@@ -157,33 +177,62 @@ describe('아트크래프트 앱 화면 — 토큰·info·engine-source·저장'
     }
   });
 
-  test('engine-source: 앱이 있으면 엑셀 원본도 내준다(no-store, engine_open)', async () => {
+  test('engine-source: 앱이 있으면 엑셀 원본도 내준다(no-store, ETag = sha256)', async () => {
     const id = await addDoc('xlsx', Buffer.from('엑셀-원본'), 'grid');
     const res = await app.inject({ method: 'GET', url: `/api/view/engine-source?token=${encodeURIComponent(tok(id, { canDownload: true }, 'artcraft'))}` });
     expect(res.statusCode).toBe(200);
     expect(res.rawPayload.toString('utf8')).toBe('엑셀-원본');
     expect(res.headers['cache-control']).toBe('private, no-store');
+    expect(res.headers.etag).toBe(`"${sha(Buffer.from('엑셀-원본'))}"`);
   });
 
   test('저장: 토큰 없음·잘못된 토큰 401', async () => {
     expect((await save('bad.token.x', Buffer.from('x'))).statusCode).toBe(401);
+    const none = await app.inject({ method: 'PUT', url: '/api/view/artcraft-save', headers: { 'content-type': 'application/octet-stream' }, payload: Buffer.from('x') });
+    expect(none.statusCode).toBe(401);
   });
 
-  test('저장: artcraft 토큰이 아니거나 편집 권한이 없으면 403(edit_save_denied), 원본 그대로', async () => {
+  test('저장: artcraft 토큰 아님·편집 권한 없음·내려받기 권한 없음이면 403(edit_save_denied permission), 원본 그대로', async () => {
     const id = await addDoc('xlsx', await xlsxBytes('원래'), 'grid');
     const before = await store.readOriginal(id, 'xlsx');
     const bytes = await xlsxBytes('바뀜');
-    expect((await save(tok(id, { canDownload: true, canEdit: true }), bytes)).statusCode).toBe(403);
-    expect((await save(tok(id, { canDownload: true }, 'artcraft'), bytes)).statusCode).toBe(403);
+    const base = await etag(id, 'xlsx');
+    expect((await save(tok(id, { canDownload: true, canEdit: true }), bytes, base)).statusCode).toBe(403);
+    expect((await save(tok(id, { canDownload: true }, 'artcraft'), bytes, base)).statusCode).toBe(403);
+    expect((await save(tok(id, { canEdit: true }, 'artcraft'), bytes, base)).statusCode).toBe(403);
     expect(Buffer.compare(await store.readOriginal(id, 'xlsx'), before)).toBe(0);
-    expect(audits(id)).toContainEqual(expect.objectContaining({ type: 'edit_save_denied', detail: 'permission' }));
+    expect(audits(id).filter((e) => e.type === 'edit_save_denied' && e.detail === 'permission')).toHaveLength(3);
   });
 
-  test('저장: 형식이 다른 바이트(docx 문서에 xlsx)는 400, 저장 안 되는 형식(pdf)도 400', async () => {
+  test('저장: If-Match 없거나 틀린 꼴이면 428(no-base)', async () => {
+    const id = await addDoc('xlsx', await xlsxBytes('원래'), 'grid');
+    expect((await save(editTok(id), await xlsxBytes('바뀜'))).statusCode).toBe(428);
+    expect((await save(editTok(id), await xlsxBytes('바뀜'), '"abc"')).statusCode).toBe(428);
+    expect(audits(id)).toContainEqual(expect.objectContaining({ type: 'edit_save_denied', detail: 'no-base' }));
+  });
+
+  test('저장: 형식이 다른 바이트 400(format), 저장 안 되는 형식 400(unsupported), 빈 본문 400(empty) — 모두 감사', async () => {
     const docx = await addDoc('docx');
-    expect((await save(tok(docx, { canDownload: true, canEdit: true }, 'artcraft'), await xlsxBytes('x'))).statusCode).toBe(400);
+    expect((await save(editTok(docx), await xlsxBytes('x'), await etag(docx, 'docx'))).statusCode).toBe(400);
+    expect(audits(docx)).toContainEqual(expect.objectContaining({ type: 'edit_save_denied', detail: 'format' }));
     const pdf = await addDoc('pdf');
-    expect((await save(tok(pdf, { canDownload: true, canEdit: true }, 'artcraft'), Buffer.from('%PDF'))).statusCode).toBe(400);
+    expect((await save(editTok(pdf), Buffer.from('%PDF'), await etag(pdf, 'pdf'))).statusCode).toBe(400);
+    expect(audits(pdf)).toContainEqual(expect.objectContaining({ type: 'edit_save_denied', detail: 'unsupported' }));
+    const xlsx = await addDoc('xlsx', await xlsxBytes('원래'), 'grid');
+    expect((await save(editTok(xlsx), Buffer.alloc(0), await etag(xlsx, 'xlsx'))).statusCode).toBe(400);
+    expect(audits(xlsx)).toContainEqual(expect.objectContaining({ type: 'edit_save_denied', detail: 'empty' }));
+  });
+
+  test('저장: 본문 상한 초과 413, 풀면 너무 큰 zip(선언 크기 위조) 413 — 원본 그대로', async () => {
+    const id = await addDoc('xlsx', await xlsxBytes('원래'), 'grid');
+    const before = await store.readOriginal(id, 'xlsx');
+    const base = await etag(id, 'xlsx');
+    expect((await save(editTok(id), Buffer.alloc(1024 * 1024 + 1, 1), base)).statusCode).toBe(413);
+    const bomb = await xlsxBytes('폭탄');
+    const view = new DataView(bomb.buffer, bomb.byteOffset, bomb.byteLength);
+    for (let i = 0; i + 4 <= bomb.length; i += 1) if (view.getUint32(i, true) === 0x02014b50) view.setUint32(i + 24, 0xfffffff0, true);
+    expect((await save(editTok(id), bomb, base)).statusCode).toBe(413);
+    expect(Buffer.compare(await store.readOriginal(id, 'xlsx'), before)).toBe(0);
   });
 
   test('저장: 편집 방이 열려 있으면 409 + 안내, 원본 그대로', async () => {
@@ -191,7 +240,7 @@ describe('아트크래프트 앱 화면 — 토큰·info·engine-source·저장'
     const before = await store.readOriginal(id, 'xlsx');
     openRooms.add(id);
     try {
-      const res = await save(tok(id, { canDownload: true, canEdit: true }, 'artcraft'), await xlsxBytes('바뀜'));
+      const res = await save(editTok(id), await xlsxBytes('바뀜'), await etag(id, 'xlsx'));
       expect(res.statusCode).toBe(409);
       expect(res.json().error).toContain('편집기');
     } finally {
@@ -201,15 +250,51 @@ describe('아트크래프트 앱 화면 — 토큰·info·engine-source·저장'
     expect(audits(id)).toContainEqual(expect.objectContaining({ type: 'edit_save_denied', detail: 'room-open' }));
   });
 
+  test('저장: 같은 base로 두 번 저장하면 두 번째는 409(stale) — 먼저 저장한 내용 그대로', async () => {
+    const id = await addDoc('xlsx', await xlsxBytes('원래'), 'grid');
+    const base = await etag(id, 'xlsx');
+    const first = await xlsxBytes('먼저');
+    expect((await save(editTok(id), first, base)).statusCode).toBe(200);
+    const res = await save(editTok(id), await xlsxBytes('나중'), base);
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toContain('먼저 저장');
+    expect(Buffer.compare(await store.readOriginal(id, 'xlsx'), first)).toBe(0);
+    expect(audits(id)).toContainEqual(expect.objectContaining({ type: 'edit_save_denied', detail: 'stale' }));
+    // 새 원본의 해시로는 다시 저장된다
+    expect((await save(editTok(id), await xlsxBytes('다시'), await etag(id, 'xlsx'))).statusCode).toBe(200);
+  });
+
   test('저장: 엑셀 성공 → 원본 바뀜, 보기 격자 다시 만듦(시트 수), edit_saved(artcraft-app)', async () => {
     const id = await addDoc('xlsx', await xlsxBytes('원래'), 'grid');
     const bytes = await xlsxBytes('새 값');
-    const res = await save(tok(id, { canDownload: true, canEdit: true }, 'artcraft'), bytes);
+    const res = await save(editTok(id), bytes, await etag(id, 'xlsx'));
     expect(res.statusCode).toBe(200);
     expect(res.json().data.pageCount).toBe(1);
     expect(Buffer.compare(await store.readOriginal(id, 'xlsx'), bytes)).toBe(0);
     expect((await store.readMeta(id))?.viewKind).toBe('grid');
     expect(await store.hasDerived(id, 'grid')).toBe(true);
+    expect(audits(id)).toContainEqual(expect.objectContaining({ type: 'edit_saved', detail: 'artcraft-app' }));
+  });
+
+  test('저장: 워드 성공 → 원본 바뀜, PDF 다시 만듦(쪽 수·meta pages), edit_saved', async () => {
+    const { zipSync, strToU8 } = await import('fflate');
+    const docx = (text: string) =>
+      Buffer.from(
+        zipSync({
+          '[Content_Types].xml': strToU8(
+            '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>',
+          ),
+          'word/document.xml': strToU8(`<w:document><w:body><w:p><w:r><w:t>${text}</w:t></w:r></w:p></w:body></w:document>`),
+        }),
+      );
+    const id = await addDoc('docx', docx('원래'), 'pages');
+    const bytes = docx('새 글');
+    const res = await save(editTok(id), bytes, await etag(id, 'docx'));
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data.pageCount).toBe(3);
+    expect(convertCalls).toContain(id);
+    expect(Buffer.compare(await store.readOriginal(id, 'docx'), bytes)).toBe(0);
+    expect(await store.readMeta(id)).toMatchObject({ viewKind: 'pages', pageCount: 3, status: 'ready' });
     expect(audits(id)).toContainEqual(expect.objectContaining({ type: 'edit_saved', detail: 'artcraft-app' }));
   });
 });

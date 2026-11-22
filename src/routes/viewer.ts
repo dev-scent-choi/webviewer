@@ -72,7 +72,7 @@ import {
   gridCellValue,
 } from '../spreadsheet.js';
 import { store } from '../storage.js';
-import { LEGACY_EDIT_TARGET, legacyDownload, ooxmlKind } from '../legacyOffice.js';
+import { LEGACY_EDIT_TARGET, legacyDownload, ooxmlKind, sha256 } from '../legacyOffice.js';
 import { isViewOnly, type DocumentMeta, type ViewClaims } from '../types.js';
 import { isOpenable, waitForInitialConversion } from '../conversionGate.js';
 import { buildViewerGridFile, saveGridFile } from '../xlsx/viewerGrid.js';
@@ -1790,7 +1790,8 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
       // 내려받기와 같은 원천 — 편집 방이 떠 있으면 저장 전 최신 바이트
       const data = (await getCurrentBytes(meta.id)) ?? (await store.readOriginal(meta.id, meta.ext));
       await recordAudit({ type: 'engine_open', docId: meta.id, viewer: view.claims.viewer });
-      return reply.type('application/octet-stream').header('cache-control', 'private, no-store').send(data);
+      // ETag = 보낸 바이트의 sha256 — 앱 화면 저장(artcraft-save)이 If-Match로 돌려보내 그 사이 다른 저장이 있었는지 본다
+      return reply.type('application/octet-stream').header('cache-control', 'private, no-store').header('etag', `"${sha256(data)}"`).send(data);
     },
   );
 
@@ -1874,10 +1875,14 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
         await recordAudit({ type: 'edit_save_denied', docId: meta.id, viewer: claims.viewer, detail });
         return reply.code(code).send({ success: false, error });
       };
-      if (claims.engine !== 'artcraft' || !claims.perms.canEdit) return deny(403, 'permission', '편집 권한이 없습니다.');
+      // canDownload도 본다 — engine-source와 같은 조건(내려받기 없는 artcraft 토큰은 판정상 서버 변환이라 앱 화면이 없다)
+      if (claims.engine !== 'artcraft' || !claims.perms.canEdit || !claims.perms.canDownload) return deny(403, 'permission', '편집 권한이 없습니다.');
       if (!ARTCRAFT_SAVE_FORMATS.has(meta.ext)) return deny(400, 'unsupported', '이 형식은 아트크래프트 앱 화면에서 저장할 수 없습니다.');
+      // 연 바이트의 해시(engine-source ETag) — 없으면 그 사이 다른 저장을 덮는지 알 수 없어 받지 않는다
+      const base = /^"?([0-9a-f]{64})"?$/.exec(request.headers['if-match'] ?? '')?.[1];
+      if (!base) return deny(428, 'no-base', '문서를 연 시점 정보(If-Match)가 없어 저장하지 않았습니다. 문서를 다시 열어 주세요.');
       const data = request.body as Buffer | undefined;
-      if (!Buffer.isBuffer(data) || data.length === 0) return reply.code(400).send({ success: false, error: '저장할 문서 내용이 없습니다.' });
+      if (!Buffer.isBuffer(data) || data.length === 0) return deny(400, 'empty', '저장할 문서 내용이 없습니다.');
       try {
         assertZipNotTooLarge(data, 'artcraft-save');
       } catch (error) {
@@ -1886,17 +1891,20 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
       }
       if (ooxmlKind(data)?.ext !== meta.ext) return deny(400, 'format', '문서 형식이 맞지 않습니다.');
       // 방의 저장(flushToStore)과 같은 줄에 선다 — 검사와 쓰기 사이에 방이 저장하지 않게
-      const saved = await runSerialized(meta.id, async () => {
-        if (isRoomOpen(meta.id)) return false;
+      const saved = await runSerialized(meta.id, async (): Promise<'ok' | 'room-open' | 'stale'> => {
+        if (isRoomOpen(meta.id)) return 'room-open';
+        if (sha256(await store.readOriginal(meta.id, meta.ext)) !== base) return 'stale';
+        // 미리 읽어 둔 옛 내용으로 편집기가 열리지 않게 — 쓰기 전에(방 시딩은 이 줄을 안 타서 쓰는 도중 열리면 옛 바이트를 읽는 창은 남는다)
+        if (meta.ext === 'xlsx') discardPrewarmedXlsx(meta.id);
         await store.saveOriginal(meta.id, meta.ext, data);
-        return true;
+        return 'ok';
       });
-      if (!saved) return deny(409, 'room-open', '편집기 화면에서 이 문서를 열고 있어 저장하지 못했습니다. 편집기를 모두 닫은 뒤 다시 저장하세요.');
+      if (saved === 'room-open') return deny(409, 'room-open', '편집기 화면에서 이 문서를 열고 있어 저장하지 못했습니다. 편집기를 모두 닫은 뒤 다시 저장하세요.');
+      if (saved === 'stale') return deny(409, 'stale', '문서를 연 뒤에 다른 사람이 먼저 저장했습니다. 내 변경은 저장하지 않았습니다 — 문서를 다시 열어 주세요.');
       // 보기 화면 자료 다시 만들기 — 실패해도 원본 저장은 된 것(hwp-save와 같다)
       let pageCount = meta.pageCount;
       try {
         if (meta.ext === 'xlsx') {
-          discardPrewarmedXlsx(meta.id); // 미리 읽어 둔 옛 내용으로 편집기가 열리지 않게
           const built = await buildViewerGridFile(data);
           await saveGridFile(store, meta.id, built.buffer);
           pageCount = built.sheetCount;
