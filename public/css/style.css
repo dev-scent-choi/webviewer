@@ -4221,3 +4221,10 @@ body.ui-view.no-copy :is(#editor, #grid-editor, #slides-rail, #slide-canvas-wrap
   .ribbon-skin .icon-btn-big { flex-direction: row; min-width: 20px; height: 20px; padding: 0 2px; }
   .ribbon-skin .icon-btn-big > svg { width: 16px; height: 16px; }
 }
+
+/* 리본 꾸밈 — 워드 레이아웃 탭 들여쓰기·간격 칸(46px 높이로) */
+.ribbon-skin .layout-fields { gap: 10px; align-items: center; }
+.ribbon-skin .layout-field-col { gap: 0; }
+.ribbon-skin .layout-field-title { font: 600 10px/14px var(--skin-font); }
+.ribbon-skin .layout-field { font: 400 11px/16px var(--skin-font); }
+.ribbon-skin .layout-field input { box-sizing: border-box; height: 16px; padding: 0 3px; }
