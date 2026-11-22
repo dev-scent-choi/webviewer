@@ -3,7 +3,8 @@
 //  (1) 제목 줄 24·탭 줄 22·리본 62·상태 줄 18px(±2, 캡처 실측)  (2) 탭·묶음·단추 이름·말풍선이 한글(영문자만 있는 라벨 0)
 //  (3) 큰 단추 = 아이콘 위·이름 아래  (4) 모든 탭의 리본 내용이 62px 안(잘림 없음)  (5) "자세히"는 있는 단추를 가리킴(워드 1·엑셀 1·PPT 0)
 //  (6) 읽기 전용 흐림이 고르다(0.45), "자세히" 흐림 = 가리키는 단추 흐림  (7) 600px 가로 스크롤 없음·제목 줄 한 줄
-//  (8) 보기 화면 같은 규격·id 그대로·첫 쪽이 막대 밑에 깔리지 않음  + 아트크래프트 캡처와 나란히 놓은 보고서
+//  (8) 보기 화면 같은 규격·id 그대로·첫 쪽이 막대 밑에 깔리지 않음  (9) 아이콘 큰 30px·작은 15px 이상, 보기 화면 단추 이름, 상태 표시(읽기 전용·연결됨·편집 열기/편집) 안 보임
+//  + 아트크래프트 캡처와 나란히 놓은 보고서
 // 쓰는 법: npm run build:editor && node scripts/verify-ribbon-skin-e2e.mjs [포트 8160~8169, 기본 8166]
 import { spawn, execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
@@ -144,6 +145,23 @@ const bigButtons = (page) =>
       })
       .filter(Boolean);
   });
+/** 아이콘 크기(아트크래프트 기준 큰 32·작은 16px, 다듬기 2026-11-22)와 숨겨야 하는 상태 표시 — 보이는 것만 잰다.
+ *  큰: 편집기 큰 단추·보기 화면 단추의 아이콘, 작은: 편집기 작은 단추 첫 아이콘(펼침 화살표 단추 제외) */
+const iconChrome = (page) =>
+  page.evaluate(() => {
+    const vis = (el) => el.getClientRects().length > 0;
+    const side = (el) => Math.round(Math.min(el.getBoundingClientRect().width, el.getBoundingClientRect().height));
+    const min = (sel) => {
+      const list = [...document.querySelectorAll(sel)].filter(vis).map(side);
+      return list.length ? Math.min(...list) : null;
+    };
+    return {
+      big: min('.ribbon-panel:not([hidden]) .icon-btn-big > svg, .toolbar-row-tools .ribbon-group-buttons > .icon-btn > svg:not([hidden]):not(.icon-btn-badge):not(.icon-btn-caret-glyph)'),
+      small: min('.ribbon-panel:not([hidden]) .icon-btn:not(.icon-btn-big):not(.dropdown-caret) > svg:first-child'),
+      chrome: [...document.querySelectorAll('#readonly-badge, .readonly-badge, .conn-status, .view-open-edit, #edit-btn, .view-readonly')].filter(vis).map((el) => el.id || el.className),
+      names: [...document.querySelectorAll('.toolbar-row-tools .ribbon-group-buttons > .icon-btn')].filter(vis).filter((b) => !b.querySelector(':scope > .tool-name')?.textContent?.trim() || !vis(b.querySelector(':scope > .tool-name'))).map((b) => b.id),
+    };
+  });
 /** 보이는 탭을 하나씩 눌러 판 높이(62±2)·잘림(scrollHeight > clientHeight)·판 안 스크롤바·묶음 이름 줄과 겹친 조작을 본다 */
 async function tabPanels(page) {
   const tabs = await page.$$eval('.ribbon-tab:not(.ribbon-tab-file)', (ts) => ts.filter((t) => !t.hidden && t.dataset.tab).map((t) => t.dataset.tab));
@@ -220,6 +238,8 @@ try {
     const big = await bigButtons(edit.page);
     const bigBad = big.filter((b) => !bigButtonLayoutOk(b.icon, b.label)).map((b) => b.name);
     rec(`(3) ${ext} 홈 탭 큰 단추 ${big.length}개 — 아이콘 위·이름 아래`, big.length > 0 && bigBad.length === 0, bigBad.join(', '));
+    const ic = await iconChrome(edit.page);
+    rec(`(9) ${ext} 홈 탭 아이콘 — 큰 단추 30px 이상·작은 단추 15px 이상(아트크래프트 32·16)`, ic.big >= 30 && ic.small >= 15, JSON.stringify(ic));
     const panels = await tabPanels(edit.page);
     rec(`(4) ${ext} 탭 ${panels.tabs.length}개 모두 리본 62px 안(잘림 없음)`, panels.tabs.length >= 5 && panels.bad.length === 0, panels.bad.join(' | '));
     const launchers = await edit.page.$$eval('.ribbon-launcher', (ls) => ls.map((l) => ({ proxy: l.dataset.proxy ?? '', ok: !!document.getElementById(l.dataset.proxy ?? '') && !l.id })));
@@ -240,6 +260,8 @@ try {
 
     // ---- 읽기 전용(ui=view) ----
     const roCtx = await browser.newContext({ viewport: { width: 1400, height: 900 } });
+    // 메인 화면에서 연 것처럼 — "편집 열기" 단추가 DOM에 생겨야 숨김을 잴 수 있다
+    await roCtx.addInitScript((id) => sessionStorage.setItem('docview-edit-doc', id), ids[ext]);
     const ro = await open(roCtx, (await token(ids[ext], { engine: 'editor' })).viewerUrl, READY[ext]);
     const rh = await heights(ro.page, EDITOR_SEL);
     rec(`(1) ${ext} 읽기 전용 — 같은 높이 규격`, heightProblems(rh).length === 0, `${JSON.stringify(rh)} ${heightProblems(rh).join(', ')}`);
@@ -252,6 +274,9 @@ try {
       return { count: vis.length, odd, launch, body: document.body.classList.contains('ui-view') };
     });
     rec(`(6) ${ext} 읽기 전용 — 흐린 단추 ${grey.count}개 모두 0.45, "자세히" 흐림 = 대상 흐림`, grey.body && grey.count > 0 && grey.odd.length === 0 && grey.launch.length === 0, JSON.stringify(grey));
+    const ric = await iconChrome(ro.page);
+    const roEdit = await ro.page.evaluate(() => document.querySelectorAll('.view-open-edit').length);
+    rec(`(9) ${ext} 읽기 전용 — 읽기 전용 표지·연결됨·편집 열기·상태 줄 읽기 전용 안 보임(편집 열기는 DOM에 있음), 아이콘 32·16`, ric.chrome.length === 0 && roEdit === 1 && ric.big >= 30 && ric.small >= 15, JSON.stringify({ ...ric, roEdit }));
     await shot(ro.page, `readonly-${ext}`);
     pairs.push([`readonly-${ext}`, REF[ext]]);
     await roCtx.close();
@@ -298,6 +323,16 @@ try {
       rec(`(8) 보기 ${ext} ${width}px — 리본 스크롤바 없음·이름 줄 겹침 없음`, !!vp && vp.bar <= 0 && vp.clash.length === 0, JSON.stringify(vp));
     }
     await v.page.setViewportSize({ width: 1400, height: 900 });
+    const vic = await iconChrome(v.page);
+    rec(`(9) 보기 ${ext} — 단추마다 아이콘(30px 이상) 아래 한글 이름, 편집 단추·상태 표시 안 보임`, vic.big >= 30 && vic.names.length === 0 && vic.chrome.length === 0, JSON.stringify(vic));
+    if (ext === 'docx') {
+      // 편집 권한 토큰 — #edit-btn이 켜져도(hidden 아님) 화면에는 보이지 않는다
+      const ectx = await browser.newContext({ viewport: { width: 1400, height: 900 } });
+      const e = await open(ectx, (await token(ids[ext], { canEdit: true })).viewerUrl, '.page-frame.page-ready');
+      const eb = await e.page.$eval('#edit-btn', (b) => ({ on: !b.hidden, shown: b.getClientRects().length > 0 }));
+      rec('(9) 보기 docx 편집 토큰 — 편집 단추 켜짐·화면에는 숨김', eb.on && !eb.shown, JSON.stringify(eb));
+      await ectx.close();
+    }
     rec(`보기 ${ext} — 화면 오류 없음`, v.errors.length === 0, v.errors.slice(0, 2).join(' | '));
     await shot(v.page, `view-${ext}`);
     pairs.push([`view-${ext}`, 'word-report.png']);
