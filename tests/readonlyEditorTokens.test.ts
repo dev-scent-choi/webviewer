@@ -102,7 +102,9 @@ describe('읽기 전용 편집기 보기 꾸밈 — 토큰 engine:editor', () =>
     const id = await addDoc('docx');
     const d = await data(id, { canDownload: true, canEdit: true });
     const t = encodeURIComponent(d.token);
-    expect(Object.keys(d)).toEqual(['token', 'viewerUrl', 'editorUrl', 'expiresInSeconds', 'engine']);
+    // contentUrl(콘텐츠만 보기, 설계 2026-11-22-artcraft-app-screen §4)만 더해졌다
+    expect(Object.keys(d)).toEqual(['token', 'viewerUrl', 'contentUrl', 'editorUrl', 'expiresInSeconds', 'engine']);
+    expect(d.contentUrl).toBe(`/view.html?token=${encodeURIComponent(d.token)}&ui=content`);
     expect(d.engine).toBe('libreoffice');
     expect(d.viewerUrl).toBe(`/view.html?token=${t}`);
     expect(d.editorUrl).toBe(`/editor.html?token=${t}`);

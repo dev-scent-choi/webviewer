@@ -38,6 +38,13 @@ describe('engineFor — 형식 × 권한 × 요청 × 설치', () => {
   test('constructor 같은 이름도 형식으로 보지 않는다', () => {
     expect(engineFor('constructor', { canDownload: true }, 'artcraft', true).engine).toBe('libreoffice');
   });
+  test('앱 화면(appOk)이 되면 엔진이 안 그리는 형식도 artcraft — 내려받기 권한은 그대로 필요', () => {
+    expect(engineFor('xlsx', { canDownload: true }, 'artcraft', true, true)).toEqual({ engine: 'artcraft' });
+    expect(engineFor('xlsx', { canDownload: true }, 'artcraft', false, true)).toEqual({ engine: 'artcraft' });
+    expect(engineFor('xlsx', { canDownload: false }, 'artcraft', true, true)).toEqual({ engine: 'libreoffice', reason: ENGINE_REASONS.noDownload });
+    expect(engineFor('xlsx', { canDownload: true }, 'artcraft', true, false)).toEqual({ engine: 'libreoffice', reason: ENGINE_REASONS.unsupported });
+    expect(engineFor('docx', { canDownload: true }, 'libreoffice', true, true)).toEqual({ engine: 'libreoffice' });
+  });
 });
 
 describe('artcraftInfo — info의 artcraft 블록', () => {

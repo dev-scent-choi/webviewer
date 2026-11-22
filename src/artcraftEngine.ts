@@ -37,12 +37,14 @@ export interface ArtcraftInfo {
   readonly workerUrl?: string;
 }
 
-/** ext는 meta.ext(저장된 바이트의 실제 종류) — 옛 형식 편집 업로드도 engine-source가 내주는 바이트와 형식이 맞는다 */
+/** ext는 meta.ext(저장된 바이트의 실제 종류) — 옛 형식 편집 업로드도 engine-source가 내주는 바이트와 형식이 맞는다.
+ * appOk = 아트크래프트 앱 화면이 이 형식을 열 수 있음(src/artcraftApp.ts appKindFor) — 엔진이 안 그리는 엑셀도 앱 화면으로 연다 */
 export function engineFor(
   ext: string,
   perms: { readonly canDownload: boolean },
   requested: Engine | undefined,
   installed: boolean,
+  appOk = false,
 ): { engine: Engine; reason?: string } {
   if (requested === 'editor') {
     if (!EDITOR_VIEW_FORMATS.has(ext)) return { engine: 'libreoffice', reason: ENGINE_REASONS.noEditor };
@@ -50,8 +52,8 @@ export function engineFor(
     return perms.canDownload ? { engine: 'editor' } : { engine: 'libreoffice', reason: ENGINE_REASONS.noDownload };
   }
   if (requested !== 'artcraft') return { engine: 'libreoffice' };
-  if (!installed) return { engine: 'libreoffice', reason: ENGINE_REASONS.notInstalled };
-  if (!ARTCRAFT_FORMATS.has(ext)) return { engine: 'libreoffice', reason: ENGINE_REASONS.unsupported };
+  if (!installed && !appOk) return { engine: 'libreoffice', reason: ENGINE_REASONS.notInstalled };
+  if (!(installed && ARTCRAFT_FORMATS.has(ext)) && !appOk) return { engine: 'libreoffice', reason: ENGINE_REASONS.unsupported };
   if (!perms.canDownload) return { engine: 'libreoffice', reason: ENGINE_REASONS.noDownload };
   return { engine: 'artcraft' };
 }

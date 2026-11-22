@@ -13,6 +13,8 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { recordAudit } from '../audit.js';
 import { ARTCRAFT_FORMATS, ENGINE_REASONS, artcraftInfo, engineFor } from '../artcraftEngine.js';
 import { readArtcraftManifest } from '../artcraftManifest.js';
+import { appInfo, appKindFor, readArtcraftAppManifest } from '../artcraftApp.js';
+import { runSerialized } from '../collab/saveSerializer.js';
 import { versionedUrl } from '../assetVersion.js';
 import { fileURLToPath } from 'node:url';
 import { SizedLruCache } from '../cache.js';
@@ -45,13 +47,15 @@ import {
 import { cachedDocxDrawing, DrawingRateLimited, renderDocxDrawingPng } from '../docx/drawingImage.js';
 import { MarkupValidationError, addMarkup, deleteMarkup, listMarkup, updateMarkup } from '../markup.js';
 import { touchPresence } from '../presence.js';
-import { docxFragmentsOf, flushNow, getCfRemoteAnswer, getCurrentBytes, getChangeLog, getFileCharts, getFileExtras, getFileImages, invalidateFileExtras } from '../collab/room.js';
+import { discardPrewarmedXlsx, docxFragmentsOf, flushNow, getCfRemoteAnswer, getCurrentBytes, getChangeLog, getFileCharts, getFileExtras, getFileImages, invalidateFileExtras, isRoomOpen } from '../collab/room.js';
 import { CfBusyError, cfTokenBudget, cfTokenRetryAfterMs, cfTokenSpend, parseCfRemoteRequest } from '../xlsx/cfRangeValues.js';
 import type { WildcardBudget } from '../collab/wildcard.js';
 
 /** 아트크래프트 Worker 번들 — info가 내용 해시를 붙여 준다(app.ts publicDir와 같은 폴더) */
 const PUBLIC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'public');
 const ARTCRAFT_WORKER = '/js/artcraftWorker.bundle.js';
+/** 아트크래프트 앱 화면이 저장할 수 있는 형식 — 앱이 같은 형식으로 저장한다(.doc 등 옛 형식 그대로인 문서는 저장하지 않는다) */
+const ARTCRAFT_SAVE_FORMATS: ReadonlySet<string> = new Set(['docx', 'xlsx', 'pptx']);
 
 /** 편집 화면 조건부 서식 서버 답 — 편집할 때마다(0.3초 묶음) 다시 묻는다 */
 // 토큰(편집 화면)마다 분당 40회 — verify:xlsx:browser(편집·스크롤·1,500·2만 행 COUNTIF 등 39항목)에서 한 화면이 1분에 부른 최대가 18회라
@@ -68,7 +72,7 @@ import {
   gridCellValue,
 } from '../spreadsheet.js';
 import { store } from '../storage.js';
-import { LEGACY_EDIT_TARGET, legacyDownload } from '../legacyOffice.js';
+import { LEGACY_EDIT_TARGET, legacyDownload, ooxmlKind } from '../legacyOffice.js';
 import { isViewOnly, type DocumentMeta, type ViewClaims } from '../types.js';
 import { isOpenable, waitForInitialConversion } from '../conversionGate.js';
 import { buildViewerGridFile, saveGridFile } from '../xlsx/viewerGrid.js';
@@ -776,8 +780,12 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
           : null;
       // 여는 엔진 — 클레임은 "요청"만 담고 판정은 매번(설계 2026-11-21 §3.2). 아트크래프트는 서버 변환 없이 원본을 브라우저가 그린다
       const manifest = readArtcraftManifest();
-      const engine = engineFor(view.meta.ext, view.claims.perms, view.claims.engine, manifest !== null);
+      const appManifest = readArtcraftAppManifest();
+      const appKind = appKindFor(view.meta.ext, appManifest, manifest);
+      const engine = engineFor(view.meta.ext, view.claims.perms, view.claims.engine, manifest !== null, appKind !== null);
       const artcraft = engine.engine === 'artcraft' && manifest ? artcraftInfo(view.meta.ext, request.query.token!, manifest) : undefined;
+      // 앱 화면(public/artcraft-app.html)이 쓴다 — viewerUrl은 앱이 못 열 때 넘어갈 보기 화면 그대로
+      const artcraftApp = engine.engine === 'artcraft' && appManifest ? appInfo(view.meta.ext, request.query.token!, appManifest, manifest) : undefined;
       return {
         success: true,
         data: {
@@ -809,6 +817,7 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
           ...(engine.reason ? { engineReason: engine.reason } : {}),
           // Worker 주소에도 내용 해시 — 캐시된 옛 Worker가 새 artcraftSource와 어긋나지 않게
           ...(artcraft ? { artcraft: { ...artcraft, workerUrl: versionedUrl(ARTCRAFT_WORKER, PUBLIC_DIR) } } : {}),
+          ...(artcraftApp ? { artcraftApp } : {}),
           // 향기랩 옛 형식(.doc·.xls·.ppt) — 편집기가 형식 이름·내려받기 문구·매크로 경고를 보인다(설계 §2.5)
           // .doc 이름의 OOXML(ZIP)은 실제로 OOXML이라 옛 형식 문구를 보이지 않는다(내려받기는 그래도 안 고쳤으면 올린 바이트 그대로)
           legacy:
@@ -1773,7 +1782,8 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
         await recordAudit({ type: 'engine_denied', docId: meta.id, viewer: view.claims.viewer, detail: 'permission' });
         return reply.code(403).send({ success: false, error: '브라우저 엔진으로 열 권한이 없습니다.' });
       }
-      if (!ARTCRAFT_FORMATS.has(meta.ext)) {
+      // 엔진이 그리는 형식, 또는 앱 화면이 여는 형식(엑셀)
+      if (!ARTCRAFT_FORMATS.has(meta.ext) && appKindFor(meta.ext, readArtcraftAppManifest(), readArtcraftManifest()) === null) {
         await recordAudit({ type: 'engine_denied', docId: meta.id, viewer: view.claims.viewer, detail: 'unsupported' });
         return reply.code(400).send({ success: false, error: ENGINE_REASONS.unsupported });
       }
@@ -1844,6 +1854,67 @@ export async function viewerRoutes(app: FastifyInstance): Promise<void> {
       invalidateRenderCache(view.meta.id);
       invalidateViewCaches(view.meta.id);
       await recordAudit({ type: 'edit_saved', docId: view.meta.id, viewer: view.claims.viewer });
+      return { success: true, data: { pageCount } };
+    },
+  );
+
+  /**
+   * 아트크래프트 앱 화면의 저장(설계 2026-11-22-artcraft-app-screen §3) — 앱이 부모에 준 :save 바이트로 원본을 통째로 바꾼다.
+   * hwp-save와 같은 규칙(canEdit·zip 폭탄·edit_saved 감사·보기 자료 다시 만들기) + artcraft 토큰만 + 같은 OOXML 형식만 +
+   * 편집 방이 열려 있으면 거절(방의 자동 저장이 이 저장을 덮거나 이 저장이 방의 편집을 덮지 않게). 버전 저장소는 아직 없다.
+   */
+  app.put<{ Querystring: TokenQuery }>(
+    '/api/view/artcraft-save',
+    { schema: { querystring: tokenQuerySchema }, bodyLimit: config.maxUploadBytes, onRequest: tokenBeforeBody, config: { rateLimit: HEAVY_RATE_LIMIT } },
+    async (request, reply) => {
+      const view = await resolveView(request.query.token, reply);
+      if (!view) return reply;
+      const { meta, claims } = view;
+      const deny = async (code: number, detail: string, error: string) => {
+        await recordAudit({ type: 'edit_save_denied', docId: meta.id, viewer: claims.viewer, detail });
+        return reply.code(code).send({ success: false, error });
+      };
+      if (claims.engine !== 'artcraft' || !claims.perms.canEdit) return deny(403, 'permission', '편집 권한이 없습니다.');
+      if (!ARTCRAFT_SAVE_FORMATS.has(meta.ext)) return deny(400, 'unsupported', '이 형식은 아트크래프트 앱 화면에서 저장할 수 없습니다.');
+      const data = request.body as Buffer | undefined;
+      if (!Buffer.isBuffer(data) || data.length === 0) return reply.code(400).send({ success: false, error: '저장할 문서 내용이 없습니다.' });
+      try {
+        assertZipNotTooLarge(data, 'artcraft-save');
+      } catch (error) {
+        if (error instanceof ZipTooLargeError) return reply.code(413).send({ success: false, error: '압축을 풀면 너무 큰 파일입니다.' });
+        throw error;
+      }
+      if (ooxmlKind(data)?.ext !== meta.ext) return deny(400, 'format', '문서 형식이 맞지 않습니다.');
+      // 방의 저장(flushToStore)과 같은 줄에 선다 — 검사와 쓰기 사이에 방이 저장하지 않게
+      const saved = await runSerialized(meta.id, async () => {
+        if (isRoomOpen(meta.id)) return false;
+        await store.saveOriginal(meta.id, meta.ext, data);
+        return true;
+      });
+      if (!saved) return deny(409, 'room-open', '편집기 화면에서 이 문서를 열고 있어 저장하지 못했습니다. 편집기를 모두 닫은 뒤 다시 저장하세요.');
+      // 보기 화면 자료 다시 만들기 — 실패해도 원본 저장은 된 것(hwp-save와 같다)
+      let pageCount = meta.pageCount;
+      try {
+        if (meta.ext === 'xlsx') {
+          discardPrewarmedXlsx(meta.id); // 미리 읽어 둔 옛 내용으로 편집기가 열리지 않게
+          const built = await buildViewerGridFile(data);
+          await saveGridFile(store, meta.id, built.buffer);
+          pageCount = built.sheetCount;
+          await store.writeMeta({ ...meta, pageCount, status: 'ready', viewKind: 'grid', progress: 100 });
+        } else {
+          const converter = findConverter(meta.ext);
+          if (converter) {
+            await waitForInitialConversion(meta.id); // 첫 변환이 늦게 끝나 새 PDF를 덮지 않게
+            pageCount = (await convertToPdf({ ...meta }, converter)).pageCount;
+            await store.writeMeta({ ...meta, pageCount, status: 'ready', viewKind: 'pages', progress: 100 });
+          }
+        }
+      } catch (error) {
+        request.log.error(error, '아트크래프트 저장 뒤 보기 자료 다시 만들기 실패');
+      }
+      invalidateRenderCache(meta.id);
+      invalidateViewCaches(meta.id);
+      await recordAudit({ type: 'edit_saved', docId: meta.id, viewer: claims.viewer, detail: 'artcraft-app' });
       return { success: true, data: { pageCount } };
     },
   );

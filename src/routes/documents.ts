@@ -20,6 +20,7 @@ import type { DocumentMeta, LegacyExt, ViewKind } from '../types.js';
 import { invalidateViewCaches } from './viewer.js';
 import { EDITOR_VIEW_FORMATS, engineFor, type Engine } from '../artcraftEngine.js';
 import { readArtcraftManifest } from '../artcraftManifest.js';
+import { appKindFor, readArtcraftAppManifest } from '../artcraftApp.js';
 import { isOpenable, trackInitialConversion } from '../conversionGate.js';
 import { assertZipNotTooLarge, ZipTooLargeError } from '../zipGuard.js';
 import { buildViewerGridFile, isLargeXlsx, saveGridFile, serializeGridFromLazyStore } from '../xlsx/viewerGrid.js';
@@ -104,6 +105,24 @@ export function editorUrlFor(
   // 전체(수식·숨긴 내용·메모·원본 그림)를 받으므로 원본을 다시 만들 수 있다. 그 경우 서버가 그린 열람 화면(viewerUrl)으로.
   const supportsReadOnlyEditor = opts.canDownload && (ext === 'docx' || ext === 'xlsx' || ext === 'pptx');
   return opts.effectiveCanEdit || supportsReadOnlyEditor ? url : undefined;
+}
+
+/**
+ * 콘텐츠만 보기(ui=content, 설계 2026-11-22-artcraft-app-screen §4) 주소 — 같은 토큰 + ui=content. 편집기 엔진이면 편집기, 쪽 문서는 보기 화면
+ * (아트크래프트 토큰이면 엔진 쪽 그림 보기), 엑셀 격자는 편집기(열람만 토큰은 편집기 방에 못 들어가 없음). 한글·도면은 콘텐츠 화면이 없다.
+ */
+export function contentUrlFor(
+  ext: string,
+  viewKind: ViewKind | undefined,
+  engine: Engine,
+  perms: { readonly canEdit: boolean; readonly canDownload: boolean },
+  token: string,
+): string | undefined {
+  const query = `?token=${encodeURIComponent(token)}&ui=content`;
+  if (engine === 'editor') return `${editorPathFor(ext)}${query}`;
+  if (viewPathFor(ext, viewKind) === '/view.html') return `/view.html${query}`;
+  if (EDITOR_VIEW_FORMATS.has(ext) && (perms.canEdit || perms.canDownload)) return `${editorPathFor(ext)}${query}`;
+  return undefined;
 }
 
 async function buildGrid(meta: DocumentMeta): Promise<GridDocument> {
@@ -544,7 +563,9 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
       // 내려받기 없음으로 서버 변환에 떨어져도 끈다. pdf·hwp 등은 영향 없음(pdf canEdit = 마크업·PDF 편집기 조건)
       const forceReadOnly = engine === 'editor' && EDITOR_VIEW_FORMATS.has(meta.ext);
       const effectiveCanEdit = !forceReadOnly && canEdit && (!isEditableExt || findConverter(meta.ext) !== null);
-      const decision = engineFor(meta.ext, { canDownload }, engine, readArtcraftManifest() !== null);
+      const engineManifest = readArtcraftManifest();
+      const appKind = appKindFor(meta.ext, readArtcraftAppManifest(), engineManifest);
+      const decision = engineFor(meta.ext, { canDownload }, engine, engineManifest !== null, appKind !== null);
       const token = issueViewToken(
         {
           docId: meta.id,
@@ -573,14 +594,18 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
       // (effectiveCanEdit이 pdf 등에서도 true일 수 있는데, 그런 문서는 markup 기능이 있는 viewer.html로 열려야 한다 —
       // pdf만 호출자가 pdfEditor를 보낼 때 PDF 편집기로. 규칙 전체는 editorUrlFor.)
       const viewerUrl = `${viewPathFor(meta.ext, meta.viewKind)}?token=${encodeURIComponent(token)}`;
+      // 아트크래프트 앱 화면이 되는 형식이면 그 화면이 기본 보기(설계 2026-11-22-artcraft-app-screen §3) — 앱이 못 열면 그 화면이 엔진 보기·서버 변환으로 넘긴다
+      const appUrl = decision.engine === 'artcraft' && appKind ? `/artcraft-app.html?token=${encodeURIComponent(token)}` : undefined;
+      const contentUrl = contentUrlFor(meta.ext, meta.viewKind, decision.engine, { canEdit: effectiveCanEdit, canDownload }, token);
       return {
         success: true,
         data: {
           token,
           // 쪽 문서는 통합 보기 껍데기, 엑셀 격자·도면·한글은 지금 보기 화면(viewPathFor) — 주소·토큰 계약은 그대로(설계 V2).
           // engine:'editor'면 편집기 화면 + ui=view(도구 숨김), fallbackUrl은 같은 토큰의 보기 화면(큰 엑셀 정원 초과 때 옮겨 간다)
-          viewerUrl: decision.engine === 'editor' ? `${editorPathFor(meta.ext)}?token=${encodeURIComponent(token)}&ui=view` : viewerUrl,
+          viewerUrl: decision.engine === 'editor' ? `${editorPathFor(meta.ext)}?token=${encodeURIComponent(token)}&ui=view` : (appUrl ?? viewerUrl),
           ...(decision.engine === 'editor' ? { fallbackUrl: viewerUrl } : {}),
+          ...(contentUrl ? { contentUrl } : {}),
           editorUrl: editorUrlFor(meta.ext, { effectiveCanEdit, canDownload, pdfEditor }, token),
           expiresInSeconds: config.tokenTtlSeconds,
           engine: decision.engine,
