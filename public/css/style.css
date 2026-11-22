@@ -2759,17 +2759,19 @@ body.home-hidden .doclist-link { display: none !important; }
 @media (max-width: 1447px) {
   .grid-editor-page #btn-wrap-text .ribbon-btn-label { display: none; }
 }
+/* 리본 꾸밈(#toolbar.ribbon-skin)에서는 큰 단추가 40px·작은 단추가 16px로 좁아 1200px 창에도 큰 단추 이름까지 다 들어간다(2026-11-22 실측 370px 남음) —
+   아래 두 단계(큰 단추 글자 접기·38px/30px 강제)는 꾸밈 없는 툴바에만 건다. 1627/1447px 작은 단추 글자 접기는 꾸밈과 함께 그대로 쓴다. */
 @media (max-width: 1396px) {
-  .grid-editor-page .ribbon-panel[data-panel="home"] .ribbon-group { padding-left: 0.35rem; padding-right: 0.35rem; }
-  .grid-editor-page #btn-paste, .grid-editor-page #home-table-style-dropdown .icon-btn-big, .grid-editor-page #home-sort-filter-dropdown .icon-btn-big, .grid-editor-page #btn-find-replace,
-  .grid-editor-page #cf-dropdown .icon-btn-big { width: 38px; }
-  .grid-editor-page #btn-paste > span, .grid-editor-page #home-table-style-dropdown .icon-btn-big > span,
-  .grid-editor-page #home-sort-filter-dropdown .icon-btn-big > span, .grid-editor-page #btn-find-replace > span,
-  .grid-editor-page #cf-dropdown .icon-btn-big > span { display: none; }
+  .grid-editor-page #toolbar:not(.ribbon-skin) .ribbon-panel[data-panel="home"] .ribbon-group { padding-left: 0.35rem; padding-right: 0.35rem; }
+  .grid-editor-page #toolbar:not(.ribbon-skin) #btn-paste, .grid-editor-page #toolbar:not(.ribbon-skin) #home-table-style-dropdown .icon-btn-big, .grid-editor-page #toolbar:not(.ribbon-skin) #home-sort-filter-dropdown .icon-btn-big, .grid-editor-page #toolbar:not(.ribbon-skin) #btn-find-replace,
+  .grid-editor-page #toolbar:not(.ribbon-skin) #cf-dropdown .icon-btn-big { width: 38px; }
+  .grid-editor-page #toolbar:not(.ribbon-skin) #btn-paste > span, .grid-editor-page #toolbar:not(.ribbon-skin) #home-table-style-dropdown .icon-btn-big > span,
+  .grid-editor-page #toolbar:not(.ribbon-skin) #home-sort-filter-dropdown .icon-btn-big > span, .grid-editor-page #toolbar:not(.ribbon-skin) #btn-find-replace > span,
+  .grid-editor-page #toolbar:not(.ribbon-skin) #cf-dropdown .icon-btn-big > span { display: none; }
 }
 @media (max-width: 1270px) {
-  .grid-editor-page .ribbon-panel[data-panel="home"] .ribbon-group { padding-left: 0.2rem; padding-right: 0.2rem; }
-  .grid-editor-page .ribbon-panel[data-panel="home"] .icon-btn:not(.icon-btn-big) { width: 30px; min-width: 30px; }
+  .grid-editor-page #toolbar:not(.ribbon-skin) .ribbon-panel[data-panel="home"] .ribbon-group { padding-left: 0.2rem; padding-right: 0.2rem; }
+  .grid-editor-page #toolbar:not(.ribbon-skin) .ribbon-panel[data-panel="home"] .icon-btn:not(.icon-btn-big) { width: 30px; min-width: 30px; }
 }
 /* icon-btn과 정확히 같은 34px로 맞춘다 — 높이가 다르면 같은 행 안에서 세로 가운데 정렬을
    해도 위쪽 시작선(top)이 서로 몇 px씩 어긋나 보인다(오와 열이 안 맞는 것처럼 보이는 원인). */
