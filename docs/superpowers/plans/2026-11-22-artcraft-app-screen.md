@@ -21,7 +21,8 @@
 - 커밋은 경로를 지정해서(`git commit -F - -- <경로…>`), 메시지는 한국어, 끝 줄 `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`. 구현자는 push하지 않는다.
 - 같은 가지에서 리본 꾸밈 작업이 진행 중이다 — 리본 마크업(`public/editor*.html`, `public/view.html`의 리본·제목 줄 구조, `ribbonMenus.ts`)은 고치지 않는다. `public/css/style.css`는 **파일 끝에 덧붙이기만** 한다.
 - 기존 e2e는 배포 기본 동작(앱 화면 켜짐) 그대로 돌린다 — 환경 변수로 앱 화면을 끄고 옛 검사를 통과시키지 않는다. "아트크래프트로 열기"가 사용자 지시로 바뀌었으므로 **verify:artcraft·verify:readonly에서 그 단추·artcraft 토큰 viewerUrl을 다루는 단언만** 새 동작(앱 화면)으로 고친다. 엔진 보기 단언은 지우지 않고 엔진 보기 주소(`/view.html?token=…` = 앱 실패 때 가는 배포 경로)로 옮겨 살린다(Task 5 Step 1에 단언별로 적음). 나머지(verify:docx·pptx·xlsx·xlsx:browser·view-only·view-shell·ribbon-skin)는 스크립트를 고치지 않고 통과해야 한다.
-- 시험은 묶음 끝(Task 5)에 한 번에: Task 1~4는 단위 시험·`npm run typecheck`·`npm run build:editor`까지만.
+- 격자 앱(gridcraft) 칸 한글(Task 6): ArtCraft 저장소는 고치지 않는다 — 앱이 지원하는 빌드 입력(`CRAFT_FONTS_DIR`)으로 S-Core Dream 4를 넣는다. 패치가 꼭 필요하면 `tools/artcraft-app/patches/`에 두고 빌드가 `git archive` 사본에 적용한다(패치는 커밋, 사본·산출물은 git 밖). 앱 리본·메뉴의 영어는 범위 밖.
+- 시험은 묶음 끝(Task 5, Task 6 뒤 다시 한 번)에 한 번에: Task 1~4는 단위 시험·`npm run typecheck`·`npm run build:editor`까지만.
 
 ## 이 계획이 정한 것(spec이 비워 둔 곳)
 
@@ -37,6 +38,7 @@
 10. **앱 화면 주소에 `ui=content`가 붙어 오면** 워드·PPT는 엔진 보기(`/view.html?…&ui=content`), 엑셀은 격자 편집기로 넘긴다.
 11. **기존 e2e(조정자 판정)**: 앱을 끄는 환경 변수 방식은 쓰지 않는다. verify:artcraft·verify:readonly의 "아트크래프트로 열기"·artcraft viewerUrl 단언만 앱 화면으로 바꾸고, 엔진 보기 단언은 `/view.html?token=…`로 옮긴다. `ui=content` 엔진 보기는 verify:content-only가, manifest 없음은 단위 시험(tests/artcraftAppRoutes·artcraftAppAssets)이 맡는다.
 
+12. **격자 앱 한글 칸(???)**: gridcraft에는 `font.add`가 없다(소스에 명령 없음 — 확인함). 웹 빌드는 빌드 입력 `CRAFT_FONTS_DIR`(craft-fonts `fonts/manifest.txt`)의 허용 글꼴(NanumGothic 자리)만 wasm에 넣는데 Task 1 빌드는 이 변수를 지웠다 → 한글 글꼴 없음. 해결: 격자 앱만 S-Core Dream 4를 NanumGothic 자리에 넣는 manifest를 빌드 입력으로 준다(시험 `spike-webapp\craft-fonts-ko`와 같은 방식, 저장소 패치 없음). 그래도 칸이 ???면 그때만 패치(Task 6 Step 6).
 ---
 
 ## File Structure
@@ -89,10 +91,10 @@ import { APP_SIZE_LIMITS, MiB, SIZE_LIMITS, appSizeProblems, brotli, checkLock, 
 ```
 
 ```ts
-  test('앱 화면 크기 상한(brotli wasm): word 8.5 · deck 5.5 · grid 5 MB — 시험 실측 7.9/4.9/4.5 MB + 여유', () => {
-    expect(APP_SIZE_LIMITS).toEqual({ word: 8.5 * MiB, deck: 5.5 * MiB, grid: 5 * MiB });
-    expect(appSizeProblems({ word: 8.5 * MiB, deck: 5.5 * MiB, grid: 5 * MiB })).toEqual([]);
-    const over = appSizeProblems({ word: 8.5 * MiB + 1, deck: 1, grid: 5 * MiB + 1 });
+  test('앱 화면 크기 상한(brotli wasm): word 8.5 · deck 5.5 · grid 5.5 MB — 시험 실측 7.9/4.9/4.5 MB + 여유(격자는 Task 6의 한글 글꼴 약 0.3 MB 포함)', () => {
+    expect(APP_SIZE_LIMITS).toEqual({ word: 8.5 * MiB, deck: 5.5 * MiB, grid: 5.5 * MiB });
+    expect(appSizeProblems({ word: 8.5 * MiB, deck: 5.5 * MiB, grid: 5.5 * MiB })).toEqual([]);
+    const over = appSizeProblems({ word: 8.5 * MiB + 1, deck: 1, grid: 5.5 * MiB + 1 });
     expect(over).toHaveLength(2);
     expect(over[0]).toContain('word');
     expect(over[1]).toContain('grid');
@@ -260,8 +262,8 @@ Expected: FAIL — `appSizeProblems`/`treeHash` 없음, `../src/artcraftApp.js` 
 - [ ] **Step 4: 빌드 도우미를 더한다** — `scripts/artcraftBuildLib.ts` 끝에 덧붙인다.
 
 ```ts
-/** 앱 화면(설계 2026-11-22-artcraft-app-screen §3) wasm brotli 상한 — 시험(SPIKE-WEBAPP) 실측 word 7.9 · deck 4.9 · grid 4.5 MB에 여유 */
-export const APP_SIZE_LIMITS = { word: 8.5 * MiB, deck: 5.5 * MiB, grid: 5 * MiB } as const;
+/** 앱 화면(설계 2026-11-22-artcraft-app-screen §3) wasm brotli 상한 — 시험(SPIKE-WEBAPP) 실측 word 7.9 · deck 4.9 · grid 4.5 MB에 여유(격자는 Task 6이 넣는 한글 글꼴 S-Core Dream 4 약 0.3 MB 포함) */
+export const APP_SIZE_LIMITS = { word: 8.5 * MiB, deck: 5.5 * MiB, grid: 5.5 * MiB } as const;
 
 export function appSizeProblems(br: { readonly word: number; readonly deck: number; readonly grid: number }): string[] {
   return (['word', 'deck', 'grid'] as const)
@@ -585,7 +587,7 @@ public/artcraft-app/
 - [ ] **Step 13: 실제로 빌드하고 산출물이 git 밖인지 본다**(약 18분 — 백그라운드로 돌리고 끝나면 확인)
 
 Run: `npm run build:artcraft-app`
-Expected: 마지막 줄 `build:artcraft-app 완료 → public/artcraft-app/manifest.json`, wasm br이 word ≤ 8.5·deck ≤ 5.5·grid ≤ 5 MB.
+Expected: 마지막 줄 `build:artcraft-app 완료 → public/artcraft-app/manifest.json`, wasm br이 word ≤ 8.5·deck ≤ 5.5·grid ≤ 5.5 MB.
 Run: `git status --porcelain -- public/artcraft-app tools/artcraft-app/.build` → 출력 없음. `git status --porcelain -- tools/artcraft-app` → `?? tools/artcraft-app/build.ts`만.
 Run: `git -C C:/Users/OpenMinds/projects/artcraft-eval/wordcraft status --porcelain` (deckcraft·gridcraft도) → 출력 없음(저장소를 고치지 않음).
 
@@ -2450,7 +2452,7 @@ npm run verify:view-shell -- http://127.0.0.1:8176
 taskkill //PID "$(cat .audit-run/regress-8176/server.pid)" //T //F
 ```
 
-Expected: 모두 실패 0. 끝나면 `.audit-run/regress-8176`을 지운다. 하나라도 실패하면 이번 변경을 원인으로 의심하고 제품 코드를 고친다(이 여섯 스크립트는 고치지 않는다).
+Expected: 모두 실패 0. 끝나면 `.audit-run/regress-8176`을 지운다. (Task 6을 마친 뒤 이 Step 6 전체를 한 번 더 돌린다 — 격자 앱 빌드가 바뀌므로.) 하나라도 실패하면 이번 변경을 원인으로 의심하고 제품 코드를 고친다(이 여섯 스크립트는 고치지 않는다).
 
 - [ ] **Step 7: 직접 조작 확인(실제 브라우저, headed)** — 8178에 시험 서버(Step 6의 8176 명령에서 포트·폴더만 8178)를 띄우고 Playwright headed(`chromium.launch({ headless: false, args: ['--enable-unsafe-webgpu'] })`)나 PC 크롬으로 연다. 화면 그림만 보고 넘기지 말고 아래를 **모두 손으로 눌러** 확인한다:
   1. 메인 화면에서 docx·xlsx·pptx 각각 "아트크래프트로 열기" → 앱 화면, 읽기 전용 표지, 한글 본문 정상(☒ 없음), 앱 리본 메뉴를 몇 개 눌러 봄, 타자해도 안 바뀜(워드·엑셀), PPT 띠.
@@ -2474,7 +2476,206 @@ EOF
 
 ---
 
+### Task 6: 격자 앱(gridcraft) 한글 칸이 ???로 깨지는 문제
+
+사용자 보고(11-22): 엑셀을 아트크래프트(앱 화면)로 열면 한글 칸이 `???`. 원인 후보 셋 중 (1) 앱 내장 글꼴에 한글 없음이 코드로 확인된다: gridcraft는 실행 중 글꼴 추가가 없고(`grep -rn '"font.add"' C:/Users/OpenMinds/projects/artcraft-eval/gridcraft` → 없음, 워드·덱만 있음), 웹 빌드는 `crates/ui-egui/build.rs`가 `CRAFT_FONTS_DIR`의 `fonts/manifest.txt` 중 `WEB_ALLOWED`(`crates/ui-egui/src/craft_fonts_policy.rs` — 한글은 `NanumGothic Regular`, 문자 `Hang,Kore`)만 넣는다. Task 1의 `build.ts`는 `CRAFT_FONTS_DIR`을 지우므로 한글 글꼴이 없다. 시험(SPIKE-WEBAPP §4)에서 칸 한글이 보였던 것은 브라우저 글꼴 대체(eframe `canvas_glyphs`) 덕인데, 이 경로가 칸 글자에 늘 쓰인다는 보장이 없다(사용자 화면에선 안 됨). (2) 시스템 글꼴 대체 없음은 (1)을 고치면 상관없고, (3) 인코딩은 Step 1의 재현 검사(ExcelJS로 만든 UTF-8 xlsx)로 가린다.
+
+**Files:**
+- Modify: `tools/artcraft-app/build.ts`, `scripts/artcraftBuildLib.ts`, `tests/artcraftBuild.test.ts`, `scripts/verify-artcraft-app-e2e.mjs`
+- Create(조건부, Step 6만): `tools/artcraft-app/patches/gridcraft/*.patch`
+
+**Interfaces:**
+- Consumes (Task 1): `build.ts`의 `BUILD`·`buildEnv`·`APPS` 반복·`lock`·`fail`; (Task 5) `verify-artcraft-app-e2e.mjs`의 `upload`·`token`·`openApp`·`rec`·`RUN`·`browser`·`sleep`
+- Produces (`artcraftBuildLib.ts`): `craftFontsManifest(file: string, sha256hex: string): string`, `containsBytes(hay: Uint8Array, needle: Uint8Array): boolean`
+- Produces (e2e): `(8) xlsx 한글 칸` 단언 셋
+
+- [ ] **Step 1: 재현 검사를 먼저 쓴다(e2e (8))** — `scripts/verify-artcraft-app-e2e.mjs`.
+
+import 두 줄을 더한다:
+
+```js
+import ExcelJS from 'exceljs';
+import sharp from 'sharp';
+```
+
+`// (4) wasm 막기` 블록 바로 앞에 블록을 더한다. 같은 칸 위치·크기에 글자만 다른(한글·물음표·네모 □) 합성 xlsx 셋을 같은 파일 이름으로 올려 앱 그림을 견준다 — 한글이 `???`나 네모로 그려지면 그 그림과 거의 같아진다(엑셀 읽기 전용은 `chrome=none`이라 앱 제목 줄도 없다):
+
+```js
+  // (8) 격자 앱 한글 칸 — ???·네모가 아니라 한글 글리프로 그려짐(Task 6). 합성 xlsx 셋(같은 이름·같은 칸·글자만 다름)의 앱 그림을 견준다
+  {
+    const make = async (dir, text) => {
+      const wb = new ExcelJS.Workbook();
+      const ws = wb.addWorksheet('시험');
+      ws.getColumn(1).width = 60;
+      ws.getRow(1).height = 60;
+      ws.getCell('A1').value = text;
+      ws.getCell('A1').font = { size: 36 };
+      fs.mkdirSync(path.join(RUN, dir), { recursive: true });
+      const file = path.join(RUN, dir, 'glyph.xlsx');
+      fs.writeFileSync(file, Buffer.from(await wb.xlsx.writeBuffer()));
+      return (await upload(file)).id;
+    };
+    const shot = async (id) => {
+      const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+      const o = await openApp(context, (await token(id, {})).viewerUrl);
+      await sleep(2000);
+      const png = await o.page.locator('#app-frame').screenshot();
+      await context.close();
+      const { data } = await sharp(png).grayscale().raw().toBuffer({ resolveWithObject: true });
+      return data;
+    };
+    const diffPixels = (a, b) => {
+      let n = 0;
+      for (let i = 0; i < Math.min(a.length, b.length); i += 1) if (Math.abs(a[i] - b[i]) > 64) n += 1;
+      return n;
+    };
+    const hangul = await shot(await make('g-hangul', '가나다라마바사아자차'));
+    const question = await shot(await make('g-question', '??????????'));
+    const tofu = await shot(await make('g-tofu', '□□□□□□□□□□'));
+    const dq = diffPixels(hangul, question);
+    const dt = diffPixels(hangul, tofu);
+    rec('(8) xlsx 한글 칸: 물음표로 그린 그림과 다름', dq > 400, `${dq}px`);
+    rec('(8) xlsx 한글 칸: 네모로 그린 그림과 다름', dt > 400, `${dt}px`);
+    rec('(8) 비교가 유효함(물음표·네모 그림끼리도 다름)', diffPixels(question, tofu) > 400);
+  }
+```
+
+맨 위 주석 첫 줄 목록에 `(8) 엑셀 한글 칸 글리프`를 더한다.
+
+- [ ] **Step 2: 재현되는지 본다(지금 빌드로)**
+
+Run: `npm run verify:artcraft-app`
+Expected: `(8) xlsx 한글 칸: 물음표로 그린 그림과 다름` FAIL(사용자 보고 재현). PASS라면 이 PC에선 브라우저 글꼴 대체로 나오는 것이니 그 사실(차이 px)을 적고 Step 3부터 그대로 진행한다(대체 경로에 기대지 않게 하는 것이 목적).
+
+- [ ] **Step 3: 빌드 도우미 시험을 쓴다** — `tests/artcraftBuild.test.ts` import에 `containsBytes, craftFontsManifest`를 더하고 describe 안 끝에:
+
+```ts
+  test('격자 앱 한글 글꼴 manifest: gridcraft 형식(8칸, " | "), NanumGothic Regular 자리, 문자 Hang,Kore, sha256 64자', () => {
+    const sha = 'a'.repeat(64);
+    const rows = craftFontsManifest('fonts/SCDream4.otf', sha).split('\n').filter((l) => l.trim() !== '' && !l.startsWith('#'));
+    expect(rows).toHaveLength(1);
+    const fields = rows[0].split(' | ');
+    expect(fields).toHaveLength(8);
+    expect(fields.slice(0, 4)).toEqual(['NanumGothic', 'Regular', 'fonts/SCDream4.otf', 'Hang,Kore']);
+    expect(fields[6]).toBe(sha);
+    expect(fields.every((f) => f.trim() !== '')).toBe(true);
+  });
+
+  test('containsBytes: 글꼴 조각이 wasm에 들어갔는지', () => {
+    const hay = Buffer.from('앞부분-글꼴조각-뒷부분');
+    expect(containsBytes(hay, Buffer.from('글꼴조각'))).toBe(true);
+    expect(containsBytes(hay, Buffer.from('없는조각'))).toBe(false);
+  });
+```
+
+Run: `npx vitest run tests/artcraftBuild.test.ts` → FAIL(함수 없음).
+
+- [ ] **Step 4: 도우미를 더한다** — `scripts/artcraftBuildLib.ts` 끝에:
+
+```ts
+/**
+ * gridcraft 웹 빌드의 글꼴 입력(craft-fonts fonts/manifest.txt) — 격자 앱은 실행 중 글꼴 추가(font.add)가 없고 이 허용 목록 글꼴만 wasm에 넣는다
+ * (gridcraft crates/ui-egui/src/craft_fonts_policy.rs WEB_ALLOWED). S-Core Dream 4를 한글 자리(NanumGothic Regular, Hang,Kore)에 넣는다.
+ * shortcut: 이름만 NanumGothic(허용 목록이 이름으로 고른다) — 앱 쪽에 글꼴 이름 설정이 생기면 제 이름으로 바꾼다
+ */
+export function craftFontsManifest(file: string, sha256hex: string): string {
+  return `# docview: S-Core Dream 4 under the NanumGothic slot (gridcraft web allowlist)\nNanumGothic | Regular | ${file} | Hang,Kore | S-Core-Dream | fonts/LICENSE | ${sha256hex} | local\n`;
+}
+
+export function containsBytes(hay: Uint8Array, needle: Uint8Array): boolean {
+  return Buffer.from(hay.buffer, hay.byteOffset, hay.byteLength).indexOf(Buffer.from(needle.buffer, needle.byteOffset, needle.byteLength)) >= 0;
+}
+```
+
+Run: `npx vitest run tests/artcraftBuild.test.ts` → PASS.
+
+- [ ] **Step 5: 격자 앱 빌드에만 글꼴 입력을 준다** — `tools/artcraft-app/build.ts`.
+
+import를 `import { createHash } from 'node:crypto';`(더함)과 `import { appSizeProblems, brotli, checkLock, containsBytes, craftFontsManifest, treeHash } from '../../scripts/artcraftBuildLib.js';`(바꿈)로 하고, `interface Built` 위에:
+
+```ts
+/** 격자 앱 칸 한글(설계 결정 12) — S-Core Dream 4를 craft-fonts 꼴 폴더로 만들어 CRAFT_FONTS_DIR로 준다(저장소는 고치지 않는다) */
+const GRID_FONT = fs.readFileSync(path.join(ROOT, 'public', 'fonts', 's-core-dream', 'SCDream4.otf'));
+function gridFontsDir(): string {
+  const dir = path.join(BUILD, 'craft-fonts-ko');
+  fs.mkdirSync(path.join(dir, 'fonts'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'fonts', 'SCDream4.otf'), GRID_FONT);
+  fs.writeFileSync(path.join(dir, 'fonts', 'LICENSE'), 'S-Core Dream (에스코어 드림) — public/fonts/s-core-dream 과 같은 조건으로 쓴다\n');
+  fs.writeFileSync(path.join(dir, 'fonts', 'manifest.txt'), craftFontsManifest('fonts/SCDream4.otf', createHash('sha256').update(GRID_FONT).digest('hex')));
+  return dir;
+}
+```
+
+cargo 호출의 `env:`를 바꾼다(맨 위 `buildEnv`가 지운 변수를 격자 앱에만 다시 준다):
+
+```ts
+    env: { ...buildEnv, CARGO_TARGET_DIR: target, ...(a.id === 'grid' ? { CRAFT_FONTS_DIR: gridFontsDir() } : {}) },
+```
+
+`built.push(…)` 바로 앞에:
+
+```ts
+  // 글꼴이 정말 들어갔는지 — 빌드 입력이 조용히 무시되면(목록 거부·경로 틀림) 칸이 다시 ???가 된다
+  if (a.id === 'grid' && !containsBytes(files.find((f) => f.rel.endsWith('_bg.wasm'))!.bytes, GRID_FONT.subarray(4096, 4160))) {
+    fail('grid 앱 wasm에 한글 글꼴(S-Core Dream 4)이 들어가지 않았습니다 — CRAFT_FONTS_DIR manifest를 확인하세요');
+  }
+```
+
+Run: `npm run build:artcraft-app`(격자 앱만 다시 빌드되어 몇 분) → `완료`, grid wasm br ≤ 5.5 MB. Run: `git -C C:/Users/OpenMinds/projects/artcraft-eval/gridcraft status --porcelain` → 출력 없음.
+Run: `npm run verify:artcraft-app` → `(8)` 셋 PASS, 나머지도 PASS.
+
+- [ ] **Step 6: (조건부 — Step 5 뒤에도 (8)이 FAIL일 때만) 칸 글자 대체 패치**
+
+글꼴은 wasm에 들어갔는데 칸이 ???면 칸 글자가 그 글꼴을 고르지 않는 것이다. `gridcraft/crates/ui-egui/src/theme/font_setup.rs`의 `font_definitions_impl`(웹은 `system=false`라 `fallback`이 비는지, craft-fonts 얼굴이 칸 family 끝에 붙는지)·`bind_cell_fallback`·`cell_family`를 읽어 원인을 적고, 칸 family 끝에 craft-fonts 얼굴을 붙이는 최소 패치를 `tools/artcraft-app/patches/gridcraft/0001-cell-craft-fonts.patch`(`git diff` 형식, 저장소 뿌리 기준 경로)로 쓴다. 저장소는 고치지 않고 빌드가 고정 커밋 사본에 적용한다 — `build.ts`의 APPS 반복 앞에:
+
+```ts
+// 패치가 있으면 고정 커밋의 사본(git archive — 저장소 작업 폴더·.git을 건드리지 않음)에 적용해 그 사본에서 빌드한다
+const PATCH_DIR = path.join(ROOT, 'tools', 'artcraft-app', 'patches');
+function sourceDir(repo: string): string {
+  const patches = fs.existsSync(path.join(PATCH_DIR, repo)) ? fs.readdirSync(path.join(PATCH_DIR, repo)).filter((n) => n.endsWith('.patch')).sort() : [];
+  if (patches.length === 0) return path.join(ARTCRAFT_DIR, repo);
+  const dir = path.join(BUILD, `src-${repo}`);
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.mkdirSync(dir, { recursive: true });
+  const tar = path.join(BUILD, `${repo}.tar`);
+  execFileSync('git', ['-C', path.join(ARTCRAFT_DIR, repo), 'archive', '--format=tar', '-o', tar, lock.repos[repo].commit]);
+  execFileSync('tar', ['-xf', tar, '-C', dir]);
+  for (const p of patches) execFileSync('git', ['apply', path.join(PATCH_DIR, repo, p)], { cwd: dir, stdio: 'inherit' });
+  return dir;
+}
+```
+
+cargo의 `cwd: path.join(ARTCRAFT_DIR, a.repo)`를 `cwd: sourceDir(a.repo)`로 바꾼다(패치 없는 앱은 지금 그대로). `git apply`가 실패하면 빌드가 멈춘다. 패치 적용 검증 단위 시험을 `tests/artcraftBuild.test.ts`에 더한다(import: `node:child_process`의 `execFileSync`, `node:fs`의 `existsSync, readdirSync`, `node:path`):
+
+```ts
+  const GRID = path.resolve(process.env.ARTCRAFT_DIR ?? 'C:/Users/OpenMinds/projects/artcraft-eval', 'gridcraft');
+  const PATCHES = path.resolve('tools/artcraft-app/patches/gridcraft');
+  test.skipIf(!existsSync(GRID) || !existsSync(PATCHES))('gridcraft 패치가 고정 커밋에 깨끗이 적용된다(git apply --check)', () => {
+    for (const p of readdirSync(PATCHES).filter((n) => n.endsWith('.patch'))) {
+      expect(() => execFileSync('git', ['-C', GRID, 'apply', '--check', path.join(PATCHES, p)])).not.toThrow();
+    }
+  });
+```
+
+다시 `npm run build:artcraft-app` → `npm run verify:artcraft-app`의 (8) PASS까지. 패치로도 안 풀리면 멈추고 찾은 원인을 보고한다(추측으로 더 고치지 않는다).
+
+- [ ] **Step 7: 회귀** — `npx vitest run`, `npm run typecheck`, Task 5 Step 6 전체(스스로 서버를 띄우는 verify:artcraft·readonly·ribbon-skin + 8176의 verify:docx·pptx·xlsx·xlsx:browser·view-only·view-shell), `npm run verify:artcraft-app`, `npm run verify:content-only`를 다시 돌린다. Expected: 모두 실패 0. Task 5 Step 7의 직접 조작 1번을 엑셀 한글 칸(`audit/office/corpus/xlsx/x08-korean-quotation.xlsx`)으로 한 번 더 손으로 본다(☒·? 없음).
+
+- [ ] **Step 8: 커밋**
+
+```bash
+git commit -F - -- tools/artcraft-app/build.ts scripts/artcraftBuildLib.ts tests/artcraftBuild.test.ts scripts/verify-artcraft-app-e2e.mjs <<'EOF'
+앱 화면 6: 격자 앱 한글 칸 ??? 고침 — gridcraft는 font.add가 없고 웹 빌드는 CRAFT_FONTS_DIR 허용 글꼴만 넣으므로 S-Core Dream 4를 한글 자리로 빌드 입력, wasm 포함 검사, e2e (8) 한글·물음표·네모 그림 비교
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+EOF
+```
+
+(Step 6을 했으면 `tools/artcraft-app/patches/gridcraft/*.patch`를 `git add` 하고 경로 목록에 더한다.)
+
+---
+
 ## Self-Review
 
-- **Spec 범위**: §3 대상 형식(APP_FORMATS·.doc :failed 전환 — Task 1·3), 열기 옵션(토큰 viewerUrl·메인 단추 — Task 2·3), 읽기 전용(워드 restrict·엑셀 protectSheet·PPT 띠 — Task 3), 저장(Task 2·3), 우리 띠(Task 3 HTML·e2e (7)), 자산(Task 1), 글꼴(Task 2 `appInfo.fonts`·Task 3 font.add), 실패 전환(Task 3 `fail`·e2e (4)), 보안(Task 1 허용 목록·Task 3 `isAppJsUrl`·`readAppMessage`). §4 ui=content(Task 4, 엔진 보기 Task 2 `contentUrlFor`·Task 4 view.ts). §5 단위(manifest 없음·origin·저장 권한·판정 함수)·e2e 두 개·기존 회귀(Task 5, verify:artcraft·readonly는 단추 단언만 새 동작으로). §6 하지 않는 것(PPT 읽기 전용 패치·메뉴 한글화·동시편집 연동·폰 측정·wasm-opt)은 계획에 없다 — craft-i18n 확인은 2차로 남김.
+- **Spec 범위**: §3 대상 형식(APP_FORMATS·.doc :failed 전환 — Task 1·3), 열기 옵션(토큰 viewerUrl·메인 단추 — Task 2·3), 읽기 전용(워드 restrict·엑셀 protectSheet·PPT 띠 — Task 3), 저장(Task 2·3), 우리 띠(Task 3 HTML·e2e (7)), 자산(Task 1), 글꼴(Task 2 `appInfo.fonts`·Task 3 font.add), 실패 전환(Task 3 `fail`·e2e (4)), 보안(Task 1 허용 목록·Task 3 `isAppJsUrl`·`readAppMessage`). §4 ui=content(Task 4, 엔진 보기 Task 2 `contentUrlFor`·Task 4 view.ts). §5 단위(manifest 없음·origin·저장 권한·판정 함수)·e2e 두 개·기존 회귀(Task 5, verify:artcraft·readonly는 단추 단언만 새 동작으로). 격자 앱 한글 칸 ???(사용자 11-22)은 Task 6. §6 하지 않는 것(PPT 읽기 전용 패치·메뉴 한글화·동시편집 연동·폰 측정·wasm-opt)은 계획에 없다 — craft-i18n 확인은 2차로 남김.
 - **이름 맞춤**: `appKindFor`·`appInfo`·`readArtcraftAppManifest`(Task 1) ↔ Task 2 사용, `contentUrlFor`(Task 2) ↔ Task 2 시험, `isContentUi`·`markContentUi`·`fallBackToViewer(url, text)`(Task 3·4) ↔ Task 3 `artcraftApp.ts`·Task 4 편집기, DOM 계약(`data-app-state`·`data-save-state`·`#app-banner` 등) ↔ Task 5.
