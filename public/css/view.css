@@ -6,7 +6,7 @@
 /* 한 줄 안내(pdf.js → 서버 그림 등) */
 .view-notice {
   position: fixed;
-  top: 6.4rem;
+  top: calc(var(--view-chrome-h) + 0.3rem);
   left: 50%;
   transform: translateX(-50%);
   z-index: 12;
@@ -42,7 +42,7 @@
 /* 썸네일 칸(설계 §3 "새로") — 막대 아래 왼쪽, 열리면 쪽 칸을 그만큼 민다 */
 .thumbs-panel {
   position: fixed;
-  top: 6.2rem;
+  top: var(--view-chrome-h);
   left: 0;
   bottom: 0;
   z-index: 9;
@@ -77,7 +77,7 @@ body.thumbs-open .pages-container { padding-left: calc(1rem + 152px); }
 /* "쪽을 준비하는 중"(설계 V8) */
 .prep-screen {
   position: fixed;
-  inset: 6.2rem 0 0;
+  inset: var(--view-chrome-h) 0 0;
   display: grid;
   place-content: center;
   justify-items: center;
@@ -102,3 +102,16 @@ body.thumbs-open .pages-container { padding-left: calc(1rem + 152px); }
 /* 아트크래프트(브라우저 엔진)로 그릴 때만 — 쪽 수가 Word와 다를 수 있음을 알린다(설계 §4.2) */
 .engine-badge { margin-left: 8px; padding: 2px 8px; border-radius: 999px; background: #e6f4f1; color: #1f4d47; font-size: 12px; line-height: 18px; white-space: nowrap; }
 .engine-badge[hidden] { display: none; }
+
+/* 리본 꾸밈(설계 2026-11-22-artcraft-ribbon-skin §2-5) — 막대 전체 높이. 쪽·도면 칸이 막대 밑에 깔리지 않게 같은 값을 쓴다 */
+:root { --view-chrome-h: 116px; }
+@media (max-width: 600px) { :root { --view-chrome-h: 86px; } }
+.pages-container,
+.svg-scroll { padding-top: calc(var(--view-chrome-h) + 0.6rem); }
+/* 도구 줄 — 세 칸 안의 묶음이 카드 높이를 채우고, 단추는 한 줄(28px) */
+.ribbon-skin .toolbar-tools { gap: 0; align-items: stretch; }
+.ribbon-skin .toolbar-row-tools .icon-btn { width: 28px; height: 28px; }
+.ribbon-skin .toolbar-row-tools .tools-btn { width: auto; align-self: center; }
+.ribbon-skin .ribbon-tab:hover { background: transparent; cursor: default; }
+/* 단추가 모두 도구▾로 옮겨졌거나 숨은 묶음은 이름만 남지 않게 통째로 숨긴다 */
+.ribbon-skin .ribbon-group:not(:has(> .ribbon-group-buttons > :not([hidden]))) { display: none; }
