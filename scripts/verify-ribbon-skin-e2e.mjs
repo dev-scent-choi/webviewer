@@ -144,20 +144,33 @@ const bigButtons = (page) =>
       })
       .filter(Boolean);
   });
-/** 보이는 탭을 하나씩 눌러 판 높이(62±2)와 잘림(scrollHeight > clientHeight)을 본다 */
+/** 보이는 탭을 하나씩 눌러 판 높이(62±2)·잘림(scrollHeight > clientHeight)·판 안 스크롤바·묶음 이름 줄과 겹친 조작을 본다 */
 async function tabPanels(page) {
   const tabs = await page.$$eval('.ribbon-tab:not(.ribbon-tab-file)', (ts) => ts.filter((t) => !t.hidden && t.dataset.tab).map((t) => t.dataset.tab));
   const bad = [];
   for (const tab of tabs) {
     await page.click(`.ribbon-tab[data-tab="${tab}"]`);
-    const m = await page.evaluate(() => {
-      const p = document.querySelector('.ribbon-panel:not([hidden])');
-      return p ? { h: Math.round(p.getBoundingClientRect().height), sh: p.scrollHeight, ch: p.clientHeight } : null;
-    });
-    if (!m || Math.abs(m.h - SKIN_PX.ribbon) > SKIN_TOLERANCE_PX || m.sh > m.ch + 1) bad.push(`${tab} ${JSON.stringify(m)}`);
+    const m = await page.evaluate(panelState, '.ribbon-panel:not([hidden])');
+    if (!m || Math.abs(m.h - SKIN_PX.ribbon) > SKIN_TOLERANCE_PX || m.sh > m.ch + 1 || m.bar > 0 || m.clash.length > 0) bad.push(`${tab} ${JSON.stringify(m)}`);
   }
   await page.click('.ribbon-tab[data-tab="home"]');
   return { tabs, bad };
+}
+/** 판 하나의 상태 — 높이, 가로 스크롤바(offsetHeight − clientHeight), 묶음 이름 줄 위 변보다 1px 넘게 내려온 조작(자세히·펼침 메뉴 제외).
+ *  스타일 갤러리는 안 항목 대신 갤러리 상자 자체와 그 스크롤바를 본다(넘친 항목은 갤러리 안에서 잘려 보이지 않음) */
+function panelState(sel) {
+  const p = document.querySelector(sel);
+  if (!p) return null;
+  const clash = [...p.querySelectorAll('.ribbon-group')].flatMap((g) => {
+    const lab = g.querySelector(':scope > .ribbon-group-label');
+    if (!lab?.getClientRects().length) return [];
+    const top = lab.getBoundingClientRect().top;
+    return [...g.querySelectorAll('button:not(.ribbon-launcher), select, input, .style-gallery')]
+      .filter((c) => c.getClientRects().length && !c.closest('.dropdown-menu') && !c.parentElement.closest('.style-gallery') && c.getBoundingClientRect().bottom > top + 1)
+      .map((c) => c.id || c.title || c.className);
+  });
+  const gallery = [...p.querySelectorAll('.style-gallery')].filter((g) => g.getClientRects().length && g.offsetHeight - g.clientHeight > 0).map((g) => g.id || 'style-gallery');
+  return { h: Math.round(p.getBoundingClientRect().height), sh: p.scrollHeight, ch: p.clientHeight, bar: p.offsetHeight - p.clientHeight, clash: [...clash, ...gallery.map((g) => `${g} 스크롤바`)] };
 }
 /** 600px — 문서·리본 가로 넘침, 제목 줄 높이(한 줄) */
 const narrowState = (page) =>
@@ -193,7 +206,8 @@ try {
   const ids = {};
   for (const [ext, file] of Object.entries(FILES)) ids[ext] = (await upload(fs.readFileSync(file), path.basename(file))).id;
   ids.pdf = (await upload(await smallPdf(), 'ribbon-skin.pdf')).id;
-  browser = await chromium.launch();
+  // 실제 Windows Chrome처럼 스크롤바를 보이게 — 숨기면 62px 판 안을 덮는 스크롤바를 못 잡는다
+  browser = await chromium.launch({ ignoreDefaultArgs: ['--hide-scrollbars'] });
 
   for (const ext of ['docx', 'xlsx', 'pptx']) {
     // ---- 편집 화면 ----
@@ -214,6 +228,15 @@ try {
     await shot(edit.page, `editor-${ext}`);
     pairs.push([`editor-${ext}`, REF[ext]]);
     await wide.close();
+
+    // ---- 좁은 창(900·800px): 판 안 스크롤바·묶음 이름 줄 겹침 ----
+    for (const width of [900, 800]) {
+      const mid = await browser.newContext({ viewport: { width, height: 900 } });
+      const m = await open(mid, (await token(ids[ext], { canEdit: true })).editorUrl, READY[ext]);
+      const mp = await tabPanels(m.page);
+      rec(`(4) ${ext} ${width}px — 탭 ${mp.tabs.length}개 모두 62px·스크롤바 없음·이름 줄 겹침 없음`, mp.tabs.length >= 5 && mp.bad.length === 0, mp.bad.join(' | '));
+      await mid.close();
+    }
 
     // ---- 읽기 전용(ui=view) ----
     const roCtx = await browser.newContext({ viewport: { width: 1400, height: 900 } });
@@ -269,6 +292,12 @@ try {
     }), VIEW_PAGE_IDS);
     const under = await underToolbar(v.page);
     rec(`(8) 보기 ${ext} — id 그대로·인쇄는 오른쪽 칸·첫 쪽이 막대 밑에 깔리지 않음`, vs.missing.length === 0 && vs.printRight && !under, JSON.stringify({ ...vs, under }));
+    for (const width of [1400, 900, 800]) {
+      await v.page.setViewportSize({ width, height: 900 });
+      const vp = await v.page.evaluate(panelState, '.toolbar-row-tools');
+      rec(`(8) 보기 ${ext} ${width}px — 리본 스크롤바 없음·이름 줄 겹침 없음`, !!vp && vp.bar <= 0 && vp.clash.length === 0, JSON.stringify(vp));
+    }
+    await v.page.setViewportSize({ width: 1400, height: 900 });
     rec(`보기 ${ext} — 화면 오류 없음`, v.errors.length === 0, v.errors.slice(0, 2).join(' | '));
     await shot(v.page, `view-${ext}`);
     pairs.push([`view-${ext}`, 'word-report.png']);
