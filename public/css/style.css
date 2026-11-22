@@ -4103,7 +4103,8 @@ body.ui-view.no-copy :is(#editor, #grid-editor, #slides-rail, #slide-canvas-wrap
 /* ==================== 아트크래프트 리본 꾸밈(설계 2026-11-22-artcraft-ribbon-skin) ====================
    #toolbar에 .ribbon-skin이 붙은 화면(워드·엑셀·PPT 편집기, 보기 화면 view.html)만 바뀐다 — 모양만, 단추·id·동작은 그대로.
    높이 규격(scripts/ribbonSkinLib.mjs SKIN_PX와 같은 값): 제목 줄 24 · 탭 줄 22 · 리본 62 · 상태 줄 18px(캡처 실측 2026-11-22).
-   리본 62px = 단추 칸 48(작은 단추 16px 세 줄 = 48, 큰 단추 48 = 위 여백 2 + 아이콘 24 + 2 + 이름 13) + 묶음 이름 줄 14. 이 묶음은 파일 끝에 있어서
+   리본 62px = 단추 칸 48(작은 단추 16px 세 줄 = 48, 큰 단추 48 = 위 여백 1 + 아이콘 32 + 1 + 이름 12) + 묶음 이름 줄 14.
+   아이콘은 아트크래프트 캡처 기준(사용자 지시 2026-11-22 "아이콘이 너무 작음"): 큰 단추 32px, 작은 단추 16px, 제목 줄 빠른 실행 16px. 이 묶음은 파일 끝에 있어서
    같은 세기의 앞 규칙(:is(.grid-editor-page, …) …, .office-shell …)을 뒤에서 덮는다 — 앞으로 옮기지 말 것. */
 :root {
   --skin-title-h: 24px;
@@ -4112,7 +4113,7 @@ body.ui-view.no-copy :is(#editor, #grid-editor, #slides-rail, #slide-canvas-wrap
   --skin-status-h: 18px;
   --skin-label-h: 14px;
   --skin-small-h: 16px;
-  --skin-big-icon: 24px;
+  --skin-big-icon: 32px;
   --skin-frame: #f3f3f3;
   --skin-line: #e0e0e0;
   --skin-hover: #e6e6e6;
@@ -4126,10 +4127,10 @@ body.ui-view.no-copy :is(#editor, #grid-editor, #slides-rail, #slide-canvas-wrap
 .ribbon-skin .office-titlebar,
 .ribbon-skin .toolbar-row-title { box-sizing: border-box; height: var(--skin-title-h); padding: 0 8px; gap: 8px; background: var(--skin-frame); color: var(--skin-text); }
 .ribbon-skin :is(.office-titlebar, .toolbar-row-title) .doc-title { color: var(--skin-text); font: 400 11px/var(--skin-title-h) var(--skin-font); }
-.ribbon-skin :is(.office-titlebar, .toolbar-row-title) :is(.icon-btn, .qa-btn) { width: 20px; min-width: 20px; height: 20px; border-radius: 4px; background: transparent; color: var(--skin-text); }
+.ribbon-skin :is(.office-titlebar, .toolbar-row-title) :is(.icon-btn, .qa-btn) { width: 22px; min-width: 22px; height: 22px; border-radius: 4px; background: transparent; color: var(--skin-text); }
 .ribbon-skin :is(.office-titlebar, .toolbar-row-title) :is(.icon-btn, .qa-btn):hover:not(:disabled) { background: var(--skin-hover); color: var(--skin-text); }
 .ribbon-skin :is(.office-titlebar, .toolbar-row-title) :is(.icon-btn, .qa-btn):focus-visible { outline: 2px solid var(--app-accent, var(--v-accent)); outline-offset: -2px; }
-.ribbon-skin :is(.office-titlebar, .toolbar-row-title) :is(.icon-btn, .qa-btn) svg { width: 14px; height: 14px; }
+.ribbon-skin :is(.office-titlebar, .toolbar-row-title) :is(.icon-btn, .qa-btn) svg { width: 16px; height: 16px; }
 .ribbon-skin .quick-access { border-left-color: var(--skin-line); }
 .ribbon-skin .office-titlebar .save-status { color: var(--skin-text-dim); }
 .ribbon-skin .office-titlebar .conn-status { padding: 1px 8px; font-size: 10px; line-height: 14px; background: var(--skin-hover); color: var(--skin-text-dim); }
@@ -4187,11 +4188,11 @@ body.ui-view.no-copy :is(#editor, #grid-editor, #slides-rail, #slide-canvas-wrap
 .ribbon-skin .ribbon-group-buttons-wrap { flex-direction: column; justify-content: center; align-items: stretch; gap: 0; }
 .ribbon-skin .ribbon-group-label { height: var(--skin-label-h); color: var(--skin-text-dim); font: 400 10px/var(--skin-label-h) var(--skin-font); letter-spacing: 0; text-align: center; white-space: nowrap; }
 
-/* 작은 단추 — 16px 한 줄(세 줄 = 48px), 아이콘+이름 단추도 같은 높이. 아이콘은 최대 14px(줄에 들게, 12px 펼침 화살표는 그대로) */
+/* 작은 단추 — 16px 한 줄(세 줄 = 48px), 아이콘+이름 단추도 같은 높이. 아이콘은 16px(아트크래프트 Cut·Copy 크기, 12px 펼침 화살표는 그대로) */
 .ribbon-skin .ribbon-row,
 .ribbon-skin .ribbon-row:has(.ribbon-btn-labeled) { min-height: var(--skin-small-h); gap: 1px; }
 .ribbon-skin .ribbon-panel .icon-btn:not(.icon-btn-big) { width: auto; min-width: var(--skin-small-h); height: var(--skin-small-h); padding: 0 2px; border-radius: 2px; }
-.ribbon-skin .ribbon-panel .icon-btn:not(.icon-btn-big) svg { max-width: 14px; max-height: 14px; }
+.ribbon-skin .ribbon-panel .icon-btn:not(.icon-btn-big) svg { max-width: 16px; max-height: 16px; }
 .ribbon-skin .ribbon-btn-labeled { height: var(--skin-small-h); padding: 0 3px; gap: 3px; }
 .ribbon-skin .ribbon-btn-label { color: var(--skin-text); font: 400 11px/14px var(--skin-font); }
 .ribbon-skin .ribbon-panel :is(.toolbar-select, .toolbar-number) { height: var(--skin-small-h); font: 400 11px var(--skin-font); }
@@ -4199,17 +4200,17 @@ body.ui-view.no-copy :is(#editor, #grid-editor, #slides-rail, #slide-canvas-wrap
 .ribbon-skin .ribbon-panel .dropdown-btn > .dropdown-caret:not(.icon-btn-big) { height: var(--skin-small-h); }
 .ribbon-skin .color-apply-btn { gap: 1px; }
 
-/* 큰 단추 — 48px, 아이콘(24px) 위, 이름 아래 */
+/* 큰 단추 — 48px, 아이콘(32px) 위, 이름(11px) 아래 — 아이콘을 줄이지 않고 위 여백·사이를 1px로 */
 .ribbon-skin .icon-btn-big {
   box-sizing: border-box;
   width: auto;
   min-width: 40px;
   height: calc(var(--skin-ribbon-h) - var(--skin-label-h));
-  padding: 2px 3px 0;
+  padding: 1px 3px 0;
   justify-content: flex-start;
-  gap: 2px;
+  gap: 1px;
   color: var(--skin-text);
-  font: 400 11px/13px var(--skin-font);
+  font: 400 11px/12px var(--skin-font);
 }
 .ribbon-skin .icon-btn-big > svg { flex: none; width: var(--skin-big-icon); height: var(--skin-big-icon); }
 
