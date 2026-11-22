@@ -4230,3 +4230,13 @@ body.ui-view.no-copy :is(#editor, #grid-editor, #slides-rail, #slide-canvas-wrap
 .ribbon-skin .layout-field-title { font: 600 10px/14px var(--skin-font); }
 .ribbon-skin .layout-field { font: 400 11px/16px var(--skin-font); }
 .ribbon-skin .layout-field input { box-sizing: border-box; height: 16px; padding: 0 3px; }
+
+/* 리본 꾸밈 — PPT 왼쪽 섬네일 레일(폭·여백은 그대로: 섬네일 크기 계산이 엮여 있다) */
+.slides-editor-page .slides-rail { background: var(--skin-frame); border-right-color: var(--skin-line); }
+.slides-editor-page .slide-card-number { color: var(--skin-text-dim); font: 400 11px var(--skin-font); }
+/* PPT 리본 안 높이 맞춤(62px) — 색 단추·전환/애니메이션 효과 칸·타이밍 고르기 상자가 작은 줄(16px)·큰 단추(48px)를 넘던 것 */
+.slides-editor-page .ribbon-skin .color-btn { height: var(--skin-small-h); gap: 1px; }
+.slides-editor-page .ribbon-skin .color-btn-glyph,
+.slides-editor-page .ribbon-skin .color-btn-glyph svg { height: 12px; font-size: 11px; }
+.slides-editor-page .ribbon-skin .effect-tile { padding: 1px 2px; gap: 2px; font: 400 10px/13px var(--skin-font); }
+.slides-editor-page .ribbon-skin .layout-field select { box-sizing: border-box; height: var(--skin-small-h); padding: 0 2px; }
