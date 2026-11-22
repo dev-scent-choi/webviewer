@@ -9,9 +9,7 @@ describe('오피스 리본 목록(src/client/ribbon/inventory.json)', () => {
   });
   it('파일 모양이 serializeInventory 그대로(단추 한 줄에 하나)', () => {
     // core.autocrlf=true 인 새 체크아웃은 CRLF로 풀린다 — 줄 끝은 보지 않는다
-    expect(fs.readFileSync(INVENTORY_PATH, 'utf8').replace(/
-/g, '
-')).toBe(serializeInventory(inv));
+    expect(fs.readFileSync(INVENTORY_PATH, 'utf8').replaceAll('\r\n', '\n')).toBe(serializeInventory(inv));
   });
   it('기본 탭 순서는 설계 §2 그대로', () => {
     expect(inv.apps.word.tabs.map((t) => t.name)).toEqual(['홈', '삽입', '그리기', '디자인', '레이아웃', '참조', '편지', '검토', '보기']);
