@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 세 편집기(워드·엑셀·PPT)와 보기 화면(`/view.html`)의 제목 줄·탭 줄·리본·상태 줄을 아트크래프트 웹 앱의 데스크톱 오피스형 리본 모양(28/24/90/22px, 밝은 회색 틀, 큰 단추·작은 단추 세 줄, 묶음 이름 줄, "자세히" 화살표)으로 바꾸되 단추·id·동작·단축키는 그대로 둔다.
+**Goal:** 세 편집기(워드·엑셀·PPT)와 보기 화면(`/view.html`)의 제목 줄·탭 줄·리본·상태 줄을 아트크래프트 웹 앱의 데스크톱 오피스형 리본 모양(24/22/62/18px — 캡처 실측, 밝은 회색 틀, 큰 단추·작은 단추 세 줄, 묶음 이름 줄, "자세히" 화살표)으로 바꾸되 단추·id·동작·단축키는 그대로 둔다.
 
 **Architecture:** 모양은 `public/css/style.css` 끝에 붙이는 한 묶음("아트크래프트 리본 꾸밈")이 맡고, `#toolbar`에 `ribbon-skin` 클래스가 붙은 화면만 바뀐다(PDF·한글 편집기·옛 `viewer.html`은 그대로). 마크업은 기존 묶음을 아트크래프트 순서에 맞춰 옮기기만 하고, "자세히"는 기존 `data-proxy`(officeShell이 이미 처리하는 대리 클릭) 단추로 기존 대화상자를 연다. 검사는 순수 규칙 모듈(`scripts/ribbonSkinLib.mjs`, vitest)과 새 브라우저 검사(`scripts/verify-ribbon-skin-e2e.mjs`) + 기존 e2e 전부.
 
@@ -16,7 +16,7 @@
 - **id·처리기·단축키·탭 구성은 그대로.** 기존 id를 지우거나 바꾸지 않고 새 id도 만들지 않는다. `src/client/editor.ts`·`grid-editor.ts`·`editor-slides.ts`·`src/client/view/*.ts`는 고치지 않는다(이 계획에서 고치는 TS는 `src/client/officeShell.ts` 한 줄뿐).
 - 글자는 전부 한글(탭·묶음 이름·단추 이름·말풍선 `title`·`aria-label`·상태 줄). 아트크래프트 영어 이름은 참고만. 글꼴 이름·용지 크기(A4·Letter)·단위(cm·pt)·글자 모양 단추(가, Aa, x²)는 라벨이 아니라 값·모양이라 그대로.
 - 읽기 전용(ui=view) 규칙은 그대로: 같은 화면, 쓰는 조작만 `.ro-disabled`(투명도 0.45). 새 디자인에서도 흐림이 고르다(보이는 흐린 단추 모두 0.45). "자세히"는 가리키는 단추와 같이 흐리거나 같이 눌린다.
-- 높이 규격(설계 §4, ±2px): 제목 줄 28 · 탭 줄 24 · 리본 본체 90 · 상태 줄 22px. 색: 틀 `#f3f3f3`, 리본 카드 흰색, 선 `#e0e0e0`, 강조는 기존 앱 색(`--app-accent`: 워드 `#1e5aa8`, 엑셀 `#1d6f42`, PPT `#c0462a`). 아이콘 세트는 바꾸지 않고 크기만(큰 단추 22→32px).
+- 높이 규격(설계 §4, ±2px): 제목 줄 24 · 탭 줄 22 · 리본 본체 62 · 상태 줄 18px(캡처 실측 2026-11-22). 작은 단추 줄 16px(세 줄 = 48) · 묶음 이름 줄 14px · 큰 단추 48px(아이콘 24px) · 글자 10~11px. 색: 틀 `#f3f3f3`, 리본 카드 흰색, 선 `#e0e0e0`, 강조는 기존 앱 색(`--app-accent`: 워드 `#1e5aa8`, 엑셀 `#1d6f42`, PPT `#c0462a`). 아이콘 세트는 바꾸지 않고 크기만(큰 단추 22→24px, 작은 단추 17→최대 14px).
 - 600px: 리본은 가로 스크롤 없이 접힘(아이콘만)·줄 바꿈, 제목 줄은 한 줄.
 - 기존 e2e는 **고치지 않고** 그대로 통과해야 한다: `verify:readonly`(85항목)·`verify:docx`·`verify:pptx`·`verify:xlsx:browser`·`verify:artcraft`·`verify:view-only`·`verify:view-shell`.
 - 향기랩 경로의 동작은 바꾸지 않는다(모양만 바뀌는 것은 의도된 변경). 새 기능·아트크래프트 앱 임베드·아이콘 세트 교체·워드 눈금자·제목 줄 자동 저장/메모/공유/사용자 원은 만들지 않는다(설계 §3).
@@ -57,7 +57,7 @@
 **Interfaces:**
 - Consumes: 없음
 - Produces:
-  - `scripts/ribbonSkinLib.mjs`: `SKIN_PX = { title: 28, tabs: 24, ribbon: 90, status: 22 }`, `SKIN_TOLERANCE_PX = 2`, `heightProblems(measured: { title?: number|null, tabs?: number|null, ribbon?: number|null, status?: number|null }): string[]`, `latinOnlyLabels(labels: string[]): string[]`, `bigButtonLayoutOk(icon: Rect, label: Rect): boolean` (`Rect = { left, top, width, height }`)
+  - `scripts/ribbonSkinLib.mjs`: `SKIN_PX = { title: 24, tabs: 22, ribbon: 62, status: 18 }`, `SKIN_TOLERANCE_PX = 2`, `heightProblems(measured: { title?: number|null, tabs?: number|null, ribbon?: number|null, status?: number|null }): string[]`, `latinOnlyLabels(labels: string[]): string[]`, `bigButtonLayoutOk(icon: Rect, label: Rect): boolean` (`Rect = { left, top, width, height }`)
   - CSS 클래스 약속(Task 2~5가 쓴다): `#toolbar.ribbon-skin`(꾸밈 켜기), `.ribbon-group`(묶음, 마지막 칸 = `.ribbon-group-label`), `.ribbon-group-buttons`, `.ribbon-row`, `.icon-btn-big`(`> svg` 아이콘 + `> span` 이름), `button.ribbon-launcher[data-proxy]`(묶음의 마지막 자식), `.toolbar-row-title`·`.toolbar-row-tools`(보기 화면의 제목 줄·리본)
   - CSS 변수: `--skin-title-h`·`--skin-tabs-h`·`--skin-ribbon-h`·`--skin-status-h`·`--skin-label-h`·`--skin-small-h`·`--skin-big-icon`·`--skin-frame`·`--skin-line`·`--skin-hover`·`--skin-text`·`--skin-text-dim`·`--skin-font`
 
@@ -69,18 +69,18 @@ import { SKIN_PX, SKIN_TOLERANCE_PX, bigButtonLayoutOk, heightProblems, latinOnl
 
 describe('heightProblems — 설계 §4 높이 규격 ±2px', () => {
   test('규격 값과 경계(±2)는 통과', () => {
-    expect(heightProblems({ title: 28, tabs: 24, ribbon: 90, status: 22 })).toEqual([]);
-    expect(heightProblems({ title: 30, tabs: 22, ribbon: 88, status: 24 })).toEqual([]);
+    expect(heightProblems({ title: 24, tabs: 22, ribbon: 62, status: 18 })).toEqual([]);
+    expect(heightProblems({ title: 26, tabs: 20, ribbon: 60, status: 20 })).toEqual([]);
   });
   test('3px 넘게 벗어나면 그 칸 이름과 값을 알린다', () => {
-    expect(heightProblems({ title: 31, tabs: 24, ribbon: 101, status: 22 })).toEqual(['title 31px (규격 28±2)', 'ribbon 101px (규격 90±2)']);
+    expect(heightProblems({ title: 27, tabs: 22, ribbon: 73, status: 18 })).toEqual(['title 27px (규격 24±2)', 'ribbon 73px (규격 62±2)']);
   });
   test('없는 칸(null·undefined — 보기 화면의 상태 줄)은 건너뛴다', () => {
-    expect(heightProblems({ title: 28, tabs: 24, ribbon: 90, status: null })).toEqual([]);
-    expect(heightProblems({ ribbon: 90 })).toEqual([]);
+    expect(heightProblems({ title: 24, tabs: 22, ribbon: 62, status: null })).toEqual([]);
+    expect(heightProblems({ ribbon: 62 })).toEqual([]);
   });
-  test('규격 숫자는 설계 값 그대로', () => {
-    expect(SKIN_PX).toEqual({ title: 28, tabs: 24, ribbon: 90, status: 22 });
+  test('규격 숫자는 설계 값(캡처 실측) 그대로', () => {
+    expect(SKIN_PX).toEqual({ title: 24, tabs: 22, ribbon: 62, status: 18 });
     expect(SKIN_TOLERANCE_PX).toBe(2);
   });
 });
@@ -98,18 +98,18 @@ describe('latinOnlyLabels — 한글이 없고 영문자만 있는 라벨', () =
 });
 
 describe('bigButtonLayoutOk — 큰 단추는 아이콘 위·이름 아래, 가로 가운데', () => {
-  const icon = { left: 10, top: 4, width: 32, height: 32 };
+  const icon = { left: 10, top: 2, width: 24, height: 24 };
   test('아이콘 아래에 이름, 가운데 맞음', () => {
-    expect(bigButtonLayoutOk(icon, { left: 4, top: 38, width: 44, height: 14 })).toBe(true);
+    expect(bigButtonLayoutOk(icon, { left: 2, top: 28, width: 40, height: 13 })).toBe(true);
   });
   test('이름이 아이콘 옆(같은 높이)이면 실패', () => {
-    expect(bigButtonLayoutOk(icon, { left: 44, top: 12, width: 40, height: 14 })).toBe(false);
+    expect(bigButtonLayoutOk(icon, { left: 36, top: 8, width: 40, height: 13 })).toBe(false);
   });
   test('가운데에서 3px 넘게 비켜나면 실패', () => {
-    expect(bigButtonLayoutOk(icon, { left: 12, top: 38, width: 44, height: 14 })).toBe(false);
+    expect(bigButtonLayoutOk(icon, { left: 6, top: 28, width: 40, height: 13 })).toBe(false);
   });
   test('1px 겹침은 반올림 오차로 본다', () => {
-    expect(bigButtonLayoutOk(icon, { left: 4, top: 35, width: 44, height: 14 })).toBe(true);
+    expect(bigButtonLayoutOk(icon, { left: 2, top: 25, width: 40, height: 13 })).toBe(true);
   });
 });
 ```
@@ -122,10 +122,10 @@ Expected: FAIL — `../scripts/ribbonSkinLib.mjs`를 찾지 못함(파일 없음
 - [ ] **Step 3: 판정 모듈을 쓴다** — `scripts/ribbonSkinLib.mjs`
 
 ```js
-// 아트크래프트 리본 꾸밈 규격(설계 2026-11-22-artcraft-ribbon-skin §4)과 순수 판정 — scripts/verify-ribbon-skin-e2e.mjs가 쓴다.
+// 아트크래프트 리본 꾸밈 규격(설계 2026-11-22-artcraft-ribbon-skin §4, 캡처 실측 2026-11-22)과 순수 판정 — scripts/verify-ribbon-skin-e2e.mjs가 쓴다.
 // 숫자는 public/css/style.css 의 --skin-title-h·--skin-tabs-h·--skin-ribbon-h·--skin-status-h 와 같은 값이어야 한다.
 
-export const SKIN_PX = Object.freeze({ title: 28, tabs: 24, ribbon: 90, status: 22 });
+export const SKIN_PX = Object.freeze({ title: 24, tabs: 22, ribbon: 62, status: 18 });
 export const SKIN_TOLERANCE_PX = 2;
 
 /** 잰 높이 중 규격 ±2px 밖인 칸 — 값이 없는 칸(null·undefined)은 그 화면에 없는 줄이라 건너뛴다 */
@@ -163,17 +163,17 @@ Expected: PASS (13 tests)
 
 /* ==================== 아트크래프트 리본 꾸밈(설계 2026-11-22-artcraft-ribbon-skin) ====================
    #toolbar에 .ribbon-skin이 붙은 화면(워드·엑셀·PPT 편집기, 보기 화면 view.html)만 바뀐다 — 모양만, 단추·id·동작은 그대로.
-   높이 규격(scripts/ribbonSkinLib.mjs SKIN_PX와 같은 값): 제목 줄 28 · 탭 줄 24 · 리본 90 · 상태 줄 22px.
-   리본 90px = 위 여백 3 + 단추 칸 71(작은 단추 22px 세 줄 = 66, 큰 단추 68) + 묶음 이름 줄 16. 이 묶음은 파일 끝에 있어서
+   높이 규격(scripts/ribbonSkinLib.mjs SKIN_PX와 같은 값): 제목 줄 24 · 탭 줄 22 · 리본 62 · 상태 줄 18px(캡처 실측 2026-11-22).
+   리본 62px = 단추 칸 48(작은 단추 16px 세 줄 = 48, 큰 단추 48 = 위 여백 2 + 아이콘 24 + 2 + 이름 13) + 묶음 이름 줄 14. 이 묶음은 파일 끝에 있어서
    같은 세기의 앞 규칙(:is(.grid-editor-page, …) …, .office-shell …)을 뒤에서 덮는다 — 앞으로 옮기지 말 것. */
 :root {
-  --skin-title-h: 28px;
-  --skin-tabs-h: 24px;
-  --skin-ribbon-h: 90px;
-  --skin-status-h: 22px;
-  --skin-label-h: 16px;
-  --skin-small-h: 22px;
-  --skin-big-icon: 32px;
+  --skin-title-h: 24px;
+  --skin-tabs-h: 22px;
+  --skin-ribbon-h: 62px;
+  --skin-status-h: 18px;
+  --skin-label-h: 14px;
+  --skin-small-h: 16px;
+  --skin-big-icon: 24px;
   --skin-frame: #f3f3f3;
   --skin-line: #e0e0e0;
   --skin-hover: #e6e6e6;
@@ -186,39 +186,39 @@ Expected: PASS (13 tests)
 /* 제목 줄 — 밝은 회색(앱 색 띠 아님), 빠른 실행·문서 이름·오른쪽 단추 */
 .ribbon-skin .office-titlebar,
 .ribbon-skin .toolbar-row-title { box-sizing: border-box; height: var(--skin-title-h); padding: 0 8px; gap: 8px; background: var(--skin-frame); color: var(--skin-text); }
-.ribbon-skin :is(.office-titlebar, .toolbar-row-title) .doc-title { color: var(--skin-text); font: 400 12px/var(--skin-title-h) var(--skin-font); }
-.ribbon-skin :is(.office-titlebar, .toolbar-row-title) :is(.icon-btn, .qa-btn) { width: 24px; min-width: 24px; height: 24px; border-radius: 4px; background: transparent; color: var(--skin-text); }
+.ribbon-skin :is(.office-titlebar, .toolbar-row-title) .doc-title { color: var(--skin-text); font: 400 11px/var(--skin-title-h) var(--skin-font); }
+.ribbon-skin :is(.office-titlebar, .toolbar-row-title) :is(.icon-btn, .qa-btn) { width: 20px; min-width: 20px; height: 20px; border-radius: 4px; background: transparent; color: var(--skin-text); }
 .ribbon-skin :is(.office-titlebar, .toolbar-row-title) :is(.icon-btn, .qa-btn):hover:not(:disabled) { background: var(--skin-hover); color: var(--skin-text); }
 .ribbon-skin :is(.office-titlebar, .toolbar-row-title) :is(.icon-btn, .qa-btn):focus-visible { outline: 2px solid var(--app-accent, var(--v-accent)); outline-offset: -2px; }
-.ribbon-skin :is(.office-titlebar, .toolbar-row-title) :is(.icon-btn, .qa-btn) svg { width: 16px; height: 16px; }
+.ribbon-skin :is(.office-titlebar, .toolbar-row-title) :is(.icon-btn, .qa-btn) svg { width: 14px; height: 14px; }
 .ribbon-skin .quick-access { border-left-color: var(--skin-line); }
 .ribbon-skin .office-titlebar .save-status { color: var(--skin-text-dim); }
-.ribbon-skin .office-titlebar .conn-status { padding: 1px 8px; font-size: 11px; line-height: 16px; background: var(--skin-hover); color: var(--skin-text-dim); }
+.ribbon-skin .office-titlebar .conn-status { padding: 1px 8px; font-size: 10px; line-height: 14px; background: var(--skin-hover); color: var(--skin-text-dim); }
 .ribbon-skin .office-titlebar .readonly-badge { background: var(--app-accent); color: #ffffff; }
 .ribbon-skin :is(.office-titlebar, .toolbar-row-title) .presence-list { --v-presence-border: var(--skin-frame); }
-.ribbon-skin :is(.office-titlebar, .toolbar-row-title) .presence-badge { width: 22px; height: 22px; font-size: 10px; }
-.ribbon-skin :is(.office-titlebar, .toolbar-row-title) :is(.back-to-view, .btn-pill) { padding: 0 10px; border-color: var(--skin-line); background: #ffffff; color: var(--skin-text); font-size: 12px; line-height: 20px; }
+.ribbon-skin :is(.office-titlebar, .toolbar-row-title) .presence-badge { width: 18px; height: 18px; font-size: 9px; }
+.ribbon-skin :is(.office-titlebar, .toolbar-row-title) :is(.back-to-view, .btn-pill) { padding: 0 10px; border-color: var(--skin-line); background: #ffffff; color: var(--skin-text); font-size: 11px; line-height: 18px; }
 .ribbon-skin :is(.office-titlebar, .toolbar-row-title) :is(.back-to-view, .btn-pill):hover:not(:disabled) { background: var(--skin-hover); }
 /* 편집/보기 모드 단추(편집 열기 · 보기 화면의 편집) — 아트크래프트의 모드 단추처럼 앱 색 알약 */
 .ribbon-skin :is(.office-titlebar, .toolbar-row-title) :is(.view-open-edit, .edit-btn) { border-color: transparent; background: var(--app-accent, var(--v-accent)); color: #ffffff; }
 
-/* 탭 줄 — 24px, 고른 탭은 앱 색 글자 + 밑줄 */
+/* 탭 줄 — 22px, 고른 탭은 앱 색 글자 + 밑줄 */
 .ribbon-skin .ribbon-tabs { box-sizing: border-box; height: var(--skin-tabs-h); align-items: stretch; gap: 2px; padding: 0 8px; background: var(--skin-frame); }
-.ribbon-skin .ribbon-tab { padding: 0 8px; border-radius: 0; color: var(--skin-text); font: 400 12px/var(--skin-tabs-h) var(--skin-font); }
+.ribbon-skin .ribbon-tab { padding: 0 8px; border-radius: 0; color: var(--skin-text); font: 400 11px/var(--skin-tabs-h) var(--skin-font); }
 .ribbon-skin .ribbon-tab:hover { background: var(--skin-hover); }
 .ribbon-skin .ribbon-tab[aria-selected="true"] { color: var(--app-accent, var(--v-accent)); font-weight: 600; }
 .ribbon-skin .ribbon-tab[aria-selected="true"]::after { left: 8px; right: 8px; bottom: 1px; height: 2px; border-radius: 1px; background: var(--app-accent, var(--v-accent)); }
 .ribbon-skin .ribbon-tab-contextual { color: var(--app-accent); }
-.ribbon-skin .ribbon-collapse { width: 22px; height: 22px; }
+.ribbon-skin .ribbon-collapse { width: 20px; height: 20px; }
 
-/* 리본 본체 — 회색 틀 안 흰 카드 90px. 탭마다 높이가 같아 아래 작업 영역이 움직이지 않는다 */
+/* 리본 본체 — 회색 틀 안 흰 카드 62px. 탭마다 높이가 같아 아래 작업 영역이 움직이지 않는다 */
 .ribbon-skin .toolbar-format.ribbon-panel,
 .ribbon-skin .toolbar-row-tools {
   box-sizing: border-box;
   height: var(--skin-ribbon-h);
   min-height: 0;
   margin: 0 6px 6px;
-  padding: 3px 4px 0;
+  padding: 0 4px;
   gap: 0;
   align-items: stretch;
   border: 0;
@@ -229,45 +229,46 @@ Expected: PASS (13 tests)
 }
 .ribbon-skin.ribbon-peeking .ribbon-panel:not([hidden]) { top: calc(var(--skin-title-h) + var(--skin-tabs-h)); }
 
-/* 묶음 — 위는 단추 칸, 아래 16px은 묶음 이름, 사이는 세로 구분선 */
+/* 묶음 — 위는 단추 칸, 아래 14px은 묶음 이름, 사이는 세로 구분선 */
 .ribbon-skin .ribbon-group { position: relative; display: grid; grid-template-rows: minmax(0, 1fr) var(--skin-label-h); gap: 0; padding: 0 6px; border-right: 1px solid var(--skin-line); }
 .ribbon-skin .ribbon-group:last-child { border-right: none; }
 .ribbon-skin .ribbon-group-buttons { align-items: center; gap: 2px; }
 .ribbon-skin .ribbon-group-buttons-wrap { flex-direction: column; justify-content: center; align-items: stretch; gap: 0; }
-.ribbon-skin .ribbon-group-label { height: var(--skin-label-h); color: var(--skin-text-dim); font: 400 11px/var(--skin-label-h) var(--skin-font); letter-spacing: 0; text-align: center; white-space: nowrap; }
+.ribbon-skin .ribbon-group-label { height: var(--skin-label-h); color: var(--skin-text-dim); font: 400 10px/var(--skin-label-h) var(--skin-font); letter-spacing: 0; text-align: center; white-space: nowrap; }
 
-/* 작은 단추 — 22px 한 줄(세 줄 쌓기), 아이콘+이름 단추도 같은 높이. 아이콘 크기(17px)는 그대로 */
+/* 작은 단추 — 16px 한 줄(세 줄 = 48px), 아이콘+이름 단추도 같은 높이. 아이콘은 최대 14px(줄에 들게, 12px 펼침 화살표는 그대로) */
 .ribbon-skin .ribbon-row,
 .ribbon-skin .ribbon-row:has(.ribbon-btn-labeled) { min-height: var(--skin-small-h); gap: 1px; }
-.ribbon-skin .ribbon-panel .icon-btn:not(.icon-btn-big) { width: auto; min-width: var(--skin-small-h); height: var(--skin-small-h); padding: 0 3px; border-radius: 3px; }
-.ribbon-skin .ribbon-btn-labeled { height: var(--skin-small-h); padding: 0 4px; gap: 4px; }
-.ribbon-skin .ribbon-btn-label { color: var(--skin-text); font: 400 12px/16px var(--skin-font); }
-.ribbon-skin .ribbon-panel :is(.toolbar-select, .toolbar-number) { height: var(--skin-small-h); font: 400 12px var(--skin-font); }
+.ribbon-skin .ribbon-panel .icon-btn:not(.icon-btn-big) { width: auto; min-width: var(--skin-small-h); height: var(--skin-small-h); padding: 0 2px; border-radius: 2px; }
+.ribbon-skin .ribbon-panel .icon-btn:not(.icon-btn-big) svg { max-width: 14px; max-height: 14px; }
+.ribbon-skin .ribbon-btn-labeled { height: var(--skin-small-h); padding: 0 3px; gap: 3px; }
+.ribbon-skin .ribbon-btn-label { color: var(--skin-text); font: 400 11px/14px var(--skin-font); }
+.ribbon-skin .ribbon-panel :is(.toolbar-select, .toolbar-number) { height: var(--skin-small-h); font: 400 11px var(--skin-font); }
 
-/* 큰 단추 — 아이콘(32px) 위, 이름 아래 */
+/* 큰 단추 — 48px, 아이콘(24px) 위, 이름 아래 */
 .ribbon-skin .icon-btn-big {
   box-sizing: border-box;
   width: auto;
-  min-width: 44px;
-  height: calc(var(--skin-ribbon-h) - var(--skin-label-h) - 6px);
-  padding: 4px 4px 0;
+  min-width: 40px;
+  height: calc(var(--skin-ribbon-h) - var(--skin-label-h));
+  padding: 2px 3px 0;
   justify-content: flex-start;
   gap: 2px;
   color: var(--skin-text);
-  font: 400 12px/14px var(--skin-font);
+  font: 400 11px/13px var(--skin-font);
 }
 .ribbon-skin .icon-btn-big > svg { flex: none; width: var(--skin-big-icon); height: var(--skin-big-icon); }
 
 /* "자세히" — 묶음 오른쪽 아래 작은 화살표, data-proxy로 기존 단추(대화상자)를 대신 누른다(officeShell.ts) */
-.ribbon-launcher { position: absolute; right: 1px; bottom: 1px; display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; padding: 0; border: 0; border-radius: 2px; background: transparent; color: var(--skin-text-dim); cursor: pointer; }
+.ribbon-launcher { position: absolute; right: 1px; bottom: 1px; display: inline-flex; align-items: center; justify-content: center; width: 12px; height: 12px; padding: 0; border: 0; border-radius: 2px; background: transparent; color: var(--skin-text-dim); cursor: pointer; }
 .ribbon-launcher:hover { background: var(--skin-hover); color: var(--skin-text); }
 .ribbon-launcher:focus-visible { outline: 2px solid var(--app-accent, var(--v-accent)); outline-offset: 0; }
-.ribbon-launcher svg { width: 10px; height: 10px; }
-.ribbon-group:has(> .ribbon-launcher) .ribbon-group-label { padding-right: 16px; }
+.ribbon-launcher svg { width: 8px; height: 8px; }
+.ribbon-group:has(> .ribbon-launcher) .ribbon-group-label { padding-right: 14px; }
 
-/* 상태 줄 — 22px(워드·PPT는 #statusbar, 엑셀은 격자 아래 .grid-status-row) */
-:is(.word-editor-page, .slides-editor-page) .office-statusbar { box-sizing: border-box; height: var(--skin-status-h); padding: 0 8px; gap: 16px; border-top-color: var(--skin-line); background: var(--skin-frame); font: 400 11px var(--skin-font); }
-.grid-editor-page .grid-status-row { box-sizing: border-box; height: var(--skin-status-h); padding-top: 0; font-size: 11px; }
+/* 상태 줄 — 18px(워드·PPT는 #statusbar, 엑셀은 격자 아래 .grid-status-row) */
+:is(.word-editor-page, .slides-editor-page) .office-statusbar { box-sizing: border-box; height: var(--skin-status-h); padding: 0 8px; gap: 16px; border-top-color: var(--skin-line); background: var(--skin-frame); font: 400 10px var(--skin-font); }
+.grid-editor-page .grid-status-row { box-sizing: border-box; height: var(--skin-status-h); padding-top: 0; font-size: 10px; }
 
 /* 600px — 리본은 가로 스크롤 없이 아이콘만 남기고 줄 바꿈, 묶음 이름·자세히는 접는다. 제목 줄은 위 규칙 그대로 한 줄 */
 @media (max-width: 600px) {
@@ -280,8 +281,8 @@ Expected: PASS (13 tests)
   .ribbon-skin .ribbon-launcher,
   .ribbon-skin .icon-btn-big > span,
   .ribbon-skin .ribbon-btn-label { display: none; }
-  .ribbon-skin .icon-btn-big { flex-direction: row; min-width: var(--skin-small-h); height: var(--skin-small-h); padding: 0 3px; }
-  .ribbon-skin .icon-btn-big > svg { width: 18px; height: 18px; }
+  .ribbon-skin .icon-btn-big { flex-direction: row; min-width: 20px; height: 20px; padding: 0 2px; }
+  .ribbon-skin .icon-btn-big > svg { width: 16px; height: 16px; }
 }
 ```
 
@@ -308,7 +309,7 @@ Expected: 타입 오류 0, 두 파일 PASS, 빌드 완료(`public/js/*.bundle.js
 
 ```bash
 git add scripts/ribbonSkinLib.mjs tests/ribbonSkinLib.test.mjs public/css/style.css public/editor.html public/editor-grid.html public/editor-slides.html src/client/officeShell.ts
-git commit -m "리본 꾸밈 1: 아트크래프트 규격 토큰·공용 틀 CSS(28/24/90/22px, 큰·작은 단추, 묶음 이름, 자세히, 600px)와 규격 판정 모듈
+git commit -m "리본 꾸밈 1: 아트크래프트 규격 토큰·공용 틀 CSS(캡처 실측 24/22/62/18px, 큰·작은 단추, 묶음 이름, 자세히, 600px)와 규격 판정 모듈
 
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ```
@@ -367,15 +368,15 @@ Expected: `페이지 설정,단락 true`
         </button>
 ```
 
-- [ ] **Step 5: 레이아웃 들여쓰기·간격 칸이 90px 리본 안에 들게** — `public/css/style.css` 끝에 덧붙인다. 칸 한 열 = 제목 16 + 1 + 입력 20 + 1 + 입력 20 = 58px(큰 단추 칸 68px 안).
+- [ ] **Step 5: 레이아웃 들여쓰기·간격 칸이 62px 리본 안에 들게** — `public/css/style.css` 끝에 덧붙인다. 칸 한 열 = 제목 14 + 입력 16 + 입력 16 = 46px(단추 칸 48px 안).
 
 ```css
-/* 리본 꾸밈 — 워드 레이아웃 탭 들여쓰기·간격 칸(58px 높이로) */
-.ribbon-skin .layout-fields { gap: 12px; align-items: center; }
-.ribbon-skin .layout-field-col { gap: 1px; }
-.ribbon-skin .layout-field-title { font: 600 11px/16px var(--skin-font); }
-.ribbon-skin .layout-field { font: 400 12px/20px var(--skin-font); }
-.ribbon-skin .layout-field input { box-sizing: border-box; height: 20px; padding: 0 4px; }
+/* 리본 꾸밈 — 워드 레이아웃 탭 들여쓰기·간격 칸(46px 높이로) */
+.ribbon-skin .layout-fields { gap: 10px; align-items: center; }
+.ribbon-skin .layout-field-col { gap: 0; }
+.ribbon-skin .layout-field-title { font: 600 10px/14px var(--skin-font); }
+.ribbon-skin .layout-field { font: 400 11px/16px var(--skin-font); }
+.ribbon-skin .layout-field input { box-sizing: border-box; height: 16px; padding: 0 3px; }
 ```
 
 - [ ] **Step 6: id가 그대로인지 확인한다**
@@ -392,7 +393,7 @@ Expected: 빌드 완료, PASS
 
 ```bash
 git add public/editor.html public/css/style.css
-git commit -m "리본 꾸밈 2: 워드 — 삽입 탭 나누기를 표 앞으로, 페이지 나누기를 페이지 설정 묶음 안으로, 언어 교정 자세히(단어 개수), 레이아웃 칸 90px 안
+git commit -m "리본 꾸밈 2: 워드 — 삽입 탭 나누기를 표 앞으로, 페이지 나누기를 페이지 설정 묶음 안으로, 언어 교정 자세히(단어 개수), 레이아웃 칸 62px 안
 
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ```
@@ -405,7 +406,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 - Modify: `public/editor-grid.html:564` (데이터 › 정렬 및 필터 묶음 이름 줄 뒤)
 
 **Interfaces:**
-- Consumes: Task 1의 `.ribbon-skin`, `.grid-editor-page .grid-status-row` 22px 규칙, `button.ribbon-launcher[data-proxy]`
+- Consumes: Task 1의 `.ribbon-skin`, `.grid-editor-page .grid-status-row` 18px 규칙, `button.ribbon-launcher[data-proxy]`
 - Produces: 엑셀 "자세히" 1개(`data-proxy="btn-sort-custom"`) — Task 6 e2e가 개수 1을 기대한다
 
 아트크래프트 엑셀 순서: 홈(클립보드·글꼴·맞춤·표시 형식·스타일·셀·편집) — 이미 같다. 삽입(표·차트)·수식·데이터·보기·차트 디자인도 그대로. 이름 상자(`#cell-ref-box`)와 수식 줄(`.formula-bar` · `#formula-input`)은 리본 아래 그대로 둔다(마크업·CSS 손대지 않음). 1627/1447/1396/1270px에서 홈 탭 글자를 접는 기존 미디어 규칙(id 선택자라 꾸밈 규칙보다 세다)도 그대로 둔다.
@@ -451,7 +452,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 - Modify: `public/css/style.css` (끝에 레일 몇 줄)
 
 **Interfaces:**
-- Consumes: Task 1의 `.ribbon-skin`, 상태 줄 22px 규칙(`.slides-editor-page .office-statusbar`)
+- Consumes: Task 1의 `.ribbon-skin`, 상태 줄 18px 규칙(`.slides-editor-page .office-statusbar`)
 - Produces: PPT "자세히" 0개(기존 대화상자 없음) — Task 6 e2e가 개수 0을 기대한다
 
 아트크래프트 PPT 순서: 홈(슬라이드·글꼴·단락·그리기) — 이미 같다. 삽입은 슬라이드 · 도형 · 텍스트 순. 디자인·전환·애니메이션은 그대로. 섬네일 레일(`#slides-rail`)은 폭(220px)·안쪽 여백을 바꾸지 않는다(섬네일 크기 계산·`verify:pptx` 영향 없게) — 색과 번호 글자만.
@@ -502,8 +503,8 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 - Modify: `public/css/view.css` (위치 상수 `6.2rem`·`6.4rem` → 변수, 빈 묶음 숨김, 도구 줄 단추 크기)
 
 **Interfaces:**
-- Consumes: Task 1의 `.ribbon-skin` 규칙(`.toolbar-row-title` 28px, `.ribbon-tabs` 24px, `.toolbar-row-tools` 90px 카드, `.ribbon-group` 묶음, 600px 접기)
-- Produces: 보기 화면 구조 약속(Task 6 e2e가 쓴다): `#toolbar.ribbon-skin` 안에 `.toolbar-row-title` · `.ribbon-tabs` · `.toolbar-row-tools`; 묶음 이름이 문서 순서로 `표시,보기,쪽,찾기,인쇄,내려받기`; CSS 변수 `--view-chrome-h`(막대 전체 높이, 넓은 화면 150px / 600px 이하 96px)
+- Consumes: Task 1의 `.ribbon-skin` 규칙(`.toolbar-row-title` 24px, `.ribbon-tabs` 22px, `.toolbar-row-tools` 62px 카드, `.ribbon-group` 묶음, 600px 접기)
+- Produces: 보기 화면 구조 약속(Task 6 e2e가 쓴다): `#toolbar.ribbon-skin` 안에 `.toolbar-row-title` · `.ribbon-tabs` · `.toolbar-row-tools`; 묶음 이름이 문서 순서로 `표시,보기,쪽,찾기,인쇄,내려받기`; CSS 변수 `--view-chrome-h`(막대 전체 높이, 넓은 화면 116px / 600px 이하 86px)
 
 지켜야 할 기존 약속(`src/client/view/toolbar.ts`·`logic.ts`의 `menuIdsFor`·`verify:view-shell`): 세 칸 `#toolbar-tools-left.toolbar-tools-left`·`.toolbar-tools-center`·`.toolbar-tools-right`는 그대로 두고 그 **안에** 묶음을 넣는다. `#print-btn`은 넓은 화면에서 `.toolbar-tools-right` 안이어야 한다(view-shell 477행). 도구▾ 메뉴로 옮겨지는 단추(`TOOL_MENU_IDS`·`NARROW_MENU_IDS`)는 메뉴에서 돌아올 때 기억해 둔 원래 부모(묶음)로 돌아오므로 그대로 산다. `#edit-btn`은 제목 줄에 그대로 둔다(편집기의 "편집 열기"와 같은 자리, 390px 배치 유지). 640px 미만에서 `#toolbar-tools-left`를 숨기는 view.css 규칙도 그대로 — 그래서 확대(`#zoom-*`)는 가운데 칸에 둔다.
 
@@ -558,7 +559,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 Run: `git show HEAD:public/view.html | grep -o 'id="[^"]*"' | sort > .audit-run-ids-before.txt; grep -o 'id="[^"]*"' public/view.html | sort > .audit-run-ids-after.txt; diff .audit-run-ids-before.txt .audit-run-ids-after.txt && echo SAME; rm -f .audit-run-ids-*.txt; grep -c 'toolbar-sep' public/view.html`
 Expected: `SAME`, 그다음 `0`
 
-- [ ] **Step 3: view.css — 막대 높이 변수와 위치, 빈 묶음 숨김.** 막대 = 제목 줄 28 + 탭 줄 24 + 리본 90 + 아래 여백 6 + 선 1 = 149px → 150px. 600px 이하는 리본이 한 줄(위아래 여백 3+3 + 단추 28 = 34px)로 접혀 28 + 24 + 34 + 6 + 1 = 93px → 96px. `public/css/view.css`에서 세 값을 바꾼다:
+- [ ] **Step 3: view.css — 막대 높이 변수와 위치, 빈 묶음 숨김.** 막대 = 제목 줄 24 + 탭 줄 22 + 리본 62 + 아래 여백 6 + 선 1 = 115px → 116px. 600px 이하는 리본이 한 줄(아래 여백 3 + 단추 28 = 31px)로 접혀 24 + 22 + 31 + 6 + 1 = 84px → 86px. `public/css/view.css`에서 세 값을 바꾼다:
   - `.view-notice`의 `top: 6.4rem;` → `top: calc(var(--view-chrome-h) + 0.3rem);`
   - `.thumbs-panel`의 `top: 6.2rem;` → `top: var(--view-chrome-h);`
   - `.prep-screen`의 `inset: 6.2rem 0 0;` → `inset: var(--view-chrome-h) 0 0;`
@@ -567,8 +568,8 @@ Expected: `SAME`, 그다음 `0`
 
 ```css
 /* 리본 꾸밈(설계 2026-11-22-artcraft-ribbon-skin §2-5) — 막대 전체 높이. 쪽·도면 칸이 막대 밑에 깔리지 않게 같은 값을 쓴다 */
-:root { --view-chrome-h: 150px; }
-@media (max-width: 600px) { :root { --view-chrome-h: 96px; } }
+:root { --view-chrome-h: 116px; }
+@media (max-width: 600px) { :root { --view-chrome-h: 86px; } }
 .pages-container,
 .svg-scroll { padding-top: calc(var(--view-chrome-h) + 0.6rem); }
 /* 도구 줄 — 세 칸 안의 묶음이 카드 높이를 채우고, 단추는 한 줄(28px) */
@@ -589,7 +590,7 @@ Expected: PASS, 빌드 완료(`menuIdsFor`·`TOOL_MENU_IDS`·`NARROW_MENU_IDS`�
 
 ```bash
 git add public/view.html public/css/view.css
-git commit -m "리본 꾸밈 5: 보기 화면 — 제목 줄·탭 줄·90px 리본 카드, 도구를 표시·보기·쪽·찾기·인쇄·내려받기 묶음으로(id·도구▾ 동작 그대로), 쪽 위치를 막대 높이 변수로
+git commit -m "리본 꾸밈 5: 보기 화면 — 제목 줄·탭 줄·62px 리본 카드, 도구를 표시·보기·쪽·찾기·인쇄·내려받기 묶음으로(id·도구▾ 동작 그대로), 쪽 위치를 막대 높이 변수로
 
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ```
@@ -611,8 +612,8 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ```js
 #!/usr/bin/env node
 // 아트크래프트 리본 꾸밈 검사(설계 2026-11-22-artcraft-ribbon-skin §4) — 세 편집기(편집·읽기 전용 ui=view)와 보기 화면(view.html):
-//  (1) 제목 줄 28·탭 줄 24·리본 90·상태 줄 22px(±2)  (2) 탭·묶음·단추 이름·말풍선이 한글(영문자만 있는 라벨 0)
-//  (3) 큰 단추 = 아이콘 위·이름 아래  (4) 모든 탭의 리본 내용이 90px 안(잘림 없음)  (5) "자세히"는 있는 단추를 가리킴(워드 1·엑셀 1·PPT 0)
+//  (1) 제목 줄 24·탭 줄 22·리본 62·상태 줄 18px(±2, 캡처 실측)  (2) 탭·묶음·단추 이름·말풍선이 한글(영문자만 있는 라벨 0)
+//  (3) 큰 단추 = 아이콘 위·이름 아래  (4) 모든 탭의 리본 내용이 62px 안(잘림 없음)  (5) "자세히"는 있는 단추를 가리킴(워드 1·엑셀 1·PPT 0)
 //  (6) 읽기 전용 흐림이 고르다(0.45), "자세히" 흐림 = 가리키는 단추 흐림  (7) 600px 가로 스크롤 없음·제목 줄 한 줄
 //  (8) 보기 화면 같은 규격·id 그대로·첫 쪽이 막대 밑에 깔리지 않음  + 아트크래프트 캡처와 나란히 놓은 보고서
 // 쓰는 법: npm run build:editor && node scripts/verify-ribbon-skin-e2e.mjs [포트 8160~8169, 기본 8166]
@@ -622,7 +623,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { PDFDocument, StandardFonts } from 'pdf-lib';
 import { chromium } from 'playwright';
-import { bigButtonLayoutOk, heightProblems, latinOnlyLabels } from './ribbonSkinLib.mjs';
+import { SKIN_PX, SKIN_TOLERANCE_PX, bigButtonLayoutOk, heightProblems, latinOnlyLabels } from './ribbonSkinLib.mjs';
 
 const PORT = Number(process.argv[2] ?? 8166);
 // 운영 포트(8000·8010·8020·8100·8110·8130·8148)와 다른 시험(8150~8159) 범위와 겹치지 않게
@@ -755,7 +756,7 @@ const bigButtons = (page) =>
       })
       .filter(Boolean);
   });
-/** 보이는 탭을 하나씩 눌러 판 높이(90±2)와 잘림(scrollHeight > clientHeight)을 본다 */
+/** 보이는 탭을 하나씩 눌러 판 높이(62±2)와 잘림(scrollHeight > clientHeight)을 본다 */
 async function tabPanels(page) {
   const tabs = await page.$$eval('.ribbon-tab:not(.ribbon-tab-file)', (ts) => ts.filter((t) => !t.hidden && t.dataset.tab).map((t) => t.dataset.tab));
   const bad = [];
@@ -765,7 +766,7 @@ async function tabPanels(page) {
       const p = document.querySelector('.ribbon-panel:not([hidden])');
       return p ? { h: Math.round(p.getBoundingClientRect().height), sh: p.scrollHeight, ch: p.clientHeight } : null;
     });
-    if (!m || Math.abs(m.h - 90) > 2 || m.sh > m.ch + 1) bad.push(`${tab} ${JSON.stringify(m)}`);
+    if (!m || Math.abs(m.h - SKIN_PX.ribbon) > SKIN_TOLERANCE_PX || m.sh > m.ch + 1) bad.push(`${tab} ${JSON.stringify(m)}`);
   }
   await page.click('.ribbon-tab[data-tab="home"]');
   return { tabs, bad };
@@ -777,7 +778,7 @@ const narrowState = (page) =>
     const t = document.querySelector('.office-titlebar, .toolbar-row-title');
     return { doc: document.documentElement.scrollWidth, body: document.body.scrollWidth, panel: p ? p.scrollWidth - p.clientWidth : 0, title: Math.round(t.getBoundingClientRect().height) };
   });
-const narrowOk = (n) => n.doc <= 600 && n.body <= 600 && n.panel <= 1 && Math.abs(n.title - 28) <= 2;
+const narrowOk = (n) => n.doc <= 600 && n.body <= 600 && n.panel <= 1 && Math.abs(n.title - SKIN_PX.title) <= SKIN_TOLERANCE_PX;
 const underToolbar = (page) => page.evaluate(() => document.querySelector('.page-frame').getBoundingClientRect().top < document.getElementById('toolbar').getBoundingClientRect().bottom);
 async function shot(page, name) {
   await page.screenshot({ path: path.join(SHOTS, `${name}.png`) });
@@ -811,14 +812,14 @@ try {
     const wide = await browser.newContext({ viewport: { width: 1400, height: 900 } });
     const edit = await open(wide, (await token(ids[ext], { canEdit: true })).editorUrl, READY[ext]);
     const h = await heights(edit.page, EDITOR_SEL);
-    rec(`(1) ${ext} 편집 — 높이 28/24/90/22(±2)`, heightProblems(h).length === 0 && h.status !== null, `${JSON.stringify(h)} ${heightProblems(h).join(', ')}`);
+    rec(`(1) ${ext} 편집 — 높이 24/22/62/18(±2)`, heightProblems(h).length === 0 && h.status !== null, `${JSON.stringify(h)} ${heightProblems(h).join(', ')}`);
     const latin = latinOnlyLabels(await labels(edit.page));
     rec(`(2) ${ext} 탭·묶음·단추 이름·말풍선이 한글`, latin.length === 0, latin.slice(0, 5).join(' | '));
     const big = await bigButtons(edit.page);
     const bigBad = big.filter((b) => !bigButtonLayoutOk(b.icon, b.label)).map((b) => b.name);
     rec(`(3) ${ext} 홈 탭 큰 단추 ${big.length}개 — 아이콘 위·이름 아래`, big.length > 0 && bigBad.length === 0, bigBad.join(', '));
     const panels = await tabPanels(edit.page);
-    rec(`(4) ${ext} 탭 ${panels.tabs.length}개 모두 리본 90px 안(잘림 없음)`, panels.tabs.length >= 5 && panels.bad.length === 0, panels.bad.join(' | '));
+    rec(`(4) ${ext} 탭 ${panels.tabs.length}개 모두 리본 62px 안(잘림 없음)`, panels.tabs.length >= 5 && panels.bad.length === 0, panels.bad.join(' | '));
     const launchers = await edit.page.$$eval('.ribbon-launcher', (ls) => ls.map((l) => ({ proxy: l.dataset.proxy ?? '', ok: !!document.getElementById(l.dataset.proxy ?? '') && !l.id })));
     rec(`(5) ${ext} "자세히" ${LAUNCHERS[ext]}개 — 기존 단추를 가리키고 id 없음`, launchers.length === LAUNCHERS[ext] && launchers.every((l) => l.ok), JSON.stringify(launchers));
     rec(`${ext} 편집 — 화면 오류 없음`, edit.errors.length === 0, edit.errors.slice(0, 2).join(' | '));
@@ -870,7 +871,7 @@ try {
     const wide = await browser.newContext({ viewport: { width: 1400, height: 900 } });
     const v = await open(wide, tok.viewerUrl, '.page-frame.page-ready');
     const vh = await heights(v.page, VIEW_SEL);
-    rec(`(8) 보기 ${ext} — ${viewPath}, 높이 28/24/90(상태 줄 없음)`, viewPath === '/view.html' && heightProblems(vh).length === 0 && vh.title !== null && vh.tabs !== null && vh.ribbon !== null, `${JSON.stringify(vh)} ${heightProblems(vh).join(', ')}`);
+    rec(`(8) 보기 ${ext} — ${viewPath}, 높이 24/22/62(상태 줄 없음)`, viewPath === '/view.html' && heightProblems(vh).length === 0 && vh.title !== null && vh.tabs !== null && vh.ribbon !== null, `${JSON.stringify(vh)} ${heightProblems(vh).join(', ')}`);
     const vl = latinOnlyLabels(await labels(v.page));
     const groups = await v.page.$$eval('#toolbar .ribbon-group-label', (ls) => ls.map((l) => l.textContent));
     rec(`(8) 보기 ${ext} — 묶음 표시·보기·쪽·찾기·인쇄·내려받기, 라벨 한글`, vl.length === 0 && groups.join(',') === '표시,보기,쪽,찾기,인쇄,내려받기', `${groups.join(',')} ${vl.slice(0, 3).join(' | ')}`);
@@ -921,7 +922,7 @@ Expected: 전부 통과(새 `tests/ribbonSkinLib.test.mjs` 포함), 타입 오�
 - [ ] **Step 4: 새 검사를 돌린다**
 
 Run: `npm run verify:ribbon-skin -- 8166`
-Expected: 마지막 줄 `N/N 통과`(약 40항목)와 `나란히 비교 보고서: …\.audit-run\ribbon-skin-shots\report.html`. 실패하면 해당 태스크의 CSS·마크업을 고친다 — 검사와 규격 숫자는 고치지 않는다(설계 값). 흔한 원인: 어떤 탭의 판이 90px을 넘거나 잘림(→ 그 묶음 칸 높이를 `--skin-small-h` 세 줄·`--skin-big-icon` 안으로), 600px 넘침(→ 그 묶음의 넓은 `select`·`input`에 `.ribbon-skin` 미디어 쿼리 안 `max-width`), 보기 화면 첫 쪽이 막대 밑(→ `--view-chrome-h` 값).
+Expected: 마지막 줄 `N/N 통과`(약 40항목)와 `나란히 비교 보고서: …\.audit-run\ribbon-skin-shots\report.html`. 실패하면 해당 태스크의 CSS·마크업을 고친다 — 검사와 규격 숫자는 고치지 않는다(설계 값). 흔한 원인: 어떤 탭의 판이 62px을 넘거나 잘림(→ 그 묶음 칸 높이를 `--skin-small-h` 세 줄·`--skin-big-icon` 안으로), 600px 넘침(→ 그 묶음의 넓은 `select`·`input`에 `.ribbon-skin` 미디어 쿼리 안 `max-width`), 보기 화면 첫 쪽이 막대 밑(→ `--view-chrome-h` 값).
 
 - [ ] **Step 5: 기존 e2e — 스스로 서버를 띄우는 것(스크립트는 고치지 않는다)**
 
@@ -969,7 +970,7 @@ taskkill /PID (Get-Content .audit-run\skin-regress\pid.txt) /T /F
 
 ```bash
 git add scripts/verify-ribbon-skin-e2e.mjs package.json
-git commit -m "리본 꾸밈 6: verify:ribbon-skin — 높이 28/24/90/22·한글 라벨·큰 단추 배치·탭별 잘림·자세히·읽기 전용 흐림·600px·보기 화면 검사와 아트크래프트 나란히 비교 보고서
+git commit -m "리본 꾸밈 6: verify:ribbon-skin — 높이 24/22/62/18·한글 라벨·큰 단추 배치·탭별 잘림·자세히·읽기 전용 흐림·600px·보기 화면 검사와 아트크래프트 나란히 비교 보고서
 
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ```
@@ -984,4 +985,4 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 - §2-1 모양 → Task 1(공용)·2·3·4. §2-2 배치만(없는 묶음 안 만듦) → Task 2(워드 삽입·레이아웃 순서), Task 4(PPT 삽입 순서), 엑셀은 이미 같은 순서. §2-3 한글 → 각 태스크 Step 1 검사 + Task 6 (2). §2-4 읽기 전용 → Task 1 Step 7(자세히 판정) + Task 6 (6) + `verify:readonly`. §2-5 보기 화면 → Task 5 + Task 6 (8). §2-6 600px → Task 1 미디어 쿼리 + Task 6 (7).
 - §4 검사 → Task 6 Step 4~7(새 검사·기존 e2e 7개·실제 브라우저·나란히 비교 보고서).
 - 계획이 정한 것(설계에 값이 없어서): "자세히"는 기존 대화상자가 있는 두 묶음에만(워드 언어 교정 → 단어 개수, 엑셀 정렬 및 필터 → 사용자 지정 정렬; PPT 없음). 보기 화면의 측정·강조·글 넣기는 설계 묶음 목록에 없어 "표시" 묶음으로, `#edit-btn`은 제목 줄에 그대로(390px 배치·view-shell 검사 유지) — 그래서 "편집 열기" 묶음은 만들지 않는다. 보기 화면에는 상태 줄이 없어 상태 줄 높이는 편집기에서만 잰다. PPT 앱 색은 기존 `#c0462a` 그대로.
-- 참고 캡처(1400×900)를 재 보면 제목 줄 약 24·탭 줄 약 22·리본 약 62·상태 줄 약 18px이다 — 설계 §1·§4의 28/24/90/22와 다르지만 설계가 구속력이 있으므로 설계 값을 따른다(사용자 확인 대상).
+- 높이 규격은 참고 캡처(1400×900) 실측값 24/22/62/18px(설계 §1·§4를 2026-11-22에 이 값으로 고침 — 처음 추정치 28/24/90/22는 틀렸음).
