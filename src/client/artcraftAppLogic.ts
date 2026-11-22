@@ -64,8 +64,16 @@ export type SaveDecision = 'upload' | 'readonly' | 'saveas' | 'empty';
 export function saveDecision(data: Record<string, unknown>, canSave: boolean): SaveDecision {
   if (!canSave) return 'readonly';
   if (data.saveAs === true) return 'saveas';
-  const size = (data.bytes as { byteLength?: unknown } | undefined)?.byteLength;
-  return typeof size === 'number' && size > 0 ? 'upload' : 'empty';
+  // 신뢰 경계 — 진짜 바이트(ArrayBuffer·TypedArray)만, byteLength만 흉내 낸 객체는 거절
+  const bytes = data.bytes;
+  return (bytes instanceof ArrayBuffer || ArrayBuffer.isView(bytes)) && bytes.byteLength > 0 ? 'upload' : 'empty';
+}
+
+/** :save의 바이트를 ArrayBuffer로(TypedArray면 그 구간만 복사) — saveDecision이 'upload'라고 본 값에만 */
+export function toArrayBuffer(bytes: unknown): ArrayBuffer {
+  if (bytes instanceof ArrayBuffer) return bytes;
+  const view = bytes as ArrayBufferView;
+  return new Uint8Array(view.buffer, view.byteOffset, view.byteLength).slice().buffer;
 }
 
 /** 앱에 줄 파일 이름 — 앱은 확장자로 형식을 고르므로 저장된 바이트 형식(meta.ext)으로 */
@@ -122,4 +130,55 @@ export function saveFailure(status: number, error: string | undefined): { text: 
   if (status === 409 && error?.includes('먼저 저장')) return { text: NOTICES.stale, reload: true };
   if (status === 428) return { text: NOTICES.noBase, reload: true };
   return { text: error ?? '서버에 연결할 수 없습니다', reload: false };
+}
+
+/**
+ * 저장을 한 줄로 — :save가 겹쳐도(Ctrl+S 두 번) 앞 저장이 끝난 뒤 보낸다. If-Match는 보내는 순간의 기준이고,
+ * 성공하면 보낸 바이트의 해시가 다음 기준(서버 원본 = 보낸 바이트). 그러지 않으면 둘째가 옛 기준으로 나가 409 stale이 된다
+ */
+export function createSaveQueue(send: (bytes: ArrayBuffer, ifMatch: string | null) => Promise<boolean>): {
+  setBase(etag: string | null): void;
+  save(bytes: ArrayBuffer): Promise<boolean>;
+} {
+  let base: string | null = null;
+  let chain: Promise<unknown> = Promise.resolve();
+  return {
+    setBase(etag) {
+      base = etag;
+    },
+    save(bytes) {
+      const run = chain.then(async () => {
+        const next = sha256Etag(bytes);
+        const ok = await send(bytes, base);
+        if (ok) base = await next;
+        return ok;
+      });
+      chain = run.catch(() => undefined);
+      return run;
+    },
+  };
+}
+
+/** 상한 안에 끝나지 않으면 message로 거부 — 준비 뒤 열기(글꼴·원본·font.add·확인 전체)가 멈춰 loading에 남지 않게 */
+export function withTimeout<T>(p: Promise<T>, ms: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const limit = new Promise<never>((_, reject) => (timer = setTimeout(() => reject(new Error(message)), ms)));
+  return Promise.race([p, limit]).finally(() => clearTimeout(timer));
+}
+
+/** 같은 출처 정적 파일 받기 — 200이 아니면 거부(404 HTML을 글꼴·문서로 넘기지 않게) */
+export async function fetchBytes(url: string): Promise<Uint8Array> {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`${url} ${r.status}`);
+  return new Uint8Array(await r.arrayBuffer());
+}
+
+/** 처음 한 번만 — 앱이 ready를 두 번 보내도 열기는 한 번(둘째는 이미 넘긴 바이트로 DataCloneError가 나 화면을 넘겨 버린다) */
+export function once(fn: () => void): () => void {
+  let done = false;
+  return () => {
+    if (done) return;
+    done = true;
+    fn();
+  };
 }

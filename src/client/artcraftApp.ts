@@ -6,8 +6,8 @@
  * 엑셀 = 서버 격자)로 넘긴다. 제목 줄엔 읽기 전용 표지·"편집 열기"를 두지 않는다(사용자 규칙 — 읽기 전용은 앱의 막힌 편집으로 드러난다).
  */
 import {
-  NOTICES, OPEN_TIMEOUT_MS, READY_TIMEOUT_MS, SAVE_LABELS, contentRedirect, fontName, frameUrl, isUndoKey, openName, readAppMessage,
-  readOnlyCommands, saveDecision, saveFailure, sha256Etag, toBase64, uiShowsDocument, unprotectedSheets, type AppKind, type SaveState,
+  NOTICES, OPEN_TIMEOUT_MS, READY_TIMEOUT_MS, SAVE_LABELS, contentRedirect, createSaveQueue, fetchBytes, fontName, frameUrl, isUndoKey, once, toArrayBuffer, withTimeout, openName, readAppMessage,
+  readOnlyCommands, saveDecision, saveFailure, toBase64, uiShowsDocument, unprotectedSheets, type AppKind, type SaveState,
 } from './artcraftAppLogic.js';
 import { fallBackToViewer, isContentUi } from './viewStrip.js';
 
@@ -96,8 +96,6 @@ async function boot(): Promise<void> {
   let opened = false;
   let failed = false;
   let unsaved = false;
-  /** 저장 기준 — engine-source ETag, 저장(200)마다 보낸 바이트의 해시로 바꾼다 */
-  let base: string | null = null;
   const fail = (why: string): void => {
     if (failed || opened) return;
     failed = true;
@@ -107,14 +105,16 @@ async function boot(): Promise<void> {
     fallBackToViewer(info.viewerUrl, NOTICES.failed);
   };
   const readyTimer = setTimeout(() => fail('준비 20초 초과'), READY_TIMEOUT_MS);
+  // 저장 기준(If-Match) — engine-source ETag, 저장(200)마다 보낸 바이트의 해시. 저장은 한 줄로 나간다
+  const saves = createSaveQueue(send);
 
   // 앱을 받는 동안 원본·글꼴도 함께 받는다
   const docBytes = fetch(app.originalUrl).then((r) => {
     if (!r.ok) throw new Error(`원본 ${r.status}`);
-    base = r.headers.get('etag');
+    saves.setBase(r.headers.get('etag'));
     return r.arrayBuffer();
   });
-  const fontBytes = Promise.all(app.fonts.map(async (url) => [fontName(url), new Uint8Array(await (await fetch(url)).arrayBuffer())] as const));
+  const fontBytes = Promise.all(app.fonts.map(async (url) => [fontName(url), await fetchBytes(url)] as const));
   docBytes.catch(() => undefined);
   fontBytes.catch(() => undefined);
 
@@ -156,21 +156,9 @@ async function boot(): Promise<void> {
 
   async function openDoc(): Promise<void> {
     try {
-      if (gridGuard) blockUndoKeys();
-      for (const [name, u8] of await fontBytes) await api().execute('font.add', { data: toBase64(u8), name });
-      const bytes = await docBytes;
-      frame.contentWindow!.postMessage({ type: `${app!.kind}craft:open`, name: fileName, bytes }, location.origin, [bytes]);
-      let shown = false;
-      for (const t0 = Date.now(); !shown && Date.now() - t0 < OPEN_TIMEOUT_MS; ) {
-        await sleep(100);
-        shown = uiShowsDocument(await api().uiInspect().catch(() => null), fileName);
-      }
-      if (!shown && readOnly) throw new Error('문서 열기 확인 시간 초과(읽기 전용 보호를 걸 수 없음)');
-      if (readOnly) {
-        const inspect = app!.kind === 'grid' ? ((await api().docInspect()) as { sheets?: unknown[] } | null) : null;
-        const sheets = Array.isArray(inspect?.sheets) ? inspect.sheets.length : 1;
-        for (const [id, params] of readOnlyCommands(app!.kind, password, sheets)) await api().execute(id, params);
-      }
+      // 준비 뒤 열기 전체의 상한 — 확인 반복(OPEN_TIMEOUT) + 글꼴·원본·font.add 몫으로 두 배
+      await withTimeout(openSteps(), OPEN_TIMEOUT_MS * 2, '문서 열기 시간 초과');
+      if (failed) return;
       opened = true;
       document.body.dataset.appState = 'open';
       if (gridGuard) setInterval(() => void reprotect(), 1000);
@@ -179,34 +167,52 @@ async function boot(): Promise<void> {
     }
   }
 
-  async function upload(bytes: ArrayBuffer): Promise<void> {
+  async function openSteps(): Promise<void> {
+    if (gridGuard) blockUndoKeys();
+    for (const [name, u8] of await fontBytes) await api().execute('font.add', { data: toBase64(u8), name });
+    const bytes = await docBytes;
+    frame.contentWindow!.postMessage({ type: `${app!.kind}craft:open`, name: fileName, bytes }, location.origin, [bytes]);
+    let shown = false;
+    for (const t0 = Date.now(); !shown && Date.now() - t0 < OPEN_TIMEOUT_MS; ) {
+      await sleep(100);
+      shown = uiShowsDocument(await api().uiInspect().catch(() => null), fileName);
+    }
+    if (!shown && readOnly) throw new Error('문서 열기 확인 시간 초과(읽기 전용 보호를 걸 수 없음)');
+    if (readOnly) {
+      const inspect = app!.kind === 'grid' ? ((await api().docInspect()) as { sheets?: unknown[] } | null) : null;
+      const sheets = Array.isArray(inspect?.sheets) ? inspect.sheets.length : 1;
+      for (const [id, params] of readOnlyCommands(app!.kind, password, sheets)) await api().execute(id, params);
+    }
+  }
+
+  async function send(bytes: ArrayBuffer, ifMatch: string | null): Promise<boolean> {
     setSave('saving');
-    const next = sha256Etag(bytes);
     const headers: Record<string, string> = { 'content-type': 'application/octet-stream' };
-    if (base) headers['if-match'] = base;
+    if (ifMatch) headers['if-match'] = ifMatch;
     const r = await fetch(`/api/view/artcraft-save?token=${encodeURIComponent(token)}`, { method: 'PUT', headers, body: bytes }).catch(() => null);
     const j = (await r?.json().catch(() => null)) as { success?: boolean; error?: string } | null;
     if (r?.ok && j?.success) {
-      base = await next;
       unsaved = false;
       setSave('saved');
-      return;
+      return true;
     }
     unsaved = true;
     const why = saveFailure(r?.status ?? 0, j?.error);
     // 428 = 기준(ETag)을 못 보낸 것 — 이 화면의 버그라 기록을 남긴다
-    if (r?.status === 428) console.error('artcraft-save 428: If-Match 없이 저장을 보냈습니다', { base });
+    if (r?.status === 428) console.error('artcraft-save 428: If-Match 없이 저장을 보냈습니다', { ifMatch });
     setSave('failed', why.text);
     if (why.reload) notice(why.text, true);
+    return false;
   }
+  const start = once(() => void openDoc());
 
   window.addEventListener('message', (e) => {
     const msg = readAppMessage(e, location.origin, frame.contentWindow, app.kind);
     if (!msg) return;
     if (msg.kind === 'ready') {
-      if (failed || opened) return;
+      if (failed) return;
       clearTimeout(readyTimer);
-      void openDoc();
+      start();
     } else if (msg.kind === 'failed') {
       // 열기 전이면 다른 화면으로, 연 뒤면(고친 내용이 있을 수 있다) 안내만
       if (opened) notice(NOTICES.appError);
@@ -223,7 +229,7 @@ async function boot(): Promise<void> {
       if (decision === 'readonly') notice(NOTICES.readOnlyIgnored);
       else if (decision === 'saveas') notice(NOTICES.saveAs);
       else if (decision === 'empty') setSave('failed', '빈 문서');
-      else void upload(msg.data.bytes as ArrayBuffer);
+      else void saves.save(toArrayBuffer(msg.data.bytes));
     }
   });
   window.addEventListener('beforeunload', (event) => {

@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
-import { describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 import {
   NOTICES, contentRedirect, fontName, frameUrl, isAppJsUrl, isUndoKey, openName, readAppMessage, readOnlyCommands, saveDecision, saveFailure, sha256Etag, toBase64,
-  uiShowsDocument, unprotectedSheets,
+  uiShowsDocument, unprotectedSheets, createSaveQueue, fetchBytes, once, withTimeout,
 } from '../src/client/artcraftAppLogic.js';
 
 const JS = '/artcraft-app/wordcraft-0123456789/wordcraft-web.js';
@@ -73,6 +73,8 @@ describe('saveDecision', () => {
     [{ bytes, saveAs: true }, true, 'saveas'],
     [{ bytes: new ArrayBuffer(0) }, true, 'empty'],
     [{}, true, 'empty'],
+    [{ bytes: { byteLength: 4 } }, true, 'empty'],
+    [{ bytes: 'abcd' }, true, 'empty'],
   ] as const)('%o · 저장 가능 %s → %s', (data, canSave, want) => {
     expect(saveDecision(data as Record<string, unknown>, canSave)).toBe(want);
   });
@@ -138,5 +140,75 @@ describe('저장 기준(If-Match) 잇기', () => {
     expect(saveFailure(409, '편집기 화면에서 이 문서를 열고 있어 저장하지 못했습니다.')).toEqual({ text: '편집기 화면에서 이 문서를 열고 있어 저장하지 못했습니다.', reload: false });
     expect(saveFailure(428, 'x')).toEqual({ text: NOTICES.noBase, reload: true });
     expect(saveFailure(0, undefined)).toEqual({ text: '서버에 연결할 수 없습니다', reload: false });
+  });
+});
+
+describe('리뷰 수정 — 겹친 저장·열기 상한·글꼴 검사·ready 한 번', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+  const hex = (u8: Uint8Array) => `"${createHash('sha256').update(u8).digest('hex')}"`;
+
+  test('createSaveQueue: 겹친 저장은 순서대로 하나씩, 둘째는 첫째 바이트의 해시를 If-Match로', async () => {
+    const sent: Array<{ n: number; ifMatch: string | null }> = [];
+    let release!: () => void;
+    const firstGate = new Promise<void>((r) => (release = r));
+    const queue = createSaveQueue(async (bytes, ifMatch) => {
+      const n = new Uint8Array(bytes)[0];
+      sent.push({ n, ifMatch });
+      if (n === 1) await firstGate;
+      return true;
+    });
+    queue.setBase('"base0"');
+    const a = new Uint8Array([1, 1]);
+    const b = new Uint8Array([2, 2]);
+    const p1 = queue.save(a.buffer);
+    const p2 = queue.save(b.buffer);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(sent).toEqual([{ n: 1, ifMatch: '"base0"' }]); // 첫 저장이 끝나기 전엔 둘째를 보내지 않는다
+    release();
+    expect(await p1).toBe(true);
+    expect(await p2).toBe(true);
+    expect(sent).toEqual([{ n: 1, ifMatch: '"base0"' }, { n: 2, ifMatch: hex(a) }]);
+  });
+
+  test('createSaveQueue: 실패하면 기준을 바꾸지 않고, 앞 저장이 throw해도 뒤 저장은 나간다', async () => {
+    const seen: Array<string | null> = [];
+    let call = 0;
+    const queue = createSaveQueue(async (_bytes, ifMatch) => {
+      seen.push(ifMatch);
+      call += 1;
+      if (call === 1) return false;
+      if (call === 2) throw new Error('끊김');
+      return true;
+    });
+    queue.setBase('"b"');
+    await queue.save(new Uint8Array([1]).buffer);
+    await queue.save(new Uint8Array([2]).buffer).catch(() => undefined);
+    await queue.save(new Uint8Array([3]).buffer);
+    expect(seen).toEqual(['"b"', '"b"', '"b"']);
+  });
+
+  test('withTimeout: 상한 안이면 값, 넘으면 그 문구로 거부', async () => {
+    await expect(withTimeout(Promise.resolve(7), 50, '느림')).resolves.toBe(7);
+    vi.useFakeTimers();
+    const slow = withTimeout(new Promise(() => undefined), 15_000, '열기 시간 초과');
+    vi.advanceTimersByTime(15_000);
+    await expect(slow).rejects.toThrow('열기 시간 초과');
+  });
+
+  test('fetchBytes: 200이면 바이트, 404면 거부(오류 화면 HTML을 글꼴로 넘기지 않게)', async () => {
+    vi.stubGlobal('fetch', async (url: string) => (url === '/ok' ? new Response(new Uint8Array([9, 8])) : new Response('<html>', { status: 404 })));
+    expect([...(await fetchBytes('/ok'))]).toEqual([9, 8]);
+    await expect(fetchBytes('/missing')).rejects.toThrow('404');
+  });
+
+  test('once: ready가 두 번 와도 한 번만', () => {
+    const fn = vi.fn();
+    const go = once(fn);
+    go();
+    go();
+    expect(fn).toHaveBeenCalledTimes(1);
   });
 });
