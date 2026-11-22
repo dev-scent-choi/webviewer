@@ -87,3 +87,25 @@ describe('오류 응답', () => {
     expect((await hit('198.51.100.10')).statusCode).not.toBe(429);
   });
 });
+
+describe('frame-ancestors — 허용 출처를 정해도 우리 화면(앱 화면의 같은 출처 iframe)은 막지 않는다', () => {
+  let app: FastifyInstance;
+  beforeAll(async () => {
+    vi.resetModules();
+    vi.stubEnv('DOCVIEW_STORAGE', 'memory');
+    vi.stubEnv('DOCVIEW_ALLOWED_ORIGINS', 'https://portal.example');
+    const { buildApp } = await import('../src/app.js');
+    app = await buildApp();
+    await app.ready();
+  }, 60_000);
+  afterAll(async () => {
+    await app.close();
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+
+  test("'self'와 허용 출처가 함께 들어간다", async () => {
+    const res = await app.inject({ method: 'GET', url: '/artcraft-frame.html' });
+    expect(res.headers['content-security-policy']).toContain("frame-ancestors 'self' https://portal.example");
+  });
+});

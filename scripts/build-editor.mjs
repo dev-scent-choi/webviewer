@@ -82,6 +82,9 @@ const built = await retry(() => build({
     'src/client/view.ts',
     // 아트크래프트 브라우저 엔진 Worker(module worker) — view.ts의 artcraftSource.ts가 /js/artcraftWorker.bundle.js로 띄운다
     'src/client/view/artcraftWorker.ts',
+    // 아트크래프트 앱 화면(public/artcraft-app.html)과 그 iframe 문서(public/artcraft-frame.html)
+    'src/client/artcraftApp.ts',
+    'src/client/artcraftFrame.ts',
   ],
   outdir: 'public/js',
   entryNames: '[name].bundle',

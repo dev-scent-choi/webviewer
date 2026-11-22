@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DocView — 아트크래프트</title>
+  <link rel="stylesheet" href="/css/style.css" />
+  <link rel="stylesheet" href="/css/view.css" />
+  <style>
+    /* 앱 화면(설계 2026-11-22-artcraft-app-screen §3) — 우리 띠는 제목 줄 하나(24px, 리본 꾸밈 규격), 나머지는 전부 앱(iframe) */
+    html, body.artcraft-app-page { height: 100%; margin: 0; overflow: hidden; }
+    .artcraft-app-page #toolbar { position: fixed; top: 0; left: 0; right: 0; z-index: 10; }
+    .artcraft-app-page .save-status { margin-left: auto; font-size: 11px; color: var(--skin-text-dim); white-space: nowrap; }
+    .artcraft-app-page .app-banner { position: fixed; top: calc(var(--skin-title-h) + 1px); left: 0; right: 0; z-index: 9; box-sizing: border-box; height: 18px; padding: 0 8px; font: 11px/18px var(--skin-font); background: #fff4ce; color: #4d3a00; }
+    .artcraft-app-page .app-banner[hidden] { display: none; }
+    #app-host { position: fixed; top: calc(var(--skin-title-h) + 1px); left: 0; right: 0; bottom: 0; }
+    #app-host.with-banner { top: calc(var(--skin-title-h) + 19px); }
+    #app-frame { display: block; width: 100%; height: 100%; border: 0; }
+    .artcraft-app-page .view-notice { top: calc(var(--skin-title-h) + 0.3rem); }
+    .artcraft-app-page .view-notice button { margin-left: 8px; }
+  </style>
+</head>
+<body class="viewer-body artcraft-app-page" data-app-state="loading" data-save-state="clean">
+  <header class="viewer-toolbar ribbon-skin" id="toolbar">
+    <div class="toolbar-row toolbar-row-title">
+      <div class="toolbar-group toolbar-left">
+        <a href="/" class="icon-btn doclist-link" title="문서 목록으로 돌아가기" aria-label="문서 목록으로 돌아가기">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="m12 19-7-7 7-7"/></svg>
+        </a>
+        <span id="doc-title" class="doc-title">문서 불러오는 중…</span>
+      </div>
+      <span id="save-status" class="save-status" role="status" aria-live="polite"></span>
+    </div>
+  </header>
+  <div id="app-banner" class="app-banner" role="status" hidden></div>
+  <div id="app-notice" class="view-notice" role="status" hidden></div>
+  <div id="app-host"></div>
+  <script type="module" src="/js/artcraftApp.bundle.js"></script>
+</body>
+</html>

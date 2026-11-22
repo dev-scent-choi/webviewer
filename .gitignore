@@ -37,6 +37,10 @@ public/js/view.bundle.js
 public/js/view.bundle.js.map
 public/js/artcraftWorker.bundle.js
 public/js/artcraftWorker.bundle.js.map
+public/js/artcraftApp.bundle.js
+public/js/artcraftApp.bundle.js.map
+public/js/artcraftFrame.bundle.js
+public/js/artcraftFrame.bundle.js.map
 # PDF 편집기의 pdf.js 부속(build-editor.mjs가 node_modules/pdfjs-dist에서 복사)
 public/js/pdf.worker.mjs
 public/pdfjs/

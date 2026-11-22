@@ -57,7 +57,8 @@ export async function buildApp(): Promise<FastifyInstance> {
   // 한다(server.ts가 부팅 시 경고). JSON 응답 등 프레임과 무관한 응답에 붙어도 무해하므로
   // 라우트를 가리지 않고 전역으로 건다.
   if (config.allowedOrigins.length > 0) {
-    const frameAncestors = `frame-ancestors ${config.allowedOrigins.join(' ')}`;
+    // 'self' — 아트크래프트 앱 화면(artcraft-app.html)이 앱을 같은 출처 iframe(artcraft-frame.html)에 띄운다
+    const frameAncestors = `frame-ancestors 'self' ${config.allowedOrigins.join(' ')}`;
     app.addHook('onSend', async (_request, reply, payload) => {
       // 라우트가 먼저 단 정책(문서 SVG의 sandbox 등)은 지우지 않고 뒤에 붙인다
       const existing = reply.getHeader('content-security-policy');

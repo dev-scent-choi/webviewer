@@ -267,6 +267,12 @@ function supportsArtcraft(doc) {
   return ARTCRAFT_EXTS.has(doc.legacy?.ext ?? doc.ext);
 }
 
+/** "아트크래프트로 열기" 단추 — 엔진 형식 + 앱 화면이 여는 엑셀(xlsx만, 서버 APP_FORMATS와 같다 — xls는 앱·엔진 모두 아님).
+ * 앱이 빌드돼 있지 않으면 서버가 libreoffice + 이유로 돌린다. 나란히 비교(compare.html)는 엔진 형식만이라 supportsArtcraft를 그대로 쓴다 */
+function supportsArtcraftOpen(doc) {
+  return supportsArtcraft(doc) || (doc.legacy?.ext ?? doc.ext) === 'xlsx';
+}
+
 function renderDocItem(doc) {
   const li = document.createElement('li');
   li.className = 'doc-item';
@@ -367,7 +373,7 @@ function renderDocItem(doc) {
       setStatus(error.message, 'error');
     });
   });
-  const artOk = supportsArtcraft(doc);
+  const artOk = supportsArtcraftOpen(doc);
   if (artOk || editorLook) quickView.textContent = '리브레오피스로 열기';
   if (artOk || editorLook) quickView.title = '서버 변환';
   info.append(quickView);

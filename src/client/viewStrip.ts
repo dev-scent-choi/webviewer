@@ -119,12 +119,12 @@ export function handleSessionRejected(event: { readonly code: number; readonly r
   else showFatal(event.reason || '서버가 연결을 거부했습니다.');
 }
 
-/** 안내를 띄우고 잠시 뒤 보기 화면으로(뒤로 가기로 다시 막힌 화면에 오지 않게 replace) */
-export function fallBackToViewer(url: string): void {
+/** 안내를 띄우고 잠시 뒤 다른 화면으로(뒤로 가기로 다시 막힌 화면에 오지 않게 replace) — 기본 문구는 정원 초과 */
+export function fallBackToViewer(url: string, text: string = CAPACITY_NOTICE): void {
   const note = document.createElement('div');
   note.className = 'view-fallback-notice';
   note.setAttribute('role', 'status');
-  note.textContent = CAPACITY_NOTICE;
+  note.textContent = text;
   document.body.append(note);
   setTimeout(() => location.replace(url), 1500);
 }
