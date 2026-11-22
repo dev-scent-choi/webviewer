@@ -356,8 +356,9 @@ for (const [mode, t] of [
 const docxEdit = await token(docxId, { ...FULL, canEdit: true });
 {
   const { ctx, page } = await openView(`${docxEdit.viewerUrl}&home=hidden`);
-  check(await page.$eval('#edit-btn', (b) => !b.hidden), '워드 편집 토큰: 편집 단추 보임');
-  await page.click('#edit-btn');
+  // 2026-11-22 사용자 지시 — "편집" 단추는 화면에 보이지 않는다(요소·처리기는 남음). 켜진 처리기를 DOM 클릭으로 확인
+  check(await page.$eval('#edit-btn', (b) => !b.hidden && b.getClientRects().length === 0), '워드 편집 토큰: 편집 단추 켜짐·화면에는 숨김');
+  await page.$eval('#edit-btn', (b) => b.click());
   await page.waitForURL(/\/editor\.html/, { timeout: 30000 });
   const u = new URL(page.url());
   check(u.searchParams.get('from') === 'view' && u.searchParams.get('home') === 'hidden', '편집 단추 → editor.html?from=view&home=hidden', u.search.replace(/token=[^&]+/, 'token=…'));
@@ -402,7 +403,7 @@ const docxEdit = await token(docxId, { ...FULL, canEdit: true });
 
   const pt = await token(pdfId, { canDownload: true, canEdit: true, pdfEditor: true });
   const v = await openView(pt.viewerUrl);
-  await v.page.click('#edit-btn');
+  await v.page.$eval('#edit-btn', (b) => b.click()); // 화면에는 숨김(2026-11-22 사용자 지시)
   await v.page.waitForURL(/\/editor-pdf\.html/, { timeout: 30000 });
   check(new URL(v.page.url()).searchParams.get('from') === 'view', 'PDF 편집 단추 → editor-pdf.html?from=view');
   await v.page.waitForSelector('.pdf-titlebar #back-to-view', { timeout: 60000 }).catch(() => undefined);

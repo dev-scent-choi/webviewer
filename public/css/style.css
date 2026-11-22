@@ -4142,6 +4142,11 @@ body.ui-view.no-copy :is(#editor, #grid-editor, #slides-rail, #slide-canvas-wrap
 /* 편집/보기 모드 단추(편집 열기 · 보기 화면의 편집) — 아트크래프트의 모드 단추처럼 앱 색 알약 */
 .ribbon-skin :is(.office-titlebar, .toolbar-row-title) :is(.view-open-edit, .edit-btn) { border-color: transparent; background: var(--app-accent, var(--v-accent)); color: #ffffff; }
 
+/* 상태 표시는 보이지 않는다(사용자 지시 2026-11-22 "읽기 전용, 편집 열기 이런거 보여주지 마") — 제목 줄 "읽기 전용" 표지·연결 상태("연결됨"),
+   "편집 열기"(편집기 ui=view)·"편집"(view.html #edit-btn) 단추, 상태 줄 "읽기 전용". 요소·id는 DOM에 남겨 처리기·시험이 찾고, 읽기 전용은 흐린 단추로만 드러난다 */
+.ribbon-skin :is(#readonly-badge, .readonly-badge, .conn-status, .view-open-edit, #edit-btn),
+.view-readonly { display: none !important; }
+
 /* 탭 줄 — 22px, 고른 탭은 앱 색 글자 + 밑줄 */
 .ribbon-skin .ribbon-tabs { box-sizing: border-box; height: var(--skin-tabs-h); align-items: stretch; gap: 2px; padding: 0 8px; background: var(--skin-frame); }
 .ribbon-skin .ribbon-tab { padding: 0 8px; border-radius: 0; color: var(--skin-text); font: 400 11px/var(--skin-tabs-h) var(--skin-font); }

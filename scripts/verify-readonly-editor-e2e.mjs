@@ -503,9 +503,11 @@ try {
     await home();
     await row().getByRole('button', { name: '열기', exact: true }).click();
     await page.waitForURL(/\/editor\.html\?token=[^&]+&ui=view$/, { timeout: 30000 });
-    const editBtn = await page.waitForSelector('.office-titlebar .view-open-edit', { timeout: 60000 }).then(() => true, () => false);
-    rec('(6) 메인 기본 "열기" docx → 읽기 전용 편집기 화면 + 편집 열기 단추', editBtn && (await page.evaluate(() => document.body.classList.contains('ui-view'))), page.url());
-    await page.click('.view-open-edit');
+    // 2026-11-22 사용자 지시 — "편집 열기" 단추는 DOM에만 있고 화면에는 보이지 않는다
+    const editBtn = await page.waitForSelector('.office-titlebar .view-open-edit', { state: 'attached', timeout: 60000 }).then(() => true, () => false);
+    const editHidden = editBtn && (await page.$eval('.view-open-edit', (b) => b.getClientRects().length === 0));
+    rec('(6) 메인 기본 "열기" docx → 읽기 전용 편집기 화면 + 편집 열기 단추(DOM에 있고 화면에는 숨김)', editBtn && editHidden && (await page.evaluate(() => document.body.classList.contains('ui-view'))), page.url());
+    await page.$eval('.view-open-edit', (b) => b.click());
     await page.waitForURL((u) => u.pathname === '/editor.html' && !u.search.includes('ui=view'), { timeout: 30000 });
     await page.waitForSelector('.ProseMirror', { timeout: 60000 });
     rec('(6) 편집 열기 → 편집 권한 편집기(리본 보임)', !(await page.evaluate(() => document.body.classList.contains('ui-view'))) && (await page.isVisible('.ribbon-tabs')));
