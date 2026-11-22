@@ -11,6 +11,8 @@ data/
 /tools/*
 !/tools/artcraft-shell/
 /tools/artcraft-shell/.build/
+!/tools/artcraft-app/
+/tools/artcraft-app/.build/
 
 # 로그·임시 파일
 *.log
@@ -68,6 +70,8 @@ public/js/.build.lock
 
 # 아트크래프트 브라우저 엔진 산출물(npm run build:artcraft) — 이름에 내용 해시가 붙어 소스가 아니다
 public/artcraft/
+# 아트크래프트 앱 화면 산출물(npm run build:artcraft-app) — 폴더 이름에 내용 해시
+public/artcraft-app/
 
 # 품질 점검(audit:office) 실행 산출물 — 서버 데이터·임시 폴더·그림
 .audit-run/

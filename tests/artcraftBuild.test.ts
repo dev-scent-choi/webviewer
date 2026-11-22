@@ -1,6 +1,6 @@
 import { brotliDecompressSync } from 'node:zlib';
 import { describe, expect, test } from 'vitest';
-import { MiB, SIZE_LIMITS, brotli, checkLock, hashedName, sizeProblems, wasmMaxMemory } from '../scripts/artcraftBuildLib.js';
+import { APP_SIZE_LIMITS, MiB, SIZE_LIMITS, appSizeProblems, brotli, checkLock, containsBytes, craftFontsManifest, hashedName, sizeProblems, treeHash, wasmMaxMemory } from '../scripts/artcraftBuildLib.js';
 
 describe('build:artcraft 도우미', () => {
   test('해시 이름: 같은 내용은 같은 이름, 내용이 바뀌면 이름도 바뀐다(10자리 16진수)', () => {
@@ -44,5 +44,43 @@ describe('build:artcraft 도우미', () => {
     expect(WebAssembly.validate(uncapped)).toBe(true);
     expect(wasmMaxMemory(uncapped)).toBeNull();
     expect(wasmMaxMemory(Uint8Array.from(head))).toBeNull();
+  });
+
+  test('앱 화면 크기 상한(brotli wasm): word 8.5 · deck 5.5 · grid 5.5 MB — 시험 실측 7.9/4.9/4.5 MB + 여유(격자는 Task 6의 한글 글꼴 약 0.3 MB 포함)', () => {
+    expect(APP_SIZE_LIMITS).toEqual({ word: 8.5 * MiB, deck: 5.5 * MiB, grid: 5.5 * MiB });
+    expect(appSizeProblems({ word: 8.5 * MiB, deck: 5.5 * MiB, grid: 5.5 * MiB })).toEqual([]);
+    const over = appSizeProblems({ word: 8.5 * MiB + 1, deck: 1, grid: 5.5 * MiB + 1 });
+    expect(over).toHaveLength(2);
+    expect(over[0]).toContain('word');
+    expect(over[1]).toContain('grid');
+  });
+
+  test('폴더 해시: 같은 파일 묶음은 같은 값(순서 무관), 이름이나 내용이 바뀌면 바뀐다', () => {
+    const a = [
+      { rel: 'wordcraft-web.js', bytes: Buffer.from('js') },
+      { rel: 'snippets/eframe-1/inline0.js', bytes: Buffer.from('s') },
+    ];
+    const h = treeHash(a);
+    expect(h).toMatch(/^[0-9a-f]{10}$/);
+    expect(treeHash([...a].reverse())).toBe(h);
+    expect(treeHash([{ ...a[0], rel: 'other.js' }, a[1]])).not.toBe(h);
+    expect(treeHash([{ ...a[0], bytes: Buffer.from('js2') }, a[1]])).not.toBe(h);
+  });
+
+  test('격자 앱 한글 글꼴 manifest: gridcraft 형식(8칸, " | "), NanumGothic Regular 자리, 문자 Hang,Kore, sha256 64자', () => {
+    const sha = 'a'.repeat(64);
+    const rows = craftFontsManifest('fonts/SCDream4.otf', sha).split('\n').filter((l) => l.trim() !== '' && !l.startsWith('#'));
+    expect(rows).toHaveLength(1);
+    const fields = rows[0].split(' | ');
+    expect(fields).toHaveLength(8);
+    expect(fields.slice(0, 4)).toEqual(['NanumGothic', 'Regular', 'fonts/SCDream4.otf', 'Hang,Kore']);
+    expect(fields[6]).toBe(sha);
+    expect(fields.every((f) => f.trim() !== '')).toBe(true);
+  });
+
+  test('containsBytes: 글꼴 조각이 wasm에 들어갔는지', () => {
+    const hay = Buffer.from('앞부분-글꼴조각-뒷부분');
+    expect(containsBytes(hay, Buffer.from('글꼴조각'))).toBe(true);
+    expect(containsBytes(hay, Buffer.from('없는조각'))).toBe(false);
   });
 });

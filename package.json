@@ -24,6 +24,7 @@
     "start": "npm run build:editor && tsx --max-old-space-size=12288 src/server.ts",
     "build:editor": "node scripts/build-editor.mjs",
     "build:artcraft": "tsx scripts/build-artcraft.ts",
+    "build:artcraft-app": "tsx tools/artcraft-app/build.ts",
     "build:server": "node scripts/build-server.mjs",
     "prepare": "npm run build:editor && npm run build:server",
     "typecheck": "tsc --noEmit",

@@ -1,3 +1,5 @@
+import os from 'node:os';
+import path from 'node:path';
 import { defineConfig } from 'vitest/config';
 
 // 전체 스위트는 50여 개 파일을 병렬 워커로 돌려서, 단독으로는 1초 미만인 테스트(첫 동적 import 포함)가
@@ -11,6 +13,7 @@ export default defineConfig({
     // 변환기 자체는 tests/loWorker.test.ts가 따로 켜서 시험한다.
     // 방 닫기 유예(room.ts, 기본 45초)는 끈다 — 기존 시험은 마지막 참여자가 나가면 방이 바로 닫힌다고 본다. 유예 자체는
     // tests/roomCloseGrace.test.ts가 값을 직접 켜서 시험한다.
-    env: { DOCVIEW_LO_WORKER: '0', DOCVIEW_ROOM_CLOSE_GRACE_MS: '0' }, // LO 변환기는 기본도 꺼짐이지만 명시해 둔다
+    // 아트크래프트 앱 화면은 끈다(빈 임시 폴더) — 켠 상태는 tests/artcraftAppRoutes.test.ts가 값을 직접 넣어 시험한다
+    env: { DOCVIEW_LO_WORKER: '0', DOCVIEW_ROOM_CLOSE_GRACE_MS: '0', DOCVIEW_ARTCRAFT_APP_DIR: path.join(os.tmpdir(), 'docview-test-no-artcraft-app') },
   },
 });

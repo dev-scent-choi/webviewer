@@ -8,23 +8,26 @@ import type { FastifyInstance } from 'fastify';
 
 const ASSET_PATH = /^\/(fonts\/)?[A-Za-z0-9_]+-[0-9a-f]{10}\.(wasm|otf)$/;
 
-export async function registerArtcraftStatic(app: FastifyInstance, root: string): Promise<void> {
+/** /artcraft-app/ 허용 목록 — 해시 폴더 안 접착 JS·wasm, 접착 JS가 상대 경로로 부르는 snippets/<이름>/inline<n>.js만 */
+export const APP_ASSET_PATH = /^\/(word|deck|grid)craft-[0-9a-f]{10}\/((word|deck|grid)craft-web(_bg)?\.(js|wasm)|snippets\/[A-Za-z0-9_-]+\/inline[0-9]+\.js)$/;
+
+export async function registerArtcraftStatic(app: FastifyInstance, root: string, prefix = '/artcraft/', assetPath: RegExp = ASSET_PATH): Promise<void> {
   // 빌드 전이라 폴더가 없어도 서버는 뜬다(빈 폴더 = 아트크래프트 꺼짐). 읽기 전용 설치본이라 못 만들면 폴더가 없다는 뜻이니
   // 등록을 건너뛴다(새어 나갈 manifest도 없다)
   try {
     mkdirSync(root, { recursive: true });
   } catch (err) {
-    app.log.warn({ err, root }, 'artcraft 자산 폴더를 만들 수 없어 /artcraft/ 서빙을 건너뜁니다');
+    app.log.warn({ err, root }, `artcraft 자산 폴더를 만들 수 없어 ${prefix} 서빙을 건너뜁니다`);
     return;
   }
   await app.register(fastifyStatic, {
     root,
-    prefix: '/artcraft/',
+    prefix,
     decorateReply: false,
     preCompressed: true,
     index: false,
     // 허용 목록: 해시 이름 wasm·otf만(.br은 preCompressed가 붙이므로 직접 요청은 막힌다). 거부 목록이면 //·대소문자로 manifest가 샌다
-    allowedPath: (pathName) => ASSET_PATH.test(pathName),
+    allowedPath: (pathName) => assetPath.test(pathName),
     // cache-control은 send가 setHeaders 뒤에 덮어쓰므로 send 옵션으로 준다
     maxAge: '365d',
     immutable: true,

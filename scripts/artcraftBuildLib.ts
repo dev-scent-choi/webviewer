@@ -62,3 +62,34 @@ export function wasmMaxMemory(bytes: Uint8Array): number | null {
   }
   return null;
 }
+
+/** 앱 화면(설계 2026-11-22-artcraft-app-screen §3) wasm brotli 상한 — 시험(SPIKE-WEBAPP) 실측 word 7.9 · deck 4.9 · grid 4.5 MB에 여유(격자는 한글 글꼴 약 0.3 MB 포함) */
+export const APP_SIZE_LIMITS = { word: 8.5 * MiB, deck: 5.5 * MiB, grid: 5.5 * MiB } as const;
+
+export function appSizeProblems(br: { readonly word: number; readonly deck: number; readonly grid: number }): string[] {
+  return (['word', 'deck', 'grid'] as const)
+    .filter((k) => br[k] > APP_SIZE_LIMITS[k])
+    .map((k) => `${k} 앱 wasm brotli ${mb(br[k])} MB > ${mb(APP_SIZE_LIMITS[k])} MB`);
+}
+
+/** 앱 폴더 이름의 해시 — 파일 이름과 내용 모두(순서 무관). 접착 JS가 snippets를 상대 경로로 부르므로 폴더째 이름을 바꾼다 */
+export function treeHash(files: ReadonlyArray<{ readonly rel: string; readonly bytes: Uint8Array }>): string {
+  const h = createHash('sha256');
+  for (const f of [...files].sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0))) {
+    h.update(f.rel).update('\0').update(f.bytes).update('\0');
+  }
+  return h.digest('hex').slice(0, 10);
+}
+
+/**
+ * gridcraft 웹 빌드의 글꼴 입력(craft-fonts fonts/manifest.txt) — 격자 앱은 실행 중 글꼴 추가(font.add)가 없고 이 허용 목록 글꼴만 wasm에 넣는다
+ * (gridcraft crates/ui-egui/src/craft_fonts_policy.rs WEB_ALLOWED). S-Core Dream 4를 한글 자리(NanumGothic Regular, Hang,Kore)에 넣는다.
+ * shortcut: 이름만 NanumGothic(허용 목록이 이름으로 고른다) — 앱 쪽에 글꼴 이름 설정이 생기면 제 이름으로 바꾼다
+ */
+export function craftFontsManifest(file: string, sha256hex: string): string {
+  return `# docview: S-Core Dream 4 under the NanumGothic slot (gridcraft web allowlist)\nNanumGothic | Regular | ${file} | Hang,Kore | S-Core-Dream | fonts/LICENSE | ${sha256hex} | local\n`;
+}
+
+export function containsBytes(hay: Uint8Array, needle: Uint8Array): boolean {
+  return Buffer.from(hay.buffer, hay.byteOffset, hay.byteLength).indexOf(Buffer.from(needle.buffer, needle.byteOffset, needle.byteLength)) >= 0;
+}

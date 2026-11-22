@@ -5,8 +5,9 @@ import rateLimit from '@fastify/rate-limit';
 import fastifyStatic from '@fastify/static';
 import fastifyWebsocket from '@fastify/websocket';
 import Fastify, { type FastifyInstance } from 'fastify';
+import { artcraftAppDir } from './artcraftApp.js';
 import { artcraftDir } from './artcraftManifest.js';
-import { registerArtcraftStatic } from './artcraftStatic.js';
+import { APP_ASSET_PATH, registerArtcraftStatic } from './artcraftStatic.js';
 import { versionAssetUrls } from './assetVersion.js';
 import { config } from './config.js';
 import { adminRoutes } from './routes/admin.js';
@@ -133,12 +134,14 @@ export async function buildApp(): Promise<FastifyInstance> {
   });
   // 아트크래프트 브라우저 엔진 자산(.br·immutable) — 아래 public 전체 서빙보다 구체적인 /artcraft/* 경로가 먼저 걸린다
   await registerArtcraftStatic(app, artcraftDir());
+  // 아트크래프트 앱 화면 자산(해시 폴더·.br·immutable, 설계 2026-11-22-artcraft-app-screen §3)
+  await registerArtcraftStatic(app, artcraftAppDir(), '/artcraft-app/', APP_ASSET_PATH);
   await app.register(fastifyStatic, {
     root: publicDir,
     // send 기본 cache-control(public, max-age=0)이 setHeaders 뒤에 덮어써서 아래 값이 한 번도 나가지 않았다 — 끄고 setHeaders가 정한다
     cacheControl: false,
     // /artcraft 은 위 허용 목록 라우트만 — 대소문자·점 경로를 달리해 이 전체 서빙으로 manifest·.br을 받지 못하게(Windows FS는 대소문자 무시)
-    allowedPath: (p) => !/^\/artcraft(\/|$)/i.test(path.posix.normalize(p.replaceAll('\\', '/'))),
+    allowedPath: (p) => !/^\/artcraft(-app)?(\/|$)/i.test(path.posix.normalize(p.replaceAll('\\', '/'))),
     // 뷰어/관리 화면 JS가 브라우저에 캐시되어 구버전이 돌지 않도록 항상 재검증시킨다.
     // 단 화면 HTML이 내용 해시(?v=, assetVersion.ts)를 붙여 부른 주소는 내용이 바뀌면 주소도 바뀌므로 오래 보관해도 된다 —
     // 화면을 열 때마다 번들마다 재검증 요청이 가던 것을 없앤다.

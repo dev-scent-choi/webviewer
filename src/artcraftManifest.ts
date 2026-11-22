@@ -30,23 +30,30 @@ export function parseManifest(raw: unknown): ArtcraftManifest | null {
   return { word, deck, fonts: [...fonts] };
 }
 
-let cached: { readonly file: string; readonly mtimeMs: number; readonly manifest: ArtcraftManifest | null } | null = null;
+/** 파일 수정 시각이 바뀔 때만 다시 읽는 JSON 읽개 — 빌드를 서버가 뜬 뒤에 돌려도 된다. 없거나 깨지면 null */
+export function cachedJsonReader<T>(parse: (raw: unknown) => T | null): (file: string) => T | null {
+  let cached: { readonly file: string; readonly mtimeMs: number; readonly value: T | null } | null = null;
+  return (file) => {
+    let mtimeMs: number;
+    try {
+      mtimeMs = statSync(file).mtimeMs;
+    } catch {
+      return null;
+    }
+    if (cached && cached.file === file && cached.mtimeMs === mtimeMs) return cached.value;
+    let value: T | null;
+    try {
+      value = parse(JSON.parse(readFileSync(file, 'utf8')));
+    } catch {
+      value = null;
+    }
+    cached = { file, mtimeMs, value };
+    return value;
+  };
+}
+
+const readManifestFile = cachedJsonReader(parseManifest);
 
 export function readArtcraftManifest(dir: string = artcraftDir()): ArtcraftManifest | null {
-  const file = path.join(dir, 'manifest.json');
-  let mtimeMs: number;
-  try {
-    mtimeMs = statSync(file).mtimeMs;
-  } catch {
-    return null;
-  }
-  if (cached && cached.file === file && cached.mtimeMs === mtimeMs) return cached.manifest;
-  let manifest: ArtcraftManifest | null;
-  try {
-    manifest = parseManifest(JSON.parse(readFileSync(file, 'utf8')));
-  } catch {
-    manifest = null;
-  }
-  cached = { file, mtimeMs, manifest };
-  return manifest;
+  return readManifestFile(path.join(dir, 'manifest.json'));
 }
