@@ -4168,6 +4168,11 @@ body.ui-view.no-copy :is(#editor, #grid-editor, #slides-rail, #slide-canvas-wrap
 }
 /* 편집기 판은 .toolbar-format의 flex: 1(기준 0%)이라 내용 최소 높이(스타일 갤러리 48.5px)만큼 62px을 넘었다 — 높이를 고정 */
 .ribbon-skin .toolbar-format.ribbon-panel { flex: none; }
+/* 601~990px에서 판 내용이 넘치면 기존 overflow-x:auto의 15px 스크롤바가 62px 판 안에서 묶음 이름 줄을 덮었다 — 막대만 숨기고 휠·터치·Tab 초점 이동으로 넘긴다 */
+.ribbon-skin .ribbon-panel, .ribbon-skin .toolbar-row-tools { scrollbar-width: none; }
+.ribbon-skin .ribbon-panel::-webkit-scrollbar, .ribbon-skin .toolbar-row-tools::-webkit-scrollbar { display: none; }
+/* 판이 overflow-y: hidden이라 첫 줄 단추의 바깥 초점 테두리 위 변이 잘렸다 — 안쪽으로 그린다 */
+.ribbon-skin .ribbon-panel :focus-visible, .ribbon-skin .toolbar-row-tools :focus-visible { outline-offset: -2px; }
 .ribbon-skin.ribbon-peeking .ribbon-panel:not([hidden]) { top: calc(var(--skin-title-h) + var(--skin-tabs-h)); }
 
 /* 묶음 — 위는 단추 칸, 아래 14px은 묶음 이름, 사이는 세로 구분선 */
