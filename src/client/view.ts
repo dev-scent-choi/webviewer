@@ -18,8 +18,11 @@ import { setupMeasure } from './view/measure.js';
 import { setupMarkup } from './view/markup.js';
 import { setupEditButton } from './view/editButton.js';
 import { waitUntilPrepared } from './view/prepare.js';
+import { markContentUi } from './viewStrip.js';
 import type { ViewInfo } from './view/types.js';
 
+// 콘텐츠만 보기(ui=content) — 도구 막대를 숨기고 쪽만(설계 2026-11-22-artcraft-app-screen §4). 정보를 받기 전에 붙인다
+markContentUi();
 const token = new URLSearchParams(location.search).get('token') ?? '';
 const tokenQuery = `token=${encodeURIComponent(token)}`;
 const PRESENCE_HEARTBEAT_MS = 8000;

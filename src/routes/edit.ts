@@ -8,11 +8,13 @@ import { isViewOnly } from '../types.js';
 
 interface EditQuery {
   readonly token?: string;
+  /** '1'이면 편집 토큰이어도 읽기 전용으로 들어온다(콘텐츠만 보기 ui=content) — 권한을 좁히기만 한다 */
+  readonly readonly?: string;
 }
 
 const editQuerySchema = {
   type: 'object',
-  properties: { token: { type: 'string' } },
+  properties: { token: { type: 'string' }, readonly: { type: 'string' } },
 } as const;
 
 /**
@@ -98,7 +100,7 @@ export async function editRoutes(app: FastifyInstance): Promise<void> {
         socket.close(4403, '열람만 허용된 토큰입니다.');
         return;
       }
-      const readOnly = !claims.perms.canEdit;
+      const readOnly = !claims.perms.canEdit || request.query.readonly === '1';
       await recordAudit({
         type: readOnly ? 'edit_joined_readonly' : 'edit_joined',
         docId: claims.docId,

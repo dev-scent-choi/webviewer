@@ -25,7 +25,7 @@ import { applyWatermark } from './watermark.js';
 import { parseTypedNumber } from '../collab/cellValueShared.js';
 import { FILL_MARK, formatValueText, hashIfTooWide, isNumberOrDateValue, isTextNumFmt, type FormattedValue } from '../collab/numberFormat.js';
 import { initOfficeShell } from './officeShell.js';
-import { handleSessionRejected } from './viewStrip.js';
+import { handleSessionRejected, markContentUi } from './viewStrip.js';
 import { bindDropdown } from './ribbonMenus.js';
 import { currentRegion, setupGridCharts } from './gridCharts.js';
 import { setupGridLinks, type GridLinks } from './gridLinks.js';
@@ -58,6 +58,9 @@ import { tableCellLook, withTableLook, type SheetTable } from '../xlsx/tableStyl
 import { compareCells, filteredRows, GRID_FILTERS_MAP, shiftFormulaRows, sortOrder, type SheetFilter } from './gridSort.js';
 import { officeAlert, officeConfirm } from './officeDialog.js';
 import { guardRoomEpoch } from './roomEpoch.js';
+
+/** 콘텐츠만 보기(ui=content) — 도구를 숨기고 편집 토큰이어도 읽기 전용으로 연다(설계 2026-11-22-artcraft-app-screen §4) */
+const contentUi = markContentUi();
 
 interface Permissions {
   readonly canPrint: boolean;
@@ -286,7 +289,7 @@ async function main(): Promise<void> {
   // 읽기 전용 연결로 처리한다(collab/room.ts). 여기서는 서식 도구(리본)만 꺼서 애초에 사용자가
   // 고칠 수 있다고 착각하지 않게 한다 — 뒤로가기/제목/검색/참여자 같은 상단 줄은 도구가 아니라
   // 계속 보여야 하므로 toolbar 전체가 아니라 .toolbar-format만 숨긴다.
-  canEdit = info.permissions.canEdit;
+  canEdit = info.permissions.canEdit && !contentUi;
   if (!canEdit) formulaInputEl.readOnly = true;
 
   titleEl.textContent = info.name;
@@ -304,7 +307,7 @@ async function main(): Promise<void> {
 
   const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const provider = new WebsocketProvider(`${wsProtocol}//${location.host}/ws/edit`, info.docId, ydoc, {
-    params: { token },
+    params: { token: token ?? '', ...(contentUi ? { readonly: '1' } : {}) },
   });
   guardRoomEpoch(provider, ydoc); // 재연결 시 이전 세대 방 상태를 합치지 않는다(src/collab/roomEpoch.ts)
   // 서버가 "이 페이지들은 다 채웠다"고 알린다(room.ts MESSAGE_PAGES_READY = 6) — 구독(요청)한 페이지가 실제로

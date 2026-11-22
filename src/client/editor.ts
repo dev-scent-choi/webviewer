@@ -43,7 +43,7 @@ import { pickPresenceColorForName, renderPresenceAvatars } from './presence.js';
 import { applyWatermark } from './watermark.js';
 import { DOC_META_MAP, DOC_META_SAVED_AT_KEY, DOC_META_SAVE_ERROR_AT_KEY } from '../collab/gridShared.js';
 import { initOfficeShell } from './officeShell.js';
-import { handleSessionRejected } from './viewStrip.js';
+import { handleSessionRejected, markContentUi } from './viewStrip.js';
 import { bindDropdown, fillColorPalette, type PaletteColor } from './ribbonMenus.js';
 import {
   applyMark,
@@ -82,6 +82,9 @@ import { caretBlockPlugin, docxLayoutPlugin, docxStyleSheetText } from './docxLa
 import { docxPastePlugin } from './docxPaste.js';
 import type { DocxRenderExtras } from '../docx/import.js';
 import type { NumberingDefs } from '../docx/numbering.js';
+
+/** 콘텐츠만 보기(ui=content) — 도구를 숨기고 편집 토큰이어도 읽기 전용으로 연다(설계 2026-11-22-artcraft-app-screen §4) */
+const contentUi = markContentUi();
 
 /** 레이아웃 탭 용지 크기(dxa, 세로 기준) */
 const PAPER_SIZES = {
@@ -599,7 +602,7 @@ async function main(): Promise<void> {
   // 서식 도구(리본) 그룹만 숨겨 애초에 사용자가 고칠 수 있다고 착각하지 않게 한다 — 뒤로가기/제목/
   // 검색/참여자 같은 상단 줄은 도구가 아니라 계속 보여야 하므로 toolbar 전체가 아니라
   // .toolbar-format만 숨긴다.
-  canEdit = info.permissions.canEdit;
+  canEdit = info.permissions.canEdit && !contentUi;
   if (!canEdit) readonlyBadgeEl.hidden = false;
 
   titleEl.textContent = info.name;
@@ -635,7 +638,7 @@ async function main(): Promise<void> {
   const fragment = ydoc.getXmlFragment('prosemirror');
   const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const provider = new WebsocketProvider(`${wsProtocol}//${location.host}/ws/edit`, info.docId, ydoc, {
-    params: { token },
+    params: { token: token ?? '', ...(contentUi ? { readonly: '1' } : {}) },
   });
   guardRoomEpoch(provider, ydoc); // 재연결 시 이전 세대 방 상태를 합치지 않는다(src/collab/roomEpoch.ts)
 

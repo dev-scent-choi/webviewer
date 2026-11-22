@@ -9,7 +9,7 @@
 
 import { mountBackToView } from './backToView.js';
 import { officeAlert } from './officeDialog.js';
-import { EDIT_DOC_KEY, installViewGuards, isViewUi, markReadOnly, viewControlAllowed } from './viewStrip.js';
+import { EDIT_DOC_KEY, installViewGuards, isContentUi, isViewUi, markReadOnly, viewControlAllowed } from './viewStrip.js';
 
 export interface OfficeShellOptions {
   readonly token: string;
@@ -342,6 +342,13 @@ export function initOfficeShell(options: OfficeShellOptions): OfficeShell {
     readOnlyItem.textContent = '읽기 전용';
     // 엑셀은 #statusbar 대신 격자 아래 .grid-status-row가 상태 줄이다
     document.querySelector('#statusbar, .grid-status-row')?.prepend(readOnlyItem);
+  }
+
+  // ---------- 콘텐츠만 보기(ui=content, 설계 2026-11-22-artcraft-app-screen §4) ----------
+  // 도구는 CSS(body.ui-content)가 숨기고, 편집기는 이 화면에서 canEdit을 끄고 방에 readonly=1로 들어온다(편집기 입구). 여기서는 보기 규칙의 키·붙여넣기·우클릭 막기
+  if (isContentUi(location.search)) {
+    document.body.classList.toggle('no-copy', !options.canCopy);
+    installViewGuards(options.canCopy, options.canPrint);
   }
 
   /** "편집 열기" — 메인 화면에서 연 경우만(공유 링크엔 없다) */

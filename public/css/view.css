@@ -147,3 +147,8 @@ body.thumbs-open .pages-container { padding-left: calc(1rem + 152px); }
 .ribbon-skin .ribbon-tab:hover { background: transparent; cursor: default; }
 /* 단추가 모두 도구▾로 옮겨졌거나 숨은 묶음은 이름만 남지 않게 통째로 숨긴다 */
 .ribbon-skin .ribbon-group:not(:has(> .ribbon-group-buttons > :not([hidden]))) { display: none; }
+
+/* 콘텐츠만 보기(ui=content, 설계 2026-11-22-artcraft-app-screen §4) — 도구 막대·섬네일·찾기·측정 줄을 숨기고 쪽만(아트크래프트 엔진 보기도 같은 화면) */
+body.ui-content { --view-chrome-h: 0px; }
+body.ui-content :is(#toolbar, #thumbs-panel, #measure-bar, #search-bar) { display: none !important; }
+body.ui-content.thumbs-open .pages-container { padding-left: 1rem; }

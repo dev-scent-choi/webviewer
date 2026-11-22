@@ -108,6 +108,21 @@ async function openEditor(docId, viewer) {
   location.href = issued.editorUrl;
 }
 
+/** 콘텐츠만 보기(설계 2026-11-22-artcraft-app-screen §4) — 도구 없이 문서만. 편집기 형식은 읽기 전용 편집기 토큰, 그 밖은 보기 토큰의
+ * viewerUrl 에 ui=content 를 붙인다(편집기 형식의 ui=view 는 바꿔 쓴다).
+ * shortcut: 서버 토큰 응답의 contentUrl 이 생기면(계획 Task 2) 그 주소로 바꾼다 */
+async function openContentOnly(doc, viewer) {
+  const issued = await issueToken(doc.id, viewer, true, true, true, false, false, supportsEdit(doc) ? 'editor' : 'libreoffice');
+  const url = new URL(issued.viewerUrl, location.href);
+  url.searchParams.set('ui', 'content');
+  location.href = url.pathname + url.search;
+}
+
+/** 콘텐츠 화면이 있는 형식 — 편집기 형식, 한글을 뺀 쪽 문서(보기 화면 view.html 로 가는 것) */
+function supportsContentOnly(doc) {
+  return supportsEdit(doc) || ((doc.viewKind ?? 'pages') === 'pages' && doc.ext !== 'hwp' && doc.ext !== 'hwpx');
+}
+
 const progressBox = document.getElementById('progress');
 const progressLabel = document.getElementById('progress-label');
 const progressPercent = document.getElementById('progress-percent');
@@ -407,6 +422,20 @@ function renderDocItem(doc) {
       });
     });
     info.append(pdfEdit);
+  }
+
+  // 콘텐츠만 보기 — 새 화면으로 가는 이동이라 링크(단추 줄 시험이 세는 button 목록은 그대로)
+  if (supportsContentOnly(doc)) {
+    const contentLink = document.createElement('a');
+    contentLink.href = '#';
+    contentLink.className = 'btn';
+    contentLink.textContent = '콘텐츠만 보기';
+    contentLink.title = '도구 없이 문서 내용만 봅니다';
+    contentLink.addEventListener('click', (event) => {
+      event.preventDefault();
+      openContentOnly(doc, '업로더').catch((error) => setStatus(error.message, 'error'));
+    });
+    info.append(contentLink);
   }
 
   info.append(makeDeleteButton());

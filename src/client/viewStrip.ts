@@ -13,6 +13,18 @@ export function isViewUi(search: string, canEdit: boolean): boolean {
   return !canEdit && new URLSearchParams(search).get('ui') === 'view';
 }
 
+/** 콘텐츠만 보기(ui=content, 설계 2026-11-22-artcraft-app-screen §4) — 토큰 종류와 무관하게 도구를 전부 숨기고 편집하지 않는다(권한은 토큰이 정한다) */
+export function isContentUi(search: string): boolean {
+  return new URLSearchParams(search).get('ui') === 'content';
+}
+
+/** 화면 입구 맨 위에서 — 콘텐츠만 보기면 body에 ui-content(도구를 CSS로 숨김)를 붙인다. 정보를 받기 전에 붙여 도구가 잠깐 보이지 않게 */
+export function markContentUi(): boolean {
+  const on = isContentUi(location.search);
+  if (on) document.body.classList.add('ui-content');
+  return on;
+}
+
 /**
  * 보기 꾸밈에서도 눌리는 리본·빠른 실행 단추(문서를 쓰지 않는 것) — 나머지는 보이되 흐리게(markReadOnly).
  * 확대·찾기·전체 선택·맞춤법 표시·단어 수·메모/변경 내용 창(읽기만)·이전/다음 메모·전환/애니메이션 미리 보기, 복사는 복사 권한이 있을 때만.

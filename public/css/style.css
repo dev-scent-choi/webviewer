@@ -4264,3 +4264,10 @@ body.ui-view.no-copy :is(#editor, #grid-editor, #slides-rail, #slide-canvas-wrap
 .slides-editor-page .ribbon-skin .layout-field select { box-sizing: border-box; height: var(--skin-small-h); padding: 0 2px; }
 /* PPT 글꼴 이름 칸 — 11px 글자에서 .toolbar-select 최대 폭 6.4em(70px)이 "테마 글꼴"을 잘랐다. 원래 뜻(.slides-font-family 9.5em)대로 */
 .slides-editor-page .ribbon-skin .slides-font-family { max-width: none; }
+
+/* ==================== 콘텐츠만 보기(ui=content, 설계 2026-11-22-artcraft-app-screen §4) ====================
+   세 편집기에서 도구(제목 줄·탭 줄·리본·상태 줄·섬네일 레일·수식 줄·시트 추가·안내 띠·파일 화면·찾기 줄)를 숨기고 본문만 전체 폭.
+   엑셀 시트 탭은 내용 이동이라 남긴다. 숨김은 화면 꾸밈일 뿐 — 권한은 토큰이 정한다 */
+body.ui-content :is(#toolbar, #statusbar, .formula-bar, .grid-status-row, #slides-rail, #sheet-add, .unsupported-warning, .backstage, #search-bar) { display: none !important; }
+body.ui-content.no-copy :is(#editor, #grid-editor, #slide-canvas-wrap),
+body.ui-content.no-copy :is(#editor, #grid-editor, #slide-canvas-wrap) * { user-select: none; -webkit-user-select: none; }

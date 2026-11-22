@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { CAPACITY_NOTICE, blockedViewKey, capacityFallback, isViewUi, viewControlAllowed } from '../src/client/viewStrip.js';
+import { CAPACITY_NOTICE, blockedViewKey, capacityFallback, isContentUi, isViewUi, viewControlAllowed } from '../src/client/viewStrip.js';
 
 describe('isViewUi — 두 겹(토큰 읽기 전용 + ui=view)', () => {
   test.each([
@@ -101,4 +101,18 @@ describe('capacityFallback — 큰 엑셀 정원 초과(4429)', () => {
     expect(capacityFallback(4429, true, undefined)).toBeNull();
   });
   test('안내 문구는 설계 그대로', () => expect(CAPACITY_NOTICE).toBe('지금은 보는 사람이 많습니다. 서버 변환으로 보여 줍니다'));
+});
+
+describe('isContentUi — 콘텐츠만 보기(토큰과 무관하게 주소의 ui=content)', () => {
+  test.each([
+    ['?token=t&ui=content', true],
+    ['?ui=content&token=t', true],
+    ['?token=t&ui=view', false],
+    ['?token=t', false],
+    ['?token=t&ui=CONTENT', false],
+    ['?token=t&ui=content2', false],
+    ['', false],
+  ])('%s → %s', (search, expected) => {
+    expect(isContentUi(search)).toBe(expected);
+  });
 });

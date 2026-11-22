@@ -8,7 +8,7 @@ import { keymap } from 'prosemirror-keymap';
 import type { Mark, MarkType, Node as PMNode } from 'prosemirror-model';
 import { ySyncPlugin, yCursorPlugin, yUndoPlugin, ySyncPluginKey, undo, redo } from 'y-prosemirror';
 import { initOfficeShell } from './officeShell.js';
-import { handleSessionRejected } from './viewStrip.js';
+import { handleSessionRejected, markContentUi } from './viewStrip.js';
 import { setupSlideDesign } from './slideDesignUi.js';
 import {
   PPTX_SAVE_NOTICE_MAP,
@@ -31,6 +31,9 @@ import { pickPresenceColorForName, renderPresenceAvatars } from './presence.js';
 import { pptxTextSchema, setSlideMediaUrl, slideMediaUrl } from '../pptx/textSchema.js';
 import { guardRoomEpoch } from './roomEpoch.js';
 import { applyAutofit, applyTextboxLook, autoNumberPlugin, refitAutofit, unmirroredFill, curvedShapePath, ensureLevelRules, turnCss } from './slideTextLook.js';
+
+/** 콘텐츠만 보기(ui=content) — 도구를 숨기고 편집 토큰이어도 읽기 전용으로 연다(설계 2026-11-22-artcraft-app-screen §4) */
+const contentUi = markContentUi();
 
 /** src/pptx/collab.ts가 서버 쪽에서 선언한 것과 같은 모양이지만, 그 파일은 node:crypto/fflate 등
  * 서버 전용 의존성을 끌고 있어 클라이언트 번들에 그대로 import할 수 없다 — Yjs 공유 타입 자체는
@@ -1311,7 +1314,7 @@ async function main(): Promise<void> {
   }
   titleEl.textContent = info.name;
   document.title = `${info.name} — DocView 편집`;
-  canEdit = info.permissions.canEdit;
+  canEdit = info.permissions.canEdit && !contentUi;
   // 리본 편집 탭은 읽기 전용이면 셸이 숨긴다(파일 탭만 남는다).
   initOfficeShell({
     token: token ?? '',
@@ -1358,7 +1361,7 @@ async function main(): Promise<void> {
   });
   const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
   provider = new WebsocketProvider(`${wsProtocol}//${location.host}/ws/edit`, info.docId, ydoc, {
-    params: { token },
+    params: { token: token ?? '', ...(contentUi ? { readonly: '1' } : {}) },
   });
   guardRoomEpoch(provider, ydoc); // 재연결 시 이전 세대 방 상태를 합치지 않는다(src/collab/roomEpoch.ts)
 
