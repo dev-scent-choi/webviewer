@@ -108,17 +108,14 @@ async function openEditor(docId, viewer) {
   location.href = issued.editorUrl;
 }
 
-/** 콘텐츠만 보기(설계 2026-11-22-artcraft-app-screen §4) — 도구 없이 문서만. 편집기 형식은 읽기 전용 편집기 토큰, 그 밖은 보기 토큰의
- * viewerUrl 에 ui=content 를 붙인다(편집기 형식의 ui=view 는 바꿔 쓴다).
- * shortcut: 서버 토큰 응답의 contentUrl 이 생기면(계획 Task 2) 그 주소로 바꾼다 */
+/** 콘텐츠만 보기(설계 2026-11-22-artcraft-app-screen §4) — 도구 없이 문서만. 편집기 형식은 읽기 전용 편집기 토큰, 그 밖은 보기 토큰의 contentUrl */
 async function openContentOnly(doc, viewer) {
   const issued = await issueToken(doc.id, viewer, true, true, true, false, false, supportsEdit(doc) ? 'editor' : 'libreoffice');
-  const url = new URL(issued.viewerUrl, location.href);
-  url.searchParams.set('ui', 'content');
-  location.href = url.pathname + url.search;
+  if (!issued.contentUrl) throw new Error('이 형식은 콘텐츠만 보기를 지원하지 않습니다');
+  location.href = issued.contentUrl;
 }
 
-/** 콘텐츠 화면이 있는 형식 — 편집기 형식, 한글을 뺀 쪽 문서(보기 화면 view.html 로 가는 것) */
+/** 콘텐츠 화면이 있는 형식 — 편집기 형식, 한글을 뺀 쪽 문서(서버 contentUrlFor와 같은 규칙) */
 function supportsContentOnly(doc) {
   return supportsEdit(doc) || ((doc.viewKind ?? 'pages') === 'pages' && doc.ext !== 'hwp' && doc.ext !== 'hwpx');
 }
@@ -374,17 +371,19 @@ function renderDocItem(doc) {
     });
   });
   const artOk = supportsArtcraftOpen(doc);
-  if (artOk || editorLook) quickView.textContent = '리브레오피스로 열기';
-  if (artOk || editorLook) quickView.title = '서버 변환';
+  // 이름은 실제로 그리는 엔진 — 엑셀은 리브레오피스가 아니라 우리 격자 화면
+  if (doc.ext === 'xlsx') quickView.textContent = '기본 편집기로 열기';
+  else if (artOk || editorLook) quickView.textContent = '리브레오피스로 열기';
+  if (artOk || editorLook) quickView.title = doc.ext === 'xlsx' ? '우리 격자 화면' : '서버 변환';
   info.append(quickView);
 
-  // 아트크래프트(브라우저 엔진)로 열기 — 안 되는 형식은 흐리게 + 이유 말풍선(흐린 단추는 마우스를 받지 않아 감싼 span에 title)
-  const artWrap = document.createElement('span');
-  const artView = document.createElement('button');
-  artView.type = 'button';
-  artView.className = 'btn';
-  artView.textContent = '아트크래프트로 열기';
+  // 아트크래프트로 열기 — 되는 형식(docx·xlsx·pptx·doc)에만 단추를 둔다(xls·ppt 등엔 없음)
   if (artOk) {
+    const artWrap = document.createElement('span');
+    const artView = document.createElement('button');
+    artView.type = 'button';
+    artView.className = 'btn';
+    artView.textContent = '아트크래프트로 열기';
     artWrap.title = '브라우저 안에서 그립니다 — 서버 변환 없이 열리며, 쪽 수가 Word와 다를 수 있습니다';
     artView.addEventListener('click', () => {
       artView.disabled = true;
@@ -393,13 +392,9 @@ function renderDocItem(doc) {
         setStatus(error.message, 'error');
       });
     });
-  } else {
-    artWrap.title = ARTCRAFT_UNSUPPORTED;
-    artView.disabled = true;
-    artView.style.pointerEvents = 'none';
+    artWrap.append(artView);
+    info.append(artWrap);
   }
-  artWrap.append(artView);
-  info.append(artWrap);
 
   if (supportsEdit(doc)) {
     const quickEdit = document.createElement('button');

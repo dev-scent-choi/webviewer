@@ -420,9 +420,9 @@ try {
     const docRow = page.locator('li.doc-item', { hasText: 'a1-korean-report.docx' });
     const pptRow = page.locator('li.doc-item', { hasText: 'SimpleMacro.ppt' });
     await docRow.waitFor({ timeout: 30000 });
-    const pptButton = pptRow.getByRole('button', { name: '아트크래프트로 열기' });
-    const pptTitle = await pptButton.locator('xpath=..').getAttribute('title');
-    rec('메인: .ppt 줄의 "아트크래프트로 열기"는 흐림 + 이유', (await pptButton.isDisabled()) && pptTitle === '이 형식은 브라우저 엔진이 지원하지 않습니다', pptTitle ?? '');
+    await pptRow.waitFor({ timeout: 30000 });
+    // 2026-11-22 판정 — 아트크래프트 단추는 되는 형식(docx·xlsx·pptx·doc)에만, .ppt 줄엔 없다
+    rec('메인: .ppt 줄엔 "아트크래프트로 열기" 단추 없음', (await pptRow.getByRole('button', { name: '아트크래프트로 열기' }).count()) === 0);
     rec('메인: docx 줄에 "리브레오피스로 열기"', await docRow.getByRole('button', { name: '리브레오피스로 열기' }).isVisible());
     const form = docRow.locator('form.token-form');
     await form.locator('input[name=viewer]').fill('공유받는 사람');

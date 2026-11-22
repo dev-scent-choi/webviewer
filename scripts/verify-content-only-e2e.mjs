@@ -97,6 +97,27 @@ try {
     await ctx.close();
   }
 
+  // 아트크래프트 토큰의 contentUrl — 앱 화면이 아니라 보기 화면의 엔진 쪽 그림(ArtcraftSource, 도구 없음, 설계 §4)
+  {
+    const ctx = await browser.newContext({ viewport: { width: 1280, height: 860 } });
+    const page = await ctx.newPage();
+    const errors = [];
+    page.on('pageerror', (e) => errors.push(String(e)));
+    const tok = await token(ids.docx, { engine: 'artcraft' });
+    const cu = tok.contentUrl ? new URL(tok.contentUrl, BASE) : null;
+    rec('아트크래프트 docx contentUrl → /view.html?…&ui=content', tok.engine === 'artcraft' && cu?.pathname === '/view.html' && cu.searchParams.get('ui') === 'content', tok.contentUrl?.split('?')[0] ?? String(tok.engineReason));
+    if (cu) {
+      await page.goto(cu.href);
+      await page.waitForSelector('.page-frame.page-ready', { timeout: 120000 });
+      await sleep(800);
+      const engine = await page.$eval('#engine-badge', (b) => !b.hidden && !!b.dataset.workerTiming);
+      const tools = await visibleTools(page);
+      rec('아트크래프트 docx ui=content — 엔진이 그림·도구 0개 보임', engine && tools.length === 0 && (await page.evaluate(() => document.body.classList.contains('ui-content'))), JSON.stringify({ engine, tools }));
+      rec('아트크래프트 docx 화면 오류 없음', errors.length === 0, errors.slice(0, 2).join(' | '));
+    }
+    await ctx.close();
+  }
+
   // 메인 화면 "콘텐츠만 보기" 링크 → ui=content
   {
     const ctx = await browser.newContext({ viewport: { width: 1280, height: 860 } });
@@ -108,6 +129,12 @@ try {
     await page.waitForURL(/ui=content/, { timeout: 30000 }).catch(() => undefined);
     const u = new URL(page.url());
     rec('메인 "콘텐츠만 보기" docx → 편집기 ui=content(ui=view 아님)', u.pathname === '/editor.html' && u.searchParams.getAll('ui').join() === 'content', u.pathname + u.search.replace(/token=[^&]+/, 'token=…'));
+    // 단추 이름은 실제 엔진(2026-11-22 판정) — 엑셀은 우리 격자 화면이라 "기본 편집기로 열기"
+    await page.goto(`${BASE}/`);
+    const xrow = page.locator('li.doc-item', { hasText: path.basename(FILES.xlsx) }).first();
+    await xrow.waitFor({ timeout: 30000 });
+    const xlabels = (await xrow.locator('.doc-info > button, .doc-info > span > button').allTextContents()).map((t) => t.trim());
+    rec('메인 xlsx 줄: "기본 편집기로 열기"·"아트크래프트로 열기"(리브레오피스 이름 없음)', xlabels.includes('기본 편집기로 열기') && xlabels.includes('아트크래프트로 열기') && !xlabels.includes('리브레오피스로 열기'), xlabels.join(','));
     await ctx.close();
   }
 } catch (error) {
