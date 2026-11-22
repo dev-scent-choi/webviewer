@@ -605,3 +605,23 @@ describe('RX-C1 저장 직전 안전망: 같은 원본 슬라이드 항목이 �
     expect(out.notices).toEqual(['같은 슬라이드가 두 번 들어 있어(연결이 끊겼다 이어질 때 생길 수 있음) 한 번만 저장했습니다.']);
   });
 });
+
+describe('자간(rPr spc) — 원본 글자 간격대로 그려 PowerPoint·아트크래프트보다 글이 넓어져 줄이 달리 끊기던 것', () => {
+  const toDOM = (raw: string) => schema.marks.runProps.spec.toDOM!(schema.marks.runProps.create({ raw }), true);
+  test('spc="-80"(1/100pt) → letter-spacing -0.8pt(슬라이드 축척)', () => {
+    expect(toDOM('<a:rPr lang="ko-KR" sz="2000" b="1" spc="-80" dirty="0"/>')).toEqual(['span', { style: 'letter-spacing: calc(-0.8 * var(--slide-pt, 1pt))' }, 0]);
+  });
+  test('spc 없음·0이면 그대로, 하이퍼링크와 함께면 둘 다', () => {
+    expect(toDOM('<a:rPr lang="ko-KR" spc="0"/>')).toEqual(['span', 0]);
+    expect(toDOM('<a:rPr lang="ko-KR"/>')).toEqual(['span', 0]);
+    expect(toDOM('<a:rPr spc="150"><a:hlinkClick r:id="rId2"/></a:rPr>')).toEqual(['span', { class: 'slide-hlink', style: 'letter-spacing: calc(1.5 * var(--slide-pt, 1pt))' }, 0]);
+  });
+  test('하위 요소(<a:hlinkClick spc=…> 같은 것)의 속성은 자간으로 읽지 않는다', () => {
+    expect(toDOM('<a:rPr lang="ko-KR"><a:latin typeface="x" spc="-80"/></a:rPr>')).toEqual(['span', 0]);
+  });
+  test('글자에 직접 b="0"이면 수준 굵게를 끄는 slide-b0(b="1"·없음은 그대로)', () => {
+    expect(toDOM('<a:rPr lang="en-US" sz="1000" b="0" dirty="0"/>')).toEqual(['span', { class: 'slide-b0' }, 0]);
+    expect(toDOM('<a:rPr lang="en-US" b="1"/>')).toEqual(['span', 0]);
+    expect(toDOM('<a:rPr b="0" spc="-50"><a:hlinkClick r:id="rId2"/></a:rPr>')).toEqual(['span', { class: 'slide-hlink slide-b0', style: 'letter-spacing: calc(-0.5 * var(--slide-pt, 1pt))' }, 0]);
+  });
+});

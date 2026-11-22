@@ -33,6 +33,8 @@ export function ensureLevelRules(): void {
   });
   const style = document.createElement('style');
   style.id = 'slide-level-rules';
+  // 글자에 직접 b="0"(textSchema runProps의 slide-b0)은 수준 굵게보다 앞선다 — 리본으로 다시 굵게 하면(<strong> 안) 굵게
+  rules.push('.slide-textbox .ProseMirror .slide-b0 { font-weight: 400; }', '.slide-textbox .ProseMirror strong .slide-b0 { font-weight: inherit; }');
   style.textContent = rules.join('\n');
   document.head.append(style);
 }

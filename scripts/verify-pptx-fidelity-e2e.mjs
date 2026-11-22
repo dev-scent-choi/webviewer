@@ -71,7 +71,10 @@ const SHAPES =
   `<mc:Fallback><p:sp><p:nvSpPr><p:cNvPr id="11" name="감싼 도형"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr>${xfrm(7315200, 3886200, 914400, 457200)}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></p:spPr></p:sp></mc:Fallback></mc:AlternateContent>` +
   // id 12: 넘치면 글자 줄이기(normAutofit) 작은 상자 — 글을 늘리면 다시 맞춰 작아진다(검토 Minor 3)
   `<p:sp><p:nvSpPr><p:cNvPr id="12" name="맞춤"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr><p:spPr>${xfrm(457200, 4800600, 2286000, 457200)}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/></p:spPr>` +
-  `<p:txBody><a:bodyPr wrap="square"><a:normAutofit/></a:bodyPr><a:lstStyle/>${text('맞춤')}</p:txBody></p:sp>`;
+  `<p:txBody><a:bodyPr wrap="square"><a:normAutofit/></a:bodyPr><a:lstStyle/>${text('맞춤')}</p:txBody></p:sp>` +
+  // id 13: 자간 -3pt(spc="-300")·글자 b="0"(수준은 굵게) 한 줄 — 자간을 안 그리면 글 폭 184pt > 칸 170pt로 두 줄(고객형 pptx 제목 줄 내림, 2026-11-22)
+  `<p:sp><p:nvSpPr><p:cNvPr id="13" name="자간"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr><p:spPr>${xfrm(4572000, 6248400, 2341880, 457200)}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/></p:spPr>` +
+  '<p:txBody><a:bodyPr wrap="square"/><a:lstStyle><a:lvl1pPr><a:defRPr b="1"/></a:lvl1pPr></a:lstStyle><a:p><a:r><a:rPr lang="ko-KR" sz="2000" b="0" spc="-300"/><a:t>가나다라마바사아자차</a:t></a:r></a:p></p:txBody></p:sp>';
 
 const THEME =
   `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><a:theme ${NS} name="T"><a:themeElements>` +
@@ -174,6 +177,16 @@ rec(
 rec('sysDash 테두리는 SVG 점선(두께×3, 두께×1)', m.dashed.length === 1 && /^(\d+(\.\d+)?) (\d+(\.\d+)?)$/.test(m.dashed[0].dash ?? '') && (() => { const [a, b] = m.dashed[0].dash.split(' ').map(Number); return near(a, b * 3, 0.01); })(), JSON.stringify(m.dashed));
 rec('점선 사각형 모서리는 직각(호 없음)', m.dashed.length === 1 && !/A/.test(m.dashed[0].d), m.dashed[0]?.d);
 rec('adj 0 둥근 사각형은 직각', m.sharp === '0px', String(m.sharp));
+const spc13 = await page.evaluate(() => {
+  const p = document.querySelector('#slide-canvas .slide-textbox[data-shape-id="13"] .ProseMirror p');
+  if (!p) return null;
+  const r = document.createRange();
+  r.selectNodeContents(p);
+  const lines = new Set([...r.getClientRects()].filter((x) => x.width > 0).map((x) => Math.round(x.top))).size;
+  const span = p.querySelector('span[style*="letter-spacing"]');
+  return { lines, ls: span ? getComputedStyle(span).letterSpacing : null, fw: span ? getComputedStyle(span).fontWeight : null };
+});
+rec('자간 spc="-300"·글자 b="0" 글상자는 한 줄(PowerPoint·아트크래프트처럼 줄 내림 없음), 굵게 아님', spc13?.lines === 1 && parseFloat(spc13.ls) < 0 && spc13.fw === '400', JSON.stringify(spc13));
 rec('기본 둥근 사각형은 원형 반지름(짧은 변의 1/6, 가로·세로 같음)', /^[\d.]+px$/.test(m.round ?? '') && parseFloat(m.round) > 2, String(m.round));
 // 왼쪽 슬라이드 창 — PowerPoint처럼 각진 썸네일, 번호는 썸네일 왼쪽, 선택은 굵은(3px 이상) 테두리
 const rail = await page.evaluate(() => {

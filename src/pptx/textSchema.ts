@@ -179,10 +179,18 @@ const marks: Record<string, MarkSpec> = {
   runProps: {
     attrs: { raw: {} },
     // 하이퍼링크 — PowerPoint 2019+ "링크도 글자 색 그대로"(<ahyp:hlinkClr val="tx"/>)면 테마 하이퍼링크 색 대신 글자 색
+    // 자간(spc, 1/100pt)·b="0" — 안 그리면 spc="-80" 같은 한글 제목이 원본보다 넓어 PowerPoint·아트크래프트와 다른 곳에서 줄이 끊겼다
     toDOM: (mark) => {
       const raw = String(mark.attrs.raw);
-      if (!/<a:hlinkClick\b/.test(raw)) return ['span', 0];
-      return ['span', { class: /hlinkClr\b[^>]*\bval="tx"/.test(raw) ? 'slide-hlink slide-hlink-tx' : 'slide-hlink' }, 0];
+      const spc = Number(/^<a:rPr\b[^>]*?\sspc="(-?\d+)"/.exec(raw)?.[1] ?? 0);
+      const attrs: Record<string, string> = {};
+      const classes: string[] = [];
+      if (/<a:hlinkClick\b/.test(raw)) classes.push(/hlinkClr\b[^>]*\bval="tx"/.test(raw) ? 'slide-hlink slide-hlink-tx' : 'slide-hlink');
+      // 글자에 직접 b="0" — 수준(lstStyle defRPr b="1")의 굵게를 끈다(규칙은 slideTextLook ensureLevelRules, 굵게 마크 안이면 굵게)
+      if (/^<a:rPr\b[^>]*?\sb="(0|false)"/.test(raw)) classes.push('slide-b0');
+      if (classes.length) attrs.class = classes.join(' ');
+      if (spc) attrs.style = `letter-spacing: calc(${spc / 100} * var(--slide-pt, 1pt))`;
+      return Object.keys(attrs).length ? ['span', attrs, 0] : ['span', 0];
     },
   },
   fontFamily: {
