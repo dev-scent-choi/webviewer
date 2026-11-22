@@ -108,9 +108,41 @@ body.thumbs-open .pages-container { padding-left: calc(1rem + 152px); }
 @media (max-width: 600px) { :root { --view-chrome-h: 86px; } }
 .pages-container,
 .svg-scroll { padding-top: calc(var(--view-chrome-h) + 0.6rem); }
-/* 도구 줄 — 세 칸 안의 묶음이 카드 높이를 채우고, 단추는 한 줄(28px) */
+/* 도구 줄 — 세 칸 안의 묶음이 카드 높이를 채우고, 단추는 편집기 큰 단추처럼 아이콘(32px) 위·한글 이름(11px) 아래(사용자 지시 2026-11-22).
+   묶음 안 단추만 — 도구▾ 메뉴로 옮겨진 단추는 메뉴 모양(아이콘 + aria-label)을 그대로 쓴다 */
 .ribbon-skin .toolbar-tools { gap: 0; align-items: stretch; }
-.ribbon-skin .toolbar-row-tools .icon-btn { width: 28px; height: 28px; }
+/* 이름을 단 단추는 넓어서 세 칸을 같은 폭(기준 0)으로 나누면 640~1023px에서 가운데·오른쪽 칸이 겹쳤다 — 내용 폭을 기준으로 남는 폭만 나눈다 */
+.ribbon-skin .toolbar-tools { flex: 1 1 auto; }
+.ribbon-skin .toolbar-row-tools .ribbon-group-buttons > .icon-btn {
+  box-sizing: border-box;
+  flex-direction: column;
+  justify-content: flex-start;
+  width: auto;
+  min-width: 36px;
+  height: calc(var(--skin-ribbon-h) - var(--skin-label-h));
+  padding: 1px 3px 0;
+  gap: 1px;
+  border-radius: 2px;
+  color: var(--skin-text);
+  font: 400 11px/12px var(--skin-font);
+  white-space: nowrap;
+}
+.ribbon-skin .toolbar-row-tools .ribbon-group-buttons > .icon-btn > svg:not(.icon-btn-badge, .icon-btn-caret-glyph) { flex: none; width: var(--skin-big-icon); height: var(--skin-big-icon); }
+/* 강조▾의 펼침 화살표는 이름 뒤 "▾"로(아트크래프트 "Paste ▾") */
+.ribbon-skin .toolbar-row-tools .ribbon-group-buttons > .icon-btn > .icon-btn-caret-glyph { display: none; }
+.ribbon-skin .toolbar-row-tools .ribbon-group-buttons > #download-as-btn .icon-btn-badge { top: 20px; right: auto; bottom: auto; left: calc(50% + 3px); }
+/* 쪽 번호 — 입력 칸·"의 N"을 아이콘 자리(32px)에, 이름은 다른 단추 이름과 같은 줄에 */
+.ribbon-skin .toolbar-row-tools .page-jump-group { display: grid; grid-template-columns: auto auto; grid-template-rows: 32px 12px; align-items: center; column-gap: 3px; row-gap: 1px; align-self: flex-start; padding: 1px 3px 0; }
+.ribbon-skin .tool-name { color: var(--skin-text); font: 400 11px/12px var(--skin-font); text-align: center; white-space: nowrap; }
+.ribbon-skin .page-jump-group .tool-name { grid-column: 1 / -1; }
+.toolbar-more-menu .tool-name { display: none; }
+@media (max-width: 600px) {
+  .ribbon-skin .toolbar-row-tools .ribbon-group-buttons > .icon-btn { flex-direction: row; justify-content: center; width: 28px; min-width: 28px; height: 28px; padding: 0; }
+  .ribbon-skin .toolbar-row-tools .ribbon-group-buttons > .icon-btn > svg:not(.icon-btn-badge, .icon-btn-caret-glyph) { width: 17px; height: 17px; }
+  .ribbon-skin .toolbar-row-tools .ribbon-group-buttons > #download-as-btn .icon-btn-badge { top: auto; left: auto; right: 2px; bottom: 1px; }
+  .ribbon-skin .toolbar-row-tools .page-jump-group { display: flex; align-self: center; padding: 0 0.3rem; }
+  .ribbon-skin .tool-name { display: none; }
+}
 .ribbon-skin .toolbar-row-tools .tools-btn { width: auto; align-self: center; }
 .ribbon-skin .ribbon-tab:hover { background: transparent; cursor: default; }
 /* 단추가 모두 도구▾로 옮겨졌거나 숨은 묶음은 이름만 남지 않게 통째로 숨긴다 */

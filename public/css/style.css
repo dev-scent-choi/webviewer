@@ -4186,7 +4186,8 @@ body.ui-view.no-copy :is(#editor, #grid-editor, #slides-rail, #slide-canvas-wrap
 .ribbon-skin .ribbon-group:last-child { border-right: none; }
 .ribbon-skin .ribbon-group-buttons { align-items: center; gap: 2px; }
 .ribbon-skin .ribbon-group-buttons-wrap { flex-direction: column; justify-content: center; align-items: stretch; gap: 0; }
-.ribbon-skin .ribbon-group-label { height: var(--skin-label-h); color: var(--skin-text-dim); font: 400 10px/var(--skin-label-h) var(--skin-font); letter-spacing: 0; text-align: center; white-space: nowrap; }
+/* 묶음 이름 — 아트크래프트처럼 단추 이름보다 옅은 회색(캡처 실측 #8f8f8f 안티에일리어싱, 흰 바탕 4.5:1 지키는 #767676) 10px 가운데 */
+.ribbon-skin .ribbon-group-label { height: var(--skin-label-h); color: #767676; font: 400 10px/var(--skin-label-h) var(--skin-font); letter-spacing: 0; text-align: center; white-space: nowrap; }
 
 /* 작은 단추 — 16px 한 줄(세 줄 = 48px), 아이콘+이름 단추도 같은 높이. 아이콘은 16px(아트크래프트 Cut·Copy 크기, 12px 펼침 화살표는 그대로) */
 .ribbon-skin .ribbon-row,
