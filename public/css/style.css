@@ -4245,3 +4245,5 @@ body.ui-view.no-copy :is(#editor, #grid-editor, #slides-rail, #slide-canvas-wrap
 .ribbon-skin .color-btn-glyph svg { height: 12px; font-size: 11px; }
 .slides-editor-page .ribbon-skin .effect-tile { padding: 1px 2px; gap: 2px; font: 400 10px/13px var(--skin-font); }
 .slides-editor-page .ribbon-skin .layout-field select { box-sizing: border-box; height: var(--skin-small-h); padding: 0 2px; }
+/* PPT 글꼴 이름 칸 — 11px 글자에서 .toolbar-select 최대 폭 6.4em(70px)이 "테마 글꼴"을 잘랐다. 원래 뜻(.slides-font-family 9.5em)대로 */
+.slides-editor-page .ribbon-skin .slides-font-family { max-width: none; }
