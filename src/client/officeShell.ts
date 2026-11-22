@@ -315,7 +315,8 @@ export function initOfficeShell(options: OfficeShellOptions): OfficeShell {
     installViewGuards(options.canCopy, options.canPrint);
     const greyOut = (): void => {
       for (const el of document.querySelectorAll<HTMLElement>(VIEW_EDIT_CONTROLS)) {
-        if (!viewControlAllowed(el.id, options.canCopy)) markReadOnly(el);
+        // "자세히"·삽입 탭 대리 단추(data-proxy)는 대신 누르는 단추와 같은 판정
+        if (!viewControlAllowed(el.dataset.proxy ?? el.id, options.canCopy)) markReadOnly(el);
       }
       // 편집기가 선택에 따라 disabled를 다시 풀어도 흐린 단추는 꺼진 채로
       for (const el of document.querySelectorAll<HTMLButtonElement>('.ro-disabled')) if ('disabled' in el && !el.disabled) el.disabled = true;
