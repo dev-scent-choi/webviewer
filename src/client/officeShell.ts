@@ -10,6 +10,7 @@
 import { mountBackToView } from './backToView.js';
 import { officeAlert } from './officeDialog.js';
 import { EDIT_DOC_KEY, installViewGuards, isContentUi, isViewUi, markReadOnly, viewControlAllowed } from './viewStrip.js';
+import { closeGroupPopup, fitPanel, hydrateIcons, installGroupToggles } from './ribbonRuntime.js';
 
 export interface OfficeShellOptions {
   readonly token: string;
@@ -120,6 +121,9 @@ export function initOfficeShell(options: OfficeShellOptions): OfficeShell {
   if (!options.canEdit && !viewUi) {
     for (const tab of tabs) if (tab.dataset.editOnly !== undefined) tab.hidden = true;
   }
+  // 사람 확인·목록 대조 시험용 — ?rbctx=1 이면 상황별 탭을 모두 보이고, 편집기가 선택에 따라 숨기려 해도 그대로 둔다
+  const showAllContextual = new URLSearchParams(location.search).get('rbctx') === '1';
+  if (showAllContextual) for (const tab of tabs) if (tab.classList.contains('ribbon-tab-contextual')) tab.hidden = false;
 
   function render(): void {
     for (const tab of tabs) {
@@ -130,6 +134,12 @@ export function initOfficeShell(options: OfficeShellOptions): OfficeShell {
     // 읽기 전용이라 보이는 편집 탭이 하나도 없으면 리본 판도 모두 숨긴다(파일 탭만 남는다).
     const activeVisible = tabs.some((tab) => tab.dataset.tab === activeTab && !tab.hidden);
     for (const panel of panels) panel.hidden = !activeVisible || panel.dataset.panel !== activeTab;
+    // 고른 탭만 아이콘을 달고(탭마다 늦게) 판이 넘치면 묶음을 접는다(오피스처럼) — 축소된 리본은 펼쳐 볼 때 다시 부른다
+    const shown = panels.find((panel) => !panel.hidden);
+    if (shown && !(collapsed && !peeking)) {
+      hydrateIcons(shown);
+      fitPanel(shown, window.innerWidth);
+    }
     toolbar.classList.toggle('ribbon-empty', !activeVisible);
     toolbar.classList.toggle('ribbon-collapsed', collapsed && !peeking);
     toolbar.classList.toggle('ribbon-peeking', collapsed && peeking);
@@ -149,6 +159,7 @@ export function initOfficeShell(options: OfficeShellOptions): OfficeShell {
     }
     const button = tabs.find((t) => t.dataset.tab === tab);
     if (!button || button.hidden) return;
+    closeGroupPopup();
     activeTab = tab;
     if (collapsed) peeking = true;
     render();
@@ -177,6 +188,17 @@ export function initOfficeShell(options: OfficeShellOptions): OfficeShell {
     });
   }
   document.getElementById('ribbon-collapse')?.addEventListener('click', toggleCollapsed);
+  installGroupToggles(toolbar);
+  let fitFrame = 0;
+  window.addEventListener('resize', () => {
+    cancelAnimationFrame(fitFrame);
+    fitFrame = requestAnimationFrame(() => {
+      const shown = panels.find((panel) => !panel.hidden);
+      if (shown && !(collapsed && !peeking)) fitPanel(shown, window.innerWidth);
+    });
+  });
+  // 메뉴 글꼴(Outfit)이 늦게 오면 폭이 바뀐다 — 받은 뒤 한 번 더 맞춘다
+  void document.fonts?.ready.then(() => render());
   window.addEventListener('keydown', (event) => {
     if ((event.ctrlKey || event.metaKey) && event.key === 'F1') {
       event.preventDefault();
@@ -315,6 +337,8 @@ export function initOfficeShell(options: OfficeShellOptions): OfficeShell {
     installViewGuards(options.canCopy, options.canPrint);
     const greyOut = (): void => {
       for (const el of document.querySelectorAll<HTMLElement>(VIEW_EDIT_CONTROLS)) {
+        // 준비 중 단추는 disabled가 우선(흐림 클래스 안 붙임), 접힌 묶음 단추는 둘러보기용 — 설계 2026-11-22-office-ribbon-structure §1-3
+        if (el.closest('[data-pending]') || el.classList.contains('rb-group-toggle')) continue;
         // "자세히"·삽입 탭 대리 단추(data-proxy)는 대신 누르는 단추와 같은 판정
         if (!viewControlAllowed(el.dataset.proxy ?? el.id, options.canCopy)) markReadOnly(el);
       }
@@ -373,6 +397,7 @@ export function initOfficeShell(options: OfficeShellOptions): OfficeShell {
   return {
     selectTab,
     setContextualTab(tab, visible) {
+      if (showAllContextual) return;
       const button = tabs.find((t) => t.dataset.tab === tab);
       if (!button || button.hidden === !visible) return;
       button.hidden = !visible;

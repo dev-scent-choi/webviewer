@@ -24,3 +24,15 @@ export declare function summarize(app: RibbonApp): Record<string, number>;
 export declare function validateInventory(inv: RibbonInventory): string[];
 export declare function serializeInventory(inv: RibbonInventory): string;
 export declare function requiredIcons(inv: RibbonInventory): string[];
+
+// Part B
+export declare function extractUnits(html: string): Map<string, string>;
+export declare function pendingHtml(key: string, c: RibbonControl): string;
+export declare function proxyHtml(key: string, c: RibbonControl): string;
+export declare function renderPanels(app: RibbonApp, units: Map<string, string>, pad?: string): string;
+export declare function renderTabs(app: RibbonApp, pad?: string): string;
+export declare function generatePage(source: string, app: RibbonApp): string;
+export interface ExpectedControl { key: string; name: string; size: string; kind: string; pending: boolean }
+export interface ExpectedGroup { id: string; name: string; collapse: number; launcher: string | null; controls: ExpectedControl[] }
+export declare function expectedStructure(app: RibbonApp): { tabs: { id: string; name: string; editOnly: boolean; contextual: boolean }[]; panels: Record<string, ExpectedGroup[]> };
+export declare function refsOf(app: RibbonApp): Record<string, string>;

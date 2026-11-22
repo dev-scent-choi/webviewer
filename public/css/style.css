@@ -4190,7 +4190,7 @@ body.ui-view.no-copy :is(#editor, #grid-editor, #slides-rail, #slide-canvas-wrap
 .ribbon-skin .ribbon-panel :focus-visible, .ribbon-skin .toolbar-row-tools :focus-visible { outline-offset: -2px; }
 /* 스타일 갤러리 — 48px 칸 안에서 가로 스크롤바가 스타일 이름을 덮었다. 아트크래프트처럼 한 줄씩 세로로 넘긴다(세로 막대는 폭만 먹음) */
 @media (min-width: 601px) {
-  .ribbon-skin .style-gallery { flex-wrap: wrap; align-content: flex-start; overflow: hidden auto; max-width: min(760px, 44vw); }
+  .ribbon-skin .style-gallery { flex-wrap: wrap; align-content: flex-start; overflow: hidden auto; max-width: min(520px, 30vw); }
   .ribbon-skin .style-gallery-item { height: 100%; box-sizing: border-box; }
 }
 .ribbon-skin.ribbon-peeking .ribbon-panel:not([hidden]) { top: calc(var(--skin-title-h) + var(--skin-tabs-h)); }
@@ -4280,3 +4280,32 @@ body.ui-view.no-copy :is(#editor, #grid-editor, #slides-rail, #slide-canvas-wrap
 body.ui-content :is(#toolbar, #statusbar, .formula-bar, .grid-status-row, #slides-rail, #sheet-add, .unsupported-warning, .backstage, #search-bar) { display: none !important; }
 body.ui-content.no-copy :is(#editor, #grid-editor, #slide-canvas-wrap),
 body.ui-content.no-copy :is(#editor, #grid-editor, #slide-canvas-wrap) * { user-select: none; -webkit-user-select: none; }
+
+/* ==================== 오피스 리본 구조(설계 2026-11-22-office-ribbon-structure) ====================
+   scripts/gen-ribbon.mjs가 만드는 준비 중 단추(보이되 꺼짐 — disabled가 읽기 전용 흐림보다 우선)·빈 갤러리·확인란·입력칸·목록,
+   좁을 때 묶음을 큰 단추 하나로 접기(src/client/ribbonRuntime.ts). 62px·큰 32/작은 16px 규격은 위 리본 꾸밈 그대로 — 높이를 늘리는 규칙을 넣지 말 것 */
+.ribbon-group > .rb-group-toggle { display: none; }
+.ribbon-skin [data-pending] { opacity: 0.45; cursor: default; }
+.ribbon-skin [data-pending]:disabled,
+.ribbon-skin [data-pending] :disabled { cursor: default; }
+/* 준비 중 아이콘(스프라이트 단색 선) — 선 굵기·색은 여기서 정해 <use> 안으로 물려준다 */
+.ribbon-skin .rb-ico { flex: none; width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.ribbon-skin .icon-btn-big > .rb-ico { width: var(--skin-big-icon); height: var(--skin-big-icon); stroke-width: 1.25; }
+/* 드롭다운·분할 단추 표시(▾) — 글자(textContent)에는 넣지 않는다 */
+.ribbon-skin :is(.rb-pending, [data-proxy])[data-kind="dropdown"] > span::after,
+.ribbon-skin :is(.rb-pending, [data-proxy])[data-kind="split"] > span::after { content: " ▾"; }
+.ribbon-skin .rb-pending:is([data-kind="dropdown"], [data-kind="split"]):not(:has(span))::after { content: "▾"; font-size: 8px; line-height: 1; }
+.ribbon-skin .rb-gallery { display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; width: 112px; height: 44px; border: 1px solid var(--skin-line); border-radius: 3px; color: var(--skin-text-dim); font: 400 10px/12px var(--skin-font); }
+.ribbon-skin .rb-check { display: inline-flex; align-items: center; gap: 3px; height: var(--skin-small-h); color: var(--skin-text); font: 400 11px/14px var(--skin-font); white-space: nowrap; }
+.ribbon-skin .rb-check input { width: 12px; height: 12px; margin: 0; }
+.ribbon-skin .rb-field input { width: 44px; }
+.ribbon-skin .rb-select { max-width: 9em; }
+/* 접힌 묶음 — 묶음 이름 큰 단추(아이콘 32 + 이름 ▾)가 판 높이 전체, 누르면 원래 단추들이 그 아래 떠 있는 판으로 */
+.ribbon-skin .ribbon-group.rb-collapsed > .rb-group-toggle { display: inline-flex; grid-row: 1 / -1; }
+.ribbon-skin .rb-group-toggle > span::after { content: " ▾"; }
+.ribbon-skin .rb-group-toggle[aria-expanded="true"] { background: var(--skin-hover); }
+.ribbon-skin .ribbon-group.rb-collapsed > :is(.ribbon-group-buttons, .ribbon-group-label, .ribbon-launcher) { display: none; }
+.ribbon-skin .ribbon-group.rb-collapsed.rb-open > .ribbon-group-buttons { display: flex; position: fixed; z-index: 70; box-sizing: border-box; height: calc(var(--skin-ribbon-h) - var(--skin-label-h) + 8px); padding: 4px 6px; border-radius: 6px; background: #ffffff; box-shadow: 0 0 0 1px var(--skin-line), 0 4px 12px rgba(0, 0, 0, 0.14); }
+@media (max-width: 600px) {
+  .ribbon-skin .ribbon-group.rb-collapsed.rb-open > .ribbon-group-buttons { height: auto; max-width: calc(100vw - 8px); flex-wrap: wrap; }
+}
