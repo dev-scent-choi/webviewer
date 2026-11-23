@@ -4280,6 +4280,12 @@ body.ui-view.no-copy :is(#editor, #grid-editor, #slides-rail, #slide-canvas-wrap
 body.ui-content :is(#toolbar, #statusbar, .formula-bar, .grid-status-row, #slides-rail, #sheet-add, .unsupported-warning, .backstage, #search-bar) { display: none !important; }
 body.ui-content.no-copy :is(#editor, #grid-editor, #slide-canvas-wrap),
 body.ui-content.no-copy :is(#editor, #grid-editor, #slide-canvas-wrap) * { user-select: none; -webkit-user-select: none; }
+/* PPT는 레일이 숨어 다른 슬라이드로 갈 길이 없다 — 슬라이드를 전부 세로로 쌓아 스크롤·키보드로 읽는다(editor-slides.ts syncContentStack).
+   위아래 margin:auto는 짧은 발표 자료에서 슬라이드를 띄엄띄엄 벌리므로 가로 가운데만. 순서 번호·점선 테두리는 편집 표시라 숨김 */
+body.ui-content .slide-canvas-wrap { flex-direction: column; gap: 2rem; outline: none; }
+body.ui-content .slide-canvas-wrap > .slide-canvas { margin: 0 auto; }
+body.ui-content .slide-anim-badge { display: none; }
+body.ui-content .slide-textbox { outline: none; }
 
 /* ==================== 오피스 리본 구조(설계 2026-11-22-office-ribbon-structure) ====================
    scripts/gen-ribbon.mjs가 만드는 준비 중 단추(보이되 꺼짐 — disabled가 읽기 전용 흐림보다 우선)·빈 갤러리·확인란·입력칸·목록,

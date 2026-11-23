@@ -1,6 +1,7 @@
 // 콘텐츠만 보기(ui=content, 설계 2026-11-22-artcraft-app-screen §4) 브라우저 검사 — 세 편집기(편집 토큰으로 열어도)와 보기 화면(view.html)에서
 //  도구(제목 줄·탭·리본·상태 줄·섬네일 레일·수식 줄·시트 추가) 0개 보임, 본문 보임, 타자를 쳐도 내용이 바뀌지 않음(화면 + 서버 원본), 600px 가로 넘침 없음,
 //  아트크래프트 contentUrl은 엔진 보기(앱 화면 자산 요청 없음), 메인 화면 "콘텐츠만 보기" 링크.
+//  쪽·슬라이드·시트 전부 닿음 — PPT 슬라이드 전부 세로로 쌓임, 워드·보기 화면·아트크래프트 엔진 보기는 휠·End 키로 마지막 쪽, 엑셀은 마지막 시트 탭.
 // 사용법(서버를 먼저 띄워 둘 것 — 업로드·토큰 API가 키 없이 열려 있는 로컬 시험 서버):
 //   npm run build:editor && node scripts/verify-content-only-e2e.mjs [http://127.0.0.1:8169]
 import fs from 'node:fs';
@@ -89,6 +90,70 @@ try {
     rec(`${ext} 600px 가로 넘침 없음`, sw <= 600, `${sw}px`);
     rec(`${ext} 화면 오류 없음`, errors.length === 0, errors.slice(0, 2).join(' | '));
     await ctx.close();
+  }
+
+  // 마지막 쪽·슬라이드·시트까지 닿는가(2026-11-23 "콘텐츠만 보기는 첫 장만 나온다" — PPT는 레일이 숨어 첫 슬라이드에 갇혔다)
+  //  휠로 끝까지, 다시 맨 위에서 키보드(End)로 끝까지 — 마지막 쪽·슬라이드가 화면 안에 그려져 있어야 한다
+  {
+    const reachLast = async (page, lastSel, label) => {
+      const inView = () => page.$eval(lastSel, (el) => { const r = el.getBoundingClientRect(); return r.height > 0 && r.top < innerHeight && r.bottom > 0; }).catch(() => false);
+      await page.mouse.move(640, 430);
+      for (let i = 0; i < 40; i += 1) { await page.mouse.wheel(0, 900); await sleep(40); }
+      await sleep(2500);
+      const byWheel = await inView();
+      await page.evaluate(() => { scrollTo(0, 0); for (const el of document.querySelectorAll('*')) if (el.scrollTop) el.scrollTop = 0; });
+      await sleep(300);
+      await page.keyboard.press('End');
+      await sleep(2500);
+      const byKey = await inView();
+      rec(`${label} 마지막까지 닿음(휠·End 키)`, byWheel && byKey, JSON.stringify({ byWheel, byKey }));
+    };
+    const open = async (url) => {
+      const ctx = await browser.newContext({ viewport: { width: 1280, height: 860 } });
+      const page = await ctx.newPage();
+      await page.goto(url);
+      return { ctx, page };
+    };
+    // PPT — 슬라이드 수만큼 쌓이고, 마지막 슬라이드도 글상자까지 그려진다
+    const pptTok = await token(ids.pptx, { canEdit: true });
+    {
+      const { ctx, page } = await open(withContent(pptTok.editorUrl));
+      await page.waitForSelector('#slide-canvas-wrap .slide-canvas .slide-textbox', { timeout: 120000 });
+      await sleep(1000);
+      const n = await page.$$eval('#slide-canvas-wrap > .slide-canvas', (els) => els.length);
+      rec('pptx 슬라이드 3장 전부 세로로 쌓임', n === 3, `${n}장`);
+      await reachLast(page, '#slide-canvas-wrap > .slide-canvas:nth-child(3) .slide-textbox', 'pptx 3번째 슬라이드');
+      await ctx.close();
+    }
+    // 워드 편집기 — 마지막 문단
+    {
+      const { ctx, page } = await open(withContent((await token(ids.docx, {})).editorUrl));
+      await page.waitForSelector('.ProseMirror p', { timeout: 120000 });
+      await sleep(1500);
+      await reachLast(page, '.ProseMirror > :last-child', 'docx 편집기');
+      await ctx.close();
+    }
+    // 엑셀 — 시트 탭(설계 결정 6: 콘텐츠 보기에서도 보임)이 전부 보이고, 마지막 시트로 넘어간다
+    {
+      const { ctx, page } = await open(withContent((await token(ids.xlsx, {})).editorUrl));
+      await page.waitForSelector('#grid-edit-table td[data-row]', { timeout: 120000 });
+      await sleep(1000);
+      const tabs = page.locator('.grid-sheet-tab');
+      const count = await tabs.count();
+      await tabs.last().click();
+      await sleep(1500);
+      const lastActive = await tabs.last().evaluate((el) => el.classList.contains('active') && el.getClientRects().length > 0);
+      rec('xlsx 시트 탭 3개 보임·마지막 시트로 넘어감', count === 3 && lastActive, JSON.stringify({ count, lastActive }));
+      await ctx.close();
+    }
+    // 보기 화면(리브레오피스 쪽 그림)·아트크래프트 엔진 보기 — 마지막 쪽이 그려짐
+    for (const [label, url] of [['보기 docx', withContent((await token(ids.docx, {})).viewerUrl)], ['아트크래프트 docx', new URL((await token(ids.docx, { engine: 'artcraft' })).contentUrl ?? '/none', BASE).href], ['아트크래프트 pptx', new URL((await token(ids.pptx, { engine: 'artcraft' })).contentUrl ?? '/none', BASE).href]]) {
+      const { ctx, page } = await open(url);
+      await page.waitForSelector('.page-frame.page-ready', { timeout: 120000 });
+      await sleep(800);
+      await reachLast(page, '.page-frame.page-ready:last-child', label);
+      await ctx.close();
+    }
   }
 
   // 보기 화면(view.html) — 리브레오피스로 그린 docx

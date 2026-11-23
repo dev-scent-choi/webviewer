@@ -33,7 +33,7 @@ export interface SlideDesignHost {
 
 const SPEED_MS: Readonly<Record<TransitionSpeed, number>> = { fast: 500, med: 750, slow: 1000 };
 
-export function setupSlideDesign(host: SlideDesignHost): { onCanvasRendered(): void; onSlidesRendered(): void } {
+export function setupSlideDesign(host: SlideDesignHost): { onCanvasRendered(canvas?: HTMLElement, entry?: SlideEntry | null): void; onSlidesRendered(): void } {
   const design = host.ydoc.getMap<SlideDesign>(PPTX_SLIDE_DESIGN_MAP);
   const originals = host.ydoc.getMap<Required<SlideDesign>>(PPTX_SLIDE_DESIGN_ORIGINAL_MAP);
 
@@ -209,24 +209,24 @@ export function setupSlideDesign(host: SlideDesignHost): { onCanvasRendered(): v
     }
   }
 
-  function onCanvasRendered(): void {
-    const entry = host.activeEntry();
+  /** 기본은 편집 캔버스의 고른 슬라이드 — 콘텐츠만 보기는 쌓은 슬라이드마다 그 캔버스·슬라이드를 넘긴다 */
+  function onCanvasRendered(canvas: HTMLElement = host.canvas, entry: SlideEntry | null = host.activeEntry()): void {
     if (!entry) return;
     const eff = effective(entry);
     const own = design.get(entry.id);
-    host.canvas.querySelector('.slide-bg-override')?.remove();
-    for (const el of host.canvas.querySelectorAll<HTMLElement>('[data-background]')) el.hidden = own?.background !== undefined;
+    canvas.querySelector('.slide-bg-override')?.remove();
+    for (const el of canvas.querySelectorAll<HTMLElement>('[data-background]')) el.hidden = own?.background !== undefined;
     if (own?.background) {
       const bg = document.createElement('div');
       bg.className = 'slide-bg-override';
       bg.style.background = own.background;
-      host.canvas.prepend(bg);
+      canvas.prepend(bg);
     }
-    for (const badge of host.canvas.querySelectorAll('.slide-anim-badge')) badge.remove();
+    for (const badge of canvas.querySelectorAll('.slide-anim-badge')) badge.remove();
     let number = 0;
     for (const a of eff.animations) {
       if (a.trigger === 'click' || number === 0) number += 1;
-      const box = host.canvas.querySelector<HTMLElement>(`.slide-textbox[data-shape-id="${CSS.escape(a.shapeId)}"]`);
+      const box = canvas.querySelector<HTMLElement>(`.slide-textbox[data-shape-id="${CSS.escape(a.shapeId)}"]`);
       if (!box) continue;
       const badge = document.createElement('span');
       badge.className = 'slide-anim-badge';

@@ -65,8 +65,9 @@ const titleEl = document.getElementById('doc-title')!;
 const connStatusEl = document.getElementById('conn-status')!;
 const railEl = document.getElementById('slides-rail') as HTMLElement;
 const canvasEl = document.getElementById('slide-canvas') as HTMLElement;
+const canvasWrapEl = document.getElementById('slide-canvas-wrap') as HTMLElement;
 /** 디자인·전환·애니메이션 탭(slideDesignUi.ts) — 캔버스·레일을 다시 그린 뒤 배경 색·순서 번호·★을 얹는다 */
-let designHooks: { onCanvasRendered(): void; onSlidesRendered(): void } | null = null;
+let designHooks: ReturnType<typeof setupSlideDesign> | null = null;
 /** 마지막으로 커서를 둔 텍스트 상자·도형(애니메이션 탭의 대상) */
 let lastFocusedShapeId: string | null = null;
 let shell: OfficeShell | null = null; // 도형 서식 상황별 탭
@@ -210,8 +211,15 @@ let focusedView: EditorView | null = null;
 // 안에서 텍스트박스가 추가/삭제되는 것(이 태스크의 핵심 기능)은 그 최상위 observe로는 잡히지
 // 않는다 — 그래서 이 별도의 perSlide 레벨 구독이 필요하다. renderCanvasForSlide가 불릴 때마다
 // (슬라이드 전환이든, 이 구독 자신이 재호출한 것이든) 맨 위에서 이전 구독을 먼저 해제하고 새로
-// 붙이므로, 활성 슬라이드가 아닌 슬라이드에 대한 구독이 남아있는 일은 없다.
-let activePerSlideUnobserve: (() => void) | null = null;
+// 붙이므로, 활성 슬라이드가 아닌 슬라이드에 대한 구독이 남아있는 일은 없다. → SlideMount.unobserve
+
+/** 슬라이드 하나를 그리는 자리 — 편집 화면은 activeMount 하나(고른 슬라이드), 콘텐츠만 보기는 슬라이드마다 하나씩 세로로 쌓는다 */
+interface SlideMount {
+  readonly canvas: HTMLElement;
+  readonly views: Map<string, EditorView>;
+  unobserve: (() => void) | null;
+}
+const activeMount: SlideMount = { canvas: canvasEl, views: mountedViews, unobserve: null };
 
 /**
  * y-prosemirror의 undo/redo를 실제 키(Ctrl+Z/Ctrl+Shift+Z, Ctrl+Y)에 연결한다. 이 keymap
@@ -521,19 +529,76 @@ function renderSlideVisual(visual: SlideVisual, pageImageUrl: string | null): HT
  * 감지해 이 함수를 다시 불러줄 때 그려진다(main()의 observe 콜백 참고).
  */
 function renderCanvasForSlide(entryId: string): void {
-  renderCanvasForSlideInner(entryId);
+  renderCanvasForSlideInner(entryId, activeMount);
   designHooks?.onCanvasRendered();
-  notifyParentWhenFirstSlideShown(entryId);
+  notifyParentWhenFirstSlideShown(entryId, canvasEl);
+}
+
+// ---------- 콘텐츠만 보기: 모든 슬라이드를 세로로 쌓는다(레일이 숨어 다른 슬라이드로 갈 길이 없었다) ----------
+// 슬라이드마다 자리(빈 캔버스)를 먼저 깔고, 화면 가까이 온 것만 시딩·그린다(큰 발표 자료에서 한꺼번에 시딩하지 않게).
+// shortcut: 한 번 그린 슬라이드의 뷰는 화면을 벗어나도 남겨 둔다 — 수백 장 문서에서 메모리가 문제면 화면 밖 뷰를 destroy할 것
+const contentMounts = new Map<string, SlideMount>();
+const contentShown = new Set<string>();
+let contentObserver: IntersectionObserver | null = null;
+
+function renderContentSlide(entryId: string): void {
+  const mount = contentMounts.get(entryId);
+  if (!mount || !contentShown.has(entryId)) return;
+  renderCanvasForSlideInner(entryId, mount);
+  const entry = slidesArray.toArray().find((e) => e.id === entryId) ?? null;
+  designHooks?.onCanvasRendered(mount.canvas, entry);
+  if (slidesArray.get(0)?.id === entryId) notifyParentWhenFirstSlideShown(entryId, mount.canvas);
+}
+
+function syncContentStack(): void {
+  const wrap = canvasWrapEl;
+  contentObserver ??= new IntersectionObserver(
+    (items) => {
+      for (const item of items) {
+        const id = (item.target as HTMLElement).dataset.id;
+        if (!item.isIntersecting || !id || contentShown.has(id)) continue;
+        contentShown.add(id);
+        contentObserver?.unobserve(item.target);
+        renderContentSlide(id);
+      }
+    },
+    { root: wrap, rootMargin: '100% 0px' },
+  );
+  const entries = slidesArray.toArray();
+  const ids = new Set(entries.map((e) => e.id));
+  for (const [id, mount] of contentMounts) {
+    if (ids.has(id)) continue;
+    mount.unobserve?.();
+    for (const view of mount.views.values()) view.destroy();
+    contentObserver.unobserve(mount.canvas);
+    contentMounts.delete(id);
+    contentShown.delete(id);
+  }
+  wrap.replaceChildren(
+    ...entries.map((entry) => {
+      let mount = contentMounts.get(entry.id);
+      if (!mount) {
+        const canvas = document.createElement('div');
+        canvas.className = 'slide-canvas';
+        canvas.dataset.id = entry.id;
+        canvas.style.width = `${emuToPx(SLIDE_W_EMU)}px`;
+        canvas.style.height = `${emuToPx(SLIDE_H_EMU)}px`;
+        mount = { canvas, views: new Map(), unobserve: null };
+        contentMounts.set(entry.id, mount);
+        contentObserver?.observe(canvas);
+      }
+      return mount.canvas;
+    }),
+  );
 }
 
 /** 부모 창(iframe으로 이 문서를 띄운 화면)에 첫 슬라이드가 다 보인다고 알린다 — 부모가 진행 게이지를
  * 이 시점에 마친다(엑셀 편집기의 docview:ready와 같다). 내용(텍스트 상자·그림)이 처음 그려진 뒤, 그 슬라이드의
  * 그림이 다 뜨면(최대 8초) 한 번만 보낸다. */
 let parentReadyPosted = false;
-function notifyParentWhenFirstSlideShown(entryId: string): void {
+function notifyParentWhenFirstSlideShown(entryId: string, canvas: HTMLElement): void {
   if (parentReadyPosted || window.parent === window) return;
-  const canvas = document.getElementById('slide-canvas');
-  if (!canvas?.querySelector('.slide-textbox, .slide-visual')) return; // 아직 시딩 전(빈 캔버스)
+  if (!canvas.querySelector('.slide-textbox, .slide-visual')) return; // 아직 시딩 전(빈 캔버스)
   // 그림·도형 목록은 글자보다 조금 늦게 따로 도착한다 — 그것까지 받아 그린 뒤에 알린다(배경 그림 없이 끝나지 않게)
   if (!slideVisuals.has(entryId)) return;
   parentReadyPosted = true;
@@ -557,7 +622,7 @@ function notifyParentWhenFirstSlideShown(entryId: string): void {
   }
 }
 
-function renderCanvasForSlideInner(entryId: string): void {
+function renderCanvasForSlideInner(entryId: string, mount: SlideMount): void {
   shell?.setContextualTab('shape-format', false); // 슬라이드를 다시 그리면 고른 상자가 없다
   // y-prosemirror(1.3.7)의 ySyncPlugin/yCursorPlugin은 원격 갱신·커서 이동이 있을 때마다
   // "이 view에 적용할 setMeta"를 모듈 전역 큐에 넣고 setTimeout(0)으로 나중에 한꺼번에
@@ -575,7 +640,7 @@ function renderCanvasForSlideInner(entryId: string): void {
   // view.state(그리고 그 안의 ySyncPlugin state가 들고 있는 binding 객체)는 destroy() 이후에도
   // 참조가 살아 있으므로, 이렇게 하면 언제 예약된 flush든 실행 시점에 항상 이 가드에 걸려
   // 안전하게 no-op된다(타이밍에 기대지 않는 결정적 해결).
-  const previousViews = [...mountedViews.values()];
+  const previousViews = [...mount.views.values()];
   for (const view of previousViews) {
     const syncState = ySyncPluginKey.getState(view.state) as { binding?: { isDestroyed?: boolean } } | undefined;
     if (syncState?.binding) syncState.binding.isDestroyed = true;
@@ -585,12 +650,13 @@ function renderCanvasForSlideInner(entryId: string): void {
     if (focusedView === view) focusedView = null;
     view.destroy();
   }
-  mountedViews.clear();
+  mount.views.clear();
   // 이전에 활성이던 슬라이드의 perSlide 구조 구독을 해제한다 — 그러지 않으면 다른 슬라이드로
   // 옮긴 뒤에도 그 슬라이드에 텍스트박스가 추가/삭제될 때마다(원격 협업자가 하는 것 포함) 이미
   // 화면에 없는 슬라이드를 위해 불필요하게 이 함수가 다시 불린다.
-  activePerSlideUnobserve?.();
-  activePerSlideUnobserve = null;
+  mount.unobserve?.();
+  mount.unobserve = null;
+  const canvasEl = mount.canvas;
   canvasEl.style.width = `${emuToPx(SLIDE_W_EMU)}px`;
   canvasEl.style.height = `${emuToPx(SLIDE_H_EMU)}px`;
   canvasEl.style.setProperty('--slide-pt', `${slidePtPx()}px`);
@@ -620,10 +686,10 @@ function renderCanvasForSlideInner(entryId: string): void {
   // perSlide는 이미 존재하지만(슬라이드가 한 번은 시딩됨) 그 안에서 텍스트박스가 나중에
   // 추가/삭제될 수 있다("텍스트 추가" 버튼, 삭제 버튼, 또는 원격 협업자의 같은 조작) — 그 구조적
   // 변경(=perSlide 자신의 키 추가/삭제)을 감지해 다시 그린다. 얕은 observe라 텍스트박스 "안"
-  // 내용 편집(타이핑)에는 반응하지 않는다(위 activePerSlideUnobserve 선언부 주석 참고).
-  const onPerSlideStructureChange = () => renderCanvasForSlide(entryId);
+  // 내용 편집(타이핑)에는 반응하지 않는다(위 SlideMount 선언부 주석 참고).
+  const onPerSlideStructureChange = () => (mount === activeMount ? renderCanvasForSlide(entryId) : renderContentSlide(entryId));
   perSlide.observe(onPerSlideStructureChange);
-  activePerSlideUnobserve = () => perSlide.unobserve(onPerSlideStructureChange);
+  mount.unobserve = () => perSlide.unobserve(onPerSlideStructureChange);
 
   for (const [shapeId, shapeMap] of perSlide.entries()) {
     const meta = shapeMap.get('meta') as SlideShapeMeta;
@@ -650,12 +716,12 @@ function renderCanvasForSlideInner(entryId: string): void {
       const next = shapeMap.get('meta') as SlideShapeMeta;
       if (next.fill && /^#[0-9A-Fa-f]{6}$/.test(next.fill)) box.style.background = next.fill;
       // 다른 참여자(또는 내)가 글을 고쳐 다시 맞춘 자동 맞춤 배율
-      const view = mountedViews.get(shapeId);
+      const view = mount.views.get(shapeId);
       if (view && next.autofit && Number.isFinite(next.autofit.fontScale) && Number.isFinite(next.autofit.lnSpcReduction)) applyAutofit(view.dom, next.autofit);
     };
     shapeMap.observe(onShapeMetaChange);
-    const previousUnobserve = activePerSlideUnobserve;
-    activePerSlideUnobserve = () => {
+    const previousUnobserve = mount.unobserve;
+    mount.unobserve = () => {
       previousUnobserve?.();
       shapeMap.unobserve(onShapeMetaChange);
     };
@@ -739,7 +805,7 @@ function renderCanvasForSlideInner(entryId: string): void {
     // 수준별 글머리·들여쓰기·크기·간격·글꼴, 자동 맞춤, 세로 쓰기, 회전, 모양 안 글자 칸(slideTextLook.ts)
     applyTextboxLook(box, view.dom, meta, emuToPx);
     viewDefaults.set(view, { sizePt: meta.defaultSizePt ?? DEFAULT_TEXT_PT, align: meta.defaultAlign ?? 'l' });
-    mountedViews.set(shapeId, view);
+    mount.views.set(shapeId, view);
   }
 }
 
@@ -833,6 +899,7 @@ function cardFor(entry: SlideEntry, index: number): HTMLElement {
 
 function renderSlides(): void {
   renderSlidesInner();
+  if (contentUi) syncContentStack();
   designHooks?.onSlidesRendered();
 }
 
@@ -1419,15 +1486,23 @@ async function main(): Promise<void> {
       pendingSlideSubscriptions.delete(key);
       pendingDuplicateSources.delete(key);
     }
-    if (activeSlideId && event.keysChanged.has(activeSlideId)) renderCanvasForSlide(activeSlideId);
+    if (contentUi) for (const key of event.keysChanged) renderContentSlide(key);
+    else if (activeSlideId && event.keysChanged.has(activeSlideId)) renderCanvasForSlide(activeSlideId);
   });
   // slideVisuals는 slideContents와 별개 타이밍에(약간 늦게) 채워진다(room.ts 참고) — 텍스트박스가
   // 먼저 보이고 이미지/도형/표가 조금 뒤에 나타나는 정도는 자연스러운 점진적 렌더링이라 괜찮다.
   slideVisuals.observe((event) => {
-    if (activeSlideId && event.keysChanged.has(activeSlideId)) renderCanvasForSlide(activeSlideId);
+    if (contentUi) for (const key of event.keysChanged) renderContentSlide(key);
+    else if (activeSlideId && event.keysChanged.has(activeSlideId)) renderCanvasForSlide(activeSlideId);
   });
   // Task 8이 남겨 둔 훅 — 슬라이드를 고를 때마다 오른쪽 캔버스를 그 슬라이드 내용으로 채운다.
-  onActiveSlideChange = renderCanvasForSlide;
+  // 콘텐츠만 보기는 고른 슬라이드 하나가 아니라 쌓은 슬라이드 전부를 그린다(syncContentStack)
+  onActiveSlideChange = contentUi ? null : renderCanvasForSlide;
+  if (contentUi) {
+    // 키보드(PageDown·End·화살표·스페이스)로도 쌓인 슬라이드를 넘기게 — 스크롤하는 칸이 처음부터 포커스를 가진다
+    canvasWrapEl.tabIndex = -1;
+    canvasWrapEl.focus({ preventScroll: true });
+  }
 
   slidesArray.observe(renderSlides);
   renderSlides();
