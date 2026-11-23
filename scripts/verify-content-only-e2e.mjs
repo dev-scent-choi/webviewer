@@ -1,8 +1,10 @@
 // 콘텐츠만 보기(ui=content, 설계 2026-11-22-artcraft-app-screen §4) 브라우저 검사 — 세 편집기(편집 토큰으로 열어도)와 보기 화면(view.html)에서
-//  도구(제목 줄·탭·리본·상태 줄·섬네일 레일·수식 줄·시트 추가) 0개 보임, 본문 보임, 타자를 쳐도 내용이 바뀌지 않음, 메인 화면 "콘텐츠만 보기" 링크.
+//  도구(제목 줄·탭·리본·상태 줄·섬네일 레일·수식 줄·시트 추가) 0개 보임, 본문 보임, 타자를 쳐도 내용이 바뀌지 않음(화면 + 서버 원본), 600px 가로 넘침 없음,
+//  아트크래프트 contentUrl은 엔진 보기(앱 화면 자산 요청 없음), 메인 화면 "콘텐츠만 보기" 링크.
 // 사용법(서버를 먼저 띄워 둘 것 — 업로드·토큰 API가 키 없이 열려 있는 로컬 시험 서버):
 //   npm run build:editor && node scripts/verify-content-only-e2e.mjs [http://127.0.0.1:8169]
 import fs from 'node:fs';
+import JSZip from 'jszip';
 import path from 'node:path';
 import { chromium } from 'playwright';
 
@@ -41,6 +43,16 @@ const withContent = (url) => {
 };
 const visibleTools = (page) => page.evaluate((sels) => sels.flatMap((s) => [...document.querySelectorAll(s)].filter((el) => el.getClientRects().length > 0).map(() => s)), TOOLS);
 const bodyText = (page) => page.evaluate(() => document.body.innerText);
+/** 받은 파일(지금 서버 원본) 안 XML 글자 — 화면만이 아니라 서버에도 쓰이지 않았는지 */
+async function savedXmlText(tokenStr) {
+  const zip = await JSZip.loadAsync(Buffer.from(await (await fetch(`${BASE}/api/view/download?token=${encodeURIComponent(tokenStr)}`)).arrayBuffer()));
+  return (await Promise.all(Object.values(zip.files).filter((f) => f.name.endsWith('.xml')).map((f) => f.async('string')))).join('\n');
+}
+async function noOverflowAt600(page) {
+  await page.setViewportSize({ width: 600, height: 860 });
+  await sleep(400);
+  return page.evaluate(() => document.documentElement.scrollWidth);
+}
 
 const browser = await chromium.launch();
 try {
@@ -53,7 +65,8 @@ try {
     const errors = [];
     page.on('pageerror', (e) => errors.push(String(e)));
     // 편집 토큰으로 — 콘텐츠만 보기는 권한이 있어도 편집하지 않는다
-    await page.goto(withContent((await token(ids[ext], { canEdit: true })).editorUrl));
+    const editTok = await token(ids[ext], { canEdit: true });
+    await page.goto(withContent(editTok.editorUrl));
     await page.waitForSelector(BODY[ext], { timeout: 120000 });
     await sleep(1500);
     const tools = await visibleTools(page);
@@ -70,6 +83,10 @@ try {
     const after = await bodyText(page);
     rec(`${ext} 타자·붙여넣기 무효(내용 그대로)`, !after.includes(MARK) && after.length === before.length, `${before.length} → ${after.length}`);
     if (ext === 'docx') rec('docx 본문 편집 불가(contenteditable 아님)', (await page.getAttribute('.ProseMirror', 'contenteditable')) !== 'true');
+    await sleep(1500);
+    rec(`${ext} 서버 원본에도 친 글자 없음(편집 토큰이어도)`, !(await savedXmlText(editTok.token)).includes(MARK));
+    const sw = await noOverflowAt600(page);
+    rec(`${ext} 600px 가로 넘침 없음`, sw <= 600, `${sw}px`);
     rec(`${ext} 화면 오류 없음`, errors.length === 0, errors.slice(0, 2).join(' | '));
     await ctx.close();
   }
@@ -94,6 +111,8 @@ try {
     await sleep(500);
     rec('보기 docx 타자 무효', !(await bodyText(page)).includes(MARK) && (await bodyText(page)).length === before.length);
     rec('보기 docx 화면 오류 없음', errors.length === 0, errors.slice(0, 2).join(' | '));
+    const sw = await noOverflowAt600(page);
+    rec('보기 docx 600px 가로 넘침 없음', sw <= 600, `${sw}px`);
     await ctx.close();
   }
 
@@ -103,6 +122,8 @@ try {
     const page = await ctx.newPage();
     const errors = [];
     page.on('pageerror', (e) => errors.push(String(e)));
+    const asked = [];
+    page.on('request', (r) => asked.push(new URL(r.url()).pathname));
     const tok = await token(ids.docx, { engine: 'artcraft' });
     const cu = tok.contentUrl ? new URL(tok.contentUrl, BASE) : null;
     rec('아트크래프트 docx contentUrl → /view.html?…&ui=content', tok.engine === 'artcraft' && cu?.pathname === '/view.html' && cu.searchParams.get('ui') === 'content', tok.contentUrl?.split('?')[0] ?? String(tok.engineReason));
@@ -114,6 +135,7 @@ try {
       const tools = await visibleTools(page);
       rec('아트크래프트 docx ui=content — 엔진이 그림·도구 0개 보임', engine && tools.length === 0 && (await page.evaluate(() => document.body.classList.contains('ui-content'))), JSON.stringify({ engine, tools }));
       rec('아트크래프트 docx 화면 오류 없음', errors.length === 0, errors.slice(0, 2).join(' | '));
+      rec('아트크래프트 docx ui=content — 앱 화면 자산 요청 없음', !asked.some((p) => p.startsWith('/artcraft-app')), asked.filter((p) => p.startsWith('/artcraft-app')).join(', '));
     }
     await ctx.close();
   }

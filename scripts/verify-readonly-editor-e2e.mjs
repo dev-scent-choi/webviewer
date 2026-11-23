@@ -47,6 +47,10 @@ if (!fs.existsSync('public/js/editor.bundle.js')) {
   console.error('public/js/editor.bundle.js 없음 — npm run build:editor 먼저');
   process.exit(1);
 }
+if (!fs.existsSync('public/artcraft-app/manifest.json')) {
+  console.error('public/artcraft-app/manifest.json 없음 — npm run build:artcraft-app 먼저');
+  process.exit(1);
+}
 
 let server = null;
 async function startServer() {
@@ -517,8 +521,8 @@ try {
     rec('(6) 메인 한 줄 단추(펼침 메뉴 없음): 열기·리브레오피스·아트크래프트·동시편집·삭제', JSON.stringify(labels) === JSON.stringify(want) && (await row().locator('details').count()) === 0, labels.join(','));
     for (const [label, re] of [
       ['리브레오피스로 열기', /\/view\.html\?token=/],
-      // 앱 빌드(manifest)가 있으면 앱 화면, 없으면 엔진 보기(설계 2026-11-22-artcraft-app-screen §3)
-      ['아트크래프트로 열기', /\/(view|artcraft-app)\.html\?token=/],
+      // 배포 기본 = 앱 화면(설계 2026-11-22-artcraft-app-screen §3, manifest 준비 검사는 맨 위)
+      ['아트크래프트로 열기', /\/artcraft-app\.html\?token=/],
       ['동시편집 열기', /\/editor\.html\?token=[^&]+$/],
     ]) {
       await home();

@@ -1099,6 +1099,8 @@ async function main(): Promise<void> {
     applyZoom();
   };
   applyZoom();
+  // 콘텐츠만 보기는 확대 단추가 없으니 창 폭이 바뀌면 다시 맞춘다(좁힌 창에 가로 스크롤이 남지 않게, 설계 2026-11-22 §5)
+  if (contentUi) window.addEventListener('resize', () => setZoom(fitZoom(VIEWER_PAGE_CONTAINER_MAX_PX)));
   on('zoom-in', () => setZoom(Math.round((zoom + 0.1) * 10) / 10));
   on('zoom-out', () => setZoom(Math.round((zoom - 0.1) * 10) / 10));
   on('btn-zoom-in-ribbon', () => setZoom(Math.round((zoom + 0.1) * 10) / 10));

@@ -4,6 +4,7 @@
 //  (5) 내려받기 권한 없는 토큰은 서버 변환으로  (6) CPU×4 첫 쪽 시간(환산 — CDP 스로틀은 메인 스레드만 늦추고 Worker는 늦추지 않으므로
 //      스로틀한 전체 시간 − Worker 시간 + 4 × Worker 시간(Worker가 잰 initMs·openMs·firstRenderMs). 로컬 서버라 받기 시간은 사실상 0 — 목표 docx 2.5초·pptx·doc 2초, 고객 pptx 3초)
 //  (7) 두 번째 열기에서 wasm·글꼴을 서버에서 다시 받지 않음(서버 요청 기록으로 센다 — 304 재검증도 요청으로 잡힌다)
+// 2026-11-22 앱 화면 뒤: 엔진 보기 단언은 /view.html?token=…(앱 실패 경로)에서, "아트크래프트로 열기" 단추·viewerUrl은 앱 화면(/artcraft-app.html)을 본다.
 // 이 스크립트가 시험 서버를 직접 띄운다(npm run build:editor, npm run build:artcraft 뒤, LibreOffice 필요):
 //   ARTCRAFT_E2E_PRIVATE_DIR=<고객형 원본 폴더> node scripts/verify-artcraft-e2e.mjs [포트=8150, 8150~8159]
 // 고객형 문서는 그 폴더에서 .audit-run/artcraft-e2e-<포트>/로 복사해 쓴다(저장소에 넣지 않는다). 변수가 없거나 폴더가 없으면 그 둘은 건너뛴다(SKIP 줄).
@@ -35,7 +36,7 @@ const rec = (name, ok, detail = '') => {
 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-for (const [file, how] of [['public/artcraft/manifest.json', 'npm run build:artcraft'], ['public/js/artcraftWorker.bundle.js', 'npm run build:editor']]) {
+for (const [file, how] of [['public/artcraft/manifest.json', 'npm run build:artcraft'], ['public/js/artcraftWorker.bundle.js', 'npm run build:editor'], ['public/artcraft-app/manifest.json', 'npm run build:artcraft-app']]) {
   if (!fs.existsSync(file)) {
     console.error(`${file} 없음 — ${how} 먼저`);
     process.exit(1);
@@ -102,6 +103,8 @@ const token = (id, body) =>
   })
     .then((r) => r.json())
     .then((j) => j.data);
+/** 엔진 쪽 그림 보기 — artcraft 토큰의 viewerUrl은 앱 화면(설계 2026-11-22-artcraft-app-screen §3), 엔진 보기는 앱 실패 때 가는 /view.html */
+const engineView = (tok) => `/view.html?token=${encodeURIComponent(tok.token)}`;
 
 async function gray(png) {
   const { data, info } = await sharp(png).flatten({ background: '#ffffff' }).resize({ width: 128 }).grayscale().raw().toBuffer({ resolveWithObject: true });
@@ -221,9 +224,10 @@ try {
     ids[c.name] = meta.id;
     const tok = await token(meta.id, { engine: 'artcraft' });
     rec(`${c.name}: 토큰 engine=artcraft`, tok.engine === 'artcraft', tok.engineReason ?? '');
+    rec(`${c.name}: 토큰 viewerUrl = 앱 화면`, /^\/artcraft-app\.html\?token=/.test(tok.viewerUrl), tok.viewerUrl);
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
     const before = await artcraftHits();
-    const o = await openPage(context, tok.viewerUrl, { throttle: true });
+    const o = await openPage(context, engineView(tok), { throttle: true });
 
     // (6) CPU×4(환산) 첫 쪽 — 메인 스레드 몫(스로틀됨) + 4 × Worker 몫
     const workerMs = o.timing ? o.timing.initMs + o.timing.openMs + o.timing.firstRenderMs : null;
@@ -347,7 +351,7 @@ try {
     // (7) 두 번째 열기 — 같은 브라우저(캐시)
     await o.page.close();
     const mid = await artcraftHits();
-    const again = await openPage(context, tok.viewerUrl);
+    const again = await openPage(context, engineView(tok));
     const after = await artcraftHits();
     rec(`${c.name}: (7) 두 번째 열기 — wasm·글꼴을 캐시에서(처음 ${mid - before}건, 두 번째 ${after - mid}건)`, mid > before && after === mid);
     await again.page.close();
@@ -359,7 +363,7 @@ try {
   {
     const tok = await token(ids['a1-korean-report.docx'], { engine: 'artcraft' });
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
-    const o = await openPage(context, tok.viewerUrl, { block: true });
+    const o = await openPage(context, engineView(tok), { block: true });
     const text = await o.page.textContent('#view-notice');
     const badge = await o.page.locator('#engine-badge').isVisible();
     const wasmBlocked = o.blocked.filter((p) => p.endsWith('.wasm'));
@@ -372,7 +376,7 @@ try {
   {
     const tok = await token(ids['a1-korean-report.docx'], { engine: 'artcraft' });
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
-    const o = await openPage(context, tok.viewerUrl);
+    const o = await openPage(context, engineView(tok));
     const worker = o.page.workers().find((w) => w.url().includes('artcraftWorker'));
     if (!worker) {
       rec('열린 뒤 Worker 죽음 — Worker를 찾음', false, o.page.workers().map((w) => w.url()).join(', '));
@@ -431,13 +435,17 @@ try {
     await form.getByRole('button', { name: '열람 링크 발급' }).click();
     const link = docRow.locator('.token-result a', { hasText: '아트크래프트로 열기' });
     await link.waitFor({ timeout: 15000 });
-    const shared = await openPage(context, await link.getAttribute('href'));
-    rec('메인: 공유 폼 아트크래프트 링크 → 표지 보임', await shared.page.locator('#engine-badge').isVisible());
-    await shared.page.close();
+    const href = await link.getAttribute('href');
+    rec('메인: 공유 폼 아트크래프트 링크 → 앱 화면 주소', /^\/artcraft-app\.html\?token=/.test(href ?? ''), href ?? '');
+    const shared = await context.newPage();
+    await shared.goto(`${BASE}${href}`);
+    rec('메인: 공유 폼 아트크래프트 링크 → 앱이 문서를 엶', await shared.waitForFunction(() => document.body.dataset.appState === 'open', null, { timeout: 120000 }).then(() => true, () => false));
+    await shared.close();
     await docRow.getByRole('button', { name: '아트크래프트로 열기' }).click();
-    await page.waitForURL(/\/view\.html\?token=/, { timeout: 15000 });
-    await page.waitForSelector('.page-frame[data-page="1"].page-ready', { timeout: 90000 });
-    rec('메인: "아트크래프트로 열기" 단추 → 표지 보임', await page.locator('#engine-badge').isVisible());
+    await page.waitForURL(/\/artcraft-app\.html\?token=/, { timeout: 15000 });
+    const appOpen = await page.waitForFunction(() => document.body.dataset.appState === 'open', null, { timeout: 120000 }).then(() => true, () => false);
+    // 읽기 전용 표지는 두지 않는다(사용자 규칙 2026-11-22) — 앱이 문서를 열고 제목 줄에 표지·"편집 열기"가 없음
+    rec('메인: "아트크래프트로 열기" 단추 → 앱 화면(문서 열림·표지 없음)', appOpen && (await page.locator('#readonly-badge, #edit-open').count()) === 0);
     await context.close();
   }
 
