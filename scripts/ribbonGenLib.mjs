@@ -6,7 +6,7 @@ import fs from 'node:fs';
 export const INVENTORY_PATH = 'src/client/ribbon/inventory.json';
 export const APP_OF_EXT = Object.freeze({ docx: 'word', xlsx: 'excel', pptx: 'powerpoint' });
 /** 리본을 목록으로 만든 편집기 확장자 — e2e 단추 수 단언이 목록을 따르는 앱(Task 3 워드·4 엑셀·5 PPT가 하나씩 더함) */
-export const LISTED_EXTS = new Set(['docx', 'xlsx']);
+export const LISTED_EXTS = new Set(['docx', 'xlsx', 'pptx']);
 export const KINDS = Object.freeze(['button', 'split', 'dropdown', 'gallery', 'toggle', 'input', 'select', 'info']);
 const MAPS = ['same', 'moved', 'nearest', 'proxy'];
 const LAYOUTS = ['columns', 'rows', 'fields'];

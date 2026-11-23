@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { generatePage, loadInventory, type AppName } from '../scripts/ribbonGenLib.mjs';
 
 // 목록대로 바꾼 앱 — Task 3(word)·4(excel)·5(powerpoint)가 하나씩 더한다
-const DONE: readonly AppName[] = ['word', 'excel'];
+const DONE: readonly AppName[] = ['word', 'excel', 'powerpoint'];
 const PAGES = ['public/editor.html', 'public/editor-grid.html', 'public/editor-slides.html'];
 const before = JSON.parse(fs.readFileSync('tests/fixtures/ribbon-ids-before.json', 'utf8')) as Record<string, string[]>;
 const headerIds = (html: string) => [...html.slice(html.indexOf('<header'), html.indexOf('</header>')).matchAll(/\sid="([^"]+)"/g)].map((m) => m[1]);

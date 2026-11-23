@@ -7,7 +7,7 @@ import { baseKeymap, splitBlockAs, toggleMark } from 'prosemirror-commands';
 import { keymap } from 'prosemirror-keymap';
 import type { Mark, MarkType, Node as PMNode } from 'prosemirror-model';
 import { ySyncPlugin, yCursorPlugin, yUndoPlugin, ySyncPluginKey, undo, redo } from 'y-prosemirror';
-import { initOfficeShell } from './officeShell.js';
+import { initOfficeShell, type OfficeShell } from './officeShell.js';
 import { handleSessionRejected, markContentUi } from './viewStrip.js';
 import { setupSlideDesign } from './slideDesignUi.js';
 import {
@@ -69,6 +69,7 @@ const canvasEl = document.getElementById('slide-canvas') as HTMLElement;
 let designHooks: { onCanvasRendered(): void; onSlidesRendered(): void } | null = null;
 /** 마지막으로 커서를 둔 텍스트 상자·도형(애니메이션 탭의 대상) */
 let lastFocusedShapeId: string | null = null;
+let shell: OfficeShell | null = null; // 도형 서식 상황별 탭
 const cardTemplate = document.getElementById('slide-card-template') as HTMLTemplateElement;
 const presenceListEl = document.getElementById('presence-list') as HTMLElement;
 
@@ -557,6 +558,7 @@ function notifyParentWhenFirstSlideShown(entryId: string): void {
 }
 
 function renderCanvasForSlideInner(entryId: string): void {
+  shell?.setContextualTab('shape-format', false); // 슬라이드를 다시 그리면 고른 상자가 없다
   // y-prosemirror(1.3.7)의 ySyncPlugin/yCursorPlugin은 원격 갱신·커서 이동이 있을 때마다
   // "이 view에 적용할 setMeta"를 모듈 전역 큐에 넣고 setTimeout(0)으로 나중에 한꺼번에
   // flush한다(y-prosemirror 소스의 updateMetas). updateMetas는 flush 직전
@@ -709,6 +711,7 @@ function renderCanvasForSlideInner(entryId: string): void {
           focusedView = view;
           lastFocusedShapeId = shapeId;
           refreshRibbonState(view);
+          shell?.setContextualTab('shape-format', canEdit);
           return false;
         },
       },
@@ -1316,7 +1319,7 @@ async function main(): Promise<void> {
   document.title = `${info.name} — DocView 편집`;
   canEdit = info.permissions.canEdit && !contentUi;
   // 리본 편집 탭은 읽기 전용이면 셸이 숨긴다(파일 탭만 남는다).
-  initOfficeShell({
+  shell = initOfficeShell({
     token: token ?? '',
     docName: info.name,
     docId: info.docId,

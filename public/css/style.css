@@ -4315,3 +4315,5 @@ body.ui-content.no-copy :is(#editor, #grid-editor, #slide-canvas-wrap) * { user-
 /* 탭이 늘어(워드 9 + 표 안 상황별 2) 좁은 창에서 탭 줄이 페이지를 밀지 않게 — 탭 줄 안에서만 가로로 밀린다 */
 .ribbon-skin .ribbon-tabs { overflow-x: auto; scrollbar-width: none; }
 .ribbon-skin .ribbon-tab { flex: none; }
+/* PPT 타이밍 묶음 — 목록대로 "재생 시간"·"지연" 칸이 더해져 2.6rem 이름 칸에서 "재생 시\n간"으로 꺾여 판(62px)을 넘었다 */
+.slides-editor-page .ribbon-skin .layout-field { grid-template-columns: 3.2rem auto; white-space: nowrap; }
