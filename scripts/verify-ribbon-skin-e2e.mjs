@@ -140,7 +140,8 @@ const bigButtons = (page) =>
       const x = el.getBoundingClientRect();
       return { left: x.left, top: x.top, width: x.width, height: x.height };
     };
-    return [...document.querySelectorAll('.ribbon-panel:not([hidden]) .icon-btn-big')]
+    // 작은 단추 3줄로 줄인 묶음(rb-compact — 오피스 중간 단계, ribbonRuntime.ts)의 큰 단추는 일부러 아이콘 16·이름 옆이라 뺀다
+    return [...document.querySelectorAll('.ribbon-panel:not([hidden]) .ribbon-group:not(.rb-compact) .icon-btn-big')]
       .filter((b) => b.getClientRects().length > 0)
       .map((b) => {
         const svg = b.querySelector(':scope > svg');
@@ -160,7 +161,7 @@ const iconChrome = (page) =>
       return list.length ? Math.min(...list) : null;
     };
     return {
-      big: min('.ribbon-panel:not([hidden]) .icon-btn-big > svg, .toolbar-row-tools .ribbon-group-buttons > .icon-btn > svg:not([hidden]):not(.icon-btn-badge):not(.icon-btn-caret-glyph)'),
+      big: min('.ribbon-panel:not([hidden]) .ribbon-group:not(.rb-compact) .icon-btn-big > svg, .toolbar-row-tools .ribbon-group-buttons > .icon-btn > svg:not([hidden]):not(.icon-btn-badge):not(.icon-btn-caret-glyph)'),
       small: min('.ribbon-panel:not([hidden]) .icon-btn:not(.icon-btn-big):not(.dropdown-caret) > svg:first-child'),
       chrome: [...document.querySelectorAll('#readonly-badge, .readonly-badge, .conn-status, .view-open-edit, #edit-btn, .view-readonly')].filter(vis).map((el) => el.id || el.className),
       names: [...document.querySelectorAll('.toolbar-row-tools .ribbon-group-buttons > .icon-btn')].filter(vis).filter((b) => !b.querySelector(':scope > .tool-name')?.textContent?.trim() || !vis(b.querySelector(':scope > .tool-name'))).map((b) => b.id),
