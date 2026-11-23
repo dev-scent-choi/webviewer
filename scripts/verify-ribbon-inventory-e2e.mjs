@@ -360,7 +360,8 @@ try {
 
     // (9) ui=view
     const ro = await browser.newContext({ viewport: { width: 1400, height: 900 } });
-    const v = await open(ro, (await token(id, { engine: 'editor' })).viewerUrl, READY[ext]);
+    const viewUrl = (await token(id, { engine: 'editor' })).viewerUrl;
+    const v = await open(ro, viewUrl, READY[ext]);
     const vs = await v.page.evaluate(() => ({
       body: document.body.classList.contains('ui-view'),
       pendingGrey: [...document.querySelectorAll('#toolbar [data-pending], #toolbar [data-pending] *')].filter((el) => el.classList.contains('ro-disabled')).length,
@@ -368,7 +369,25 @@ try {
       greyed: document.querySelectorAll('#toolbar .ro-disabled').length,
     }));
     rec(`(9) ${ext} ui=view — 쓰는 단추 흐림 ${vs.greyed}개, 준비 중·접힌 묶음 단추엔 흐림 없음`, vs.body && vs.greyed > 0 && vs.pendingGrey === 0 && vs.toggleGrey === 0, JSON.stringify(vs));
+    if (ext === 'pptx') {
+      await v.page.$eval('.slide-textbox', (b) => b.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })));
+      await sleep(200);
+      const hidden = await v.page.$eval('.ribbon-tab[data-tab="shape-format"]', (t) => t.hidden);
+      rec('(13) pptx ui=view — 상자 pointerdown이 도형 서식 탭을 열지 않음', hidden === true, JSON.stringify({ hidden }));
+    }
     await ro.close();
+    // (9) 좁은 폭 ui=view — 열린 접힌 묶음 판 안의 조작은 꺼진 채
+    const rn = await browser.newContext({ viewport: { width: 600, height: 900 } });
+    const vn = await open(rn, viewUrl, READY[ext]);
+    await vn.page.click('.ribbon-panel:not([hidden]) > .ribbon-group[data-collapse] > .rb-group-toggle');
+    const pn = await vn.page.evaluate(() => {
+      const ctl = [...document.querySelectorAll('.ribbon-group.rb-open > .ribbon-group-buttons button, .ribbon-group.rb-open > .ribbon-group-buttons select, .ribbon-group.rb-open > .ribbon-group-buttons input')];
+      const live = ctl.filter((el) => !el.closest('[data-pending]') && el.id !== 'btn-copy' && // 복사는 읽기 전용에서도 허용(canCopy)
+         !el.classList.contains('ro-disabled') && !el.disabled && el.getAttribute('aria-disabled') !== 'true');
+      return { total: ctl.length, live: live.length };
+    });
+    rec(`(9) ${ext} ui=view 접힌 묶음 판 — 안의 조작 ${pn.total}개 모두 꺼짐(복사 제외)`, pn.total > 0 && pn.live === 0, JSON.stringify(pn));
+    await rn.close();
   }
   writeReport(report);
   console.log(`\n나란히 보기: ${path.join(SHOTS, 'report.html')}`);

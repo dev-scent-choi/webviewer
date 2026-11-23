@@ -27,11 +27,26 @@ export function hydrateIcons(panel: HTMLElement): void {
 }
 
 let openGroup: HTMLElement | null = null;
+let popSeq = 0;
+
+/** 접힌 묶음 단추에 aria-haspopup·aria-controls(판 id는 한 번만 매긴다) */
+function wireToggle(group: HTMLElement): void {
+  if (!group.querySelector) return;
+  const toggle = group.querySelector<HTMLElement>(':scope > .rb-group-toggle');
+  const body = group.querySelector<HTMLElement>(':scope > .ribbon-group-buttons');
+  if (!toggle || !body) return;
+  if (!body.id) body.id = `rb-pop-${++popSeq}`;
+  toggle.setAttribute('aria-haspopup', 'true');
+  toggle.setAttribute('aria-controls', body.id);
+}
 
 export function closeGroupPopup(): void {
   if (!openGroup) return;
+  const toggle = openGroup.querySelector<HTMLElement>(':scope > .rb-group-toggle');
+  // 판 안에 있던 포커스가 display:none 으로 BODY로 떨어지지 않게 토글로 되돌린다
+  if (toggle && openGroup.contains(document.activeElement)) toggle.focus();
   openGroup.classList.remove('rb-open');
-  openGroup.querySelector(':scope > .rb-group-toggle')?.setAttribute('aria-expanded', 'false');
+  toggle?.setAttribute('aria-expanded', 'false');
   openGroup = null;
 }
 
@@ -42,7 +57,10 @@ export function fitPanel(panel: HTMLElement, viewportWidth: number): void {
   // 같은 판·같은 폭으로 다시 맞출 때(상황별 탭·글꼴 받음·폰 키보드 resize)는 열린 묶음 판을 닫지 않는다
   if (lastFit?.panel !== panel || lastFit.width !== viewportWidth) closeGroupPopup();
   lastFit = { panel, width: viewportWidth };
-  for (const g of groups) g.classList.remove('rb-collapsed', 'rb-compact');
+  for (const g of groups) {
+    g.classList.remove('rb-collapsed', 'rb-compact');
+    wireToggle(g);
+  }
   if (viewportWidth <= NARROW_PX) {
     for (const g of groups) g.classList.add('rb-collapsed');
     return;
@@ -91,7 +109,13 @@ export function installGroupToggles(toolbar: HTMLElement): void {
   toolbar.addEventListener('click', (event) => {
     const toggle = (event.target as Element).closest<HTMLElement>('.rb-group-toggle');
     const group = toggle?.closest<HTMLElement>('.ribbon-group');
-    if (!toggle || !group) return;
+    if (!toggle || !group) {
+      // 판 안 명령을 누르면 닫는다(오피스처럼) — 안쪽 드롭다운·선택 상자·입력을 여는 조작은 제외
+      const t = event.target as Element;
+      if (openGroup && t.closest('.ribbon-group-buttons') && t.closest('button') && !t.closest('.dropdown-caret, .dropdown-menu, select, input')) closeGroupPopup();
+      return;
+    }
+    wireToggle(group);
     const wasOpen = openGroup === group;
     closeGroupPopup();
     if (wasOpen) return;
@@ -110,6 +134,7 @@ export function installGroupToggles(toolbar: HTMLElement): void {
     if (openGroup && !openGroup.contains(target) && !target.closest('.dropdown-menu')) closeGroupPopup();
   });
   document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape') closeGroupPopup();
+    // 안쪽 드롭다운·선택 상자가 이미 처리한 Esc는 판까지 닫지 않는다
+    if (event.key === 'Escape' && !event.defaultPrevented && !(event.target as Element | null)?.closest?.('.dropdown-menu, select')) closeGroupPopup();
   });
 }

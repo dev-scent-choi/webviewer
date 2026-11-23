@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { collapseOrder } from '../src/client/ribbonRuntime.js';
 
 describe('collapseOrder — 오피스처럼 접는 순서', () => {
@@ -35,12 +35,21 @@ function fakeEl() {
 describe('fitPanel — 열린 묶음 판은 폭이 바뀔 때만 닫는다(M2)', () => {
   it('같은 폭으로 다시 맞추면 열린 판 유지, 폭이 바뀌면 닫음', async () => {
     const listeners: Record<string, (e: unknown) => void> = {};
-    (globalThis as Record<string, unknown>).document = { addEventListener: () => {} };
+    let focused: unknown = null;
+    const inside = {};
+    (globalThis as Record<string, unknown>).document = {
+      addEventListener: (t: string, f: (e: unknown) => void) => (listeners[t] = f),
+      get activeElement() {
+        return focused;
+      },
+    };
     (globalThis as Record<string, unknown>).window = { innerWidth: 1000 };
     const { fitPanel, installGroupToggles } = await import('../src/client/ribbonRuntime.js');
-    const toggle = fakeEl();
+    const toggle = Object.assign(fakeEl(), { focus: vi.fn(), getBoundingClientRect: () => ({ left: 10, bottom: 20 }) });
+    const body = { id: '', offsetWidth: 100, style: {} as Record<string, string> };
     const group = Object.assign(fakeEl(), {
-      querySelector: (sel: string) => (sel.includes('rb-group-toggle') ? toggle : null),
+      querySelector: (sel: string) => (sel.includes('rb-group-toggle') ? toggle : sel.includes('ribbon-group-buttons') ? body : null),
+      contains: (n: unknown) => n === inside,
     });
     Object.assign(toggle, { closest: () => group });
     Object.defineProperty(group, 'offsetWidth', { get: () => (group.classes.has('rb-collapsed') ? 60 : 400) });
@@ -62,6 +71,20 @@ describe('fitPanel — 열린 묶음 판은 폭이 바뀔 때만 닫는다(M2)',
     fitPanel(panel, 1000); // 상황별 탭·글꼴 받음으로 render 다시
     expect(group.classes.has('rb-open')).toBe(true);
     expect(toggle.attrs.get('aria-expanded')).toBe('true');
+
+    // M1/M3: 속성·포커스 복귀·Esc
+    expect(toggle.attrs.get('aria-haspopup')).toBe('true');
+    expect(toggle.attrs.get('aria-controls')).toBe(body.id);
+    listeners.keydown({ key: 'Escape', defaultPrevented: true, target: { closest: () => null } });
+    expect(group.classes.has('rb-open')).toBe(true); // 이미 처리된 Esc는 무시
+    focused = inside;
+    listeners.keydown({ key: 'Escape', defaultPrevented: false, target: { closest: () => null } });
+    expect(group.classes.has('rb-open')).toBe(false);
+    expect(toggle.focus).toHaveBeenCalled();
+    listeners.click({ target: { closest: () => toggle } });
+    listeners.click({ target: { closest: (s: string) => (s === 'button' || s === '.ribbon-group-buttons' ? {} : null) } }); // 판 안 명령
+    expect(group.classes.has('rb-open')).toBe(false);
+    listeners.click({ target: { closest: () => toggle } });
 
     fitPanel(panel, 900); // 창 폭이 바뀜
     expect(group.classes.has('rb-open')).toBe(false);
