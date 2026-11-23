@@ -11,10 +11,7 @@
     html, body.artcraft-app-page { height: 100%; margin: 0; overflow: hidden; }
     .artcraft-app-page #toolbar { position: fixed; top: 0; left: 0; right: 0; z-index: 10; }
     .artcraft-app-page .save-status { margin-left: auto; font-size: 11px; color: var(--skin-text-dim); white-space: nowrap; }
-    .artcraft-app-page .app-banner { position: fixed; top: calc(var(--skin-title-h) + 1px); left: 0; right: 0; z-index: 9; box-sizing: border-box; height: 18px; padding: 0 8px; font: 11px/18px var(--skin-font); background: #fff4ce; color: #4d3a00; }
-    .artcraft-app-page .app-banner[hidden] { display: none; }
     #app-host { position: fixed; top: calc(var(--skin-title-h) + 1px); left: 0; right: 0; bottom: 0; }
-    #app-host.with-banner { top: calc(var(--skin-title-h) + 19px); }
     #app-frame { display: block; width: 100%; height: 100%; border: 0; }
     .artcraft-app-page .view-notice { top: calc(var(--skin-title-h) + 0.3rem); }
     .artcraft-app-page .view-notice button { margin-left: 8px; }
@@ -32,7 +29,6 @@
       <span id="save-status" class="save-status" role="status" aria-live="polite"></span>
     </div>
   </header>
-  <div id="app-banner" class="app-banner" role="status" hidden></div>
   <div id="app-notice" class="view-notice" role="status" hidden></div>
   <div id="app-host"></div>
   <script type="module" src="/js/artcraftApp.bundle.js"></script>

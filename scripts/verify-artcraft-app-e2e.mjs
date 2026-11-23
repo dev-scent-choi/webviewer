@@ -1,9 +1,10 @@
 // 아트크래프트 앱 화면 — 설계 2026-11-22-artcraft-app-screen §5의 브라우저 검사(docx·xlsx·pptx 각각 읽기 전용·편집 토큰):
 //  (1) 앱 화면이 뜨고 문서가 보임(워드 document.text·엑셀 시트 수·PPT 슬라이드 수)
-//  (2) 읽기 전용: 워드·엑셀 타자 → 변화 없음(엑셀 시트 모두 보호, Ctrl+Z·edit.undo 뒤 1.5초 안에 다시 보호), PPT는 "편집은 저장되지 않습니다" 띠
+//  (2) 읽기 전용: 워드·엑셀 타자 → 변화 없음(엑셀 시트 모두 보호, Ctrl+Z·edit.undo 뒤 1.5초 안에 다시 보호), PPT는 띠 없이 Ctrl+S 때만 "편집은 저장되지 않습니다" 안내
 //  (3) 편집 토큰 Ctrl+S/file.save → 서버 저장 → 받은 파일·다시 연 앱에 반영, 편집 방이 열려 있으면 거절 안내, 옛 기준(다른 창이 먼저 저장)이면 409 안내
 //  (4) wasm 막기 → 안내 + 엔진 보기(워드)·서버 격자(엑셀)  (5) 서버 변환 요청 0건  (6) 두 번째 열기에서 앱 자산을 서버에서 다시 받지 않음
 //  (7) 우리 제목 줄 24px·한글, 읽기 전용 표지·"편집 열기" 없음(사용자 규칙 2026-11-22), 600px 가로 넘침 없음
+//  (8) 메인 공유 폼: 링크 복사 = 앱 화면 주소(viewerUrl), 동시편집 + 아트크래프트 → 앱 화면에서 편집·Ctrl+S 저장(200)
 // 이 스크립트가 시험 서버를 직접 띄운다(npm run build:editor·build:artcraft·build:artcraft-app 뒤, LibreOffice 필요 — 업로드 변환):
 //   node scripts/verify-artcraft-app-e2e.mjs [포트=8172, 8170~8179]
 // 합성 문서(audit/office/corpus)만 쓴다. 다 통과하면 .audit-run/artcraft-app-e2e-<포트>/를 지운다. 실패하면 살펴보도록 남긴다.
@@ -30,6 +31,7 @@ const API = { docx: 'wordcraft', xlsx: 'gridcraft', pptx: 'deckcraft' };
 const SERVER_CONVERT = /^\/api\/view\/(pages|derived-pdf|status|search|pdf-)/;
 const FAILED_NOTICE = '아트크래프트 앱 화면을 열지 못해 다른 화면으로 보여 줍니다';
 const STALE_NOTICE = '문서를 연 뒤에 다른 사람이 먼저 저장했습니다';
+const DECK_RO_NOTICE = '이 화면의 편집은 저장되지 않습니다';
 const results = [];
 const rec = (name, ok, detail = '') => {
   results.push(ok);
@@ -189,14 +191,24 @@ try {
       const after = await inspect(o.page, api);
       rec('(2) xlsx 읽기 전용: 타자해도 되돌리기 목록 그대로', after.undo.length === undoBefore, `${undoBefore} → ${after.undo.length}`);
       // 시트 보호는 되돌리기로 풀린다(Task 1) — 키는 막고, 메뉴·명령으로 풀리면 1.5초 안에 다시 건다(Task 3)
+      // 되돌릴 것(보호 명령)이 있어야 "Ctrl+Z가 막혔다"가 뜻이 있다 — 막힌 키는 되돌리기 목록을 줄이지 않는다
+      const undoZ0 = (await inspect(o.page, api)).undo.length;
       await clickCanvas(o.page, 0.3, 0.4);
       await o.page.keyboard.press('Control+z');
       await sleep(300);
       const z = await allProtectedWithin(o.page, 1500);
-      rec('(2) xlsx 읽기 전용: Ctrl+Z 뒤에도 모든 시트 보호', z !== null, z === null ? '풀림' : `${z} ms`);
-      const undone = await exec(o.page, api, 'edit.undo').catch((e) => String(e));
+      const undoZ1 = (await inspect(o.page, api)).undo.length;
+      rec('(2) xlsx 읽기 전용: Ctrl+Z 뒤에도 모든 시트 보호(되돌릴 보호가 있는데 키가 막힘)', undoZ0 > 0 && undoZ1 === undoZ0 && z !== null, `되돌리기 ${undoZ0} → ${undoZ1}, ${z === null ? '풀림' : `${z} ms`}`);
+      // edit.undo가 정말 보호를 풀었는지(시트 하나라도 풀림 또는 되돌리기 목록이 줄어듦)를 같은 틀 안에서 바로 본 뒤에 다시 보호를 잰다
+      const undone = await frameOf(o.page).evaluate(async (a) => {
+        const before = await window[a].docInspect();
+        const result = await window[a].execute('edit.undo').catch((e) => String(e));
+        const after = await window[a].docInspect();
+        return { result, lifted: after.sheets.some((s) => s.protected !== true) || after.undo.length < before.undo.length, undo: [before.undo.length, after.undo.length] };
+      }, api);
       const t = await allProtectedWithin(o.page, 1500);
-      rec('(2) xlsx 읽기 전용: edit.undo 뒤 1.5초 안에 다시 보호', t !== null, `${JSON.stringify(undone)} → ${t === null ? '1.5초 넘음' : `${t} ms`}`);
+      rec('(2) xlsx 읽기 전용: edit.undo가 보호를 풂(헛통과 막기)', undone.lifted, JSON.stringify(undone));
+      rec('(2) xlsx 읽기 전용: edit.undo 뒤 1.5초 안에 다시 보호', undone.lifted && t !== null, `${JSON.stringify(undone.result)} → ${t === null ? '1.5초 넘음' : `${t} ms`}`);
       await clickCanvas(o.page, 0.3, 0.4);
       await o.page.keyboard.type('WWW', { delay: 100 });
       await o.page.keyboard.press('Enter');
@@ -206,7 +218,15 @@ try {
     } else {
       const d = await inspect(o.page, api);
       rec('(1) pptx: 슬라이드 3장', d.slides.length === 3, d.slides.length);
-      rec('(2) pptx 읽기 전용: "이 화면의 편집은 저장되지 않습니다" 띠', (await o.page.textContent('#app-banner')) === '이 화면의 편집은 저장되지 않습니다' && (await o.page.isVisible('#app-banner')));
+      // 읽기 전용 표지를 늘 띄우지 않는다(사용자 규칙) — 열었을 때 띠·안내 없음, 저장하려 할 때만 안내
+      const quiet = await o.page.evaluate(() => ({ banner: document.querySelectorAll('#app-banner').length, notice: !document.querySelector('#app-notice').hidden, text: document.body.innerText }));
+      rec('(2) pptx 읽기 전용: 열었을 때 띠·안내 없음', quiet.banner === 0 && !quiet.notice && !quiet.text.includes(DECK_RO_NOTICE), JSON.stringify({ banner: quiet.banner, notice: quiet.notice }));
+      const n0 = o.paths.length;
+      await clickCanvas(o.page);
+      await o.page.keyboard.press('Control+s');
+      const note = await o.page.waitForFunction((t) => !document.querySelector('#app-notice').hidden && document.querySelector('#app-notice').textContent === t, DECK_RO_NOTICE, { timeout: 5000 }).then(() => true, () => false);
+      await sleep(500);
+      rec('(2) pptx 읽기 전용: Ctrl+S → "이 화면의 편집은 저장되지 않습니다" 안내 + 서버에 보내지 않음', note && !o.paths.slice(n0).includes('/api/view/artcraft-save'), await o.page.textContent('#app-notice'));
     }
     rec(`(2) ${ext}: 읽기 전용 저장 시도 → 서버에 보내지 않음`, await (async () => {
       const n = o.paths.length;
@@ -252,7 +272,7 @@ try {
     const context = await browser.newContext({ viewport: { width: 1400, height: 900 } });
     const tok = await token(ids.docx, { canEdit: true });
     const o = await openApp(context, tok.viewerUrl);
-    rec('(3) docx 편집 토큰: 띠 없음', !(await o.page.isVisible('#app-banner')));
+    rec('(3) docx 편집 토큰: 안내 없음', await o.page.isHidden('#app-notice'));
     await clickCanvas(o.page);
     await o.page.keyboard.type('ZZQA');
     await sleep(500);
@@ -318,14 +338,65 @@ try {
 
     const pt = await token(ids.pptx, { canEdit: true });
     const p = await openApp(context, pt.viewerUrl);
-    rec('(3) pptx 편집 토큰: 띠 없음', !(await p.page.isVisible('#app-banner')));
+    rec('(3) pptx 편집 토큰: 안내 없음', await p.page.isHidden('#app-notice'));
+    // 첫 슬라이드 제목 글상자를 바꿔 저장 — 다시 열었을 때 바뀐 제목이 보여야 한다(편집 없이 저장만 하면 헛통과)
+    const NEW_TITLE = '저장 시험 제목 ZQ7';
+    const s0 = await exec(p.page, 'deckcraft', 'slide.inspect', { index: 0 });
+    const titleShape = (s0.shapes ?? []).find((sh) => JSON.stringify(sh).includes('한글 발표 자료'));
+    const setRes = await exec(p.page, 'deckcraft', 'text.set', { id: titleShape?.id, text: NEW_TITLE }).catch((e) => String(e));
+    const shownTitle = (await inspect(p.page, 'deckcraft')).slides[0].title;
+    rec('(3) pptx: 제목 글상자 바꿈', shownTitle === NEW_TITLE, `${titleShape?.id} ${JSON.stringify(setRes)} → ${shownTitle}`);
     await exec(p.page, 'deckcraft', 'file.save');
     const ps = await saveSettled(p.page);
-    rec('(3) pptx: file.save → 저장됨', ps === 'saved', `${ps} ${await p.page.textContent('#save-status')}`);
+    rec('(3) pptx: file.save → 저장됨 + 서버 원본에 바꾼 제목', ps === 'saved' && (await savedXmlText(pt.token)).includes(NEW_TITLE), `${ps} ${await p.page.textContent('#save-status')}`);
     await p.page.close();
     const reopened = await openApp(context, pt.viewerUrl);
-    rec('(3) pptx: 저장 뒤 다시 열어도 슬라이드 3장', (await inspect(reopened.page, 'deckcraft')).slides.length === 3);
+    const rd = await inspect(reopened.page, 'deckcraft');
+    rec('(3) pptx: 다시 연 앱에 바꾼 제목 + 슬라이드 3장', rd.slides.length === 3 && rd.slides[0].title === NEW_TITLE, `${rd.slides.length}장, ${rd.slides[0].title}`);
     await reopened.page.close();
+    await context.close();
+  }
+
+  // (8) 메인 공유 폼 — 링크 복사는 연 화면(앱 화면) 주소, 동시편집 + 아트크래프트는 앱 화면 편집
+  {
+    const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, permissions: ['clipboard-read', 'clipboard-write'] });
+    const page = await context.newPage();
+    await page.goto(`${BASE}/`);
+    const row = page.locator('li.doc-item', { hasText: path.basename(FILES.xlsx) });
+    await row.waitFor({ timeout: 30000 });
+    const form = row.locator('form.token-form');
+    await form.locator('input[name=viewer]').fill('공유받는 사람');
+    await form.locator('input[name=canDownload]').check();
+    await form.locator('input[name=engine][value=artcraft]').check();
+    await form.getByRole('button', { name: '열람 링크 발급' }).click();
+    const openLink = row.locator('.token-result a', { hasText: '아트크래프트로 열기' });
+    await openLink.waitFor({ timeout: 15000 });
+    const href = await openLink.getAttribute('href');
+    await row.locator('.token-result').getByRole('button', { name: '링크 복사' }).click();
+    await row.locator('.token-result').getByRole('button', { name: '복사됨' }).waitFor({ timeout: 5000 }).catch(() => undefined);
+    const copied = await page.evaluate(() => navigator.clipboard.readText());
+    rec('(8) 공유 폼: 링크 복사 = 앱 화면 주소(viewerUrl)', /^\/artcraft-app\.html\?token=/.test(href ?? '') && copied === new URL(href, BASE).href, copied.replace(/token=[^&]+/, 'token=…'));
+
+    // 동시편집을 켜도 아트크래프트 라디오는 남는다 → engine=artcraft + canEdit 토큰 → 앱 화면에서 편집·저장
+    await form.locator('input[name=canEdit]').check();
+    const radios = await form.evaluate((f) => Object.fromEntries([...f.querySelectorAll('input[name=engine]')].map((r) => [r.value, r.disabled])));
+    rec('(8) 공유 폼: 동시편집 켜도 아트크래프트 라디오 켜짐(나머지는 꺼짐)', radios.artcraft === false && radios.editor === true && radios.libreoffice === true, JSON.stringify(radios));
+    await form.locator('input[name=engine][value=artcraft]').check();
+    await form.getByRole('button', { name: '열람 링크 발급' }).click();
+    await page.waitForFunction((old) => [...document.querySelectorAll('.token-result a')].some((x) => x.textContent === '아트크래프트로 열기' && x.getAttribute('href') !== old), href, { timeout: 15000 });
+    const editHref = await openLink.getAttribute('href');
+    const app = await openApp(context, editHref);
+    rec('(8) 동시편집 + 아트크래프트: 시트 보호 없음(편집 가능)', (await inspect(app.page, 'gridcraft')).sheets.every((s) => s.protected !== true));
+    const saveRes = app.page.waitForResponse((r) => new URL(r.url()).pathname === '/api/view/artcraft-save', { timeout: 60000 }).catch(() => null);
+    await clickCanvas(app.page, 0.3, 0.4);
+    await app.page.keyboard.type('SHR8', { delay: 100 });
+    await app.page.keyboard.press('Enter');
+    await sleep(500);
+    await app.page.keyboard.press('Control+s');
+    const st = await saveSettled(app.page);
+    const res = await saveRes;
+    rec('(8) 동시편집 + 아트크래프트: Ctrl+S → 200 저장됨', st === 'saved' && res?.status() === 200, `${st} ${res?.status()}`);
+    await app.page.close();
     await context.close();
   }
 

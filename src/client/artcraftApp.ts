@@ -1,7 +1,7 @@
 /**
  * 아트크래프트 앱 화면 입구(public/artcraft-app.html, 설계 2026-11-22-artcraft-app-screen §3). 앱 자체 화면(리본·도구 그대로)을 같은 출처 iframe에
  * 띄우고, 준비되면 한글 글꼴(font.add ×2) → 문서(:open)를 넣는다. 읽기 전용이면 워드 review.restrict·엑셀 protectSheet(+되돌리기 막기·다시 걸기),
- * PPT는 띠. 저장(:save)은 canEdit 토큰이면 PUT /api/view/artcraft-save(If-Match = 연 바이트의 ETag, 저장 뒤엔 보낸 바이트의 해시로 잇는다),
+ * PPT는 막을 명령이 없어 저장 시도(:save·Ctrl+S) 때만 "편집은 저장되지 않습니다" 안내. 저장(:save)은 canEdit 토큰이면 PUT /api/view/artcraft-save(If-Match = 연 바이트의 ETag, 저장 뒤엔 보낸 바이트의 해시로 잇는다),
  * 아니면 무시하고 안내. 준비 20초 초과·:failed·wasm 받기 실패면 info.viewerUrl(워드·PPT = 엔진 보기 → 거기서도 실패하면 리브레오피스,
  * 엑셀 = 서버 격자)로 넘긴다. 제목 줄엔 읽기 전용 표지·"편집 열기"를 두지 않는다(사용자 규칙 — 읽기 전용은 앱의 막힌 편집으로 드러난다).
  */
@@ -54,13 +54,6 @@ function notice(text: string, reload = false): void {
   }
 }
 
-function showBanner(text: string): void {
-  const banner = el('app-banner');
-  banner.textContent = text;
-  banner.hidden = false;
-  el('app-host').classList.add('with-banner');
-}
-
 function randomPassword(): string {
   return [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
@@ -91,7 +84,16 @@ async function boot(): Promise<void> {
   document.title = `DocView — ${info.name}`;
   const canSave = info.permissions.canEdit && ['docx', 'xlsx', 'pptx'].includes(info.ext);
   const readOnly = !canSave;
-  if (readOnly && app.kind === 'deck') showBanner(NOTICES.readOnlyDeck);
+  // 읽기 전용 표지는 늘 띄우지 않는다(사용자 규칙) — 저장하려 할 때만 알린다. PPT는 편집 자체는 되므로 문구가 다르다
+  const readOnlyNotice = app.kind === 'deck' ? NOTICES.readOnlyDeck : NOTICES.readOnlyIgnored;
+  if (readOnly) {
+    // 앱 밖(제목 줄)에 초점이 있을 때의 Ctrl+S — 브라우저 "페이지 저장" 대신 안내
+    document.addEventListener('keydown', (event) => {
+      if (!(event.ctrlKey || event.metaKey) || (event.code !== 'KeyS' && event.key.toLowerCase() !== 's')) return;
+      event.preventDefault();
+      notice(readOnlyNotice);
+    });
+  }
 
   let opened = false;
   let failed = false;
@@ -226,7 +228,7 @@ async function boot(): Promise<void> {
       }
     } else {
       const decision = saveDecision(msg.data, canSave);
-      if (decision === 'readonly') notice(NOTICES.readOnlyIgnored);
+      if (decision === 'readonly') notice(readOnlyNotice);
       else if (decision === 'saveas') notice(NOTICES.saveAs);
       else if (decision === 'empty') setSave('failed', '빈 문서');
       else void saves.save(toArrayBuffer(msg.data.bytes));
