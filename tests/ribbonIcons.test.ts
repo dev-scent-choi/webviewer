@@ -22,6 +22,15 @@ describe('리본 준비 중 아이콘 스프라이트(public/ribbon/icons.svg)',
     for (const m of svg.matchAll(/<symbol [^>]*>/g)) expect(m[0]).toMatch(/viewBox="0 0 24 24"/);
     expect(svg).not.toMatch(/#[0-9a-fA-F]{3,8}\b|rgb\(|<image|<text|<script|<style|<foreignObject|href="(?!#rbi-)/);
   });
+  it('처리기 속성(on*=)·xlink:href 없음', () => {
+    expect(svg).not.toMatch(/\son[a-z]+\s*=/i);
+    expect(svg).not.toMatch(/xlink:href/i);
+  });
+  it('줄 번호(line-numbers)는 번호 매기기(numbering)와 다른 그림', () => {
+    const body = (id: string) => svg.match(new RegExp(`<symbol id="rbi-${id}"[^>]*>(.*?)</symbol>`))?.[1];
+    expect(body('line-numbers')).toBeTruthy();
+    expect(body('line-numbers')).not.toBe(body('numbering'));
+  });
   it('대리 기호(<use>)는 있는 기호만 가리킨다', () => {
     for (const m of svg.matchAll(/<use href="#rbi-([a-z0-9-]+)"/g)) expect(ids).toContain(m[1]);
   });
