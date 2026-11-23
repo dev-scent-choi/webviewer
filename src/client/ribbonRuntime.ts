@@ -34,9 +34,13 @@ export function closeGroupPopup(): void {
   openGroup = null;
 }
 
+let lastFit: { panel: HTMLElement; width: number } | null = null;
+
 export function fitPanel(panel: HTMLElement, viewportWidth: number): void {
   const groups = [...panel.querySelectorAll<HTMLElement>(':scope > .ribbon-group[data-collapse]')];
-  closeGroupPopup();
+  // 같은 판·같은 폭으로 다시 맞출 때(상황별 탭·글꼴 받음·폰 키보드 resize)는 열린 묶음 판을 닫지 않는다
+  if (lastFit?.panel !== panel || lastFit.width !== viewportWidth) closeGroupPopup();
+  lastFit = { panel, width: viewportWidth };
   for (const g of groups) g.classList.remove('rb-collapsed');
   if (viewportWidth <= NARROW_PX) {
     for (const g of groups) g.classList.add('rb-collapsed');
@@ -46,6 +50,7 @@ export function fitPanel(panel: HTMLElement, viewportWidth: number): void {
     if (panel.scrollWidth <= panel.clientWidth + 1) break;
     groups[index].classList.add('rb-collapsed');
   }
+  if (openGroup && !openGroup.classList.contains('rb-collapsed')) closeGroupPopup();
 }
 
 export function installGroupToggles(toolbar: HTMLElement): void {

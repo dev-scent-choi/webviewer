@@ -432,6 +432,21 @@ try {
       await edit.page.close();
     }
 
+    if (ext === 'docx') {
+      // ?rbctx=1(상황별 탭 모두 보기)은 보기 꾸밈에선 표 레이아웃 탭을 보이고, 꾸밈 없는 읽기 전용에선 편집 탭을 숨긴 그대로 둔다
+      const tableTab = async (url) => {
+        const p = await context.newPage();
+        await p.goto(`${BASE}${url}`);
+        await p.waitForSelector(ED[ext].ready, { timeout: 90000 });
+        const shownTab = await p.$eval('.ribbon-tab[data-tab="table"]', (t) => !t.hidden);
+        await p.close();
+        return shownTab;
+      };
+      const viewCtx = await tableTab(`${tok.viewerUrl}&rbctx=1`);
+      const plainCtx = await tableTab(`${tok.viewerUrl.replace(/&ui=view$/, '')}&rbctx=1`);
+      rec(`(1) ${ext} ?rbctx=1 — 보기 꾸밈엔 표 레이아웃 탭 보임, 꾸밈 없는 읽기 전용엔 숨김`, viewCtx && !plainCtx, JSON.stringify({ viewCtx, plainCtx }));
+    }
+
     rec(`${ext} 화면 오류 없음`, errors.length === 0, errors.slice(0, 2).join(' | '));
     await context.close();
   }

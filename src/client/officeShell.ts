@@ -123,7 +123,8 @@ export function initOfficeShell(options: OfficeShellOptions): OfficeShell {
   }
   // 사람 확인·목록 대조 시험용 — ?rbctx=1 이면 상황별 탭을 모두 보이고, 편집기가 선택에 따라 숨기려 해도 그대로 둔다
   const showAllContextual = new URLSearchParams(location.search).get('rbctx') === '1';
-  if (showAllContextual) for (const tab of tabs) if (tab.classList.contains('ribbon-tab-contextual')) tab.hidden = false;
+  // 읽기 전용(보기 꾸밈 아님)은 편집 탭을 숨긴 그대로 둔다
+  if (showAllContextual && (options.canEdit || viewUi)) for (const tab of tabs) if (tab.classList.contains('ribbon-tab-contextual')) tab.hidden = false;
 
   function render(): void {
     for (const tab of tabs) {
@@ -134,15 +135,16 @@ export function initOfficeShell(options: OfficeShellOptions): OfficeShell {
     // 읽기 전용이라 보이는 편집 탭이 하나도 없으면 리본 판도 모두 숨긴다(파일 탭만 남는다).
     const activeVisible = tabs.some((tab) => tab.dataset.tab === activeTab && !tab.hidden);
     for (const panel of panels) panel.hidden = !activeVisible || panel.dataset.panel !== activeTab;
-    // 고른 탭만 아이콘을 달고(탭마다 늦게) 판이 넘치면 묶음을 접는다(오피스처럼) — 축소된 리본은 펼쳐 볼 때 다시 부른다
+    toolbar.classList.toggle('ribbon-empty', !activeVisible);
+    toolbar.classList.toggle('ribbon-collapsed', collapsed && !peeking);
+    toolbar.classList.toggle('ribbon-peeking', collapsed && peeking);
+    // 고른 탭만 아이콘을 달고(탭마다 늦게) 판이 넘치면 묶음을 접는다(오피스처럼) — 축소된 리본은 펼쳐 볼 때 다시 부른다.
+    // 클래스를 바꾼 뒤에 잰다: 축소(ribbon-collapsed) 중엔 판이 display:none이라 폭이 0으로 읽힌다
     const shown = panels.find((panel) => !panel.hidden);
     if (shown && !(collapsed && !peeking)) {
       hydrateIcons(shown);
       fitPanel(shown, window.innerWidth);
     }
-    toolbar.classList.toggle('ribbon-empty', !activeVisible);
-    toolbar.classList.toggle('ribbon-collapsed', collapsed && !peeking);
-    toolbar.classList.toggle('ribbon-peeking', collapsed && peeking);
     const collapseBtn = document.getElementById('ribbon-collapse');
     collapseBtn?.setAttribute('aria-pressed', String(collapsed));
     collapseBtn?.setAttribute('title', collapsed ? '리본 고정 (Ctrl+F1)' : '리본 축소 (Ctrl+F1)');

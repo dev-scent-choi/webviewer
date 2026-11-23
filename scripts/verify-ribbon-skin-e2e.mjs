@@ -4,6 +4,7 @@
 //  (3) 큰 단추 = 아이콘 위·이름 아래  (4) 모든 탭의 리본 내용이 62px 안(잘림 없음)  (5) "자세히"는 있는 단추를 가리킴(워드 1·엑셀 1·PPT 0)
 //  (6) 읽기 전용 흐림이 고르다(0.45), "자세히" 흐림 = 가리키는 단추 흐림  (7) 600px 가로 스크롤 없음·제목 줄 한 줄
 //  (8) 보기 화면 같은 규격·id 그대로·첫 쪽이 막대 밑에 깔리지 않음  (9) 아이콘 큰 30px·작은 15px 이상, 보기 화면 단추 이름, 상태 표시(읽기 전용·연결됨·편집 열기/편집) 안 보임
+//  (10) 워드 묶음 접기 — 축소 리본 엿보기·다시 고정 때 접힘, 같은 폭 다시 맞춤은 열린 묶음 판 유지
 //  + 아트크래프트 캡처와 나란히 놓은 보고서
 // 쓰는 법: npm run build:editor && node scripts/verify-ribbon-skin-e2e.mjs [포트 8160~8169, 기본 8166]
 import { spawn, execFileSync } from 'node:child_process';
@@ -248,6 +249,46 @@ try {
     await shot(edit.page, `editor-${ext}`);
     pairs.push([`editor-${ext}`, REF[ext]]);
     await wide.close();
+
+    if (ext === 'docx') {
+      // ---- 묶음 접기(오피스 리본 구조 Task 2 고침 I1·M2): 홈 판 묶음에 data-collapse·접힘 단추를 달고 오른쪽 묶음을 넓혀 넘치게 한다 ----
+      const fold = await browser.newContext({ viewport: { width: 1000, height: 900 } });
+      const f = await open(fold, (await token(ids[ext], { canEdit: true })).editorUrl, READY[ext]);
+      await f.page.evaluate(() => {
+        const groups = [...document.querySelectorAll('.ribbon-panel[data-panel="home"] > .ribbon-group')];
+        for (const g of groups) {
+          g.dataset.collapse = '1';
+          g.insertAdjacentHTML('afterbegin', '<button type="button" class="icon-btn icon-btn-big rb-group-toggle" aria-expanded="false"><span>묶음</span></button>');
+        }
+        groups.at(-1).querySelector('.ribbon-group-buttons').insertAdjacentHTML('beforeend', '<span style="display:inline-block;width:1600px"></span>');
+      });
+      const foldState = () => f.page.evaluate(() => {
+        const p = document.querySelector('.ribbon-panel[data-panel="home"]');
+        return { shown: p.getClientRects().length > 0, folded: p.querySelectorAll(':scope > .rb-collapsed').length, over: p.scrollWidth - p.clientWidth, open: p.querySelectorAll('.rb-open').length };
+      });
+      const unfold = () => f.page.evaluate(() => document.querySelectorAll('.rb-collapsed').forEach((g) => g.classList.remove('rb-collapsed')));
+      const foldOk = (s) => s.shown && s.folded > 0 && s.over <= 1;
+      await f.page.click('#ribbon-collapse'); // 리본 축소
+      await unfold();
+      await f.page.click('.ribbon-tab[data-tab="home"]'); // 탭을 눌러 엿보기
+      const peek = await foldState();
+      rec('(10) docx 축소한 리본을 탭으로 펼쳐 보면 넘치는 묶음이 접힘', foldOk(peek), JSON.stringify(peek));
+      await f.page.mouse.click(700, 600); // 리본 밖 — 다시 축소
+      await unfold();
+      await f.page.click('#ribbon-collapse'); // 다시 고정
+      const pin = await foldState();
+      rec('(10) docx 리본을 다시 고정하면 넘치는 묶음이 접힘', foldOk(pin), JSON.stringify(pin));
+      await f.page.click('.ribbon-panel[data-panel="home"] > .rb-collapsed > .rb-group-toggle');
+      await f.page.evaluate(() => window.dispatchEvent(new Event('resize')));
+      await sleep(300);
+      const same = await foldState();
+      await f.page.setViewportSize({ width: 950, height: 900 });
+      await sleep(300);
+      const changed = await foldState();
+      rec('(10) docx 접힌 묶음 판 — 같은 폭으로 다시 맞춰도 열림 유지, 폭이 바뀌면 닫힘', same.open === 1 && changed.open === 0, JSON.stringify({ same, changed }));
+      rec('docx 묶음 접기 — 화면 오류 없음', f.errors.length === 0, f.errors.slice(0, 2).join(' | '));
+      await fold.close();
+    }
 
     // ---- 좁은 창(900·800px): 판 안 스크롤바·묶음 이름 줄 겹침 ----
     for (const width of [900, 800]) {
