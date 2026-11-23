@@ -18,7 +18,7 @@ import { APP_OF_EXT, LISTED_EXTS as LISTED, launcherCount, loadInventory } from 
 
 const PORT = Number(process.argv[2] ?? 8166);
 // 운영 포트(8000·8010·8020·8100·8110·8130·8148)와 다른 시험(8150~8159) 범위와 겹치지 않게
-if (!(PORT >= 8160 && PORT <= 8169)) throw new Error(`시험 포트는 8160~8169만 쓴다(받은 값 ${PORT})`);
+if (!((PORT >= 8160 && PORT <= 8169) || (PORT >= 8180 && PORT <= 8189))) throw new Error(`시험 포트는 8160~8169·8180~8189만 쓴다(받은 값 ${PORT})`);
 const BASE = `http://127.0.0.1:${PORT}`;
 const RUN = path.resolve('.audit-run', `ribbon-skin-e2e-${PORT}`);
 const SHOTS = path.resolve('.audit-run', 'ribbon-skin-shots');

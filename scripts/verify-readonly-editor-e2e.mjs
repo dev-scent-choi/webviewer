@@ -16,11 +16,11 @@ import path from 'node:path';
 import ExcelJS from 'exceljs';
 import { PDFDocument, StandardFonts } from 'pdf-lib';
 import { chromium } from 'playwright';
-import { APP_OF_EXT, LISTED_EXTS as LISTED, loadInventory, pendingIn } from './ribbonGenLib.mjs';
+import { APP_OF_EXT, LISTED_EXTS as LISTED, loadInventory, pendingIn, tabCount } from './ribbonGenLib.mjs';
 
 const PORT = Number(process.argv[2] ?? 8162);
 // 운영 포트(8000·8010·8020·8100·8110·8130·8148)와 다른 시험(8150~8159) 범위와 겹치지 않게
-if (!(PORT >= 8160 && PORT <= 8169)) throw new Error(`시험 포트는 8160~8169만 쓴다(받은 값 ${PORT})`);
+if (!((PORT >= 8160 && PORT <= 8169) || (PORT >= 8180 && PORT <= 8189))) throw new Error(`시험 포트는 8160~8169·8180~8189만 쓴다(받은 값 ${PORT})`);
 const BASE = `http://127.0.0.1:${PORT}`;
 const RUN = path.resolve('.audit-run', `readonly-editor-e2e-${PORT}`);
 const FILES = {
@@ -183,7 +183,8 @@ const FORCE_CLICK = {
 };
 // 준비 중 단추 수는 오피스 리본 목록에서 — 아직 목록으로 만들지 않은 앱(LISTED_EXTS 밖)은 0
 const INV = loadInventory();
-const MIN_TABS = { docx: 6, xlsx: 6, pptx: 6 };
+// 탭 수는 오피스 리본 목록에서(설계 2026-11-22-office-ribbon-structure — 사용자 지시로 탭이 늘었다)
+const MIN_TABS = Object.fromEntries(Object.entries(APP_OF_EXT).map(([ext, name]) => [ext, tabCount(INV.apps[name])]));
 
 async function openView(context, url, ext) {
   const page = await context.newPage();

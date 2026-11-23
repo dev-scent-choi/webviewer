@@ -57,6 +57,8 @@
     "verify:artcraft-app": "node scripts/verify-artcraft-app-e2e.mjs",
     "verify:artcraft-app-korean": "node scripts/verify-artcraft-app-korean-e2e.mjs",
     "verify:ribbon-skin": "node scripts/verify-ribbon-skin-e2e.mjs",
+    "gen:ribbon": "node scripts/gen-ribbon.mjs",
+    "verify:ribbon-inventory": "node scripts/verify-ribbon-inventory-e2e.mjs",
     "perf:docx": "node audit/office/perf-docx-typing.mjs"
   },
   "dependencies": {
