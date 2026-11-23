@@ -4308,6 +4308,9 @@ body.ui-content.no-copy :is(#editor, #grid-editor, #slide-canvas-wrap) * { user-
 .ribbon-skin .ribbon-group.rb-collapsed.rb-open > .ribbon-group-buttons { display: flex; position: fixed; z-index: 70; box-sizing: border-box; height: calc(var(--skin-ribbon-h) - var(--skin-label-h) + 8px); padding: 4px 6px; border-radius: 6px; background: #ffffff; box-shadow: 0 0 0 1px var(--skin-line), 0 4px 12px rgba(0, 0, 0, 0.14); }
 @media (max-width: 600px) {
   .ribbon-skin .ribbon-group.rb-collapsed.rb-open > .ribbon-group-buttons { height: auto; max-width: calc(100vw - 8px); flex-wrap: wrap; }
+  /* 600px: 접힌 묶음 단추는 아이콘 16 + 한글 묶음 이름(한 줄, 10px)으로 — 이름 없는 빈 단추·아이콘 넘침 방지 */
+  .ribbon-skin .icon-btn-big > .rb-ico { width: 16px; height: 16px; }
+  .ribbon-skin .ribbon-group > .rb-group-toggle > span { display: inline; font-size: 10px; line-height: 12px; white-space: nowrap; }
 }
 /* 탭이 늘어(워드 9 + 표 안 상황별 2) 좁은 창에서 탭 줄이 페이지를 밀지 않게 — 탭 줄 안에서만 가로로 밀린다 */
 .ribbon-skin .ribbon-tabs { overflow-x: auto; scrollbar-width: none; }

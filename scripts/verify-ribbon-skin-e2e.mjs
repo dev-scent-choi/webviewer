@@ -335,12 +335,28 @@ try {
       const n = await open(narrow, (await token(ids[ext], body))[key], READY[ext]);
       const tabs = await n.page.$$eval('.ribbon-tab:not(.ribbon-tab-file)', (ts) => ts.filter((t) => !t.hidden && t.dataset.tab).map((t) => t.dataset.tab));
       const bad = [];
+      const toggleBad = [];
+      let toggleCount = 0;
       for (const tab of tabs) {
         await n.page.click(`.ribbon-tab[data-tab="${tab}"]`);
         const s = await narrowState(n.page);
         if (!narrowOk(s)) bad.push(`${tab} ${JSON.stringify(s)}`);
+        // 접힌 묶음 단추마다 보이는 한글 이름(단추 안)이 있고 아이콘은 16px 이하
+        const tg = await n.page.$$eval('.ribbon-panel:not([hidden]) .rb-group-toggle', (bs) => bs.filter((b) => b.getClientRects().length > 0).map((b) => {
+          const r = b.getBoundingClientRect();
+          const sp = b.querySelector(':scope > span');
+          const sr = sp && sp.getClientRects().length > 0 ? sp.getBoundingClientRect() : null;
+          const ico = b.querySelector('.rb-ico');
+          const ir = ico && ico.getClientRects().length > 0 ? ico.getBoundingClientRect() : null;
+          const named = !!sr && sr.width > 0 && (sp.textContent ?? '').trim().length > 0 && sr.top >= r.top - 1 && sr.bottom <= r.bottom + 1 && sr.right <= r.right + 1;
+          return { name: b.title, named, ico: ir ? Math.round(Math.max(ir.width, ir.height)) : 0 };
+        }));
+        toggleCount += tg.length;
+        for (const t of tg) if (!t.named || t.ico > 16) toggleBad.push(`${tab}/${t.name} ${JSON.stringify(t)}`);
       }
       rec(`(7) ${ext} ${mode} 600px — 탭 ${tabs.length}개 모두 가로 넘침 없음·제목 줄 한 줄`, tabs.length >= 5 && bad.length === 0, bad.join(' | '));
+      // 목록으로 만든 앱만(엑셀·PPT는 Task 4·5 전엔 접힌 묶음이 없다)
+      if (LISTED.has(ext)) rec(`(7) ${ext} ${mode} 600px — 접힌 묶음 단추 ${toggleCount}개마다 보이는 이름이 단추 안에 있고 아이콘 ≤ 16px`, toggleCount > 0 && toggleBad.length === 0, toggleBad.slice(0, 3).join(' | '));
       await narrow.close();
     }
   }
