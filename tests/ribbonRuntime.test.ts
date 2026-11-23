@@ -25,7 +25,7 @@ function fakeEl() {
     dataset: { collapse: '1' } as Record<string, string>,
     classList: {
       add: (c: string) => classes.add(c),
-      remove: (c: string) => classes.delete(c),
+      remove: (...cs: string[]) => cs.forEach((c) => classes.delete(c)),
       contains: (c: string) => classes.has(c),
     },
     setAttribute: (k: string, v: string) => attrs.set(k, v),
@@ -43,6 +43,7 @@ describe('fitPanel — 열린 묶음 판은 폭이 바뀔 때만 닫는다(M2)',
       querySelector: (sel: string) => (sel.includes('rb-group-toggle') ? toggle : null),
     });
     Object.assign(toggle, { closest: () => group });
+    Object.defineProperty(group, 'offsetWidth', { get: () => (group.classes.has('rb-collapsed') ? 60 : 400) });
     // 묶음을 접어야만 판이 넘치지 않는다
     const panel = {
       querySelectorAll: () => [group],
@@ -65,5 +66,46 @@ describe('fitPanel — 열린 묶음 판은 폭이 바뀔 때만 닫는다(M2)',
     fitPanel(panel, 900); // 창 폭이 바뀜
     expect(group.classes.has('rb-open')).toBe(false);
     expect(toggle.attrs.get('aria-expanded')).toBe('false');
+  });
+});
+
+describe('fitPanel — 오피스 순서: 크게 → 작은 단추 3줄 → 접기, 남으면 다시 펴기', () => {
+  // 묶음 폭은 상태(크게·작게·접힘)에 따라 정해 두고, 판 scrollWidth는 그 합
+  function setup(clientWidth: number) {
+    (globalThis as Record<string, unknown>).document = { addEventListener: () => {} };
+    const mk = (priority: number, full: number, compact: number, folded: number) => {
+      const g = fakeEl();
+      g.dataset.collapse = String(priority);
+      // Object.assign은 getter를 값으로 굳히므로 defineProperty로
+      return Object.defineProperty(g, 'offsetWidth', { get: () => (g.classes.has('rb-collapsed') ? folded : g.classes.has('rb-compact') ? compact : full) }) as typeof g & { offsetWidth: number };
+    };
+    const groups = [mk(9, 100, 100, 50), mk(2, 120, 80, 40), mk(1, 60, 60, 30)];
+    const panel = {
+      querySelectorAll: () => groups,
+      get scrollWidth() {
+        return groups.reduce((n, g) => n + g.offsetWidth, 0);
+      },
+      clientWidth,
+    } as unknown as HTMLElement;
+    const state = () => groups.map((g) => (g.classes.has('rb-collapsed') ? 'folded' : g.classes.has('rb-compact') ? 'compact' : 'full'));
+    return { panel, state };
+  }
+  it('작게 줄여 들어가면 접지 않는다(줄어들지 않는 묶음은 크게 둔다)', async () => {
+    const { fitPanel } = await import('../src/client/ribbonRuntime.js');
+    const { panel, state } = setup(250);
+    fitPanel(panel, 1400);
+    expect(state()).toEqual(['full', 'compact', 'full']);
+  });
+  it('접은 뒤 먼저 접은 묶음이 다시 들어가면 편다', async () => {
+    const { fitPanel } = await import('../src/client/ribbonRuntime.js');
+    const { panel, state } = setup(200);
+    fitPanel(panel, 1300);
+    expect(state()).toEqual(['full', 'folded', 'full']);
+  });
+  it('넉넉하면 모두 크게', async () => {
+    const { fitPanel } = await import('../src/client/ribbonRuntime.js');
+    const { panel, state } = setup(400);
+    fitPanel(panel, 1920);
+    expect(state()).toEqual(['full', 'full', 'full']);
   });
 });

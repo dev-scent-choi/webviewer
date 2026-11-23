@@ -4298,14 +4298,28 @@ body.ui-content.no-copy :is(#editor, #grid-editor, #slide-canvas-wrap) * { user-
 .ribbon-skin .rb-gallery { display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; width: 112px; height: 44px; border: 1px solid var(--skin-line); border-radius: 3px; color: var(--skin-text-dim); font: 400 10px/12px var(--skin-font); }
 .ribbon-skin .rb-check { display: inline-flex; align-items: center; gap: 3px; height: var(--skin-small-h); color: var(--skin-text); font: 400 11px/14px var(--skin-font); white-space: nowrap; }
 .ribbon-skin .rb-check input { width: 12px; height: 12px; margin: 0; }
-.ribbon-skin .rb-field input { width: 44px; }
-.ribbon-skin .rb-select { max-width: 9em; }
+/* 준비 중 입력 칸·목록 — 16px 줄 안에서 위아래 1px 띄워(14px) 첫 줄이 판 위 테두리에 붙지 않게, 이름은 한 줄(두 줄로 꺾이면 판 62px를 넘었다) */
+.ribbon-skin .rb-field { grid-template-columns: auto auto; column-gap: 3px; align-items: center; height: var(--skin-small-h); white-space: nowrap; }
+.ribbon-skin .rb-field input { box-sizing: border-box; width: 44px; height: 14px; }
+.ribbon-skin .ribbon-panel .rb-select { box-sizing: border-box; max-width: 9em; height: 14px; margin: 1px 0; padding: 0 2px; }
 /* 접힌 묶음 — 묶음 이름 큰 단추(아이콘 32 + 이름 ▾)가 판 높이 전체, 누르면 원래 단추들이 그 아래 떠 있는 판으로 */
 .ribbon-skin .ribbon-group.rb-collapsed > .rb-group-toggle { display: inline-flex; grid-row: 1 / -1; }
 .ribbon-skin .rb-group-toggle > span::after { content: " ▾"; }
 .ribbon-skin .rb-group-toggle[aria-expanded="true"] { background: var(--skin-hover); }
 .ribbon-skin .ribbon-group.rb-collapsed > :is(.ribbon-group-buttons, .ribbon-group-label, .ribbon-launcher) { display: none; }
 .ribbon-skin .ribbon-group.rb-collapsed.rb-open > .ribbon-group-buttons { display: flex; position: fixed; z-index: 70; box-sizing: border-box; height: calc(var(--skin-ribbon-h) - var(--skin-label-h) + 8px); padding: 4px 6px; border-radius: 6px; background: #ffffff; box-shadow: 0 0 0 1px var(--skin-line), 0 4px 12px rgba(0, 0, 0, 0.14); }
+/* 접기 전 중간 단계(오피스와 같음) — 큰 단추가 아이콘 16 + 이름 한 줄의 작은 단추(16px)가 되어 세 줄씩 세로로 쌓인다.
+   작은 단추 묶음·갤러리·입력 칸은 세 줄 높이 그대로. fitPanel이 실제로 좁아질 때만 붙인다 */
+.ribbon-skin .ribbon-group.rb-compact { padding: 0 4px; }
+/* 스타일 갤러리는 오피스처럼 보이는 칸 수만 줄인다(세로로 넘겨 보기는 그대로) */
+.ribbon-skin .ribbon-group.rb-compact .style-gallery { max-width: 200px; }
+.ribbon-skin .ribbon-group.rb-compact > .ribbon-group-buttons { display: grid; grid-auto-flow: column dense; grid-template-rows: repeat(3, var(--skin-small-h)); align-content: center; align-items: center; justify-items: start; gap: 0 2px; }
+.ribbon-skin .ribbon-group.rb-compact > .ribbon-group-buttons > :not(.icon-btn-big, .dropdown-btn:has(> .icon-btn-big)) { grid-row: 1 / -1; }
+.ribbon-skin .ribbon-group.rb-compact > .ribbon-group-buttons > .dropdown-btn { display: inline-flex; align-items: center; }
+.ribbon-skin .ribbon-group.rb-compact > .ribbon-group-buttons > .icon-btn-big,
+.ribbon-skin .ribbon-group.rb-compact > .ribbon-group-buttons > .dropdown-btn > .icon-btn-big { flex-direction: row; justify-content: flex-start; min-width: 0; height: var(--skin-small-h); padding: 0 3px; gap: 3px; white-space: nowrap; }
+.ribbon-skin .ribbon-group.rb-compact > .ribbon-group-buttons > .icon-btn-big > :is(svg, .rb-ico),
+.ribbon-skin .ribbon-group.rb-compact > .ribbon-group-buttons > .dropdown-btn > .icon-btn-big > :is(svg, .rb-ico) { width: 16px; height: 16px; stroke-width: 1.5; }
 @media (max-width: 600px) {
   .ribbon-skin .ribbon-group.rb-collapsed.rb-open > .ribbon-group-buttons { height: auto; max-width: calc(100vw - 8px); flex-wrap: wrap; }
   /* 600px: 접힌 묶음 단추는 아이콘 16 + 한글 묶음 이름(한 줄, 10px)으로 — 이름 없는 빈 단추·아이콘 넘침 방지 */

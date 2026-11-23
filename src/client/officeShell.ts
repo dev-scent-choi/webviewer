@@ -168,6 +168,8 @@ export function initOfficeShell(options: OfficeShellOptions): OfficeShell {
   }
 
   function toggleCollapsed(): void {
+    // 축소→재고정 때 같은 폭이라 fitPanel이 열린 묶음 판을 그대로 두므로 여기서 닫는다
+    closeGroupPopup();
     collapsed = !collapsed;
     peeking = false;
     writeCollapsed(collapsed);
