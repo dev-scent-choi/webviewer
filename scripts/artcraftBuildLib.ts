@@ -4,6 +4,7 @@
  */
 import { createHash } from 'node:crypto';
 import { brotliCompressSync, constants } from 'node:zlib';
+import { APP_ASSET_PATH } from '../src/artcraftStatic.js';
 
 export const MiB = 1024 * 1024;
 export const SIZE_LIMITS = { word: 5 * MiB, deck: 2.5 * MiB, fonts: 0.6 * MiB } as const;
@@ -92,4 +93,9 @@ export function craftFontsManifest(file: string, sha256hex: string): string {
 
 export function containsBytes(hay: Uint8Array, needle: Uint8Array): boolean {
   return Buffer.from(hay.buffer, hay.byteOffset, hay.byteLength).indexOf(Buffer.from(needle.buffer, needle.byteOffset, needle.byteLength)) >= 0;
+}
+
+/** 서버 허용 목록(APP_ASSET_PATH)에 걸리지 않는 산출 파일 — 있으면 그 파일이 404라 앱이 조용히 엔진 보기로 넘어간다(wasm-bindgen snippet 모양이 바뀐 경우 등) */
+export function unservedAppAssets(dir: string, rels: readonly string[]): string[] {
+  return rels.filter((rel) => !APP_ASSET_PATH.test(`/${dir}/${rel}`));
 }

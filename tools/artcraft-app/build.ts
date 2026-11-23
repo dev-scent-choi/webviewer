@@ -11,7 +11,7 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { appSizeProblems, brotli, checkLock, containsBytes, craftFontsManifest, treeHash } from '../../scripts/artcraftBuildLib.js';
+import { appSizeProblems, brotli, checkLock, containsBytes, craftFontsManifest, treeHash, unservedAppAssets } from '../../scripts/artcraftBuildLib.js';
 
 const ROOT = process.cwd();
 const BUILD = path.join(ROOT, 'tools', 'artcraft-app', '.build');
@@ -37,14 +37,17 @@ const git = (dir: string, ...args: string[]) => execFileSync('git', ['--no-optio
 const lock = JSON.parse(fs.readFileSync(LOCK, 'utf8')) as { rustc?: string; repos: Record<string, { url: string; commit: string }> };
 const rustc = execFileSync('rustc', [TOOLCHAIN, '--version'], { encoding: 'utf8' }).trim();
 if (!lock.rustc || !rustc.startsWith(`rustc ${lock.rustc} `)) fail(`rustc 판이 ARTCRAFT.lock(${lock.rustc ?? '없음'})과 다릅니다: ${rustc}`);
-for (const { repo } of APPS) {
-  const want = lock.repos[repo]?.commit;
-  if (!want) fail(`ARTCRAFT.lock에 ${repo} 커밋이 없습니다`);
-  const dir = path.join(ARTCRAFT_DIR, repo);
-  if (!fs.existsSync(dir)) fail(`${dir} 없음 — ${lock.repos[repo].url}을(를) ${want}로 받아 두세요`);
-  const problem = checkLock(repo, want, git(dir, 'rev-parse', 'HEAD'), git(dir, 'status', '--porcelain', '--untracked-files=normal'));
-  if (problem) fail(problem);
+function checkRepos(): void {
+  for (const { repo } of APPS) {
+    const want = lock.repos[repo]?.commit;
+    if (!want) fail(`ARTCRAFT.lock에 ${repo} 커밋이 없습니다`);
+    const dir = path.join(ARTCRAFT_DIR, repo);
+    if (!fs.existsSync(dir)) fail(`${dir} 없음 — ${lock.repos[repo].url}을(를) ${want}로 받아 두세요`);
+    const problem = checkLock(repo, want, git(dir, 'rev-parse', 'HEAD'), git(dir, 'status', '--porcelain', '--untracked-files=normal'));
+    if (problem) fail(problem);
+  }
 }
+checkRepos();
 if (!fs.existsSync(WASM_BINDGEN)) fail(`wasm-bindgen 없음(${WASM_BINDGEN}) — 앱 Cargo.lock과 같은 0.2.129를 받아 두세요`);
 const wbVersion = execFileSync(WASM_BINDGEN, ['--version'], { encoding: 'utf8' }).trim();
 if (wbVersion !== 'wasm-bindgen 0.2.129') fail(`${wbVersion} ≠ wasm-bindgen 0.2.129(앱 Cargo.lock 판과 같아야 한다)`);
@@ -112,10 +115,16 @@ const byId = Object.fromEntries(built.map((b) => [b.id, wasmBr(b)])) as { word: 
 const problems = appSizeProblems(byId);
 if (problems.length > 0) fail(`크기 상한 초과:\n  ${problems.join('\n  ')}`);
 
+// 18분 빌드 중 저장소가 다른 커밋으로 바뀌었으면 manifest.commits가 거짓이 된다 — 쓰기 전에 다시 본다
+checkRepos();
+const dirs = built.map((b) => `${b.repo}-${treeHash(b.files)}`);
+const unserved = built.flatMap((b, i) => unservedAppAssets(dirs[i], b.files.map((f) => f.rel)).map((r) => `${dirs[i]}/${r}`));
+if (unserved.length > 0) fail(`서버 허용 목록(APP_ASSET_PATH)에 없는 산출 파일 — 404가 됩니다: ${unserved.join(', ')}`);
+
 fs.rmSync(OUT, { recursive: true, force: true });
 const manifest: Record<string, unknown> = {};
-for (const b of built) {
-  const dir = `${b.repo}-${treeHash(b.files)}`;
+for (const [i, b] of built.entries()) {
+  const dir = dirs[i];
   for (const f of b.files) {
     const file = path.join(OUT, dir, f.rel);
     fs.mkdirSync(path.dirname(file), { recursive: true });

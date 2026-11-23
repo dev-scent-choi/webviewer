@@ -1,6 +1,6 @@
 import { brotliDecompressSync } from 'node:zlib';
 import { describe, expect, test } from 'vitest';
-import { APP_SIZE_LIMITS, MiB, SIZE_LIMITS, appSizeProblems, brotli, checkLock, containsBytes, craftFontsManifest, hashedName, sizeProblems, treeHash, wasmMaxMemory } from '../scripts/artcraftBuildLib.js';
+import { APP_SIZE_LIMITS, MiB, SIZE_LIMITS, appSizeProblems, brotli, checkLock, containsBytes, craftFontsManifest, hashedName, sizeProblems, treeHash, unservedAppAssets, wasmMaxMemory } from '../scripts/artcraftBuildLib.js';
 
 describe('build:artcraft 도우미', () => {
   test('해시 이름: 같은 내용은 같은 이름, 내용이 바뀌면 이름도 바뀐다(10자리 16진수)', () => {
@@ -82,5 +82,15 @@ describe('build:artcraft 도우미', () => {
     const hay = Buffer.from('앞부분-글꼴조각-뒷부분');
     expect(containsBytes(hay, Buffer.from('글꼴조각'))).toBe(true);
     expect(containsBytes(hay, Buffer.from('없는조각'))).toBe(false);
+  });
+
+  test('산출 파일 허용 목록: 서버 APP_ASSET_PATH에 안 맞는 파일만 돌려준다(build:artcraft-app이 쓰기 전에 멈춤)', () => {
+    const dir = 'gridcraft-0123456789';
+    expect(unservedAppAssets(dir, ['gridcraft-web.js', 'gridcraft-web_bg.wasm', 'snippets/egui-abc_1/inline0.js'])).toEqual([]);
+    expect(unservedAppAssets(dir, ['gridcraft-web.js', 'snippets/egui/inline0.mjs', 'snippets/a/b/inline1.js', 'gridcraft-web.d.ts'])).toEqual([
+      'snippets/egui/inline0.mjs',
+      'snippets/a/b/inline1.js',
+      'gridcraft-web.d.ts',
+    ]);
   });
 });
