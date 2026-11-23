@@ -2756,8 +2756,8 @@ body.home-hidden .doclist-link { display: none !important; }
 @media (max-width: 1447px) {
   .grid-editor-page #toolbar:not(.ribbon-skin) #btn-wrap-text .ribbon-btn-label { display: none; }
 }
-/* 리본 꾸밈에서는 아트크래프트처럼 작은 단추 이름(잘라내기·복사·행 삽입…)을 남긴다(사용자 지시 2026-11-22) — 1400px 홈 탭이 940px쯤이라 넉넉하다.
-   1100px 아래에서만 접는다(그 아래는 판 안 가로 넘김) */
+/* 리본 꾸밈에서는 아트크래프트처럼 작은 단추 이름(잘라내기·복사·행 삽입…)을 남긴다(사용자 지시 2026-11-22). 오피스 목록대로 묶음이 늘어 1400px 홈 탭은
+   모두 펼치면 약 1450px라 넘친다 — 넘침은 ribbonRuntime.ts fitPanel이 묶음을 작은 단추 3줄로 줄이거나 접어 맞춘다. 이름은 1100px 아래에서만 숨긴다 */
 @media (max-width: 1100px) {
   .grid-editor-page #toolbar.ribbon-skin :is(#btn-cut, #btn-copy, #btn-add-row, #btn-del-row, #btn-add-col, #btn-del-col, #btn-merge-center, #btn-wrap-text) .ribbon-btn-label { display: none; }
 }
@@ -3806,7 +3806,7 @@ body.review-pane-open #editor-zoom-host { margin-right: 320px; }
 .table-style-swatch i { display: block; background: #ffffff; border: 1px solid var(--ts-head); }
 .table-style-swatch i:first-child { background: var(--ts-head); }
 .table-style-swatch i:nth-child(2) { background: var(--ts-band); }
-.chart-title-field { grid-template-columns: auto 10rem; white-space: nowrap; } /* 이름 "차트 제목"(오피스 이름)이 두 줄로 꺾이지 않게 */
+.chart-title-field { grid-template-columns: auto 12rem; white-space: nowrap; } /* 이름 "차트 제목"(오피스 이름)이 두 줄로 꺾이지 않게 */
 
 /* ---------- Excel 데이터 탭: 필터 단추·값 목록·정렬 대화상자 ---------- */
 .grid-filter-layer { position: absolute; left: 0; top: 0; width: 0; height: 0; z-index: 4; }

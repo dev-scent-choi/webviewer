@@ -1731,7 +1731,7 @@
                 {"key":"autosum","name":"자동 합계","size":"big","kind":"split","ref":"#autosum-dropdown-formulas > .autosum-apply","map":"same","unit":"#autosum-dropdown-formulas"},
                 {"key":"average","name":"평균","size":"small","kind":"button","ref":".autosum-apply[data-fn=\"AVERAGE\"]","map":"nearest","note":"오피스엔 자동 합계 드롭다운 안 항목 — 자동 합계 바로 뒤에 작은 단추로"},
                 {"key":"max","name":"최대값","size":"small","kind":"button","ref":".autosum-apply[data-fn=\"MAX\"]","map":"nearest","note":"위와 같음"},
-                {"key":"count","name":"숫자 개수","size":"small","kind":"button","ref":".autosum-apply[data-fn=\"COUNT\"]","map":"nearest","note":"위와 같음","unverified":true},
+                {"key":"count","name":"숫자 개수","size":"small","kind":"button","ref":".autosum-apply[data-fn=\"COUNT\"]","map":"nearest","break":true,"note":"위와 같음 — 평균·최대값 | 숫자 개수·최소값 두 줄씩(최소값만 한 칸에 홀로 서지 않게)","unverified":true},
                 {"key":"min","name":"최소값","size":"small","kind":"button","ref":".autosum-apply[data-fn=\"MIN\"]","map":"nearest","note":"위와 같음"},
                 {"key":"recently-used","name":"최근 사용 항목","size":"big","kind":"dropdown","pending":true,"unverified":true},
                 {"key":"financial","name":"재무","size":"big","kind":"dropdown","pending":true},
