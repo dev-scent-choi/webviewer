@@ -4309,3 +4309,6 @@ body.ui-content.no-copy :is(#editor, #grid-editor, #slide-canvas-wrap) * { user-
 @media (max-width: 600px) {
   .ribbon-skin .ribbon-group.rb-collapsed.rb-open > .ribbon-group-buttons { height: auto; max-width: calc(100vw - 8px); flex-wrap: wrap; }
 }
+/* 탭이 늘어(워드 9 + 표 안 상황별 2) 좁은 창에서 탭 줄이 페이지를 밀지 않게 — 탭 줄 안에서만 가로로 밀린다 */
+.ribbon-skin .ribbon-tabs { overflow-x: auto; scrollbar-width: none; }
+.ribbon-skin .ribbon-tab { flex: none; }

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // 아트크래프트 리본 꾸밈 검사(설계 2026-11-22-artcraft-ribbon-skin §4) — 세 편집기(편집·읽기 전용 ui=view)와 보기 화면(view.html):
 //  (1) 제목 줄 24·탭 줄 22·리본 62·상태 줄 18px(±2, 캡처 실측)  (2) 탭·묶음·단추 이름·말풍선이 한글(영문자만 있는 라벨 0)
-//  (3) 큰 단추 = 아이콘 위·이름 아래  (4) 모든 탭의 리본 내용이 62px 안(잘림 없음)  (5) "자세히"는 있는 단추를 가리킴(워드 1·엑셀 1·PPT 0)
+//  (3) 큰 단추 = 아이콘 위·이름 아래  (4) 모든 탭의 리본 내용이 62px 안(잘림 없음)  (5) "자세히" 수는 목록 기준, 준비 중은 꺼짐·나머지는 있는 단추를 가리킴
 //  (6) 읽기 전용 흐림이 고르다(0.45), "자세히" 흐림 = 가리키는 단추 흐림  (7) 600px 가로 스크롤 없음·제목 줄 한 줄
 //  (8) 보기 화면 같은 규격·id 그대로·첫 쪽이 막대 밑에 깔리지 않음  (9) 아이콘 큰 30px·작은 15px 이상, 보기 화면 단추 이름, 상태 표시(읽기 전용·연결됨·편집 열기/편집) 안 보임
 //  (10) 워드 묶음 접기 — 축소 리본 엿보기·다시 고정 때 접힘, 같은 폭 다시 맞춤은 열린 묶음 판 유지
@@ -14,6 +14,7 @@ import path from 'node:path';
 import { PDFDocument, StandardFonts } from 'pdf-lib';
 import { chromium } from 'playwright';
 import { SKIN_PX, SKIN_TOLERANCE_PX, bigButtonLayoutOk, heightProblems, latinOnlyLabels } from './ribbonSkinLib.mjs';
+import { APP_OF_EXT, launcherCount, loadInventory } from './ribbonGenLib.mjs';
 
 const PORT = Number(process.argv[2] ?? 8166);
 // 운영 포트(8000·8010·8020·8100·8110·8130·8148)와 다른 시험(8150~8159) 범위와 겹치지 않게
@@ -29,7 +30,10 @@ const FILES = {
 };
 const READY = { docx: '.ProseMirror', xlsx: '#grid-edit-table td[data-row]', pptx: '#slides-rail .slide-card' };
 const REF = { docx: 'word-report.png', xlsx: 'grid-plain.png', pptx: 'deck-korean.png' };
-const LAUNCHERS = { docx: 1, xlsx: 1, pptx: 0 };
+// "자세히" 수는 오피스 리본 목록에서(상황별 탭 판 포함, 준비 중 포함) — 아직 목록으로 만들지 않은 앱(Task 4·5 전)은 옛 수
+const INV = loadInventory();
+const LISTED = new Set(['docx']);
+const LAUNCHERS = Object.fromEntries(Object.entries(APP_OF_EXT).map(([ext, name]) => [ext, LISTED.has(ext) ? launcherCount(INV.apps[name]) : { xlsx: 1, pptx: 0 }[ext]]));
 const EDITOR_SEL = { title: '.office-titlebar', tabs: '.ribbon-tabs', ribbon: '.ribbon-panel:not([hidden])', status: '#statusbar, .grid-status-row' };
 const VIEW_SEL = { title: '.toolbar-row-title', tabs: '.ribbon-tabs', ribbon: '.toolbar-row-tools', status: null };
 const VIEW_PAGE_IDS = ['back-btn', 'doc-title', 'edit-btn', 'thumbs-btn', 'measure-btn', 'invert-btn', 'markup-add-btn', 'text-tool-btn', 'markup-include-wrap', 'zoom-out', 'zoom-in', 'zoom-fit-btn', 'zoom-level', 'page-prev', 'page-jump-input', 'page-next', 'rotate-btn', 'search-btn', 'print-btn', 'download-btn', 'download-as-btn', 'fullscreen-btn', 'tools-btn', 'tools-menu'];
@@ -243,8 +247,8 @@ try {
     rec(`(9) ${ext} 홈 탭 아이콘 — 큰 단추 30px 이상·작은 단추 15px 이상(아트크래프트 32·16)`, ic.big >= 30 && ic.small >= 15, JSON.stringify(ic));
     const panels = await tabPanels(edit.page);
     rec(`(4) ${ext} 탭 ${panels.tabs.length}개 모두 리본 62px 안(잘림 없음)`, panels.tabs.length >= 5 && panels.bad.length === 0, panels.bad.join(' | '));
-    const launchers = await edit.page.$$eval('.ribbon-launcher', (ls) => ls.map((l) => ({ proxy: l.dataset.proxy ?? '', ok: !!document.getElementById(l.dataset.proxy ?? '') && !l.id })));
-    rec(`(5) ${ext} "자세히" ${LAUNCHERS[ext]}개 — 기존 단추를 가리키고 id 없음`, launchers.length === LAUNCHERS[ext] && launchers.every((l) => l.ok), JSON.stringify(launchers));
+    const launchers = await edit.page.$$eval('.ribbon-launcher', (ls) => ls.map((l) => ({ proxy: l.dataset.proxy ?? '', pending: l.hasAttribute('data-pending'), ok: !l.id && (l.hasAttribute('data-pending') ? l.disabled : !!document.getElementById(l.dataset.proxy ?? '')) })));
+    rec(`(5) ${ext} "자세히" ${LAUNCHERS[ext]}개(목록 기준) — 준비 중은 꺼짐, 나머지는 기존 단추를 가리킴, id 없음`, launchers.length === LAUNCHERS[ext] && launchers.every((l) => l.ok), JSON.stringify(launchers.filter((l) => !l.ok)));
     rec(`${ext} 편집 — 화면 오류 없음`, edit.errors.length === 0, edit.errors.slice(0, 2).join(' | '));
     await shot(edit.page, `editor-${ext}`);
     pairs.push([`editor-${ext}`, REF[ext]]);

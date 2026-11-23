@@ -81,42 +81,53 @@
     </div>
 
     <div class="ribbon-tabs" role="tablist" aria-label="리본">
+      <!-- ribbon:tabs:begin -->
       <button class="ribbon-tab ribbon-tab-file" role="tab" data-tab="file">파일</button>
       <button class="ribbon-tab" role="tab" data-tab="home" data-edit-only>홈</button>
       <button class="ribbon-tab" role="tab" data-tab="insert" data-edit-only>삽입</button>
+      <button class="ribbon-tab" role="tab" data-tab="draw" data-edit-only>그리기</button>
+      <button class="ribbon-tab" role="tab" data-tab="design" data-edit-only>디자인</button>
       <button class="ribbon-tab" role="tab" data-tab="layout" data-edit-only>레이아웃</button>
+      <button class="ribbon-tab" role="tab" data-tab="references" data-edit-only>참조</button>
+      <button class="ribbon-tab" role="tab" data-tab="mailings" data-edit-only>편지</button>
       <button class="ribbon-tab" role="tab" data-tab="review">검토</button>
       <button class="ribbon-tab" role="tab" data-tab="view">보기</button>
-      <button class="ribbon-tab ribbon-tab-contextual" role="tab" data-tab="table" data-edit-only hidden>표 레이아웃</button>
+      <button class="ribbon-tab ribbon-tab-contextual" role="tab" data-tab="table-design" data-edit-only hidden>테이블 디자인</button>
+      <button class="ribbon-tab ribbon-tab-contextual" role="tab" data-tab="table" data-edit-only hidden>레이아웃</button>
+      <button class="ribbon-tab ribbon-tab-contextual" role="tab" data-tab="header-footer" data-edit-only hidden>머리글/바닥글</button>
+      <button class="ribbon-tab ribbon-tab-contextual" role="tab" data-tab="picture-format" data-edit-only hidden>그림 서식</button>
+      <button class="ribbon-tab ribbon-tab-contextual" role="tab" data-tab="shape-format" data-edit-only hidden>도형 서식</button>
+      <!-- ribbon:tabs:end -->
       <span class="ribbon-tabs-spacer"></span>
       <button id="ribbon-collapse" class="ribbon-collapse" title="리본 축소 (Ctrl+F1)" aria-label="리본 축소">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 15 6-6 6 6"/></svg>
       </button>
     </div>
 
-    <!-- ===== 홈 ===== -->
+    <!-- ribbon:panels:begin — scripts/gen-ribbon.mjs가 src/client/ribbon/inventory.json으로 만든다(손으로 고치지 말 것) -->
     <div class="toolbar-group toolbar-format ribbon-panel" data-panel="home" role="tabpanel">
-      <div class="ribbon-group">
+      <div class="ribbon-group" data-group="clipboard" data-collapse="9" role="group" aria-label="클립보드">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="paste" aria-expanded="false" title="클립보드"><span>클립보드</span></button>
         <div class="ribbon-group-buttons">
-          <button id="btn-paste" class="icon-btn icon-btn-big" title="붙여넣기 (Ctrl+V)">
+          <button data-rb="home.clipboard.paste" id="btn-paste" class="icon-btn icon-btn-big" title="붙여넣기 (Ctrl+V)">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="4" width="10" height="4" rx="1"/><rect x="5" y="6" width="14" height="16" rx="1.5"/><path d="M9 12h6M9 16h6"/></svg>
             <span>붙여넣기</span>
           </button>
           <div class="ribbon-group-buttons-wrap">
             <div class="ribbon-row">
-              <button id="btn-cut" class="icon-btn ribbon-btn-labeled" title="잘라내기 (Ctrl+X)">
+              <button data-rb="home.clipboard.cut" id="btn-cut" class="icon-btn ribbon-btn-labeled" title="잘라내기 (Ctrl+X)">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><path d="M8.5 8 20 20M8.5 16 20 4"/></svg>
                 <span class="ribbon-btn-label">잘라내기</span>
               </button>
             </div>
             <div class="ribbon-row">
-              <button id="btn-copy" class="icon-btn ribbon-btn-labeled" title="복사 (Ctrl+C)">
+              <button data-rb="home.clipboard.copy" id="btn-copy" class="icon-btn ribbon-btn-labeled" title="복사 (Ctrl+C)">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="8" width="12" height="13" rx="1.3"/><path d="M15 8V5.5A1.5 1.5 0 0 0 13.5 4H5.5A1.5 1.5 0 0 0 4 5.5v11A1.5 1.5 0 0 0 5.5 18H8"/></svg>
                 <span class="ribbon-btn-label">복사</span>
               </button>
             </div>
             <div class="ribbon-row">
-              <button id="btn-format-painter" class="icon-btn ribbon-btn-labeled" title="서식 복사 (두 번 누르면 계속 칠하기, Esc로 끝)">
+              <button data-rb="home.clipboard.format-painter" id="btn-format-painter" class="icon-btn ribbon-btn-labeled" title="서식 복사 (두 번 누르면 계속 칠하기, Esc로 끝)">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h9v5H9z"/><path d="M11 8v5H7a2 2 0 0 0-2 2v1"/><path d="m14 15 6 6"/><path d="M12.5 15.5a2 2 0 0 1 2.8 0l1.2 1.2a2 2 0 0 1 0 2.8L14 22l-4-4Z"/></svg>
                 <span class="ribbon-btn-label">서식 복사</span>
               </button>
@@ -124,246 +135,299 @@
           </div>
         </div>
         <span class="ribbon-group-label">클립보드</span>
+        <button type="button" class="ribbon-launcher" data-pending disabled title="준비 중 — 클립보드 창" aria-label="클립보드 자세히"><svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 5.5v-4h4M4 4l4.5 4.5M8.5 5v3.5H5"/></svg></button>
       </div>
-
-      <div class="ribbon-group">
-        <div class="ribbon-group-buttons ribbon-group-buttons-wrap">
-          <div class="ribbon-row">
-            <select id="font-family" class="toolbar-select toolbar-select-full" title="글꼴" aria-label="글꼴">
-              <option value="">(문서 기본)</option>
-              <option value="맑은 고딕">맑은 고딕</option>
-              <option value="굴림">굴림</option>
-              <option value="굴림체">굴림체</option>
-              <option value="돋움">돋움</option>
-              <option value="돋움체">돋움체</option>
-              <option value="바탕">바탕</option>
-              <option value="바탕체">바탕체</option>
-              <option value="궁서">궁서</option>
-              <option value="궁서체">궁서체</option>
-              <option value="Arial">Arial</option>
-              <option value="Calibri">Calibri</option>
-              <option value="Cambria">Cambria</option>
-              <option value="Times New Roman">Times New Roman</option>
-              <option value="Courier New">Courier New</option>
-              <option value="Verdana">Verdana</option>
-              <option value="Tahoma">Tahoma</option>
-            </select>
-            <select id="font-size" class="toolbar-select" title="글꼴 크기" aria-label="글꼴 크기">
-              <option value="8">8</option><option value="9">9</option><option value="10">10</option><option value="10.5">10.5</option>
-              <option value="11">11</option><option value="12">12</option><option value="14">14</option><option value="16">16</option>
-              <option value="18">18</option><option value="20">20</option><option value="22">22</option><option value="24">24</option>
-              <option value="26">26</option><option value="28">28</option><option value="36">36</option><option value="48">48</option>
-              <option value="72">72</option>
-            </select>
-            <button id="btn-font-grow" class="icon-btn icon-btn-fontsize" title="글꼴 크기 크게 (Ctrl+])">
-              <span class="fontsize-glyph">가</span><span class="fontsize-arrow">▲</span>
-            </button>
-            <button id="btn-font-shrink" class="icon-btn icon-btn-fontsize" title="글꼴 크기 작게 (Ctrl+[)">
-              <span class="fontsize-glyph">가</span><span class="fontsize-arrow">▼</span>
-            </button>
-            <span class="dropdown-btn" id="change-case-dropdown">
-              <button class="icon-btn dropdown-caret dropdown-caret-labeled" title="대/소문자 바꾸기" aria-label="대/소문자 바꾸기">
-                Aa
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+      <div class="ribbon-group" data-group="font" data-collapse="8" role="group" aria-label="글꼴">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="font-family" aria-expanded="false" title="글꼴"><span>글꼴</span></button>
+        <div class="ribbon-group-buttons">
+          <div class="ribbon-group-buttons-wrap rb-rows">
+            <div class="ribbon-row">
+              <select data-rb="home.font.font-family" id="font-family" class="toolbar-select toolbar-select-full" title="글꼴" aria-label="글꼴">
+                <option value="">(문서 기본)</option>
+                <option value="맑은 고딕">맑은 고딕</option>
+                <option value="굴림">굴림</option>
+                <option value="굴림체">굴림체</option>
+                <option value="돋움">돋움</option>
+                <option value="돋움체">돋움체</option>
+                <option value="바탕">바탕</option>
+                <option value="바탕체">바탕체</option>
+                <option value="궁서">궁서</option>
+                <option value="궁서체">궁서체</option>
+                <option value="Arial">Arial</option>
+                <option value="Calibri">Calibri</option>
+                <option value="Cambria">Cambria</option>
+                <option value="Times New Roman">Times New Roman</option>
+                <option value="Courier New">Courier New</option>
+                <option value="Verdana">Verdana</option>
+                <option value="Tahoma">Tahoma</option>
+              </select>
+              <select data-rb="home.font.font-size" id="font-size" class="toolbar-select" title="글꼴 크기" aria-label="글꼴 크기">
+                <option value="8">8</option><option value="9">9</option><option value="10">10</option><option value="10.5">10.5</option>
+                <option value="11">11</option><option value="12">12</option><option value="14">14</option><option value="16">16</option>
+                <option value="18">18</option><option value="20">20</option><option value="22">22</option><option value="24">24</option>
+                <option value="26">26</option><option value="28">28</option><option value="36">36</option><option value="48">48</option>
+                <option value="72">72</option>
+              </select>
+              <button data-rb="home.font.grow" id="btn-font-grow" class="icon-btn icon-btn-fontsize" title="글꼴 크기 크게 (Ctrl+])">
+                <span class="fontsize-glyph">가</span><span class="fontsize-arrow">▲</span>
               </button>
-              <div class="dropdown-menu" hidden>
-                <button data-value="sentence">문장의 첫 글자를 대문자로</button>
-                <button data-value="lower">모두 소문자로</button>
-                <button data-value="upper">모두 대문자로</button>
-                <button data-value="title">각 단어를 대문자로 시작</button>
-                <button data-value="toggle">대/소문자 전환</button>
-              </div>
-            </span>
-            <button id="btn-clear-format" class="icon-btn" title="모든 서식 지우기">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m7 21-4.3-4.3c-.94-.94-.94-2.46 0-3.4l9.6-9.6c.94-.94 2.46-.94 3.4 0l5.6 5.6c.94.94.94 2.46 0 3.4L13 21"/><path d="M22 21H7"/><path d="m5 11 9 9"/></svg>
-            </button>
-          </div>
-          <div class="ribbon-row">
-            <button id="btn-bold" class="icon-btn icon-btn-glyph" title="굵게 (Ctrl+B)"><strong>가</strong></button>
-            <button id="btn-italic" class="icon-btn icon-btn-glyph" title="기울임꼴 (Ctrl+I)"><em>가</em></button>
-            <button id="btn-underline" class="icon-btn icon-btn-glyph" title="밑줄 (Ctrl+U)"><u>가</u></button>
-            <button id="btn-strike" class="icon-btn icon-btn-glyph" title="취소선"><s>가</s></button>
-            <button id="btn-subscript" class="icon-btn" title="아래 첨자 (Ctrl+=)">x<sub>2</sub></button>
-            <button id="btn-superscript" class="icon-btn" title="위 첨자 (Ctrl+Shift++)">x<sup>2</sup></button>
-            <span class="dropdown-btn color-dropdown-btn" id="highlight-dropdown">
-              <button id="btn-highlight-apply" class="icon-btn color-apply-btn" title="텍스트 강조 색">
-                <span class="color-btn-glyph">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m9 11-6 6v3h9l3-3"/><path d="m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4"/></svg>
-                </span>
-                <span class="color-btn-bar" id="highlight-bar" style="background: #ffff00;"></span>
+              <button data-rb="home.font.shrink" id="btn-font-shrink" class="icon-btn icon-btn-fontsize" title="글꼴 크기 작게 (Ctrl+[)">
+                <span class="fontsize-glyph">가</span><span class="fontsize-arrow">▼</span>
               </button>
-              <button class="dropdown-caret" aria-label="텍스트 강조 색 선택">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+              <span data-rb="home.font.change-case" class="dropdown-btn" id="change-case-dropdown">
+                <button class="icon-btn dropdown-caret dropdown-caret-labeled" title="대/소문자 바꾸기" aria-label="대/소문자 바꾸기">
+                  Aa
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+                </button>
+                <div class="dropdown-menu" hidden>
+                  <button data-value="sentence">문장의 첫 글자를 대문자로</button>
+                  <button data-value="lower">모두 소문자로</button>
+                  <button data-value="upper">모두 대문자로</button>
+                  <button data-value="title">각 단어를 대문자로 시작</button>
+                  <button data-value="toggle">대/소문자 전환</button>
+                </div>
+              </span>
+              <button data-rb="home.font.clear-format" id="btn-clear-format" class="icon-btn" title="모든 서식 지우기">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m7 21-4.3-4.3c-.94-.94-.94-2.46 0-3.4l9.6-9.6c.94-.94 2.46-.94 3.4 0l5.6 5.6c.94.94.94 2.46 0 3.4L13 21"/><path d="M22 21H7"/><path d="m5 11 9 9"/></svg>
               </button>
-              <div class="dropdown-menu" hidden></div>
-            </span>
-            <span class="dropdown-btn color-dropdown-btn" id="font-color-dropdown">
-              <button id="btn-font-color-apply" class="icon-btn color-apply-btn" title="글꼴 색">
-                <span class="color-btn-glyph">가</span>
-                <span class="color-btn-bar" id="font-color-bar" style="background: #c00000;"></span>
-              </button>
-              <button class="dropdown-caret" aria-label="글꼴 색 선택">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
-              </button>
-              <div class="dropdown-menu" hidden></div>
-            </span>
+              <button data-rb="home.font.phonetic-guide" data-pending data-kind="button" title="준비 중 — 윗주 달기" type="button" class="icon-btn rb-pending" data-icon="phonetic-guide" aria-label="윗주 달기" disabled></button>
+              <button data-rb="home.font.char-border" data-pending data-kind="button" title="준비 중 — 문자 테두리" type="button" class="icon-btn rb-pending" data-icon="char-border" aria-label="문자 테두리" disabled></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="home.font.bold" id="btn-bold" class="icon-btn icon-btn-glyph" title="굵게 (Ctrl+B)"><strong>가</strong></button>
+              <button data-rb="home.font.italic" id="btn-italic" class="icon-btn icon-btn-glyph" title="기울임꼴 (Ctrl+I)"><em>가</em></button>
+              <button data-rb="home.font.underline" id="btn-underline" class="icon-btn icon-btn-glyph" title="밑줄 (Ctrl+U)"><u>가</u></button>
+              <button data-rb="home.font.strike" id="btn-strike" class="icon-btn icon-btn-glyph" title="취소선"><s>가</s></button>
+              <button data-rb="home.font.subscript" id="btn-subscript" class="icon-btn" title="아래 첨자 (Ctrl+=)">x<sub>2</sub></button>
+              <button data-rb="home.font.superscript" id="btn-superscript" class="icon-btn" title="위 첨자 (Ctrl+Shift++)">x<sup>2</sup></button>
+              <button data-rb="home.font.text-effects" data-pending data-kind="dropdown" title="준비 중 — 텍스트 효과 및 타이포그래피" type="button" class="icon-btn rb-pending" data-icon="text-effects" aria-label="텍스트 효과 및 타이포그래피" disabled></button>
+              <span data-rb="home.font.highlight" class="dropdown-btn color-dropdown-btn" id="highlight-dropdown">
+                <button id="btn-highlight-apply" class="icon-btn color-apply-btn" title="텍스트 강조 색">
+                  <span class="color-btn-glyph">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m9 11-6 6v3h9l3-3"/><path d="m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4"/></svg>
+                  </span>
+                  <span class="color-btn-bar" id="highlight-bar" style="background: #ffff00;"></span>
+                </button>
+                <button class="dropdown-caret" aria-label="텍스트 강조 색 선택">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+                </button>
+                <div class="dropdown-menu" hidden></div>
+              </span>
+              <span data-rb="home.font.font-color" class="dropdown-btn color-dropdown-btn" id="font-color-dropdown">
+                <button id="btn-font-color-apply" class="icon-btn color-apply-btn" title="글꼴 색">
+                  <span class="color-btn-glyph">가</span>
+                  <span class="color-btn-bar" id="font-color-bar" style="background: #c00000;"></span>
+                </button>
+                <button class="dropdown-caret" aria-label="글꼴 색 선택">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+                </button>
+                <div class="dropdown-menu" hidden></div>
+              </span>
+              <button data-rb="home.font.char-shading" data-pending data-kind="button" title="준비 중 — 문자 음영" type="button" class="icon-btn rb-pending" data-icon="char-shading" aria-label="문자 음영" disabled></button>
+              <button data-rb="home.font.enclose-chars" data-pending data-kind="dropdown" title="준비 중 — 원 문자" type="button" class="icon-btn rb-pending" data-icon="enclose-chars" aria-label="원 문자" disabled></button>
+            </div>
           </div>
         </div>
         <span class="ribbon-group-label">글꼴</span>
+        <button type="button" class="ribbon-launcher" data-pending disabled title="준비 중 — 글꼴" aria-label="글꼴 자세히"><svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 5.5v-4h4M4 4l4.5 4.5M8.5 5v3.5H5"/></svg></button>
       </div>
-
-      <div class="ribbon-group">
-        <div class="ribbon-group-buttons ribbon-group-buttons-wrap">
-          <div class="ribbon-row">
-            <button id="btn-bullet-list" class="icon-btn" title="글머리 기호">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="4.5" cy="6" r="1" fill="currentColor" stroke="none"/><circle cx="4.5" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="4.5" cy="18" r="1" fill="currentColor" stroke="none"/><path d="M9 6h11M9 12h11M9 18h11"/></svg>
-            </button>
-            <button id="btn-ordered-list" class="icon-btn" title="번호 매기기">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 6h10M10 12h10M10 18h10"/><path d="M4 4.5h1.2V9M4 9h2.4"/><path d="M4 14.2c.4-.6 2.4-.8 2.4.5 0 1-2.4 1.6-2.4 3.3h2.5"/></svg>
-            </button>
-            <button id="btn-multilevel-list" class="icon-btn" title="다단계 목록">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M9 6h11M12 12h8M14 18h6"/><circle cx="4.5" cy="6" r="1" fill="currentColor" stroke="none"/><circle cx="7.5" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="10.5" cy="18" r="1" fill="currentColor" stroke="none"/></svg>
-            </button>
-            <button id="btn-outdent" class="icon-btn" title="내어쓰기">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m9 8-4 4 4 4"/><path d="M13 6h8M13 12h8M13 18h8"/></svg>
-            </button>
-            <button id="btn-indent" class="icon-btn" title="들여쓰기">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m5 8 4 4-4 4"/><path d="M13 6h8M13 12h8M13 18h8"/></svg>
-            </button>
-          </div>
-          <div class="ribbon-row">
-            <button id="btn-align-left" class="icon-btn" title="왼쪽 맞춤 (Ctrl+L)">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h10M4 18h14"/></svg>
-            </button>
-            <button id="btn-align-center" class="icon-btn" title="가운데 맞춤 (Ctrl+E)">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M8 12h8M6 18h12"/></svg>
-            </button>
-            <button id="btn-align-right" class="icon-btn" title="오른쪽 맞춤 (Ctrl+R)">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M10 12h10M6 18h14"/></svg>
-            </button>
-            <button id="btn-align-justify" class="icon-btn" title="양쪽 맞춤 (Ctrl+J)">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
-            </button>
-            <span class="dropdown-btn" id="line-spacing-dropdown">
-              <button class="icon-btn dropdown-caret dropdown-caret-labeled" title="줄 및 단락 간격" aria-label="줄 및 단락 간격">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4v16M4.5 6.5 7 4l2.5 2.5M4.5 17.5 7 20l2.5-2.5"/><path d="M13 6h7M13 12h7M13 18h7"/></svg>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+      <div class="ribbon-group" data-group="paragraph" data-collapse="7" role="group" aria-label="단락">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="bullets" aria-expanded="false" title="단락"><span>단락</span></button>
+        <div class="ribbon-group-buttons">
+          <div class="ribbon-group-buttons-wrap rb-rows">
+            <div class="ribbon-row">
+              <button data-rb="home.paragraph.bullets" id="btn-bullet-list" class="icon-btn" title="글머리 기호">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="4.5" cy="6" r="1" fill="currentColor" stroke="none"/><circle cx="4.5" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="4.5" cy="18" r="1" fill="currentColor" stroke="none"/><path d="M9 6h11M9 12h11M9 18h11"/></svg>
               </button>
-              <div class="dropdown-menu" hidden>
-                <button data-value="1">1.0</button>
-                <button data-value="1.15">1.15</button>
-                <button data-value="1.5">1.5</button>
-                <button data-value="2">2.0</button>
-                <button data-value="2.5">2.5</button>
-                <button data-value="3">3.0</button>
-              </div>
-            </span>
-            <span class="dropdown-btn color-dropdown-btn" id="shading-dropdown">
-              <button id="btn-shading-apply" class="icon-btn color-apply-btn" title="음영">
-                <span class="color-btn-glyph">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 8h14l-1.6 10.2a2 2 0 0 1-2 1.8H8.6a2 2 0 0 1-2-1.8L5 8Z"/><path d="M8 8a4 4 0 0 1 8 0"/></svg>
-                </span>
-                <span class="color-btn-bar" id="shading-bar" style="background: #d9d9d9;"></span>
+              <button data-rb="home.paragraph.numbering" id="btn-ordered-list" class="icon-btn" title="번호 매기기">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 6h10M10 12h10M10 18h10"/><path d="M4 4.5h1.2V9M4 9h2.4"/><path d="M4 14.2c.4-.6 2.4-.8 2.4.5 0 1-2.4 1.6-2.4 3.3h2.5"/></svg>
               </button>
-              <button class="dropdown-caret" aria-label="음영 색 선택">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+              <button data-rb="home.paragraph.multilevel" id="btn-multilevel-list" class="icon-btn" title="다단계 목록">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M9 6h11M12 12h8M14 18h6"/><circle cx="4.5" cy="6" r="1" fill="currentColor" stroke="none"/><circle cx="7.5" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="10.5" cy="18" r="1" fill="currentColor" stroke="none"/></svg>
               </button>
-              <div class="dropdown-menu" hidden></div>
-            </span>
+              <button data-rb="home.paragraph.outdent" id="btn-outdent" class="icon-btn" title="내어쓰기">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m9 8-4 4 4 4"/><path d="M13 6h8M13 12h8M13 18h8"/></svg>
+              </button>
+              <button data-rb="home.paragraph.indent" id="btn-indent" class="icon-btn" title="들여쓰기">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m5 8 4 4-4 4"/><path d="M13 6h8M13 12h8M13 18h8"/></svg>
+              </button>
+              <button data-rb="home.paragraph.sort" data-pending data-kind="button" title="준비 중 — 정렬" type="button" class="icon-btn rb-pending" data-icon="sort" aria-label="정렬" disabled></button>
+              <button data-rb="home.paragraph.show-marks" data-pending data-kind="button" title="준비 중 — 편집 기호 표시/숨기기" type="button" class="icon-btn rb-pending" data-icon="show-marks" aria-label="편집 기호 표시/숨기기" disabled></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="home.paragraph.align-left" id="btn-align-left" class="icon-btn" title="왼쪽 맞춤 (Ctrl+L)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h10M4 18h14"/></svg>
+              </button>
+              <button data-rb="home.paragraph.align-center" id="btn-align-center" class="icon-btn" title="가운데 맞춤 (Ctrl+E)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M8 12h8M6 18h12"/></svg>
+              </button>
+              <button data-rb="home.paragraph.align-right" id="btn-align-right" class="icon-btn" title="오른쪽 맞춤 (Ctrl+R)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M10 12h10M6 18h14"/></svg>
+              </button>
+              <button data-rb="home.paragraph.justify" id="btn-align-justify" class="icon-btn" title="양쪽 맞춤 (Ctrl+J)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+              </button>
+              <button data-rb="home.paragraph.distributed" data-pending data-kind="button" title="준비 중 — 균등 분할" type="button" class="icon-btn rb-pending" data-icon="distributed" aria-label="균등 분할" disabled></button>
+              <span data-rb="home.paragraph.line-spacing" class="dropdown-btn" id="line-spacing-dropdown">
+                <button class="icon-btn dropdown-caret dropdown-caret-labeled" title="줄 및 단락 간격" aria-label="줄 및 단락 간격">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4v16M4.5 6.5 7 4l2.5 2.5M4.5 17.5 7 20l2.5-2.5"/><path d="M13 6h7M13 12h7M13 18h7"/></svg>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+                </button>
+                <div class="dropdown-menu" hidden>
+                  <button data-value="1">1.0</button>
+                  <button data-value="1.15">1.15</button>
+                  <button data-value="1.5">1.5</button>
+                  <button data-value="2">2.0</button>
+                  <button data-value="2.5">2.5</button>
+                  <button data-value="3">3.0</button>
+                </div>
+              </span>
+              <span data-rb="home.paragraph.shading" class="dropdown-btn color-dropdown-btn" id="shading-dropdown">
+                <button id="btn-shading-apply" class="icon-btn color-apply-btn" title="음영">
+                  <span class="color-btn-glyph">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 8h14l-1.6 10.2a2 2 0 0 1-2 1.8H8.6a2 2 0 0 1-2-1.8L5 8Z"/><path d="M8 8a4 4 0 0 1 8 0"/></svg>
+                  </span>
+                  <span class="color-btn-bar" id="shading-bar" style="background: #d9d9d9;"></span>
+                </button>
+                <button class="dropdown-caret" aria-label="음영 색 선택">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+                </button>
+                <div class="dropdown-menu" hidden></div>
+              </span>
+              <button data-rb="home.paragraph.borders" data-pending data-kind="split" title="준비 중 — 테두리" type="button" class="icon-btn rb-pending" data-icon="borders" aria-label="테두리" disabled></button>
+            </div>
           </div>
         </div>
         <span class="ribbon-group-label">단락</span>
+        <button type="button" class="ribbon-launcher" data-pending disabled title="준비 중 — 단락" aria-label="단락 자세히"><svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 5.5v-4h4M4 4l4.5 4.5M8.5 5v3.5H5"/></svg></button>
       </div>
-
-      <div class="ribbon-group">
-        <div class="style-gallery">
-          <button class="style-gallery-item" data-style="Normal" data-preview="normal" title="표준">
-            <span class="style-gallery-preview">가나다Aa</span>
-            <span class="style-gallery-label">표준</span>
-          </button>
-          <button class="style-gallery-item" data-style="NoSpacing" data-preview="spacingless" title="간격 없음">
-            <span class="style-gallery-preview">가나다Aa</span>
-            <span class="style-gallery-label">간격 없음</span>
-          </button>
-          <button class="style-gallery-item" data-style="Heading1" data-preview="h1" title="제목 1 (Ctrl+Alt+1)">
-            <span class="style-gallery-preview">가나다</span>
-            <span class="style-gallery-label">제목 1</span>
-          </button>
-          <button class="style-gallery-item" data-style="Heading2" data-preview="h2" title="제목 2 (Ctrl+Alt+2)">
-            <span class="style-gallery-preview">가나다</span>
-            <span class="style-gallery-label">제목 2</span>
-          </button>
-          <button class="style-gallery-item" data-style="Title" data-preview="title" title="제목">
-            <span class="style-gallery-preview">가나다</span>
-            <span class="style-gallery-label">제목</span>
-          </button>
-          <button class="style-gallery-item" data-style="Subtitle" data-preview="subtitle" title="부제">
-            <span class="style-gallery-preview">가나다</span>
-            <span class="style-gallery-label">부제</span>
-          </button>
-          <button class="style-gallery-item" data-char-style="subtle" data-preview="emphasis" title="약한 강조">
-            <span class="style-gallery-preview">가나다Aa</span>
-            <span class="style-gallery-label">약한 강조</span>
-          </button>
-          <button class="style-gallery-item" data-char-style="emphasis" data-preview="strong-emphasis" title="강조">
-            <span class="style-gallery-preview">가나다Aa</span>
-            <span class="style-gallery-label">강조</span>
-          </button>
-          <button class="style-gallery-item" data-char-style="strong" data-preview="strong" title="굵은 텍스트">
-            <span class="style-gallery-preview">가나다Aa</span>
-            <span class="style-gallery-label">굵은 텍스트</span>
-          </button>
-          <button class="style-gallery-item" data-style="Quote" data-preview="quote" title="인용">
-            <span class="style-gallery-preview">가나다Aa</span>
-            <span class="style-gallery-label">인용</span>
-          </button>
-          <button class="style-gallery-item" data-style="IntenseQuote" data-preview="intense-quote" title="강한 인용">
-            <span class="style-gallery-preview">가나다Aa</span>
-            <span class="style-gallery-label">강한 인용</span>
-          </button>
+      <div class="ribbon-group" data-group="styles" data-collapse="4" role="group" aria-label="스타일">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="style-gallery" aria-expanded="false" title="스타일"><span>스타일</span></button>
+        <div class="ribbon-group-buttons">
+          <div data-rb="home.styles.style-gallery" class="style-gallery" aria-label="스타일">
+            <button class="style-gallery-item" data-style="Normal" data-preview="normal" title="표준">
+              <span class="style-gallery-preview">가나다Aa</span>
+              <span class="style-gallery-label">표준</span>
+            </button>
+            <button class="style-gallery-item" data-style="NoSpacing" data-preview="spacingless" title="간격 없음">
+              <span class="style-gallery-preview">가나다Aa</span>
+              <span class="style-gallery-label">간격 없음</span>
+            </button>
+            <button class="style-gallery-item" data-style="Heading1" data-preview="h1" title="제목 1 (Ctrl+Alt+1)">
+              <span class="style-gallery-preview">가나다</span>
+              <span class="style-gallery-label">제목 1</span>
+            </button>
+            <button class="style-gallery-item" data-style="Heading2" data-preview="h2" title="제목 2 (Ctrl+Alt+2)">
+              <span class="style-gallery-preview">가나다</span>
+              <span class="style-gallery-label">제목 2</span>
+            </button>
+            <button class="style-gallery-item" data-style="Title" data-preview="title" title="제목">
+              <span class="style-gallery-preview">가나다</span>
+              <span class="style-gallery-label">제목</span>
+            </button>
+            <button class="style-gallery-item" data-style="Subtitle" data-preview="subtitle" title="부제">
+              <span class="style-gallery-preview">가나다</span>
+              <span class="style-gallery-label">부제</span>
+            </button>
+            <button class="style-gallery-item" data-char-style="subtle" data-preview="emphasis" title="약한 강조">
+              <span class="style-gallery-preview">가나다Aa</span>
+              <span class="style-gallery-label">약한 강조</span>
+            </button>
+            <button class="style-gallery-item" data-char-style="emphasis" data-preview="strong-emphasis" title="강조">
+              <span class="style-gallery-preview">가나다Aa</span>
+              <span class="style-gallery-label">강조</span>
+            </button>
+            <button class="style-gallery-item" data-char-style="strong" data-preview="strong" title="굵은 텍스트">
+              <span class="style-gallery-preview">가나다Aa</span>
+              <span class="style-gallery-label">굵은 텍스트</span>
+            </button>
+            <button class="style-gallery-item" data-style="Quote" data-preview="quote" title="인용">
+              <span class="style-gallery-preview">가나다Aa</span>
+              <span class="style-gallery-label">인용</span>
+            </button>
+            <button class="style-gallery-item" data-style="IntenseQuote" data-preview="intense-quote" title="강한 인용">
+              <span class="style-gallery-preview">가나다Aa</span>
+              <span class="style-gallery-label">강한 인용</span>
+            </button>
+          </div>
         </div>
         <span class="ribbon-group-label">스타일</span>
+        <button type="button" class="ribbon-launcher" data-pending disabled title="준비 중 — 스타일 창" aria-label="스타일 자세히"><svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 5.5v-4h4M4 4l4.5 4.5M8.5 5v3.5H5"/></svg></button>
       </div>
-
-      <div class="ribbon-group">
-        <div class="ribbon-group-buttons ribbon-group-buttons-wrap">
-          <div class="ribbon-row">
-            <button id="btn-ribbon-find" class="icon-btn ribbon-btn-labeled" title="찾기 (Ctrl+F)">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
-              <span class="ribbon-btn-label">찾기</span>
-            </button>
-          </div>
-          <div class="ribbon-row">
-            <button id="btn-ribbon-replace" class="icon-btn ribbon-btn-labeled" title="바꾸기 (Ctrl+H)">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h11l-3-3M17 17H6l3 3"/></svg>
-              <span class="ribbon-btn-label">바꾸기</span>
-            </button>
-          </div>
-          <div class="ribbon-row">
-            <button id="btn-ribbon-select" class="icon-btn ribbon-btn-labeled" title="모두 선택 (Ctrl+A)">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3v17l4.5-4.5L12 20l2-1-2.5-4.5L17 14z"/></svg>
-              <span class="ribbon-btn-label">모두 선택</span>
-            </button>
+      <div class="ribbon-group" data-group="editing" data-collapse="5" role="group" aria-label="편집">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="find" aria-expanded="false" title="편집"><span>편집</span></button>
+        <div class="ribbon-group-buttons">
+          <div class="ribbon-group-buttons-wrap">
+            <div class="ribbon-row">
+              <button data-rb="home.editing.find" id="btn-ribbon-find" class="icon-btn ribbon-btn-labeled" title="찾기 (Ctrl+F)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+                <span class="ribbon-btn-label">찾기</span>
+              </button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="home.editing.replace" id="btn-ribbon-replace" class="icon-btn ribbon-btn-labeled" title="바꾸기 (Ctrl+H)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h11l-3-3M17 17H6l3 3"/></svg>
+                <span class="ribbon-btn-label">바꾸기</span>
+              </button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="home.editing.select" id="btn-ribbon-select" class="icon-btn ribbon-btn-labeled" title="모두 선택 (Ctrl+A)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3v17l4.5-4.5L12 20l2-1-2.5-4.5L17 14z"/></svg>
+                <span class="ribbon-btn-label">선택</span>
+              </button>
+            </div>
           </div>
         </div>
         <span class="ribbon-group-label">편집</span>
       </div>
-    </div>
-
-    <!-- ===== 삽입 ===== -->
-    <div class="toolbar-group toolbar-format ribbon-panel" data-panel="insert" role="tabpanel" hidden>
-      <div class="ribbon-group">
+      <div class="ribbon-group" data-group="voice" data-collapse="2" role="group" aria-label="음성">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="dictate" aria-expanded="false" title="음성"><span>음성</span></button>
         <div class="ribbon-group-buttons">
-          <button id="btn-insert-break" class="icon-btn icon-btn-big" title="줄 바꿈 (Shift+Enter)">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 5v6a3 3 0 0 1-3 3H5"/><path d="m9 10-4 4 4 4"/></svg>
-            <span>줄 바꿈</span>
-          </button>
+          <button data-rb="home.voice.dictate" data-pending data-kind="split" title="준비 중 — 받아쓰기" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="dictate" aria-label="받아쓰기" disabled><span>받아쓰기</span></button>
         </div>
-        <span class="ribbon-group-label">나누기</span>
+        <span class="ribbon-group-label">음성</span>
       </div>
-      <div class="ribbon-group">
+      <div class="ribbon-group" data-group="editor" data-collapse="1" role="group" aria-label="편집기">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="editor" aria-expanded="false" title="편집기"><span>편집기</span></button>
         <div class="ribbon-group-buttons">
-          <span class="dropdown-btn" id="table-insert-dropdown">
+          <button data-rb="home.editor.editor" data-pending data-kind="button" title="준비 중 — 편집기" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="editor" aria-label="편집기" disabled><span>편집기</span></button>
+        </div>
+        <span class="ribbon-group-label">편집기</span>
+      </div>
+    </div>
+    <div class="toolbar-group toolbar-format ribbon-panel" data-panel="insert" role="tabpanel" hidden>
+      <div class="ribbon-group" data-group="pages" data-collapse="3" role="group" aria-label="페이지">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="cover-page" aria-expanded="false" title="페이지"><span>페이지</span></button>
+        <div class="ribbon-group-buttons">
+          <div class="ribbon-group-buttons-wrap">
+            <div class="ribbon-row">
+              <button data-rb="insert.pages.cover-page" data-pending data-kind="dropdown" title="준비 중 — 표지" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="cover-page" aria-label="표지" disabled><span class="ribbon-btn-label">표지</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="insert.pages.blank-page" data-pending data-kind="button" title="준비 중 — 빈 페이지" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="blank-page" aria-label="빈 페이지" disabled><span class="ribbon-btn-label">빈 페이지</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="insert.pages.page-break" id="btn-page-break" class="icon-btn ribbon-btn-labeled" title="페이지 나누기 (Ctrl+Enter)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3v6h12V3M6 21v-6h12v6"/><path d="M3 12h3M9 12h2M13 12h2M18 12h3"/></svg>
+                <span class="ribbon-btn-label">페이지 나누기</span>
+              </button>
+            </div>
+          </div>
+          <div class="ribbon-group-buttons-wrap">
+            <div class="ribbon-row">
+              <button data-rb="insert.pages.line-break" id="btn-insert-break" class="icon-btn ribbon-btn-labeled" title="줄 바꿈 (Shift+Enter)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 5v6a3 3 0 0 1-3 3H5"/><path d="m9 10-4 4 4 4"/></svg>
+                <span class="ribbon-btn-label">줄 바꿈</span>
+              </button>
+            </div>
+          </div>
+        </div>
+        <span class="ribbon-group-label">페이지</span>
+      </div>
+      <div class="ribbon-group" data-group="tables" data-collapse="8" role="group" aria-label="표">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="table" aria-expanded="false" title="표"><span>표</span></button>
+        <div class="ribbon-group-buttons">
+          <span data-rb="insert.tables.table" class="dropdown-btn" id="table-insert-dropdown">
             <button class="icon-btn icon-btn-big dropdown-caret" id="btn-table" title="표 삽입">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4.5" width="17" height="15" rx="1"/><path d="M3.5 9.5h17M3.5 14.5h17M9.2 4.5v15M14.8 4.5v15"/></svg>
               <span>표 ▾</span>
@@ -376,13 +440,176 @@
         </div>
         <span class="ribbon-group-label">표</span>
       </div>
-    </div>
-
-    <!-- ===== 레이아웃 ===== -->
-    <div class="toolbar-group toolbar-format ribbon-panel" data-panel="layout" role="tabpanel" hidden>
-      <div class="ribbon-group">
+      <div class="ribbon-group" data-group="illustrations" data-collapse="6" role="group" aria-label="일러스트레이션">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="pictures" aria-expanded="false" title="일러스트레이션"><span>일러스트레이션</span></button>
         <div class="ribbon-group-buttons">
-          <span class="dropdown-btn" id="margins-dropdown">
+          <button data-rb="insert.illustrations.pictures" data-pending data-kind="dropdown" title="준비 중 — 그림" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="pictures" aria-label="그림" disabled><span>그림</span></button>
+          <button data-rb="insert.illustrations.shapes" data-pending data-kind="dropdown" title="준비 중 — 도형" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="shapes" aria-label="도형" disabled><span>도형</span></button>
+          <button data-rb="insert.illustrations.icons" data-pending data-kind="button" title="준비 중 — 아이콘" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="icons" aria-label="아이콘" disabled><span>아이콘</span></button>
+          <button data-rb="insert.illustrations.3d-models" data-pending data-kind="split" title="준비 중 — 3D 모델" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="3d-models" aria-label="3D 모델" disabled><span>3D 모델</span></button>
+          <div class="ribbon-group-buttons-wrap">
+            <div class="ribbon-row">
+              <button data-rb="insert.illustrations.smartart" data-pending data-kind="button" title="준비 중 — 스마트아트" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="smartart" aria-label="스마트아트" disabled><span class="ribbon-btn-label">스마트아트</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="insert.illustrations.chart" data-pending data-kind="button" title="준비 중 — 차트" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="chart" aria-label="차트" disabled><span class="ribbon-btn-label">차트</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="insert.illustrations.screenshot" data-pending data-kind="dropdown" title="준비 중 — 스크린샷" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="screenshot" aria-label="스크린샷" disabled><span class="ribbon-btn-label">스크린샷</span></button>
+            </div>
+          </div>
+        </div>
+        <span class="ribbon-group-label">일러스트레이션</span>
+      </div>
+      <div class="ribbon-group" data-group="addins" data-collapse="2" role="group" aria-label="추가 기능">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="addins" aria-expanded="false" title="추가 기능"><span>추가 기능</span></button>
+        <div class="ribbon-group-buttons">
+          <button data-rb="insert.addins.addins" data-pending data-kind="button" title="준비 중 — 추가 기능" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="addins" aria-label="추가 기능" disabled><span>추가 기능</span></button>
+        </div>
+        <span class="ribbon-group-label">추가 기능</span>
+      </div>
+      <div class="ribbon-group" data-group="media" data-collapse="2" role="group" aria-label="미디어">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="online-video" aria-expanded="false" title="미디어"><span>미디어</span></button>
+        <div class="ribbon-group-buttons">
+          <button data-rb="insert.media.online-video" data-pending data-kind="button" title="준비 중 — 온라인 비디오" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="online-video" aria-label="온라인 비디오" disabled><span>온라인 비디오</span></button>
+        </div>
+        <span class="ribbon-group-label">미디어</span>
+      </div>
+      <div class="ribbon-group" data-group="links" data-collapse="4" role="group" aria-label="링크">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="link" aria-expanded="false" title="링크"><span>링크</span></button>
+        <div class="ribbon-group-buttons">
+          <button data-rb="insert.links.link" data-pending data-kind="split" title="준비 중 — 링크" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="link" aria-label="링크" disabled><span>링크</span></button>
+          <div class="ribbon-group-buttons-wrap">
+            <div class="ribbon-row">
+              <button data-rb="insert.links.bookmark" data-pending data-kind="button" title="준비 중 — 책갈피" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="bookmark" aria-label="책갈피" disabled><span class="ribbon-btn-label">책갈피</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="insert.links.cross-reference" data-pending data-kind="button" title="준비 중 — 상호 참조" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="cross-reference" aria-label="상호 참조" disabled><span class="ribbon-btn-label">상호 참조</span></button>
+            </div>
+          </div>
+        </div>
+        <span class="ribbon-group-label">링크</span>
+      </div>
+      <div class="ribbon-group" data-group="comments" data-collapse="5" role="group" aria-label="메모">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="comment" aria-expanded="false" title="메모"><span>메모</span></button>
+        <div class="ribbon-group-buttons">
+          <button data-rb="insert.comments.comment" data-kind="button" data-proxy="btn-new-comment" type="button" class="icon-btn icon-btn-big" data-icon="comment" title="메모"><span>메모</span></button>
+        </div>
+        <span class="ribbon-group-label">메모</span>
+      </div>
+      <div class="ribbon-group" data-group="header-footer" data-collapse="5" role="group" aria-label="머리글/바닥글">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="header" aria-expanded="false" title="머리글/바닥글"><span>머리글/바닥글</span></button>
+        <div class="ribbon-group-buttons">
+          <button data-rb="insert.header-footer.header" data-pending data-kind="dropdown" title="준비 중 — 머리글" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="header" aria-label="머리글" disabled><span>머리글</span></button>
+          <button data-rb="insert.header-footer.footer" data-pending data-kind="dropdown" title="준비 중 — 바닥글" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="footer" aria-label="바닥글" disabled><span>바닥글</span></button>
+          <button data-rb="insert.header-footer.page-number" data-pending data-kind="dropdown" title="준비 중 — 페이지 번호" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="page-number" aria-label="페이지 번호" disabled><span>페이지 번호</span></button>
+        </div>
+        <span class="ribbon-group-label">머리글/바닥글</span>
+      </div>
+      <div class="ribbon-group" data-group="text" data-collapse="4" role="group" aria-label="텍스트">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="text-box" aria-expanded="false" title="텍스트"><span>텍스트</span></button>
+        <div class="ribbon-group-buttons">
+          <button data-rb="insert.text.text-box" data-pending data-kind="dropdown" title="준비 중 — 텍스트 상자" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="text-box" aria-label="텍스트 상자" disabled><span>텍스트 상자</span></button>
+          <div class="ribbon-group-buttons-wrap">
+            <div class="ribbon-row">
+              <button data-rb="insert.text.quick-parts" data-pending data-kind="dropdown" title="준비 중 — 빠른 문서 요소" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="quick-parts" aria-label="빠른 문서 요소" disabled><span class="ribbon-btn-label">빠른 문서 요소</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="insert.text.wordart" data-pending data-kind="dropdown" title="준비 중 — 워드아트" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="wordart" aria-label="워드아트" disabled><span class="ribbon-btn-label">워드아트</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="insert.text.drop-cap" data-pending data-kind="dropdown" title="준비 중 — 단락의 첫 문자 장식" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="drop-cap" aria-label="단락의 첫 문자 장식" disabled><span class="ribbon-btn-label">단락의 첫 문자 장식</span></button>
+            </div>
+          </div>
+          <div class="ribbon-group-buttons-wrap">
+            <div class="ribbon-row">
+              <button data-rb="insert.text.signature-line" data-pending data-kind="split" title="준비 중 — 서명란" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="signature-line" aria-label="서명란" disabled><span class="ribbon-btn-label">서명란</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="insert.text.date-time" data-pending data-kind="button" title="준비 중 — 날짜 및 시간" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="date-time" aria-label="날짜 및 시간" disabled><span class="ribbon-btn-label">날짜 및 시간</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="insert.text.object" data-pending data-kind="split" title="준비 중 — 개체" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="object" aria-label="개체" disabled><span class="ribbon-btn-label">개체</span></button>
+            </div>
+          </div>
+        </div>
+        <span class="ribbon-group-label">텍스트</span>
+      </div>
+      <div class="ribbon-group" data-group="symbols" data-collapse="3" role="group" aria-label="기호">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="equation" aria-expanded="false" title="기호"><span>기호</span></button>
+        <div class="ribbon-group-buttons">
+          <button data-rb="insert.symbols.equation" data-pending data-kind="split" title="준비 중 — 수식" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="equation" aria-label="수식" disabled><span>수식</span></button>
+          <button data-rb="insert.symbols.symbol" data-pending data-kind="dropdown" title="준비 중 — 기호" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="symbol" aria-label="기호" disabled><span>기호</span></button>
+        </div>
+        <span class="ribbon-group-label">기호</span>
+      </div>
+    </div>
+    <div class="toolbar-group toolbar-format ribbon-panel" data-panel="draw" role="tabpanel" hidden>
+      <div class="ribbon-group" data-group="draw-tools" data-collapse="6" role="group" aria-label="그리기 도구">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="draw-select" aria-expanded="false" title="그리기 도구"><span>그리기 도구</span></button>
+        <div class="ribbon-group-buttons">
+          <button data-rb="draw.draw-tools.draw-select" data-pending data-kind="dropdown" title="준비 중 — 선택" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="draw-select" aria-label="선택" disabled><span>선택</span></button>
+          <button data-rb="draw.draw-tools.lasso" data-pending data-kind="button" title="준비 중 — 올가미 선택" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="lasso" aria-label="올가미 선택" disabled><span>올가미 선택</span></button>
+          <button data-rb="draw.draw-tools.eraser" data-pending data-kind="dropdown" title="준비 중 — 지우개" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="eraser" aria-label="지우개" disabled><span>지우개</span></button>
+          <div data-rb="draw.draw-tools.pens" data-pending data-kind="gallery" title="준비 중 — 펜" class="rb-gallery" role="group" aria-label="펜"><span>펜</span></div>
+          <button data-rb="draw.draw-tools.add-pen" data-pending data-kind="dropdown" title="준비 중 — 펜 추가" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="add-pen" aria-label="펜 추가" disabled><span>펜 추가</span></button>
+        </div>
+        <span class="ribbon-group-label">그리기 도구</span>
+      </div>
+      <div class="ribbon-group" data-group="convert" data-collapse="4" role="group" aria-label="변환">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="ink-to-shape" aria-expanded="false" title="변환"><span>변환</span></button>
+        <div class="ribbon-group-buttons">
+          <button data-rb="draw.convert.ink-to-shape" data-pending data-kind="button" title="준비 중 — 잉크를 도형으로" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="ink-to-shape" aria-label="잉크를 도형으로" disabled><span>잉크를 도형으로</span></button>
+          <button data-rb="draw.convert.ink-to-math" data-pending data-kind="button" title="준비 중 — 잉크를 수식으로" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="ink-to-math" aria-label="잉크를 수식으로" disabled><span>잉크를 수식으로</span></button>
+        </div>
+        <span class="ribbon-group-label">변환</span>
+      </div>
+      <div class="ribbon-group" data-group="replay" data-collapse="2" role="group" aria-label="재생">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="ink-replay" aria-expanded="false" title="재생"><span>재생</span></button>
+        <div class="ribbon-group-buttons">
+          <button data-rb="draw.replay.ink-replay" data-pending data-kind="button" title="준비 중 — 잉크 재생" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="ink-replay" aria-label="잉크 재생" disabled><span>잉크 재생</span></button>
+        </div>
+        <span class="ribbon-group-label">재생</span>
+      </div>
+    </div>
+    <div class="toolbar-group toolbar-format ribbon-panel" data-panel="design" role="tabpanel" hidden>
+      <div class="ribbon-group" data-group="document-formatting" data-collapse="5" role="group" aria-label="문서 서식">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="themes" aria-expanded="false" title="문서 서식"><span>문서 서식</span></button>
+        <div class="ribbon-group-buttons">
+          <button data-rb="design.document-formatting.themes" data-pending data-kind="dropdown" title="준비 중 — 테마" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="themes" aria-label="테마" disabled><span>테마</span></button>
+          <div data-rb="design.document-formatting.style-set" data-pending data-kind="gallery" title="준비 중 — 스타일 집합" class="rb-gallery" role="group" aria-label="스타일 집합"><span>스타일 집합</span></div>
+          <button data-rb="design.document-formatting.colors" data-pending data-kind="dropdown" title="준비 중 — 색" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="colors" aria-label="색" disabled><span>색</span></button>
+          <button data-rb="design.document-formatting.fonts" data-pending data-kind="dropdown" title="준비 중 — 글꼴" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="fonts" aria-label="글꼴" disabled><span>글꼴</span></button>
+          <div class="ribbon-group-buttons-wrap">
+            <div class="ribbon-row">
+              <button data-rb="design.document-formatting.paragraph-spacing" data-pending data-kind="dropdown" title="준비 중 — 단락 간격" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="paragraph-spacing" aria-label="단락 간격" disabled><span class="ribbon-btn-label">단락 간격</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="design.document-formatting.effects" data-pending data-kind="dropdown" title="준비 중 — 효과" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="effects" aria-label="효과" disabled><span class="ribbon-btn-label">효과</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="design.document-formatting.set-default" data-pending data-kind="button" title="준비 중 — 기본값으로 설정" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="set-default" aria-label="기본값으로 설정" disabled><span class="ribbon-btn-label">기본값으로 설정</span></button>
+            </div>
+          </div>
+        </div>
+        <span class="ribbon-group-label">문서 서식</span>
+      </div>
+      <div class="ribbon-group" data-group="page-background" data-collapse="6" role="group" aria-label="페이지 배경">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="watermark" aria-expanded="false" title="페이지 배경"><span>페이지 배경</span></button>
+        <div class="ribbon-group-buttons">
+          <button data-rb="design.page-background.watermark" data-pending data-kind="dropdown" title="준비 중 — 워터마크" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="watermark" aria-label="워터마크" disabled><span>워터마크</span></button>
+          <button data-rb="design.page-background.page-color" data-pending data-kind="dropdown" title="준비 중 — 페이지 색" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="page-color" aria-label="페이지 색" disabled><span>페이지 색</span></button>
+          <button data-rb="design.page-background.page-borders" data-pending data-kind="button" title="준비 중 — 페이지 테두리" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="page-borders" aria-label="페이지 테두리" disabled><span>페이지 테두리</span></button>
+        </div>
+        <span class="ribbon-group-label">페이지 배경</span>
+      </div>
+    </div>
+    <div class="toolbar-group toolbar-format ribbon-panel" data-panel="layout" role="tabpanel" hidden>
+      <div class="ribbon-group" data-group="page-setup" data-collapse="8" role="group" aria-label="페이지 설정">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="text-direction" aria-expanded="false" title="페이지 설정"><span>페이지 설정</span></button>
+        <div class="ribbon-group-buttons">
+          <button data-rb="layout.page-setup.text-direction" data-pending data-kind="dropdown" title="준비 중 — 텍스트 방향" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="text-direction" aria-label="텍스트 방향" disabled><span>텍스트 방향</span></button>
+          <span data-rb="layout.page-setup.margins" class="dropdown-btn" id="margins-dropdown">
             <button class="icon-btn icon-btn-big dropdown-caret" title="여백">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="1"/><rect x="8" y="6" width="8" height="12" stroke-dasharray="2 1.6"/></svg>
               <span>여백 ▾</span>
@@ -395,7 +622,7 @@
               <button data-value="wide"><strong>넓게</strong><small>위·아래 2.54cm, 왼쪽·오른쪽 5.08cm</small></button>
             </div>
           </span>
-          <span class="dropdown-btn" id="orientation-dropdown">
+          <span data-rb="layout.page-setup.orientation" class="dropdown-btn" id="orientation-dropdown">
             <button class="icon-btn icon-btn-big dropdown-caret" title="용지 방향">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="7" width="14" height="10" rx="1"/><rect x="11" y="3" width="10" height="14" rx="1" stroke-dasharray="2 1.6"/></svg>
               <span>용지 방향 ▾</span>
@@ -405,7 +632,7 @@
               <button data-value="landscape"><strong>가로</strong></button>
             </div>
           </span>
-          <span class="dropdown-btn" id="paper-size-dropdown">
+          <span data-rb="layout.page-setup.size" class="dropdown-btn" id="paper-size-dropdown">
             <button class="icon-btn icon-btn-big dropdown-caret" title="크기">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="3" width="12" height="18" rx="1"/><path d="M3 6v12M2 7l1-1 1 1M2 17l1 1 1-1"/></svg>
               <span>크기 ▾</span>
@@ -419,111 +646,478 @@
               <button data-value="Legal"><strong>Legal</strong><small>21.59cm × 35.56cm</small></button>
             </div>
           </span>
-          <button id="btn-page-break" class="icon-btn icon-btn-big" title="페이지 나누기 (Ctrl+Enter)">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3v6h12V3M6 21v-6h12v6"/><path d="M3 12h3M9 12h2M13 12h2M18 12h3"/></svg>
-            <span>페이지 나누기</span>
-          </button>
+          <button data-rb="layout.page-setup.columns" data-pending data-kind="dropdown" title="준비 중 — 단" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="columns" aria-label="단" disabled><span>단</span></button>
+          <div class="ribbon-group-buttons-wrap">
+            <div class="ribbon-row">
+              <button data-rb="layout.page-setup.breaks" data-pending data-kind="dropdown" title="준비 중 — 나누기" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="breaks" aria-label="나누기" disabled><span class="ribbon-btn-label">나누기</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="layout.page-setup.line-numbers" data-pending data-kind="dropdown" title="준비 중 — 줄 번호" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="line-numbers" aria-label="줄 번호" disabled><span class="ribbon-btn-label">줄 번호</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="layout.page-setup.hyphenation" data-pending data-kind="dropdown" title="준비 중 — 하이픈 넣기" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="hyphenation" aria-label="하이픈 넣기" disabled><span class="ribbon-btn-label">하이픈 넣기</span></button>
+            </div>
+          </div>
         </div>
         <span class="ribbon-group-label">페이지 설정</span>
+        <button type="button" class="ribbon-launcher" data-pending disabled title="준비 중 — 페이지 설정" aria-label="페이지 설정 자세히"><svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 5.5v-4h4M4 4l4.5 4.5M8.5 5v3.5H5"/></svg></button>
       </div>
-      <div class="ribbon-group">
+      <div class="ribbon-group" data-group="manuscript" data-collapse="2" role="group" aria-label="원고지">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="manuscript-settings" aria-expanded="false" title="원고지"><span>원고지</span></button>
+        <div class="ribbon-group-buttons">
+          <button data-rb="layout.manuscript.manuscript-settings" data-pending data-kind="button" title="준비 중 — 원고지 설정" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="manuscript-settings" aria-label="원고지 설정" disabled><span>원고지 설정</span></button>
+        </div>
+        <span class="ribbon-group-label">원고지</span>
+      </div>
+      <div class="ribbon-group" data-group="paragraph" data-collapse="7" role="group" aria-label="단락">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="indent-left" aria-expanded="false" title="단락"><span>단락</span></button>
         <div class="ribbon-group-buttons layout-fields">
           <div class="layout-field-col">
             <span class="layout-field-title">들여쓰기</span>
-            <label class="layout-field"><span>왼쪽</span><input id="indent-left" type="number" min="0" max="50" step="0.1" /><em>cm</em></label>
-            <label class="layout-field"><span>오른쪽</span><input id="indent-right" type="number" min="0" max="50" step="0.1" /><em>cm</em></label>
+            <label data-rb="layout.paragraph.indent-left" class="layout-field"><span>왼쪽</span><input id="indent-left" type="number" min="0" max="50" step="0.1" /><em>cm</em></label>
+            <label data-rb="layout.paragraph.indent-right" class="layout-field"><span>오른쪽</span><input id="indent-right" type="number" min="0" max="50" step="0.1" /><em>cm</em></label>
           </div>
           <div class="layout-field-col">
             <span class="layout-field-title">간격</span>
-            <label class="layout-field"><span>앞</span><input id="spacing-before" type="number" min="0" max="200" step="6" /><em>pt</em></label>
-            <label class="layout-field"><span>뒤</span><input id="spacing-after" type="number" min="0" max="200" step="6" /><em>pt</em></label>
+            <label data-rb="layout.paragraph.spacing-before" class="layout-field"><span>앞</span><input id="spacing-before" type="number" min="0" max="200" step="6" /><em>pt</em></label>
+            <label data-rb="layout.paragraph.spacing-after" class="layout-field"><span>뒤</span><input id="spacing-after" type="number" min="0" max="200" step="6" /><em>pt</em></label>
           </div>
         </div>
         <span class="ribbon-group-label">단락</span>
+        <button type="button" class="ribbon-launcher" data-pending disabled title="준비 중 — 단락" aria-label="단락 자세히"><svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 5.5v-4h4M4 4l4.5 4.5M8.5 5v3.5H5"/></svg></button>
+      </div>
+      <div class="ribbon-group" data-group="arrange" data-collapse="4" role="group" aria-label="정렬">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="position" aria-expanded="false" title="정렬"><span>정렬</span></button>
+        <div class="ribbon-group-buttons">
+          <button data-rb="layout.arrange.position" data-pending data-kind="dropdown" title="준비 중 — 위치" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="position" aria-label="위치" disabled><span>위치</span></button>
+          <button data-rb="layout.arrange.wrap-text" data-pending data-kind="dropdown" title="준비 중 — 텍스트 줄 바꿈" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="wrap-text" aria-label="텍스트 줄 바꿈" disabled><span>텍스트 줄 바꿈</span></button>
+          <div class="ribbon-group-buttons-wrap">
+            <div class="ribbon-row">
+              <button data-rb="layout.arrange.bring-forward" data-pending data-kind="split" title="준비 중 — 앞으로 가져오기" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="bring-forward" aria-label="앞으로 가져오기" disabled><span class="ribbon-btn-label">앞으로 가져오기</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="layout.arrange.send-backward" data-pending data-kind="split" title="준비 중 — 뒤로 보내기" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="send-backward" aria-label="뒤로 보내기" disabled><span class="ribbon-btn-label">뒤로 보내기</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="layout.arrange.selection-pane" data-pending data-kind="button" title="준비 중 — 선택 창" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="selection-pane" aria-label="선택 창" disabled><span class="ribbon-btn-label">선택 창</span></button>
+            </div>
+          </div>
+          <div class="ribbon-group-buttons-wrap">
+            <div class="ribbon-row">
+              <button data-rb="layout.arrange.align" data-pending data-kind="dropdown" title="준비 중 — 맞춤" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="align" aria-label="맞춤" disabled><span class="ribbon-btn-label">맞춤</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="layout.arrange.group" data-pending data-kind="dropdown" title="준비 중 — 그룹화" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="group" aria-label="그룹화" disabled><span class="ribbon-btn-label">그룹화</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="layout.arrange.rotate" data-pending data-kind="dropdown" title="준비 중 — 회전" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="rotate" aria-label="회전" disabled><span class="ribbon-btn-label">회전</span></button>
+            </div>
+          </div>
+        </div>
+        <span class="ribbon-group-label">정렬</span>
       </div>
     </div>
-
-    <!-- ===== 검토 ===== -->
-    <div class="toolbar-group toolbar-format ribbon-panel" data-panel="review" role="tabpanel" hidden>
-      <div class="ribbon-group">
+    <div class="toolbar-group toolbar-format ribbon-panel" data-panel="references" role="tabpanel" hidden>
+      <div class="ribbon-group" data-group="toc" data-collapse="5" role="group" aria-label="목차">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="toc" aria-expanded="false" title="목차"><span>목차</span></button>
         <div class="ribbon-group-buttons">
-          <button id="btn-spellcheck" class="icon-btn icon-btn-big" title="맞춤법 검사 표시(브라우저 맞춤법 검사기)" aria-pressed="true">
+          <button data-rb="references.toc.toc" data-pending data-kind="dropdown" title="준비 중 — 목차" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="toc" aria-label="목차" disabled><span>목차</span></button>
+          <div class="ribbon-group-buttons-wrap">
+            <div class="ribbon-row">
+              <button data-rb="references.toc.add-text" data-pending data-kind="dropdown" title="준비 중 — 텍스트 추가" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="add-text" aria-label="텍스트 추가" disabled><span class="ribbon-btn-label">텍스트 추가</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="references.toc.update-table" data-pending data-kind="button" title="준비 중 — 목차 업데이트" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="update-table" aria-label="목차 업데이트" disabled><span class="ribbon-btn-label">목차 업데이트</span></button>
+            </div>
+          </div>
+        </div>
+        <span class="ribbon-group-label">목차</span>
+      </div>
+      <div class="ribbon-group" data-group="footnotes" data-collapse="5" role="group" aria-label="각주">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="insert-footnote" aria-expanded="false" title="각주"><span>각주</span></button>
+        <div class="ribbon-group-buttons">
+          <button data-rb="references.footnotes.insert-footnote" data-pending data-kind="button" title="준비 중 — 각주 삽입" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="insert-footnote" aria-label="각주 삽입" disabled><span>각주 삽입</span></button>
+          <div class="ribbon-group-buttons-wrap">
+            <div class="ribbon-row">
+              <button data-rb="references.footnotes.insert-endnote" data-pending data-kind="button" title="준비 중 — 미주 삽입" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="insert-endnote" aria-label="미주 삽입" disabled><span class="ribbon-btn-label">미주 삽입</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="references.footnotes.next-footnote" data-pending data-kind="split" title="준비 중 — 다음 각주" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="next-footnote" aria-label="다음 각주" disabled><span class="ribbon-btn-label">다음 각주</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="references.footnotes.show-notes" data-pending data-kind="button" title="준비 중 — 주석 표시" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="show-notes" aria-label="주석 표시" disabled><span class="ribbon-btn-label">주석 표시</span></button>
+            </div>
+          </div>
+        </div>
+        <span class="ribbon-group-label">각주</span>
+        <button type="button" class="ribbon-launcher" data-pending disabled title="준비 중 — 각주 및 미주" aria-label="각주 자세히"><svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 5.5v-4h4M4 4l4.5 4.5M8.5 5v3.5H5"/></svg></button>
+      </div>
+      <div class="ribbon-group" data-group="research" data-collapse="2" role="group" aria-label="조사">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="search" aria-expanded="false" title="조사"><span>조사</span></button>
+        <div class="ribbon-group-buttons">
+          <button data-rb="references.research.search" data-pending data-kind="button" title="준비 중 — 검색" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="search" aria-label="검색" disabled><span>검색</span></button>
+        </div>
+        <span class="ribbon-group-label">조사</span>
+      </div>
+      <div class="ribbon-group" data-group="citations" data-collapse="4" role="group" aria-label="인용 및 참고 문헌">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="insert-citation" aria-expanded="false" title="인용 및 참고 문헌"><span>인용 및 참고 문헌</span></button>
+        <div class="ribbon-group-buttons">
+          <button data-rb="references.citations.insert-citation" data-pending data-kind="dropdown" title="준비 중 — 인용 삽입" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="insert-citation" aria-label="인용 삽입" disabled><span>인용 삽입</span></button>
+          <div class="ribbon-group-buttons-wrap">
+            <div class="ribbon-row">
+              <button data-rb="references.citations.manage-sources" data-pending data-kind="button" title="준비 중 — 원본 관리" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="manage-sources" aria-label="원본 관리" disabled><span class="ribbon-btn-label">원본 관리</span></button>
+            </div>
+            <div class="ribbon-row">
+              <select data-rb="references.citations.citation-style" data-pending data-kind="select" title="준비 중 — 스타일" class="toolbar-select rb-select" aria-label="스타일" disabled><option>스타일</option></select>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="references.citations.bibliography" data-pending data-kind="dropdown" title="준비 중 — 참고 문헌" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="bibliography" aria-label="참고 문헌" disabled><span class="ribbon-btn-label">참고 문헌</span></button>
+            </div>
+          </div>
+        </div>
+        <span class="ribbon-group-label">인용 및 참고 문헌</span>
+      </div>
+      <div class="ribbon-group" data-group="captions" data-collapse="3" role="group" aria-label="캡션">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="insert-caption" aria-expanded="false" title="캡션"><span>캡션</span></button>
+        <div class="ribbon-group-buttons">
+          <button data-rb="references.captions.insert-caption" data-pending data-kind="button" title="준비 중 — 캡션 삽입" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="insert-caption" aria-label="캡션 삽입" disabled><span>캡션 삽입</span></button>
+          <div class="ribbon-group-buttons-wrap">
+            <div class="ribbon-row">
+              <button data-rb="references.captions.insert-table-of-figures" data-pending data-kind="button" title="준비 중 — 그림 목차 삽입" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="insert-table-of-figures" aria-label="그림 목차 삽입" disabled><span class="ribbon-btn-label">그림 목차 삽입</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="references.captions.update-table-of-figures" data-pending data-kind="button" title="준비 중 — 표 업데이트" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="update-table-of-figures" aria-label="표 업데이트" disabled><span class="ribbon-btn-label">표 업데이트</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="references.captions.cross-reference" data-pending data-kind="button" title="준비 중 — 상호 참조" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="cross-reference" aria-label="상호 참조" disabled><span class="ribbon-btn-label">상호 참조</span></button>
+            </div>
+          </div>
+        </div>
+        <span class="ribbon-group-label">캡션</span>
+      </div>
+      <div class="ribbon-group" data-group="index" data-collapse="3" role="group" aria-label="색인">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="mark-entry" aria-expanded="false" title="색인"><span>색인</span></button>
+        <div class="ribbon-group-buttons">
+          <button data-rb="references.index.mark-entry" data-pending data-kind="button" title="준비 중 — 항목 표시" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="mark-entry" aria-label="항목 표시" disabled><span>항목 표시</span></button>
+          <div class="ribbon-group-buttons-wrap">
+            <div class="ribbon-row">
+              <button data-rb="references.index.insert-index" data-pending data-kind="button" title="준비 중 — 색인 삽입" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="insert-index" aria-label="색인 삽입" disabled><span class="ribbon-btn-label">색인 삽입</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="references.index.update-index" data-pending data-kind="button" title="준비 중 — 색인 업데이트" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="update-index" aria-label="색인 업데이트" disabled><span class="ribbon-btn-label">색인 업데이트</span></button>
+            </div>
+          </div>
+        </div>
+        <span class="ribbon-group-label">색인</span>
+      </div>
+      <div class="ribbon-group" data-group="toa" data-collapse="2" role="group" aria-label="인용 목차">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="mark-citation" aria-expanded="false" title="인용 목차"><span>인용 목차</span></button>
+        <div class="ribbon-group-buttons">
+          <button data-rb="references.toa.mark-citation" data-pending data-kind="button" title="준비 중 — 인용 표시" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="mark-citation" aria-label="인용 표시" disabled><span>인용 표시</span></button>
+          <div class="ribbon-group-buttons-wrap">
+            <div class="ribbon-row">
+              <button data-rb="references.toa.insert-toa" data-pending data-kind="button" title="준비 중 — 인용 목차 삽입" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="insert-toa" aria-label="인용 목차 삽입" disabled><span class="ribbon-btn-label">인용 목차 삽입</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="references.toa.update-toa" data-pending data-kind="button" title="준비 중 — 인용 목차 업데이트" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="update-toa" aria-label="인용 목차 업데이트" disabled><span class="ribbon-btn-label">인용 목차 업데이트</span></button>
+            </div>
+          </div>
+        </div>
+        <span class="ribbon-group-label">인용 목차</span>
+      </div>
+    </div>
+    <div class="toolbar-group toolbar-format ribbon-panel" data-panel="mailings" role="tabpanel" hidden>
+      <div class="ribbon-group" data-group="create" data-collapse="3" role="group" aria-label="만들기">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="envelopes" aria-expanded="false" title="만들기"><span>만들기</span></button>
+        <div class="ribbon-group-buttons">
+          <button data-rb="mailings.create.envelopes" data-pending data-kind="button" title="준비 중 — 봉투" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="envelopes" aria-label="봉투" disabled><span>봉투</span></button>
+          <button data-rb="mailings.create.labels" data-pending data-kind="button" title="준비 중 — 레이블" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="labels" aria-label="레이블" disabled><span>레이블</span></button>
+        </div>
+        <span class="ribbon-group-label">만들기</span>
+      </div>
+      <div class="ribbon-group" data-group="start-mail-merge" data-collapse="5" role="group" aria-label="편지 병합 시작">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="start-mail-merge" aria-expanded="false" title="편지 병합 시작"><span>편지 병합 시작</span></button>
+        <div class="ribbon-group-buttons">
+          <button data-rb="mailings.start-mail-merge.start-mail-merge" data-pending data-kind="dropdown" title="준비 중 — 편지 병합 시작" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="start-mail-merge" aria-label="편지 병합 시작" disabled><span>편지 병합 시작</span></button>
+          <button data-rb="mailings.start-mail-merge.select-recipients" data-pending data-kind="dropdown" title="준비 중 — 받는 사람 선택" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="select-recipients" aria-label="받는 사람 선택" disabled><span>받는 사람 선택</span></button>
+          <button data-rb="mailings.start-mail-merge.edit-recipient-list" data-pending data-kind="button" title="준비 중 — 받는 사람 목록 편집" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="edit-recipient-list" aria-label="받는 사람 목록 편집" disabled><span>받는 사람 목록 편집</span></button>
+        </div>
+        <span class="ribbon-group-label">편지 병합 시작</span>
+      </div>
+      <div class="ribbon-group" data-group="write-insert-fields" data-collapse="4" role="group" aria-label="필드 쓰기 및 삽입">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="highlight-merge-fields" aria-expanded="false" title="필드 쓰기 및 삽입"><span>필드 쓰기 및 삽입</span></button>
+        <div class="ribbon-group-buttons">
+          <button data-rb="mailings.write-insert-fields.highlight-merge-fields" data-pending data-kind="button" title="준비 중 — 병합 필드 강조 표시" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="highlight-merge-fields" aria-label="병합 필드 강조 표시" disabled><span>병합 필드 강조 표시</span></button>
+          <button data-rb="mailings.write-insert-fields.address-block" data-pending data-kind="button" title="준비 중 — 주소 블록" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="address-block" aria-label="주소 블록" disabled><span>주소 블록</span></button>
+          <button data-rb="mailings.write-insert-fields.greeting-line" data-pending data-kind="button" title="준비 중 — 인사말" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="greeting-line" aria-label="인사말" disabled><span>인사말</span></button>
+          <button data-rb="mailings.write-insert-fields.insert-merge-field" data-pending data-kind="split" title="준비 중 — 병합 필드 삽입" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="insert-merge-field" aria-label="병합 필드 삽입" disabled><span>병합 필드 삽입</span></button>
+          <div class="ribbon-group-buttons-wrap">
+            <div class="ribbon-row">
+              <button data-rb="mailings.write-insert-fields.rules" data-pending data-kind="dropdown" title="준비 중 — 규칙" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="rules" aria-label="규칙" disabled><span class="ribbon-btn-label">규칙</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="mailings.write-insert-fields.match-fields" data-pending data-kind="button" title="준비 중 — 필드 일치" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="match-fields" aria-label="필드 일치" disabled><span class="ribbon-btn-label">필드 일치</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="mailings.write-insert-fields.update-labels" data-pending data-kind="button" title="준비 중 — 레이블 업데이트" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="update-labels" aria-label="레이블 업데이트" disabled><span class="ribbon-btn-label">레이블 업데이트</span></button>
+            </div>
+          </div>
+        </div>
+        <span class="ribbon-group-label">필드 쓰기 및 삽입</span>
+      </div>
+      <div class="ribbon-group" data-group="preview-results" data-collapse="3" role="group" aria-label="결과 미리 보기">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="preview-results" aria-expanded="false" title="결과 미리 보기"><span>결과 미리 보기</span></button>
+        <div class="ribbon-group-buttons">
+          <button data-rb="mailings.preview-results.preview-results" data-pending data-kind="button" title="준비 중 — 결과 미리 보기" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="preview-results" aria-label="결과 미리 보기" disabled><span>결과 미리 보기</span></button>
+          <div class="ribbon-group-buttons-wrap rb-rows">
+            <div class="ribbon-row">
+              <button data-rb="mailings.preview-results.first-record" data-pending data-kind="button" title="준비 중 — 처음 레코드" type="button" class="icon-btn rb-pending" data-icon="first-record" aria-label="처음 레코드" disabled></button>
+              <button data-rb="mailings.preview-results.previous-record" data-pending data-kind="button" title="준비 중 — 이전 레코드" type="button" class="icon-btn rb-pending" data-icon="previous-record" aria-label="이전 레코드" disabled></button>
+              <label data-rb="mailings.preview-results.record-number" data-pending data-kind="input" title="준비 중 — 레코드" class="layout-field rb-field"><span>레코드</span><input type="text" disabled aria-label="레코드" /></label>
+              <button data-rb="mailings.preview-results.next-record" data-pending data-kind="button" title="준비 중 — 다음 레코드" type="button" class="icon-btn rb-pending" data-icon="next-record" aria-label="다음 레코드" disabled></button>
+              <button data-rb="mailings.preview-results.last-record" data-pending data-kind="button" title="준비 중 — 마지막 레코드" type="button" class="icon-btn rb-pending" data-icon="last-record" aria-label="마지막 레코드" disabled></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="mailings.preview-results.find-recipient" data-pending data-kind="button" title="준비 중 — 받는 사람 찾기" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="find-recipient" aria-label="받는 사람 찾기" disabled><span class="ribbon-btn-label">받는 사람 찾기</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="mailings.preview-results.check-errors" data-pending data-kind="button" title="준비 중 — 오류 자동 확인" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="check-errors" aria-label="오류 자동 확인" disabled><span class="ribbon-btn-label">오류 자동 확인</span></button>
+            </div>
+          </div>
+        </div>
+        <span class="ribbon-group-label">결과 미리 보기</span>
+      </div>
+      <div class="ribbon-group" data-group="finish" data-collapse="6" role="group" aria-label="마침">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="finish-merge" aria-expanded="false" title="마침"><span>마침</span></button>
+        <div class="ribbon-group-buttons">
+          <button data-rb="mailings.finish.finish-merge" data-pending data-kind="dropdown" title="준비 중 — 완료 및 병합" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="finish-merge" aria-label="완료 및 병합" disabled><span>완료 및 병합</span></button>
+        </div>
+        <span class="ribbon-group-label">마침</span>
+      </div>
+    </div>
+    <div class="toolbar-group toolbar-format ribbon-panel" data-panel="review" role="tabpanel" hidden>
+      <div class="ribbon-group" data-group="proofing" data-collapse="6" role="group" aria-label="언어 교정">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="spelling" aria-expanded="false" title="언어 교정"><span>언어 교정</span></button>
+        <div class="ribbon-group-buttons">
+          <button data-rb="review.proofing.spelling" id="btn-spellcheck" class="icon-btn icon-btn-big" title="맞춤법 검사 표시(브라우저 맞춤법 검사기)" aria-pressed="true">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14 7.5 5l3.5 9M5.3 11h4.4"/><path d="m13 15 3 3 6-7"/><path d="M3 20c1-.8 2-.8 3 0s2 .8 3 0 2-.8 3 0"/></svg>
-            <span>맞춤법 검사</span>
+            <span>맞춤법 및 문법 검사</span>
           </button>
-          <button id="btn-word-count" class="icon-btn icon-btn-big" title="단어 개수">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="1.5"/><path d="M7 9h4M7 13h6M7 17h3"/><text x="17.5" y="12.5" font-size="6" text-anchor="middle" fill="currentColor" stroke="none" font-family="sans-serif">123</text></svg>
-            <span>단어 개수</span>
-          </button>
+          <div class="ribbon-group-buttons-wrap">
+            <div class="ribbon-row">
+              <button data-rb="review.proofing.thesaurus" data-pending data-kind="button" title="준비 중 — 동의어 사전" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="thesaurus" aria-label="동의어 사전" disabled><span class="ribbon-btn-label">동의어 사전</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="review.proofing.word-count" id="btn-word-count" class="icon-btn ribbon-btn-labeled" title="단어 개수">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="1.5"/><path d="M7 9h4M7 13h6M7 17h3"/><text x="17.5" y="12.5" font-size="6" text-anchor="middle" fill="currentColor" stroke="none" font-family="sans-serif">123</text></svg>
+                <span class="ribbon-btn-label">단어 개수</span>
+              </button>
+            </div>
+          </div>
         </div>
         <span class="ribbon-group-label">언어 교정</span>
-        <button type="button" class="ribbon-launcher" data-proxy="btn-word-count" title="단어 개수 대화상자 열기" aria-label="언어 교정 자세히">
-          <svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 5.5v-4h4M4 4l4.5 4.5M8.5 5v3.5H5"/></svg>
-        </button>
       </div>
-      <div class="ribbon-group">
+      <div class="ribbon-group" data-group="speech" data-collapse="2" role="group" aria-label="음성">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="read-aloud" aria-expanded="false" title="음성"><span>음성</span></button>
         <div class="ribbon-group-buttons">
-          <button id="btn-new-comment" class="icon-btn icon-btn-big" title="새 메모 (Ctrl+Alt+M)">
+          <button data-rb="review.speech.read-aloud" data-pending data-kind="button" title="준비 중 — 소리 내어 읽기" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="read-aloud" aria-label="소리 내어 읽기" disabled><span>소리 내어 읽기</span></button>
+        </div>
+        <span class="ribbon-group-label">음성</span>
+      </div>
+      <div class="ribbon-group" data-group="accessibility" data-collapse="2" role="group" aria-label="접근성">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="check-accessibility" aria-expanded="false" title="접근성"><span>접근성</span></button>
+        <div class="ribbon-group-buttons">
+          <button data-rb="review.accessibility.check-accessibility" data-pending data-kind="split" title="준비 중 — 접근성 검사" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="check-accessibility" aria-label="접근성 검사" disabled><span>접근성 검사</span></button>
+        </div>
+        <span class="ribbon-group-label">접근성</span>
+      </div>
+      <div class="ribbon-group" data-group="language" data-collapse="3" role="group" aria-label="언어">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="translate" aria-expanded="false" title="언어"><span>언어</span></button>
+        <div class="ribbon-group-buttons">
+          <button data-rb="review.language.translate" data-pending data-kind="dropdown" title="준비 중 — 번역" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="translate" aria-label="번역" disabled><span>번역</span></button>
+          <button data-rb="review.language.language" data-pending data-kind="dropdown" title="준비 중 — 언어" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="language" aria-label="언어" disabled><span>언어</span></button>
+        </div>
+        <span class="ribbon-group-label">언어</span>
+      </div>
+      <div class="ribbon-group" data-group="comments" data-collapse="7" role="group" aria-label="메모">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="new-comment" aria-expanded="false" title="메모"><span>메모</span></button>
+        <div class="ribbon-group-buttons">
+          <button data-rb="review.comments.new-comment" id="btn-new-comment" class="icon-btn icon-btn-big" title="새 메모 (Ctrl+Alt+M)">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H9l-5 4z"/><path d="M12 8v5M9.5 10.5h5"/></svg>
             <span>새 메모</span>
           </button>
           <div class="ribbon-group-buttons-wrap">
             <div class="ribbon-row">
-              <button id="btn-delete-comment" class="icon-btn ribbon-btn-labeled" title="메모 삭제">
+              <button data-rb="review.comments.delete-comment" id="btn-delete-comment" class="icon-btn ribbon-btn-labeled" title="메모 삭제">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H9l-5 4z"/><path d="m10 8 4 4M14 8l-4 4"/></svg>
                 <span class="ribbon-btn-label">삭제</span>
               </button>
-              <button id="btn-show-comments" class="icon-btn ribbon-btn-labeled" title="메모 표시" aria-pressed="false">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H9l-5 4z"/><path d="M8 9h8M8 12h5"/></svg>
-                <span class="ribbon-btn-label">메모 표시</span>
-              </button>
             </div>
             <div class="ribbon-row">
-              <button id="btn-prev-comment" class="icon-btn ribbon-btn-labeled" title="이전 메모">
+              <button data-rb="review.comments.previous-comment" id="btn-prev-comment" class="icon-btn ribbon-btn-labeled" title="이전 메모">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H9l-5 4z"/><path d="m13 8-3 2.5 3 2.5"/></svg>
                 <span class="ribbon-btn-label">이전</span>
               </button>
-              <button id="btn-next-comment" class="icon-btn ribbon-btn-labeled" title="다음 메모">
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="review.comments.next-comment" id="btn-next-comment" class="icon-btn ribbon-btn-labeled" title="다음 메모">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H9l-5 4z"/><path d="m11 8 3 2.5-3 2.5"/></svg>
                 <span class="ribbon-btn-label">다음</span>
               </button>
             </div>
           </div>
+          <button data-rb="review.comments.show-comments" id="btn-show-comments" class="icon-btn icon-btn-big" title="메모 표시" aria-pressed="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H9l-5 4z"/><path d="M8 9h8M8 12h5"/></svg>
+            <span>메모 표시</span>
+          </button>
         </div>
         <span class="ribbon-group-label">메모</span>
       </div>
-      <div class="ribbon-group">
+      <div class="ribbon-group" data-group="tracking" data-collapse="5" role="group" aria-label="추적">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="track-changes" aria-expanded="false" title="추적"><span>추적</span></button>
         <div class="ribbon-group-buttons">
-          <button id="btn-show-changes" class="icon-btn icon-btn-big" title="이 편집 세션에서 누가 어느 문단을 바꿨는지" aria-pressed="false">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="13" height="17" rx="1.2"/><path d="M7 8h7M7 12h4"/><path d="m13 17 2 2 5-5"/></svg>
-            <span>변경 내용</span>
-          </button>
+          <button data-rb="review.tracking.track-changes" data-pending data-kind="split" title="준비 중 — 변경 내용 추적" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="track-changes" aria-label="변경 내용 추적" disabled><span>변경 내용 추적</span></button>
+          <div class="ribbon-group-buttons-wrap">
+            <div class="ribbon-row">
+              <select data-rb="review.tracking.display-for-review" data-pending data-kind="select" title="준비 중 — 검토할 표시" class="toolbar-select rb-select" aria-label="검토할 표시" disabled><option>검토할 표시</option></select>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="review.tracking.show-markup" data-pending data-kind="dropdown" title="준비 중 — 태그 표시" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="show-markup" aria-label="태그 표시" disabled><span class="ribbon-btn-label">태그 표시</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="review.tracking.reviewing-pane" id="btn-show-changes" class="icon-btn ribbon-btn-labeled" title="이 편집 세션에서 누가 어느 문단을 바꿨는지" aria-pressed="false">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="13" height="17" rx="1.2"/><path d="M7 8h7M7 12h4"/><path d="m13 17 2 2 5-5"/></svg>
+                <span class="ribbon-btn-label">검토 창</span>
+              </button>
+            </div>
+          </div>
         </div>
         <span class="ribbon-group-label">추적</span>
+        <button type="button" class="ribbon-launcher" data-pending disabled title="준비 중 — 변경 내용 추적 옵션" aria-label="추적 자세히"><svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 5.5v-4h4M4 4l4.5 4.5M8.5 5v3.5H5"/></svg></button>
+      </div>
+      <div class="ribbon-group" data-group="changes" data-collapse="4" role="group" aria-label="변경 내용">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="accept" aria-expanded="false" title="변경 내용"><span>변경 내용</span></button>
+        <div class="ribbon-group-buttons">
+          <button data-rb="review.changes.accept" data-pending data-kind="split" title="준비 중 — 적용" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="accept" aria-label="적용" disabled><span>적용</span></button>
+          <div class="ribbon-group-buttons-wrap">
+            <div class="ribbon-row">
+              <button data-rb="review.changes.reject" data-pending data-kind="split" title="준비 중 — 거부" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="reject" aria-label="거부" disabled><span class="ribbon-btn-label">거부</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="review.changes.previous-change" data-pending data-kind="button" title="준비 중 — 이전" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="previous-change" aria-label="이전" disabled><span class="ribbon-btn-label">이전</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="review.changes.next-change" data-pending data-kind="button" title="준비 중 — 다음" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="next-change" aria-label="다음" disabled><span class="ribbon-btn-label">다음</span></button>
+            </div>
+          </div>
+        </div>
+        <span class="ribbon-group-label">변경 내용</span>
+      </div>
+      <div class="ribbon-group" data-group="compare" data-collapse="3" role="group" aria-label="비교">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="compare" aria-expanded="false" title="비교"><span>비교</span></button>
+        <div class="ribbon-group-buttons">
+          <button data-rb="review.compare.compare" data-pending data-kind="dropdown" title="준비 중 — 비교" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="compare" aria-label="비교" disabled><span>비교</span></button>
+        </div>
+        <span class="ribbon-group-label">비교</span>
+      </div>
+      <div class="ribbon-group" data-group="protect" data-collapse="3" role="group" aria-label="보호">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="block-authors" aria-expanded="false" title="보호"><span>보호</span></button>
+        <div class="ribbon-group-buttons">
+          <button data-rb="review.protect.block-authors" data-pending data-kind="button" title="준비 중 — 작성자 차단" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="block-authors" aria-label="작성자 차단" disabled><span>작성자 차단</span></button>
+          <button data-rb="review.protect.restrict-editing" data-pending data-kind="button" title="준비 중 — 편집 제한" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="restrict-editing" aria-label="편집 제한" disabled><span>편집 제한</span></button>
+        </div>
+        <span class="ribbon-group-label">보호</span>
+      </div>
+      <div class="ribbon-group" data-group="ink" data-collapse="1" role="group" aria-label="잉크">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="hide-ink" aria-expanded="false" title="잉크"><span>잉크</span></button>
+        <div class="ribbon-group-buttons">
+          <button data-rb="review.ink.hide-ink" data-pending data-kind="dropdown" title="준비 중 — 잉크 숨기기" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="hide-ink" aria-label="잉크 숨기기" disabled><span>잉크 숨기기</span></button>
+        </div>
+        <span class="ribbon-group-label">잉크</span>
       </div>
     </div>
-
-    <!-- ===== 보기 ===== -->
     <div class="toolbar-group toolbar-format ribbon-panel" data-panel="view" role="tabpanel" hidden>
-      <div class="ribbon-group">
+      <div class="ribbon-group" data-group="views" data-collapse="6" role="group" aria-label="보기">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="read-mode" aria-expanded="false" title="보기"><span>보기</span></button>
         <div class="ribbon-group-buttons">
-          <button id="btn-zoom-100" class="icon-btn icon-btn-big" title="100%로 보기">
+          <button data-rb="view.views.read-mode" data-pending data-kind="button" title="준비 중 — 읽기 모드" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="read-mode" aria-label="읽기 모드" disabled><span>읽기 모드</span></button>
+          <button data-rb="view.views.print-layout" data-pending data-kind="button" title="준비 중 — 인쇄 모양" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="print-layout" aria-label="인쇄 모양" disabled><span>인쇄 모양</span></button>
+          <button data-rb="view.views.web-layout" data-pending data-kind="button" title="준비 중 — 웹 모양" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="web-layout" aria-label="웹 모양" disabled><span>웹 모양</span></button>
+          <div class="ribbon-group-buttons-wrap">
+            <div class="ribbon-row">
+              <button data-rb="view.views.outline" data-pending data-kind="button" title="준비 중 — 개요" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="outline" aria-label="개요" disabled><span class="ribbon-btn-label">개요</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="view.views.draft" data-pending data-kind="button" title="준비 중 — 초안" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="draft" aria-label="초안" disabled><span class="ribbon-btn-label">초안</span></button>
+            </div>
+          </div>
+        </div>
+        <span class="ribbon-group-label">보기</span>
+      </div>
+      <div class="ribbon-group" data-group="immersive" data-collapse="3" role="group" aria-label="몰입형">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="focus" aria-expanded="false" title="몰입형"><span>몰입형</span></button>
+        <div class="ribbon-group-buttons">
+          <button data-rb="view.immersive.focus" data-pending data-kind="button" title="준비 중 — 포커스" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="focus" aria-label="포커스" disabled><span>포커스</span></button>
+          <button data-rb="view.immersive.immersive-reader" data-pending data-kind="button" title="준비 중 — 몰입형 리더" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="immersive-reader" aria-label="몰입형 리더" disabled><span>몰입형 리더</span></button>
+        </div>
+        <span class="ribbon-group-label">몰입형</span>
+      </div>
+      <div class="ribbon-group" data-group="page-movement" data-collapse="3" role="group" aria-label="페이지 이동">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="vertical" aria-expanded="false" title="페이지 이동"><span>페이지 이동</span></button>
+        <div class="ribbon-group-buttons">
+          <button data-rb="view.page-movement.vertical" data-pending data-kind="button" title="준비 중 — 세로" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="vertical" aria-label="세로" disabled><span>세로</span></button>
+          <button data-rb="view.page-movement.side-to-side" data-pending data-kind="button" title="준비 중 — 나란히" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="side-to-side" aria-label="나란히" disabled><span>나란히</span></button>
+        </div>
+        <span class="ribbon-group-label">페이지 이동</span>
+      </div>
+      <div class="ribbon-group" data-group="show" data-collapse="4" role="group" aria-label="표시">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="ruler" aria-expanded="false" title="표시"><span>표시</span></button>
+        <div class="ribbon-group-buttons">
+          <div class="ribbon-group-buttons-wrap">
+            <div class="ribbon-row">
+              <label data-rb="view.show.ruler" data-pending data-kind="toggle" title="준비 중 — 눈금자" class="rb-check"><input type="checkbox" disabled /><span>눈금자</span></label>
+            </div>
+            <div class="ribbon-row">
+              <label data-rb="view.show.gridlines" data-pending data-kind="toggle" title="준비 중 — 눈금선" class="rb-check"><input type="checkbox" disabled /><span>눈금선</span></label>
+            </div>
+            <div class="ribbon-row">
+              <label data-rb="view.show.navigation-pane" data-pending data-kind="toggle" title="준비 중 — 탐색 창" class="rb-check"><input type="checkbox" disabled /><span>탐색 창</span></label>
+            </div>
+          </div>
+        </div>
+        <span class="ribbon-group-label">표시</span>
+      </div>
+      <div class="ribbon-group" data-group="zoom" data-collapse="7" role="group" aria-label="확대/축소">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="zoom" aria-expanded="false" title="확대/축소"><span>확대/축소</span></button>
+        <div class="ribbon-group-buttons">
+          <button data-rb="view.zoom.zoom" data-pending data-kind="button" title="준비 중 — 확대/축소" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="zoom" aria-label="확대/축소" disabled><span>확대/축소</span></button>
+          <button data-rb="view.zoom.zoom-100" id="btn-zoom-100" class="icon-btn icon-btn-big" title="100%로 보기">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/><text x="11" y="13.4" font-size="6" text-anchor="middle" fill="currentColor" stroke="none" font-family="sans-serif">100</text></svg>
             <span>100%</span>
           </button>
-          <button id="btn-zoom-page-width" class="icon-btn icon-btn-big" title="페이지 너비에 맞추기">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="3" width="12" height="18" rx="1"/><path d="M2 12h4M18 12h4M4 10l-2 2 2 2M20 10l2 2-2 2"/></svg>
-            <span>페이지 너비</span>
-          </button>
           <div class="ribbon-group-buttons-wrap">
             <div class="ribbon-row">
-              <button id="btn-zoom-in-ribbon" class="icon-btn ribbon-btn-labeled" title="확대">
+              <button data-rb="view.zoom.one-page" data-pending data-kind="button" title="준비 중 — 한 페이지" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="one-page" aria-label="한 페이지" disabled><span class="ribbon-btn-label">한 페이지</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="view.zoom.multiple-pages" data-pending data-kind="button" title="준비 중 — 여러 페이지" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="multiple-pages" aria-label="여러 페이지" disabled><span class="ribbon-btn-label">여러 페이지</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="view.zoom.page-width" id="btn-zoom-page-width" class="icon-btn ribbon-btn-labeled" title="페이지 너비에 맞추기">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="3" width="12" height="18" rx="1"/><path d="M2 12h4M18 12h4M4 10l-2 2 2 2M20 10l2 2-2 2"/></svg>
+                <span class="ribbon-btn-label">페이지 너비</span>
+              </button>
+            </div>
+          </div>
+          <div class="ribbon-group-buttons-wrap">
+            <div class="ribbon-row">
+              <button data-rb="view.zoom.zoom-in" id="btn-zoom-in-ribbon" class="icon-btn ribbon-btn-labeled" title="확대">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3M8 11h6M11 8v6"/></svg>
                 <span class="ribbon-btn-label">확대</span>
               </button>
             </div>
             <div class="ribbon-row">
-              <button id="btn-zoom-out-ribbon" class="icon-btn ribbon-btn-labeled" title="축소">
+              <button data-rb="view.zoom.zoom-out" id="btn-zoom-out-ribbon" class="icon-btn ribbon-btn-labeled" title="축소">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3M8 11h6"/></svg>
                 <span class="ribbon-btn-label">축소</span>
               </button>
@@ -532,76 +1126,562 @@
         </div>
         <span class="ribbon-group-label">확대/축소</span>
       </div>
-    </div>
-
-    <!-- ===== 표 레이아웃 (커서가 표 안에 있을 때만) ===== -->
-    <div class="toolbar-group toolbar-format ribbon-panel" data-panel="table" role="tabpanel" hidden>
-      <div class="ribbon-group">
+      <div class="ribbon-group" data-group="window" data-collapse="5" role="group" aria-label="창">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="new-window" aria-expanded="false" title="창"><span>창</span></button>
         <div class="ribbon-group-buttons">
-          <button id="btn-del-table" class="icon-btn icon-btn-big" title="표 삭제">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4.5" width="13" height="11" rx="1"/><path d="M3.5 10h13M10 4.5v11"/><path d="m15 15 6 6M21 15l-6 6"/></svg>
-            <span>표 삭제</span>
-          </button>
+          <button data-rb="view.window.new-window" data-pending data-kind="button" title="준비 중 — 새 창" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="new-window" aria-label="새 창" disabled><span>새 창</span></button>
+          <button data-rb="view.window.arrange-all" data-pending data-kind="button" title="준비 중 — 모두 정렬" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="arrange-all" aria-label="모두 정렬" disabled><span>모두 정렬</span></button>
+          <button data-rb="view.window.split" data-pending data-kind="button" title="준비 중 — 나누기" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="split" aria-label="나누기" disabled><span>나누기</span></button>
           <div class="ribbon-group-buttons-wrap">
             <div class="ribbon-row">
-              <button id="btn-del-row" class="icon-btn ribbon-btn-labeled" title="행 삭제">
+              <button data-rb="view.window.view-side-by-side" data-pending data-kind="button" title="준비 중 — 나란히 보기" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="view-side-by-side" aria-label="나란히 보기" disabled><span class="ribbon-btn-label">나란히 보기</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="view.window.synchronous-scrolling" data-pending data-kind="button" title="준비 중 — 동시 스크롤" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="synchronous-scrolling" aria-label="동시 스크롤" disabled><span class="ribbon-btn-label">동시 스크롤</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="view.window.reset-window-position" data-pending data-kind="button" title="준비 중 — 창 위치 다시 설정" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="reset-window-position" aria-label="창 위치 다시 설정" disabled><span class="ribbon-btn-label">창 위치 다시 설정</span></button>
+            </div>
+          </div>
+          <button data-rb="view.window.switch-windows" data-pending data-kind="dropdown" title="준비 중 — 창 전환" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="switch-windows" aria-label="창 전환" disabled><span>창 전환</span></button>
+        </div>
+        <span class="ribbon-group-label">창</span>
+      </div>
+      <div class="ribbon-group" data-group="macros" data-collapse="2" role="group" aria-label="매크로">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="macros" aria-expanded="false" title="매크로"><span>매크로</span></button>
+        <div class="ribbon-group-buttons">
+          <button data-rb="view.macros.macros" data-pending data-kind="split" title="준비 중 — 매크로" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="macros" aria-label="매크로" disabled><span>매크로</span></button>
+        </div>
+        <span class="ribbon-group-label">매크로</span>
+      </div>
+      <div class="ribbon-group" data-group="sharepoint" data-collapse="1" role="group" aria-label="셰어포인트">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="properties" aria-expanded="false" title="셰어포인트"><span>셰어포인트</span></button>
+        <div class="ribbon-group-buttons">
+          <button data-rb="view.sharepoint.properties" data-pending data-kind="button" title="준비 중 — 속성" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="properties" aria-label="속성" disabled><span>속성</span></button>
+        </div>
+        <span class="ribbon-group-label">셰어포인트</span>
+      </div>
+    </div>
+    <div class="toolbar-group toolbar-format ribbon-panel" data-panel="table-design" role="tabpanel" hidden>
+      <div class="ribbon-group" data-group="style-options" data-collapse="3" role="group" aria-label="표 스타일 옵션">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="header-row" aria-expanded="false" title="표 스타일 옵션"><span>표 스타일 옵션</span></button>
+        <div class="ribbon-group-buttons">
+          <div class="ribbon-group-buttons-wrap">
+            <div class="ribbon-row">
+              <label data-rb="table-design.style-options.header-row" data-pending data-kind="toggle" title="준비 중 — 머리글 행" class="rb-check"><input type="checkbox" disabled /><span>머리글 행</span></label>
+            </div>
+            <div class="ribbon-row">
+              <label data-rb="table-design.style-options.first-column" data-pending data-kind="toggle" title="준비 중 — 첫째 열" class="rb-check"><input type="checkbox" disabled /><span>첫째 열</span></label>
+            </div>
+            <div class="ribbon-row">
+              <label data-rb="table-design.style-options.total-row" data-pending data-kind="toggle" title="준비 중 — 요약 행" class="rb-check"><input type="checkbox" disabled /><span>요약 행</span></label>
+            </div>
+          </div>
+          <div class="ribbon-group-buttons-wrap">
+            <div class="ribbon-row">
+              <label data-rb="table-design.style-options.last-column" data-pending data-kind="toggle" title="준비 중 — 마지막 열" class="rb-check"><input type="checkbox" disabled /><span>마지막 열</span></label>
+            </div>
+            <div class="ribbon-row">
+              <label data-rb="table-design.style-options.banded-rows" data-pending data-kind="toggle" title="준비 중 — 줄무늬 행" class="rb-check"><input type="checkbox" disabled /><span>줄무늬 행</span></label>
+            </div>
+            <div class="ribbon-row">
+              <label data-rb="table-design.style-options.banded-columns" data-pending data-kind="toggle" title="준비 중 — 줄무늬 열" class="rb-check"><input type="checkbox" disabled /><span>줄무늬 열</span></label>
+            </div>
+          </div>
+        </div>
+        <span class="ribbon-group-label">표 스타일 옵션</span>
+      </div>
+      <div class="ribbon-group" data-group="table-styles" data-collapse="5" role="group" aria-label="표 스타일">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="table-styles" aria-expanded="false" title="표 스타일"><span>표 스타일</span></button>
+        <div class="ribbon-group-buttons">
+          <div data-rb="table-design.table-styles.table-styles" data-pending data-kind="gallery" title="준비 중 — 표 스타일" class="rb-gallery" role="group" aria-label="표 스타일"><span>표 스타일</span></div>
+          <button data-rb="table-design.table-styles.shading" data-pending data-kind="split" title="준비 중 — 음영" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="shading" aria-label="음영" disabled><span>음영</span></button>
+        </div>
+        <span class="ribbon-group-label">표 스타일</span>
+      </div>
+      <div class="ribbon-group" data-group="borders" data-collapse="4" role="group" aria-label="테두리">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="border-styles" aria-expanded="false" title="테두리"><span>테두리</span></button>
+        <div class="ribbon-group-buttons">
+          <button data-rb="table-design.borders.border-styles" data-pending data-kind="dropdown" title="준비 중 — 테두리 스타일" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="border-styles" aria-label="테두리 스타일" disabled><span>테두리 스타일</span></button>
+          <div class="ribbon-group-buttons-wrap">
+            <div class="ribbon-row">
+              <select data-rb="table-design.borders.line-style" data-pending data-kind="select" title="준비 중 — 선 스타일" class="toolbar-select rb-select" aria-label="선 스타일" disabled><option>선 스타일</option></select>
+            </div>
+            <div class="ribbon-row">
+              <select data-rb="table-design.borders.line-weight" data-pending data-kind="select" title="준비 중 — 펜 두께" class="toolbar-select rb-select" aria-label="펜 두께" disabled><option>펜 두께</option></select>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="table-design.borders.pen-color" data-pending data-kind="split" title="준비 중 — 펜 색" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="pen-color" aria-label="펜 색" disabled><span class="ribbon-btn-label">펜 색</span></button>
+            </div>
+          </div>
+          <button data-rb="table-design.borders.borders" data-pending data-kind="split" title="준비 중 — 테두리" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="borders" aria-label="테두리" disabled><span>테두리</span></button>
+          <button data-rb="table-design.borders.border-painter" data-pending data-kind="button" title="준비 중 — 테두리 복사" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="border-painter" aria-label="테두리 복사" disabled><span>테두리 복사</span></button>
+        </div>
+        <span class="ribbon-group-label">테두리</span>
+        <button type="button" class="ribbon-launcher" data-pending disabled title="준비 중 — 테두리 및 음영" aria-label="테두리 자세히"><svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 5.5v-4h4M4 4l4.5 4.5M8.5 5v3.5H5"/></svg></button>
+      </div>
+    </div>
+    <div class="toolbar-group toolbar-format ribbon-panel" data-panel="table" role="tabpanel" hidden>
+      <div class="ribbon-group" data-group="table" data-collapse="3" role="group" aria-label="표">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="select" aria-expanded="false" title="표"><span>표</span></button>
+        <div class="ribbon-group-buttons">
+          <div class="ribbon-group-buttons-wrap">
+            <div class="ribbon-row">
+              <button data-rb="table.table.select" data-pending data-kind="dropdown" title="준비 중 — 선택" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="select" aria-label="선택" disabled><span class="ribbon-btn-label">선택</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="table.table.view-gridlines" data-pending data-kind="button" title="준비 중 — 눈금선 보기" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="view-gridlines" aria-label="눈금선 보기" disabled><span class="ribbon-btn-label">눈금선 보기</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="table.table.properties" data-pending data-kind="button" title="준비 중 — 속성" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="properties" aria-label="속성" disabled><span class="ribbon-btn-label">속성</span></button>
+            </div>
+          </div>
+        </div>
+        <span class="ribbon-group-label">표</span>
+      </div>
+      <div class="ribbon-group" data-group="draw" data-collapse="2" role="group" aria-label="그리기">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="draw-table" aria-expanded="false" title="그리기"><span>그리기</span></button>
+        <div class="ribbon-group-buttons">
+          <button data-rb="table.draw.draw-table" data-pending data-kind="button" title="준비 중 — 표 그리기" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="draw-table" aria-label="표 그리기" disabled><span>표 그리기</span></button>
+          <button data-rb="table.draw.eraser" data-pending data-kind="button" title="준비 중 — 지우개" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="eraser" aria-label="지우개" disabled><span>지우개</span></button>
+        </div>
+        <span class="ribbon-group-label">그리기</span>
+      </div>
+      <div class="ribbon-group" data-group="rows-columns" data-collapse="8" role="group" aria-label="행 및 열">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="delete-table" aria-expanded="false" title="행 및 열"><span>행 및 열</span></button>
+        <div class="ribbon-group-buttons">
+          <div class="ribbon-group-buttons-wrap">
+            <div class="ribbon-row">
+              <button data-rb="table.rows-columns.delete-table" id="btn-del-table" class="icon-btn ribbon-btn-labeled" title="표 삭제">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4.5" width="13" height="11" rx="1"/><path d="M3.5 10h13M10 4.5v11"/><path d="m15 15 6 6M21 15l-6 6"/></svg>
+                <span class="ribbon-btn-label">표 삭제</span>
+              </button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="table.rows-columns.delete-row" id="btn-del-row" class="icon-btn ribbon-btn-labeled" title="행 삭제">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="9" width="18" height="6" rx="1"/><path d="m9 10 6 4M15 10l-6 4"/></svg>
                 <span class="ribbon-btn-label">행 삭제</span>
               </button>
             </div>
             <div class="ribbon-row">
-              <button id="btn-del-col" class="icon-btn ribbon-btn-labeled" title="열 삭제">
+              <button data-rb="table.rows-columns.delete-column" id="btn-del-col" class="icon-btn ribbon-btn-labeled" title="열 삭제">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="18" rx="1"/><path d="m10 9 4 6M14 9l-4 6"/></svg>
                 <span class="ribbon-btn-label">열 삭제</span>
               </button>
             </div>
           </div>
-        </div>
-        <span class="ribbon-group-label">삭제</span>
-      </div>
-      <div class="ribbon-group">
-        <div class="ribbon-group-buttons ribbon-group-buttons-wrap">
-          <div class="ribbon-row">
-            <button id="btn-add-row-before" class="icon-btn ribbon-btn-labeled" title="위에 삽입">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="13" width="18" height="7" rx="1"/><path d="M12 3v7M8.5 6.5h7"/></svg>
-              <span class="ribbon-btn-label">위에 삽입</span>
-            </button>
-            <button id="btn-add-col-before" class="icon-btn ribbon-btn-labeled" title="왼쪽에 삽입">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="13" y="3" width="7" height="18" rx="1"/><path d="M3 12h7M6.5 8.5v7"/></svg>
-              <span class="ribbon-btn-label">왼쪽에 삽입</span>
-            </button>
-          </div>
-          <div class="ribbon-row">
-            <button id="btn-add-row" class="icon-btn ribbon-btn-labeled" title="아래에 삽입">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="7" rx="1"/><path d="M12 14v7M8.5 17.5h7"/></svg>
-              <span class="ribbon-btn-label">아래에 삽입</span>
-            </button>
-            <button id="btn-add-col" class="icon-btn ribbon-btn-labeled" title="오른쪽에 삽입">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="7" height="18" rx="1"/><path d="M14 12h7M17.5 8.5v7"/></svg>
-              <span class="ribbon-btn-label">오른쪽에 삽입</span>
-            </button>
-          </div>
+          <button data-rb="table.rows-columns.insert-above" id="btn-add-row-before" class="icon-btn icon-btn-big" title="위에 삽입">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="13" width="18" height="7" rx="1"/><path d="M12 3v7M8.5 6.5h7"/></svg>
+            <span>위에 삽입</span>
+          </button>
+          <button data-rb="table.rows-columns.insert-below" id="btn-add-row" class="icon-btn icon-btn-big" title="아래에 삽입">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="7" rx="1"/><path d="M12 14v7M8.5 17.5h7"/></svg>
+            <span>아래에 삽입</span>
+          </button>
+          <button data-rb="table.rows-columns.insert-left" id="btn-add-col-before" class="icon-btn icon-btn-big" title="왼쪽에 삽입">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="13" y="3" width="7" height="18" rx="1"/><path d="M3 12h7M6.5 8.5v7"/></svg>
+            <span>왼쪽에 삽입</span>
+          </button>
+          <button data-rb="table.rows-columns.insert-right" id="btn-add-col" class="icon-btn icon-btn-big" title="오른쪽에 삽입">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="7" height="18" rx="1"/><path d="M14 12h7M17.5 8.5v7"/></svg>
+            <span>오른쪽에 삽입</span>
+          </button>
         </div>
         <span class="ribbon-group-label">행 및 열</span>
+        <button type="button" class="ribbon-launcher" data-pending disabled title="준비 중 — 셀 삽입" aria-label="행 및 열 자세히"><svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 5.5v-4h4M4 4l4.5 4.5M8.5 5v3.5H5"/></svg></button>
       </div>
-      <div class="ribbon-group">
-        <div class="ribbon-group-buttons ribbon-group-buttons-wrap">
-          <div class="ribbon-row">
-            <button id="btn-merge-cells" class="icon-btn ribbon-btn-labeled" title="셀 병합 (여러 셀을 끌어 선택한 뒤)">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="12" rx="1"/><path d="m8 12 3-2v4zM16 12l-3-2v4z"/></svg>
-              <span class="ribbon-btn-label">셀 병합</span>
-            </button>
-          </div>
-          <div class="ribbon-row">
-            <button id="btn-split-cell" class="icon-btn ribbon-btn-labeled" title="셀 분할">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="12" rx="1"/><path d="M12 6v12M9 12H5M15 12h4"/></svg>
-              <span class="ribbon-btn-label">셀 분할</span>
-            </button>
+      <div class="ribbon-group" data-group="merge" data-collapse="7" role="group" aria-label="병합">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="merge-cells" aria-expanded="false" title="병합"><span>병합</span></button>
+        <div class="ribbon-group-buttons">
+          <div class="ribbon-group-buttons-wrap">
+            <div class="ribbon-row">
+              <button data-rb="table.merge.merge-cells" id="btn-merge-cells" class="icon-btn ribbon-btn-labeled" title="셀 병합 (여러 셀을 끌어 선택한 뒤)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="12" rx="1"/><path d="m8 12 3-2v4zM16 12l-3-2v4z"/></svg>
+                <span class="ribbon-btn-label">셀 병합</span>
+              </button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="table.merge.split-cells" id="btn-split-cell" class="icon-btn ribbon-btn-labeled" title="셀 분할">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="12" rx="1"/><path d="M12 6v12M9 12H5M15 12h4"/></svg>
+                <span class="ribbon-btn-label">셀 분할</span>
+              </button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="table.merge.split-table" data-pending data-kind="button" title="준비 중 — 표 분할" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="split-table" aria-label="표 분할" disabled><span class="ribbon-btn-label">표 분할</span></button>
+            </div>
           </div>
         </div>
         <span class="ribbon-group-label">병합</span>
       </div>
+      <div class="ribbon-group" data-group="cell-size" data-collapse="4" role="group" aria-label="셀 크기">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="autofit" aria-expanded="false" title="셀 크기"><span>셀 크기</span></button>
+        <div class="ribbon-group-buttons">
+          <button data-rb="table.cell-size.autofit" data-pending data-kind="dropdown" title="준비 중 — 자동 맞춤" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="autofit" aria-label="자동 맞춤" disabled><span>자동 맞춤</span></button>
+          <div class="ribbon-group-buttons-wrap">
+            <div class="ribbon-row">
+              <label data-rb="table.cell-size.height" data-pending data-kind="input" title="준비 중 — 높이" class="layout-field rb-field"><span>높이</span><input type="text" disabled aria-label="높이" /></label>
+            </div>
+            <div class="ribbon-row">
+              <label data-rb="table.cell-size.width" data-pending data-kind="input" title="준비 중 — 너비" class="layout-field rb-field"><span>너비</span><input type="text" disabled aria-label="너비" /></label>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="table.cell-size.distribute-rows" data-pending data-kind="button" title="준비 중 — 행 높이를 같게" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="distribute-rows" aria-label="행 높이를 같게" disabled><span class="ribbon-btn-label">행 높이를 같게</span></button>
+            </div>
+          </div>
+          <div class="ribbon-group-buttons-wrap">
+            <div class="ribbon-row">
+              <button data-rb="table.cell-size.distribute-columns" data-pending data-kind="button" title="준비 중 — 열 너비를 같게" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="distribute-columns" aria-label="열 너비를 같게" disabled><span class="ribbon-btn-label">열 너비를 같게</span></button>
+            </div>
+          </div>
+        </div>
+        <span class="ribbon-group-label">셀 크기</span>
+        <button type="button" class="ribbon-launcher" data-pending disabled title="준비 중 — 표 속성" aria-label="셀 크기 자세히"><svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 5.5v-4h4M4 4l4.5 4.5M8.5 5v3.5H5"/></svg></button>
+      </div>
+      <div class="ribbon-group" data-group="alignment" data-collapse="3" role="group" aria-label="맞춤">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="align-00" aria-expanded="false" title="맞춤"><span>맞춤</span></button>
+        <div class="ribbon-group-buttons">
+          <div class="ribbon-group-buttons-wrap rb-rows">
+            <div class="ribbon-row">
+              <button data-rb="table.alignment.align-00" data-pending data-kind="button" title="준비 중 — 위쪽 왼쪽 맞춤" type="button" class="icon-btn rb-pending" data-icon="align-00" aria-label="위쪽 왼쪽 맞춤" disabled></button>
+              <button data-rb="table.alignment.align-01" data-pending data-kind="button" title="준비 중 — 위쪽 가운데 맞춤" type="button" class="icon-btn rb-pending" data-icon="align-01" aria-label="위쪽 가운데 맞춤" disabled></button>
+              <button data-rb="table.alignment.align-02" data-pending data-kind="button" title="준비 중 — 위쪽 오른쪽 맞춤" type="button" class="icon-btn rb-pending" data-icon="align-02" aria-label="위쪽 오른쪽 맞춤" disabled></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="table.alignment.align-10" data-pending data-kind="button" title="준비 중 — 가운데 왼쪽 맞춤" type="button" class="icon-btn rb-pending" data-icon="align-10" aria-label="가운데 왼쪽 맞춤" disabled></button>
+              <button data-rb="table.alignment.align-11" data-pending data-kind="button" title="준비 중 — 가운데 맞춤" type="button" class="icon-btn rb-pending" data-icon="align-11" aria-label="가운데 맞춤" disabled></button>
+              <button data-rb="table.alignment.align-12" data-pending data-kind="button" title="준비 중 — 가운데 오른쪽 맞춤" type="button" class="icon-btn rb-pending" data-icon="align-12" aria-label="가운데 오른쪽 맞춤" disabled></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="table.alignment.align-20" data-pending data-kind="button" title="준비 중 — 아래쪽 왼쪽 맞춤" type="button" class="icon-btn rb-pending" data-icon="align-20" aria-label="아래쪽 왼쪽 맞춤" disabled></button>
+              <button data-rb="table.alignment.align-21" data-pending data-kind="button" title="준비 중 — 아래쪽 가운데 맞춤" type="button" class="icon-btn rb-pending" data-icon="align-21" aria-label="아래쪽 가운데 맞춤" disabled></button>
+              <button data-rb="table.alignment.align-22" data-pending data-kind="button" title="준비 중 — 아래쪽 오른쪽 맞춤" type="button" class="icon-btn rb-pending" data-icon="align-22" aria-label="아래쪽 오른쪽 맞춤" disabled></button>
+            </div>
+          </div>
+          <button data-rb="table.alignment.text-direction" data-pending data-kind="button" title="준비 중 — 텍스트 방향" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="text-direction" aria-label="텍스트 방향" disabled><span>텍스트 방향</span></button>
+          <button data-rb="table.alignment.cell-margins" data-pending data-kind="button" title="준비 중 — 셀 여백" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="cell-margins" aria-label="셀 여백" disabled><span>셀 여백</span></button>
+        </div>
+        <span class="ribbon-group-label">맞춤</span>
+      </div>
+      <div class="ribbon-group" data-group="data" data-collapse="2" role="group" aria-label="데이터">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="sort" aria-expanded="false" title="데이터"><span>데이터</span></button>
+        <div class="ribbon-group-buttons">
+          <button data-rb="table.data.sort" data-pending data-kind="button" title="준비 중 — 정렬" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="sort" aria-label="정렬" disabled><span>정렬</span></button>
+          <div class="ribbon-group-buttons-wrap">
+            <div class="ribbon-row">
+              <button data-rb="table.data.repeat-header-rows" data-pending data-kind="button" title="준비 중 — 머리글 행 반복" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="repeat-header-rows" aria-label="머리글 행 반복" disabled><span class="ribbon-btn-label">머리글 행 반복</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="table.data.convert-to-text" data-pending data-kind="button" title="준비 중 — 텍스트로 변환" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="convert-to-text" aria-label="텍스트로 변환" disabled><span class="ribbon-btn-label">텍스트로 변환</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="table.data.formula" data-pending data-kind="button" title="준비 중 — 수식" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="formula" aria-label="수식" disabled><span class="ribbon-btn-label">수식</span></button>
+            </div>
+          </div>
+        </div>
+        <span class="ribbon-group-label">데이터</span>
+      </div>
     </div>
+    <div class="toolbar-group toolbar-format ribbon-panel" data-panel="header-footer" role="tabpanel" hidden>
+      <div class="ribbon-group" data-group="header-footer" data-collapse="5" role="group" aria-label="머리글/바닥글">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="header" aria-expanded="false" title="머리글/바닥글"><span>머리글/바닥글</span></button>
+        <div class="ribbon-group-buttons">
+          <button data-rb="header-footer.header-footer.header" data-pending data-kind="dropdown" title="준비 중 — 머리글" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="header" aria-label="머리글" disabled><span>머리글</span></button>
+          <button data-rb="header-footer.header-footer.footer" data-pending data-kind="dropdown" title="준비 중 — 바닥글" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="footer" aria-label="바닥글" disabled><span>바닥글</span></button>
+          <button data-rb="header-footer.header-footer.page-number" data-pending data-kind="dropdown" title="준비 중 — 페이지 번호" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="page-number" aria-label="페이지 번호" disabled><span>페이지 번호</span></button>
+        </div>
+        <span class="ribbon-group-label">머리글/바닥글</span>
+      </div>
+      <div class="ribbon-group" data-group="insert" data-collapse="4" role="group" aria-label="삽입">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="date-time" aria-expanded="false" title="삽입"><span>삽입</span></button>
+        <div class="ribbon-group-buttons">
+          <button data-rb="header-footer.insert.date-time" data-pending data-kind="button" title="준비 중 — 날짜 및 시간" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="date-time" aria-label="날짜 및 시간" disabled><span>날짜 및 시간</span></button>
+          <button data-rb="header-footer.insert.document-info" data-pending data-kind="dropdown" title="준비 중 — 문서 정보" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="document-info" aria-label="문서 정보" disabled><span>문서 정보</span></button>
+          <button data-rb="header-footer.insert.quick-parts" data-pending data-kind="dropdown" title="준비 중 — 빠른 문서 요소" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="quick-parts" aria-label="빠른 문서 요소" disabled><span>빠른 문서 요소</span></button>
+          <button data-rb="header-footer.insert.pictures" data-pending data-kind="button" title="준비 중 — 그림" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="pictures" aria-label="그림" disabled><span>그림</span></button>
+          <button data-rb="header-footer.insert.online-pictures" data-pending data-kind="button" title="준비 중 — 온라인 그림" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="online-pictures" aria-label="온라인 그림" disabled><span>온라인 그림</span></button>
+        </div>
+        <span class="ribbon-group-label">삽입</span>
+      </div>
+      <div class="ribbon-group" data-group="navigation" data-collapse="3" role="group" aria-label="탐색">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="go-to-header" aria-expanded="false" title="탐색"><span>탐색</span></button>
+        <div class="ribbon-group-buttons">
+          <button data-rb="header-footer.navigation.go-to-header" data-pending data-kind="button" title="준비 중 — 머리글로 이동" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="go-to-header" aria-label="머리글로 이동" disabled><span>머리글로 이동</span></button>
+          <button data-rb="header-footer.navigation.go-to-footer" data-pending data-kind="button" title="준비 중 — 바닥글로 이동" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="go-to-footer" aria-label="바닥글로 이동" disabled><span>바닥글로 이동</span></button>
+          <div class="ribbon-group-buttons-wrap">
+            <div class="ribbon-row">
+              <button data-rb="header-footer.navigation.previous" data-pending data-kind="button" title="준비 중 — 이전" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="previous" aria-label="이전" disabled><span class="ribbon-btn-label">이전</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="header-footer.navigation.next" data-pending data-kind="button" title="준비 중 — 다음" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="next" aria-label="다음" disabled><span class="ribbon-btn-label">다음</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="header-footer.navigation.link-to-previous" data-pending data-kind="button" title="준비 중 — 이전 머리글에 연결" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="link-to-previous" aria-label="이전 머리글에 연결" disabled><span class="ribbon-btn-label">이전 머리글에 연결</span></button>
+            </div>
+          </div>
+        </div>
+        <span class="ribbon-group-label">탐색</span>
+      </div>
+      <div class="ribbon-group" data-group="options" data-collapse="3" role="group" aria-label="옵션">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="different-first-page" aria-expanded="false" title="옵션"><span>옵션</span></button>
+        <div class="ribbon-group-buttons">
+          <div class="ribbon-group-buttons-wrap">
+            <div class="ribbon-row">
+              <label data-rb="header-footer.options.different-first-page" data-pending data-kind="toggle" title="준비 중 — 첫 페이지를 다르게 지정" class="rb-check"><input type="checkbox" disabled /><span>첫 페이지를 다르게 지정</span></label>
+            </div>
+            <div class="ribbon-row">
+              <label data-rb="header-footer.options.different-odd-even" data-pending data-kind="toggle" title="준비 중 — 짝수와 홀수 페이지를 다르게 설정" class="rb-check"><input type="checkbox" disabled /><span>짝수와 홀수 페이지를 다르게 설정</span></label>
+            </div>
+            <div class="ribbon-row">
+              <label data-rb="header-footer.options.show-document-text" data-pending data-kind="toggle" title="준비 중 — 문서 텍스트 표시" class="rb-check"><input type="checkbox" disabled /><span>문서 텍스트 표시</span></label>
+            </div>
+          </div>
+        </div>
+        <span class="ribbon-group-label">옵션</span>
+      </div>
+      <div class="ribbon-group" data-group="position" data-collapse="2" role="group" aria-label="위치">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="header-from-top" aria-expanded="false" title="위치"><span>위치</span></button>
+        <div class="ribbon-group-buttons">
+          <div class="ribbon-group-buttons-wrap">
+            <div class="ribbon-row">
+              <label data-rb="header-footer.position.header-from-top" data-pending data-kind="input" title="준비 중 — 위쪽 머리글" class="layout-field rb-field"><span>위쪽 머리글</span><input type="text" disabled aria-label="위쪽 머리글" /></label>
+            </div>
+            <div class="ribbon-row">
+              <label data-rb="header-footer.position.footer-from-bottom" data-pending data-kind="input" title="준비 중 — 아래쪽 바닥글" class="layout-field rb-field"><span>아래쪽 바닥글</span><input type="text" disabled aria-label="아래쪽 바닥글" /></label>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="header-footer.position.insert-alignment-tab" data-pending data-kind="button" title="준비 중 — 맞춤 탭 삽입" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="insert-alignment-tab" aria-label="맞춤 탭 삽입" disabled><span class="ribbon-btn-label">맞춤 탭 삽입</span></button>
+            </div>
+          </div>
+        </div>
+        <span class="ribbon-group-label">위치</span>
+      </div>
+      <div class="ribbon-group" data-group="close" data-collapse="9" role="group" aria-label="닫기">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="close-header-footer" aria-expanded="false" title="닫기"><span>닫기</span></button>
+        <div class="ribbon-group-buttons">
+          <button data-rb="header-footer.close.close-header-footer" data-pending data-kind="button" title="준비 중 — 머리글/바닥글 닫기" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="close-header-footer" aria-label="머리글/바닥글 닫기" disabled><span>머리글/바닥글 닫기</span></button>
+        </div>
+        <span class="ribbon-group-label">닫기</span>
+      </div>
+    </div>
+    <div class="toolbar-group toolbar-format ribbon-panel" data-panel="picture-format" role="tabpanel" hidden>
+      <div class="ribbon-group" data-group="adjust" data-collapse="6" role="group" aria-label="조정">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="remove-background" aria-expanded="false" title="조정"><span>조정</span></button>
+        <div class="ribbon-group-buttons">
+          <button data-rb="picture-format.adjust.remove-background" data-pending data-kind="button" title="준비 중 — 배경 제거" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="remove-background" aria-label="배경 제거" disabled><span>배경 제거</span></button>
+          <button data-rb="picture-format.adjust.corrections" data-pending data-kind="dropdown" title="준비 중 — 수정" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="corrections" aria-label="수정" disabled><span>수정</span></button>
+          <button data-rb="picture-format.adjust.color" data-pending data-kind="dropdown" title="준비 중 — 색" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="color" aria-label="색" disabled><span>색</span></button>
+          <button data-rb="picture-format.adjust.artistic-effects" data-pending data-kind="dropdown" title="준비 중 — 꾸밈 효과" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="artistic-effects" aria-label="꾸밈 효과" disabled><span>꾸밈 효과</span></button>
+          <button data-rb="picture-format.adjust.transparency" data-pending data-kind="dropdown" title="준비 중 — 투명도" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="transparency" aria-label="투명도" disabled><span>투명도</span></button>
+          <div class="ribbon-group-buttons-wrap">
+            <div class="ribbon-row">
+              <button data-rb="picture-format.adjust.compress" data-pending data-kind="button" title="준비 중 — 그림 압축" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="compress" aria-label="그림 압축" disabled><span class="ribbon-btn-label">그림 압축</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="picture-format.adjust.change-picture" data-pending data-kind="dropdown" title="준비 중 — 그림 바꾸기" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="change-picture" aria-label="그림 바꾸기" disabled><span class="ribbon-btn-label">그림 바꾸기</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="picture-format.adjust.reset-picture" data-pending data-kind="split" title="준비 중 — 그림 원래대로" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="reset-picture" aria-label="그림 원래대로" disabled><span class="ribbon-btn-label">그림 원래대로</span></button>
+            </div>
+          </div>
+        </div>
+        <span class="ribbon-group-label">조정</span>
+      </div>
+      <div class="ribbon-group" data-group="picture-styles" data-collapse="5" role="group" aria-label="그림 스타일">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="picture-styles" aria-expanded="false" title="그림 스타일"><span>그림 스타일</span></button>
+        <div class="ribbon-group-buttons">
+          <div data-rb="picture-format.picture-styles.picture-styles" data-pending data-kind="gallery" title="준비 중 — 그림 스타일" class="rb-gallery" role="group" aria-label="그림 스타일"><span>그림 스타일</span></div>
+          <div class="ribbon-group-buttons-wrap">
+            <div class="ribbon-row">
+              <button data-rb="picture-format.picture-styles.picture-border" data-pending data-kind="split" title="준비 중 — 그림 테두리" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="picture-border" aria-label="그림 테두리" disabled><span class="ribbon-btn-label">그림 테두리</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="picture-format.picture-styles.picture-effects" data-pending data-kind="dropdown" title="준비 중 — 그림 효과" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="picture-effects" aria-label="그림 효과" disabled><span class="ribbon-btn-label">그림 효과</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="picture-format.picture-styles.picture-layout" data-pending data-kind="dropdown" title="준비 중 — 그림 레이아웃" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="picture-layout" aria-label="그림 레이아웃" disabled><span class="ribbon-btn-label">그림 레이아웃</span></button>
+            </div>
+          </div>
+        </div>
+        <span class="ribbon-group-label">그림 스타일</span>
+        <button type="button" class="ribbon-launcher" data-pending disabled title="준비 중 — 그림 서식" aria-label="그림 스타일 자세히"><svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 5.5v-4h4M4 4l4.5 4.5M8.5 5v3.5H5"/></svg></button>
+      </div>
+      <div class="ribbon-group" data-group="accessibility" data-collapse="2" role="group" aria-label="접근성">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="alt-text" aria-expanded="false" title="접근성"><span>접근성</span></button>
+        <div class="ribbon-group-buttons">
+          <button data-rb="picture-format.accessibility.alt-text" data-pending data-kind="button" title="준비 중 — 대체 텍스트" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="alt-text" aria-label="대체 텍스트" disabled><span>대체 텍스트</span></button>
+        </div>
+        <span class="ribbon-group-label">접근성</span>
+      </div>
+      <div class="ribbon-group" data-group="arrange" data-collapse="3" role="group" aria-label="정렬">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="bring-forward" aria-expanded="false" title="정렬"><span>정렬</span></button>
+        <div class="ribbon-group-buttons">
+          <div class="ribbon-group-buttons-wrap">
+            <div class="ribbon-row">
+              <button data-rb="picture-format.arrange.bring-forward" data-pending data-kind="split" title="준비 중 — 앞으로 가져오기" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="bring-forward" aria-label="앞으로 가져오기" disabled><span class="ribbon-btn-label">앞으로 가져오기</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="picture-format.arrange.send-backward" data-pending data-kind="split" title="준비 중 — 뒤로 보내기" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="send-backward" aria-label="뒤로 보내기" disabled><span class="ribbon-btn-label">뒤로 보내기</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="picture-format.arrange.selection-pane" data-pending data-kind="button" title="준비 중 — 선택 창" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="selection-pane" aria-label="선택 창" disabled><span class="ribbon-btn-label">선택 창</span></button>
+            </div>
+          </div>
+          <div class="ribbon-group-buttons-wrap">
+            <div class="ribbon-row">
+              <button data-rb="picture-format.arrange.align" data-pending data-kind="dropdown" title="준비 중 — 맞춤" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="align" aria-label="맞춤" disabled><span class="ribbon-btn-label">맞춤</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="picture-format.arrange.group" data-pending data-kind="dropdown" title="준비 중 — 그룹화" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="group" aria-label="그룹화" disabled><span class="ribbon-btn-label">그룹화</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="picture-format.arrange.rotate" data-pending data-kind="dropdown" title="준비 중 — 회전" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="rotate" aria-label="회전" disabled><span class="ribbon-btn-label">회전</span></button>
+            </div>
+          </div>
+        </div>
+        <span class="ribbon-group-label">정렬</span>
+      </div>
+      <div class="ribbon-group" data-group="size" data-collapse="4" role="group" aria-label="크기">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="crop" aria-expanded="false" title="크기"><span>크기</span></button>
+        <div class="ribbon-group-buttons">
+          <button data-rb="picture-format.size.crop" data-pending data-kind="split" title="준비 중 — 자르기" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="crop" aria-label="자르기" disabled><span>자르기</span></button>
+          <div class="ribbon-group-buttons-wrap">
+            <div class="ribbon-row">
+              <label data-rb="picture-format.size.height" data-pending data-kind="input" title="준비 중 — 높이" class="layout-field rb-field"><span>높이</span><input type="text" disabled aria-label="높이" /></label>
+            </div>
+            <div class="ribbon-row">
+              <label data-rb="picture-format.size.width" data-pending data-kind="input" title="준비 중 — 너비" class="layout-field rb-field"><span>너비</span><input type="text" disabled aria-label="너비" /></label>
+            </div>
+          </div>
+        </div>
+        <span class="ribbon-group-label">크기</span>
+        <button type="button" class="ribbon-launcher" data-pending disabled title="준비 중 — 크기 및 위치" aria-label="크기 자세히"><svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 5.5v-4h4M4 4l4.5 4.5M8.5 5v3.5H5"/></svg></button>
+      </div>
+    </div>
+    <div class="toolbar-group toolbar-format ribbon-panel" data-panel="shape-format" role="tabpanel" hidden>
+      <div class="ribbon-group" data-group="insert-shapes" data-collapse="3" role="group" aria-label="도형 삽입">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="shapes" aria-expanded="false" title="도형 삽입"><span>도형 삽입</span></button>
+        <div class="ribbon-group-buttons">
+          <div data-rb="shape-format.insert-shapes.shapes" data-pending data-kind="gallery" title="준비 중 — 도형" class="rb-gallery" role="group" aria-label="도형"><span>도형</span></div>
+          <div class="ribbon-group-buttons-wrap">
+            <div class="ribbon-row">
+              <button data-rb="shape-format.insert-shapes.edit-shape" data-pending data-kind="dropdown" title="준비 중 — 도형 편집" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="edit-shape" aria-label="도형 편집" disabled><span class="ribbon-btn-label">도형 편집</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="shape-format.insert-shapes.draw-text-box" data-pending data-kind="split" title="준비 중 — 텍스트 상자 그리기" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="draw-text-box" aria-label="텍스트 상자 그리기" disabled><span class="ribbon-btn-label">텍스트 상자 그리기</span></button>
+            </div>
+          </div>
+        </div>
+        <span class="ribbon-group-label">도형 삽입</span>
+      </div>
+      <div class="ribbon-group" data-group="shape-styles" data-collapse="5" role="group" aria-label="도형 스타일">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="shape-styles" aria-expanded="false" title="도형 스타일"><span>도형 스타일</span></button>
+        <div class="ribbon-group-buttons">
+          <div data-rb="shape-format.shape-styles.shape-styles" data-pending data-kind="gallery" title="준비 중 — 도형 스타일" class="rb-gallery" role="group" aria-label="도형 스타일"><span>도형 스타일</span></div>
+          <div class="ribbon-group-buttons-wrap">
+            <div class="ribbon-row">
+              <button data-rb="shape-format.shape-styles.shape-fill" data-pending data-kind="split" title="준비 중 — 도형 채우기" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="shape-fill" aria-label="도형 채우기" disabled><span class="ribbon-btn-label">도형 채우기</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="shape-format.shape-styles.shape-outline" data-pending data-kind="split" title="준비 중 — 도형 윤곽선" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="shape-outline" aria-label="도형 윤곽선" disabled><span class="ribbon-btn-label">도형 윤곽선</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="shape-format.shape-styles.shape-effects" data-pending data-kind="dropdown" title="준비 중 — 도형 효과" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="shape-effects" aria-label="도형 효과" disabled><span class="ribbon-btn-label">도형 효과</span></button>
+            </div>
+          </div>
+        </div>
+        <span class="ribbon-group-label">도형 스타일</span>
+        <button type="button" class="ribbon-launcher" data-pending disabled title="준비 중 — 도형 서식" aria-label="도형 스타일 자세히"><svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 5.5v-4h4M4 4l4.5 4.5M8.5 5v3.5H5"/></svg></button>
+      </div>
+      <div class="ribbon-group" data-group="wordart-styles" data-collapse="4" role="group" aria-label="워드아트 스타일">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="wordart-styles" aria-expanded="false" title="워드아트 스타일"><span>워드아트 스타일</span></button>
+        <div class="ribbon-group-buttons">
+          <div data-rb="shape-format.wordart-styles.wordart-styles" data-pending data-kind="gallery" title="준비 중 — 빠른 스타일" class="rb-gallery" role="group" aria-label="빠른 스타일"><span>빠른 스타일</span></div>
+          <div class="ribbon-group-buttons-wrap">
+            <div class="ribbon-row">
+              <button data-rb="shape-format.wordart-styles.text-fill" data-pending data-kind="split" title="준비 중 — 텍스트 채우기" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="text-fill" aria-label="텍스트 채우기" disabled><span class="ribbon-btn-label">텍스트 채우기</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="shape-format.wordart-styles.text-outline" data-pending data-kind="split" title="준비 중 — 텍스트 윤곽선" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="text-outline" aria-label="텍스트 윤곽선" disabled><span class="ribbon-btn-label">텍스트 윤곽선</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="shape-format.wordart-styles.text-effects" data-pending data-kind="dropdown" title="준비 중 — 텍스트 효과" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="text-effects" aria-label="텍스트 효과" disabled><span class="ribbon-btn-label">텍스트 효과</span></button>
+            </div>
+          </div>
+        </div>
+        <span class="ribbon-group-label">워드아트 스타일</span>
+        <button type="button" class="ribbon-launcher" data-pending disabled title="준비 중 — 텍스트 효과 서식" aria-label="워드아트 스타일 자세히"><svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 5.5v-4h4M4 4l4.5 4.5M8.5 5v3.5H5"/></svg></button>
+      </div>
+      <div class="ribbon-group" data-group="text" data-collapse="3" role="group" aria-label="텍스트">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="text-direction" aria-expanded="false" title="텍스트"><span>텍스트</span></button>
+        <div class="ribbon-group-buttons">
+          <div class="ribbon-group-buttons-wrap">
+            <div class="ribbon-row">
+              <button data-rb="shape-format.text.text-direction" data-pending data-kind="dropdown" title="준비 중 — 텍스트 방향" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="text-direction" aria-label="텍스트 방향" disabled><span class="ribbon-btn-label">텍스트 방향</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="shape-format.text.align-text" data-pending data-kind="dropdown" title="준비 중 — 텍스트 맞춤" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="align-text" aria-label="텍스트 맞춤" disabled><span class="ribbon-btn-label">텍스트 맞춤</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="shape-format.text.create-link" data-pending data-kind="button" title="준비 중 — 연결 만들기" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="create-link" aria-label="연결 만들기" disabled><span class="ribbon-btn-label">연결 만들기</span></button>
+            </div>
+          </div>
+        </div>
+        <span class="ribbon-group-label">텍스트</span>
+      </div>
+      <div class="ribbon-group" data-group="accessibility" data-collapse="2" role="group" aria-label="접근성">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="alt-text" aria-expanded="false" title="접근성"><span>접근성</span></button>
+        <div class="ribbon-group-buttons">
+          <button data-rb="shape-format.accessibility.alt-text" data-pending data-kind="button" title="준비 중 — 대체 텍스트" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="alt-text" aria-label="대체 텍스트" disabled><span>대체 텍스트</span></button>
+        </div>
+        <span class="ribbon-group-label">접근성</span>
+      </div>
+      <div class="ribbon-group" data-group="arrange" data-collapse="3" role="group" aria-label="정렬">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="position" aria-expanded="false" title="정렬"><span>정렬</span></button>
+        <div class="ribbon-group-buttons">
+          <button data-rb="shape-format.arrange.position" data-pending data-kind="dropdown" title="준비 중 — 위치" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="position" aria-label="위치" disabled><span>위치</span></button>
+          <button data-rb="shape-format.arrange.wrap-text" data-pending data-kind="dropdown" title="준비 중 — 텍스트 줄 바꿈" type="button" class="icon-btn icon-btn-big rb-pending" data-icon="wrap-text" aria-label="텍스트 줄 바꿈" disabled><span>텍스트 줄 바꿈</span></button>
+          <div class="ribbon-group-buttons-wrap">
+            <div class="ribbon-row">
+              <button data-rb="shape-format.arrange.bring-forward" data-pending data-kind="split" title="준비 중 — 앞으로 가져오기" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="bring-forward" aria-label="앞으로 가져오기" disabled><span class="ribbon-btn-label">앞으로 가져오기</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="shape-format.arrange.send-backward" data-pending data-kind="split" title="준비 중 — 뒤로 보내기" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="send-backward" aria-label="뒤로 보내기" disabled><span class="ribbon-btn-label">뒤로 보내기</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="shape-format.arrange.selection-pane" data-pending data-kind="button" title="준비 중 — 선택 창" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="selection-pane" aria-label="선택 창" disabled><span class="ribbon-btn-label">선택 창</span></button>
+            </div>
+          </div>
+          <div class="ribbon-group-buttons-wrap">
+            <div class="ribbon-row">
+              <button data-rb="shape-format.arrange.align" data-pending data-kind="dropdown" title="준비 중 — 맞춤" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="align" aria-label="맞춤" disabled><span class="ribbon-btn-label">맞춤</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="shape-format.arrange.group" data-pending data-kind="dropdown" title="준비 중 — 그룹화" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="group" aria-label="그룹화" disabled><span class="ribbon-btn-label">그룹화</span></button>
+            </div>
+            <div class="ribbon-row">
+              <button data-rb="shape-format.arrange.rotate" data-pending data-kind="dropdown" title="준비 중 — 회전" type="button" class="icon-btn ribbon-btn-labeled rb-pending" data-icon="rotate" aria-label="회전" disabled><span class="ribbon-btn-label">회전</span></button>
+            </div>
+          </div>
+        </div>
+        <span class="ribbon-group-label">정렬</span>
+      </div>
+      <div class="ribbon-group" data-group="size" data-collapse="4" role="group" aria-label="크기">
+        <button type="button" class="icon-btn icon-btn-big rb-group-toggle" data-icon="height" aria-expanded="false" title="크기"><span>크기</span></button>
+        <div class="ribbon-group-buttons">
+          <div class="ribbon-group-buttons-wrap">
+            <div class="ribbon-row">
+              <label data-rb="shape-format.size.height" data-pending data-kind="input" title="준비 중 — 높이" class="layout-field rb-field"><span>높이</span><input type="text" disabled aria-label="높이" /></label>
+            </div>
+            <div class="ribbon-row">
+              <label data-rb="shape-format.size.width" data-pending data-kind="input" title="준비 중 — 너비" class="layout-field rb-field"><span>너비</span><input type="text" disabled aria-label="너비" /></label>
+            </div>
+          </div>
+        </div>
+        <span class="ribbon-group-label">크기</span>
+        <button type="button" class="ribbon-launcher" data-pending disabled title="준비 중 — 크기 및 위치" aria-label="크기 자세히"><svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 5.5v-4h4M4 4l4.5 4.5M8.5 5v3.5H5"/></svg></button>
+      </div>
+    </div>
+    <!-- ribbon:panels:end -->
   </header>
 
   <div id="search-bar" class="search-bar" hidden role="dialog" aria-label="찾기 및 바꾸기">

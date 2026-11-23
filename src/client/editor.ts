@@ -744,6 +744,7 @@ async function main(): Promise<void> {
       const newState = view.state.apply(tr);
       view.updateState(newState);
       syncToolbarState(newState, defaultSizePt, defaultFontName);
+      shell.setContextualTab('table-design', canEdit && isInTable(newState)); // 오피스처럼 표 안에서는 "테이블 디자인"·"레이아웃" 두 탭
       shell.setContextualTab('table', canEdit && isInTable(newState));
       syncLayoutFields(newState);
       syncReview(newState);

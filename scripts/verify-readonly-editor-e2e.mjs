@@ -16,6 +16,7 @@ import path from 'node:path';
 import ExcelJS from 'exceljs';
 import { PDFDocument, StandardFonts } from 'pdf-lib';
 import { chromium } from 'playwright';
+import { APP_OF_EXT, loadInventory, pendingIn } from './ribbonGenLib.mjs';
 
 const PORT = Number(process.argv[2] ?? 8162);
 // 운영 포트(8000·8010·8020·8100·8110·8130·8148)와 다른 시험(8150~8159) 범위와 겹치지 않게
@@ -180,6 +181,9 @@ const FORCE_CLICK = {
   xlsx: ['btn-cell-bold', 'btn-merge-center', 'btn-add-row', 'btn-del-col', 'btn-wrap-text', 'sheet-add', 'qa-undo'],
   pptx: ['btn-add-blank', 'btn-dup-slide', 'btn-del-slide', 'btn-add-textbox', 'btn-shape-rect', 'qa-undo'],
 };
+// 준비 중 단추 수는 오피스 리본 목록에서 — 아직 목록으로 만들지 않은 앱(Task 4·5 전)은 0
+const INV = loadInventory();
+const LISTED = new Set(['docx']);
 const MIN_TABS = { docx: 6, xlsx: 6, pptx: 6 };
 
 async function openView(context, url, ext) {
@@ -265,10 +269,14 @@ try {
       const panel = await page.evaluate((t) => {
         const el = document.querySelector(`.ribbon-panel[data-panel="${t}"]`);
         const controls = [...el.querySelectorAll('button, select, input')].filter((c) => c.getClientRects().length > 0);
-        return { visible: !el.hidden && el.getClientRects().length > 0, controls: controls.length, greyed: controls.filter((c) => c.classList.contains('ro-disabled')).length };
+        // 준비 중(disabled가 우선)과 접힌 묶음 단추(둘러보기용)는 흐림 대상이 아니다 — 설계 2026-11-22-office-ribbon-structure §1-3
+        const pending = controls.filter((c) => c.closest('[data-pending]')).length;
+        const toggles = controls.filter((c) => c.classList.contains('rb-group-toggle')).length;
+        return { visible: !el.hidden && el.getClientRects().length > 0, controls: controls.length, greyed: controls.filter((c) => c.classList.contains('ro-disabled')).length, pending, toggles, pendingAll: el.querySelectorAll('[data-pending]').length };
       }, tab);
       const wantActive = ext === 'pptx' ? 1 : 0; // 전환 미리 보기
-      rec(`(1) ${ext} "${tab}" 탭 눌러 보기 — 판이 열리고 쓰는 단추는 모두 흐림`, panel.visible && panel.controls > 0 && panel.greyed === panel.controls - wantActive, JSON.stringify(panel));
+      const wantPending = LISTED.has(ext) ? pendingIn(INV.apps[APP_OF_EXT[ext]], tab) : 0;
+      rec(`(1) ${ext} "${tab}" 탭 눌러 보기 — 판이 열리고 쓰는 단추는 모두 흐림, 준비 중 ${wantPending}개(목록 기준)는 꺼진 채`, panel.visible && panel.controls > 0 && panel.greyed === panel.controls - wantActive - panel.pending - panel.toggles && panel.pendingAll === wantPending, JSON.stringify({ ...panel, wantPending }));
       await page.click('.ribbon-tab[data-tab="home"]');
     }
 
