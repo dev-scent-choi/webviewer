@@ -1370,7 +1370,7 @@
                 {"key":"middle-align","name":"가운데 맞춤","size":"small","kind":"button","iconOnly":true,"ref":"#btn-valign-middle","map":"same","row":0},
                 {"key":"bottom-align","name":"아래쪽 맞춤","size":"small","kind":"button","iconOnly":true,"ref":"#btn-valign-bottom","map":"same","row":0},
                 {"key":"orientation","name":"방향","size":"small","kind":"dropdown","pending":true,"items":["시계 반대 방향 각도","시계 방향 각도","세로 쓰기","텍스트 위로 회전","텍스트 아래로 회전","셀 맞춤 서식"],"iconOnly":true,"row":0},
-                {"key":"wrap-text","name":"자동 줄 바꿈","size":"small","kind":"button","ref":"#btn-wrap-text","map":"same","row":0,"unverified":true},
+                {"key":"wrap-text","name":"텍스트 줄 바꿈","size":"small","kind":"button","ref":"#btn-wrap-text","map":"same","fix":"이름 \"자동 줄 바꿈\" → \"텍스트 줄 바꿈\"(support.microsoft.com/ko-kr/office/2a18cff5-ccc1-4bce-95e4-f0d4f3ff4e84 \"홈 탭의 맞춤 그룹에서 텍스트 줄 바꿈을 선택합니다\")","row":0},
                 {"key":"align-left","name":"왼쪽 맞춤","size":"small","kind":"button","iconOnly":true,"ref":"#btn-cell-align-l","map":"same","fix":"title \"왼쪽 정렬\" → \"왼쪽 맞춤\"","row":1},
                 {"key":"center","name":"가운데 맞춤","size":"small","kind":"button","iconOnly":true,"ref":"#btn-cell-align-c","map":"same","fix":"title \"가운데 정렬\" → \"가운데 맞춤\"","row":1},
                 {"key":"align-right","name":"오른쪽 맞춤","size":"small","kind":"button","iconOnly":true,"ref":"#btn-cell-align-r","map":"same","fix":"title \"오른쪽 정렬\" → \"오른쪽 맞춤\"","row":1},
@@ -2835,7 +2835,7 @@
               "launcher": null,
               "controls": [
                 {"key":"sound","name":"소리","size":"small","kind":"select","pending":true},
-                {"key":"duration","name":"속도","size":"small","kind":"select","ref":"#transition-speed","map":"nearest","unit":"label.layout-field:has(> #transition-speed)","note":"오피스 \"기간\"(초 입력) 자리 — 빠르게·보통·느리게","unverified":true},
+                {"key":"duration","name":"기간","size":"small","kind":"select","ref":"#transition-speed","map":"nearest","unit":"label.layout-field:has(> #transition-speed)","fix":"이름 \"속도\" → \"기간\"(support.microsoft.com/ko-kr/office/c3c3c66f-4cca-4821-b8b9-7de0f3f6ead1 \"기간 상자에 원하는 시간(초)을 입력합니다\")","note":"오피스 \"기간\"(초 입력) 자리 — 고르는 값은 빠르게·보통·느리게 그대로"},
                 {"key":"apply-all","name":"모두 적용","size":"small","kind":"button","ref":"#btn-transition-apply-all","map":"same"},
                 {"key":"on-click","name":"마우스를 클릭할 때","size":"small","kind":"toggle","pending":true,"stackTitle":"화면 전환","unverified":true},
                 {"key":"after","name":"다음 시간 후","size":"small","kind":"toggle","pending":true,"unverified":true},
