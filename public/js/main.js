@@ -109,15 +109,20 @@ async function openEditor(docId, viewer) {
 }
 
 /** 콘텐츠만 보기(설계 2026-11-22-artcraft-app-screen §4) — 도구 없이 문서만. 편집기 형식은 읽기 전용 편집기 토큰, 그 밖은 보기 토큰의 contentUrl */
-async function openContentOnly(doc, viewer) {
+async function openContentOnly(doc, viewer, link) {
   const issued = await issueToken(doc.id, viewer, true, true, true, false, false, supportsEdit(doc) ? 'editor' : 'libreoffice');
-  if (!issued.contentUrl) throw new Error('이 형식은 콘텐츠만 보기를 지원하지 않습니다');
+  // 서버가 콘텐츠 화면을 주지 않으면(아직 변환 중 등) 오류 대신 링크를 숨긴다
+  if (!issued.contentUrl) {
+    link.hidden = true;
+    return;
+  }
   location.href = issued.contentUrl;
 }
 
-/** 콘텐츠 화면이 있는 형식 — 편집기 형식, 한글을 뺀 쪽 문서(서버 contentUrlFor와 같은 규칙) */
+/** 콘텐츠 화면이 있는 형식 — 편집기 형식, 한글을 뺀 쪽 문서(서버 contentUrlFor·viewPathFor와 같은 규칙: viewKind 없으면 xlsx·csv는 격자) */
 function supportsContentOnly(doc) {
-  return supportsEdit(doc) || ((doc.viewKind ?? 'pages') === 'pages' && doc.ext !== 'hwp' && doc.ext !== 'hwpx');
+  const kind = doc.viewKind ?? (doc.ext === 'xlsx' || doc.ext === 'csv' ? 'grid' : 'pages');
+  return supportsEdit(doc) || (kind === 'pages' && doc.ext !== 'hwp' && doc.ext !== 'hwpx');
 }
 
 const progressBox = document.getElementById('progress');
@@ -434,7 +439,7 @@ function renderDocItem(doc) {
     contentLink.title = '도구 없이 문서 내용만 봅니다';
     contentLink.addEventListener('click', (event) => {
       event.preventDefault();
-      openContentOnly(doc, '업로더').catch((error) => setStatus(error.message, 'error'));
+      openContentOnly(doc, '업로더', contentLink).catch((error) => setStatus(error.message, 'error'));
     });
     info.append(contentLink);
   }
@@ -469,11 +474,11 @@ function renderDocItem(doc) {
     engineHint.hidden = !editorWithoutSave();
   });
   engineHint.hidden = !editorWithoutSave();
-  // "동시편집"을 켜면 엔진 라디오는 끈다 — 편집 토큰은 지금처럼 편집기(editorUrl)로 열린다(꺼진 라디오는 FormData 에 없어 libreoffice)
+  // 동시편집 + 아트크래프트 = 앱 화면 편집(engine=artcraft+canEdit), 나머지 엔진은 편집기(editorUrl) — 그래서 동시편집을 켜면 아트크래프트만 남긴다
   const editBox = form.querySelector('input[name=canEdit]');
   if (editBox && supportsEdit(doc)) {
     editBox.addEventListener('change', () => {
-      for (const radio of form.querySelectorAll('input[name=engine]')) radio.disabled = editBox.checked || (radio.value === 'artcraft' && !artOk);
+      for (const radio of form.querySelectorAll('input[name=engine]')) radio.disabled = radio.value === 'artcraft' ? !artOk : editBox.checked;
     });
   }
   const result = document.createElement('p');
@@ -530,7 +535,8 @@ function renderDocItem(doc) {
       copy.textContent = '링크 복사';
       copy.className = 'btn btn-ghost';
       copy.addEventListener('click', async () => {
-        const link = issued.engine === 'editor' ? issued.viewerUrl : issued.editorUrl || issued.viewerUrl;
+        // 리브레오피스만 편집기 주소를 복사한다 — 편집기·아트크래프트는 연 화면(viewerUrl) 그대로
+        const link = issued.engine === 'libreoffice' ? issued.editorUrl || issued.viewerUrl : issued.viewerUrl;
         await navigator.clipboard.writeText(new URL(link, location.origin).href);
         copy.textContent = '복사됨';
       });
