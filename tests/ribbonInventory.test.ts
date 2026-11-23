@@ -1,4 +1,6 @@
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { INVENTORY_PATH, loadInventory, requiredIcons, serializeInventory, summarize, validateInventory } from '../scripts/ribbonGenLib.mjs';
 
@@ -10,6 +12,18 @@ describe('오피스 리본 목록(src/client/ribbon/inventory.json)', () => {
   it('파일 모양이 serializeInventory 그대로(단추 한 줄에 하나)', () => {
     // core.autocrlf=true 인 새 체크아웃은 CRLF로 풀린다 — 줄 끝은 보지 않는다
     expect(fs.readFileSync(INVENTORY_PATH, 'utf8').replaceAll('\r\n', '\n')).toBe(serializeInventory(inv));
+  });
+  it('CRLF로 풀린 목록도 같은 목록으로 읽히고 같은 모양으로 비교된다', () => {
+    const crlf = serializeInventory(inv).replaceAll('\n', '\r\n');
+    const file = path.join(os.tmpdir(), `ribbon-inv-crlf-${process.pid}.json`);
+    fs.writeFileSync(file, crlf);
+    try {
+      expect(crlf).toContain('\r\n');
+      expect(loadInventory(file)).toEqual(inv);
+      expect(fs.readFileSync(file, 'utf8').replaceAll('\r\n', '\n')).toBe(serializeInventory(inv));
+    } finally {
+      fs.rmSync(file, { force: true });
+    }
   });
   it('기본 탭 순서는 설계 §2 그대로', () => {
     expect(inv.apps.word.tabs.map((t) => t.name)).toEqual(['홈', '삽입', '그리기', '디자인', '레이아웃', '참조', '편지', '검토', '보기']);
