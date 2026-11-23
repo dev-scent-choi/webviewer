@@ -630,6 +630,8 @@ function renderCanvasForSlideInner(entryId: string): void {
     const box = document.createElement('div');
     box.className = 'slide-textbox';
     box.dataset.shapeId = shapeId; // 디버깅/테스트에서 개별 텍스트박스를 식별하기 위함(동작에는 영향 없음)
+    // 상자 테두리·여백을 눌러도(글 영역 포커스 없이) 도형 서식 탭을 연다 — 편집 권한일 때만
+    if (canEdit) box.addEventListener('pointerdown', () => shell?.setContextualTab('shape-format', true));
     box.style.left = `${emuToPx(meta.x ?? SLIDE_W_EMU * 0.2)}px`;
     box.style.top = `${emuToPx(meta.y ?? SLIDE_H_EMU * 0.4)}px`;
     box.style.width = `${emuToPx(meta.w ?? SLIDE_W_EMU * NEW_TEXTBOX_WIDTH_RATIO)}px`;
