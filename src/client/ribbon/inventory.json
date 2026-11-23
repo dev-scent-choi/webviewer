@@ -1501,11 +1501,11 @@
                 {"key":"bar","name":"가로 막대형","size":"small","kind":"button","ref":"[data-insert-chart=\"bar\"]","map":"nearest","convert":"big→small","note":"위와 같음","unverified":true},
                 {"key":"line","name":"꺾은선형","size":"small","kind":"button","ref":"[data-insert-chart=\"line\"]","map":"nearest","convert":"big→small","note":"오피스 \"꺾은선형 또는 영역형 차트 삽입\" 자리"},
                 {"key":"pie","name":"원형","size":"small","kind":"button","ref":"[data-insert-chart=\"pie\"]","map":"nearest","convert":"big→small","note":"오피스 \"원형 또는 도넛형 차트 삽입\" 자리","unverified":true},
-                {"key":"hierarchy","name":"계층 구조 차트","size":"small","kind":"dropdown","pending":true,"unverified":true},
-                {"key":"statistic","name":"통계 차트","size":"small","kind":"dropdown","pending":true,"unverified":true},
-                {"key":"scatter","name":"분산형 또는 거품형 차트","size":"small","kind":"dropdown","pending":true},
-                {"key":"waterfall","name":"폭포, 깔때기형, 주식형, 표면형 또는 방사형 차트","size":"small","kind":"dropdown","pending":true,"unverified":true},
-                {"key":"combo","name":"콤보 차트","size":"small","kind":"dropdown","pending":true,"unverified":true},
+                {"key":"hierarchy","name":"계층 구조 차트","size":"small","kind":"dropdown","iconOnly":true,"pending":true,"unverified":true},
+                {"key":"statistic","name":"통계 차트","size":"small","kind":"dropdown","iconOnly":true,"pending":true,"unverified":true},
+                {"key":"scatter","name":"분산형 또는 거품형 차트","size":"small","kind":"dropdown","iconOnly":true,"pending":true},
+                {"key":"waterfall","name":"폭포, 깔때기형, 주식형, 표면형 또는 방사형 차트","size":"small","kind":"dropdown","iconOnly":true,"pending":true,"unverified":true},
+                {"key":"combo","name":"콤보 차트","size":"small","kind":"dropdown","iconOnly":true,"pending":true,"unverified":true},
                 {"key":"maps","name":"지도","size":"big","kind":"dropdown","pending":true,"unverified":true},
                 {"key":"pivot-chart","name":"피벗 차트","size":"big","kind":"split","pending":true}
               ]

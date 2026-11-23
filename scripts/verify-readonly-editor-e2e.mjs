@@ -16,7 +16,7 @@ import path from 'node:path';
 import ExcelJS from 'exceljs';
 import { PDFDocument, StandardFonts } from 'pdf-lib';
 import { chromium } from 'playwright';
-import { APP_OF_EXT, loadInventory, pendingIn } from './ribbonGenLib.mjs';
+import { APP_OF_EXT, LISTED_EXTS as LISTED, loadInventory, pendingIn } from './ribbonGenLib.mjs';
 
 const PORT = Number(process.argv[2] ?? 8162);
 // 운영 포트(8000·8010·8020·8100·8110·8130·8148)와 다른 시험(8150~8159) 범위와 겹치지 않게
@@ -181,9 +181,8 @@ const FORCE_CLICK = {
   xlsx: ['btn-cell-bold', 'btn-merge-center', 'btn-add-row', 'btn-del-col', 'btn-wrap-text', 'sheet-add', 'qa-undo'],
   pptx: ['btn-add-blank', 'btn-dup-slide', 'btn-del-slide', 'btn-add-textbox', 'btn-shape-rect', 'qa-undo'],
 };
-// 준비 중 단추 수는 오피스 리본 목록에서 — 아직 목록으로 만들지 않은 앱(Task 4·5 전)은 0
+// 준비 중 단추 수는 오피스 리본 목록에서 — 아직 목록으로 만들지 않은 앱(LISTED_EXTS 밖)은 0
 const INV = loadInventory();
-const LISTED = new Set(['docx']);
 const MIN_TABS = { docx: 6, xlsx: 6, pptx: 6 };
 
 async function openView(context, url, ext) {

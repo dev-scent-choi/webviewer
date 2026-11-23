@@ -13,6 +13,7 @@ export type AppName = 'word' | 'excel' | 'powerpoint';
 export interface RibbonInventory { version: number; spec: string; source: string; schema: Record<string, string>; summary: Record<AppName, Record<string, number>>; apps: Record<AppName, RibbonApp> }
 export declare const INVENTORY_PATH: string;
 export declare const APP_OF_EXT: Readonly<Record<'docx' | 'xlsx' | 'pptx', AppName>>;
+export declare const LISTED_EXTS: ReadonlySet<string>;
 export declare const KINDS: readonly string[];
 export declare function loadInventory(file?: string): RibbonInventory;
 export declare function controlKey(tabId: string, groupId: string, c: RibbonControl): string;

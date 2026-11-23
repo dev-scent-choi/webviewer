@@ -14,7 +14,7 @@ import path from 'node:path';
 import { PDFDocument, StandardFonts } from 'pdf-lib';
 import { chromium } from 'playwright';
 import { SKIN_PX, SKIN_TOLERANCE_PX, bigButtonLayoutOk, heightProblems, latinOnlyLabels } from './ribbonSkinLib.mjs';
-import { APP_OF_EXT, launcherCount, loadInventory } from './ribbonGenLib.mjs';
+import { APP_OF_EXT, LISTED_EXTS as LISTED, launcherCount, loadInventory } from './ribbonGenLib.mjs';
 
 const PORT = Number(process.argv[2] ?? 8166);
 // 운영 포트(8000·8010·8020·8100·8110·8130·8148)와 다른 시험(8150~8159) 범위와 겹치지 않게
@@ -30,9 +30,8 @@ const FILES = {
 };
 const READY = { docx: '.ProseMirror', xlsx: '#grid-edit-table td[data-row]', pptx: '#slides-rail .slide-card' };
 const REF = { docx: 'word-report.png', xlsx: 'grid-plain.png', pptx: 'deck-korean.png' };
-// "자세히" 수는 오피스 리본 목록에서(상황별 탭 판 포함, 준비 중 포함) — 아직 목록으로 만들지 않은 앱(Task 4·5 전)은 옛 수
+// "자세히" 수는 오피스 리본 목록에서(상황별 탭 판 포함, 준비 중 포함) — 아직 목록으로 만들지 않은 앱(LISTED_EXTS 밖)은 옛 수
 const INV = loadInventory();
-const LISTED = new Set(['docx']);
 const LAUNCHERS = Object.fromEntries(Object.entries(APP_OF_EXT).map(([ext, name]) => [ext, LISTED.has(ext) ? launcherCount(INV.apps[name]) : { xlsx: 1, pptx: 0 }[ext]]));
 const EDITOR_SEL = { title: '.office-titlebar', tabs: '.ribbon-tabs', ribbon: '.ribbon-panel:not([hidden])', status: '#statusbar, .grid-status-row' };
 const VIEW_SEL = { title: '.toolbar-row-title', tabs: '.ribbon-tabs', ribbon: '.toolbar-row-tools', status: null };
@@ -355,7 +354,7 @@ try {
         for (const t of tg) if (!t.named || t.ico > 16) toggleBad.push(`${tab}/${t.name} ${JSON.stringify(t)}`);
       }
       rec(`(7) ${ext} ${mode} 600px — 탭 ${tabs.length}개 모두 가로 넘침 없음·제목 줄 한 줄`, tabs.length >= 5 && bad.length === 0, bad.join(' | '));
-      // 목록으로 만든 앱만(엑셀·PPT는 Task 4·5 전엔 접힌 묶음이 없다)
+      // 목록으로 만든 앱만(PPT는 Task 5 전엔 접힌 묶음이 없다)
       if (LISTED.has(ext)) rec(`(7) ${ext} ${mode} 600px — 접힌 묶음 단추 ${toggleCount}개마다 보이는 이름이 단추 안에 있고 아이콘 ≤ 16px`, toggleCount > 0 && toggleBad.length === 0, toggleBad.slice(0, 3).join(' | '));
       await narrow.close();
     }

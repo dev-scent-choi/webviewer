@@ -3806,7 +3806,7 @@ body.review-pane-open #editor-zoom-host { margin-right: 320px; }
 .table-style-swatch i { display: block; background: #ffffff; border: 1px solid var(--ts-head); }
 .table-style-swatch i:first-child { background: var(--ts-head); }
 .table-style-swatch i:nth-child(2) { background: var(--ts-band); }
-.chart-title-field { grid-template-columns: 2.6rem 12rem; }
+.chart-title-field { grid-template-columns: auto 10rem; white-space: nowrap; } /* 이름 "차트 제목"(오피스 이름)이 두 줄로 꺾이지 않게 */
 
 /* ---------- Excel 데이터 탭: 필터 단추·값 목록·정렬 대화상자 ---------- */
 .grid-filter-layer { position: absolute; left: 0; top: 0; width: 0; height: 0; z-index: 4; }

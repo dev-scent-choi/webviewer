@@ -4057,7 +4057,11 @@ async function main(): Promise<void> {
       const sheet = structure.get(String(activeSheet));
       return { rows: sheet?.rowCount ?? 1, cols: sheet?.colCount ?? 1 };
     },
-    setChartTabVisible: (visible) => shell.setContextualTab('chart', visible),
+    setChartTabVisible: (visible) => {
+      // 오피스처럼 차트를 고르면 "차트 디자인"·"서식" 두 탭
+      shell.setContextualTab('chart', visible);
+      shell.setContextualTab('chart-format', visible);
+    },
   });
   afterGridRender = () => charts.render();
   gridLinks = setupGridLinks({
